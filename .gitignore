@@ -1,0 +1,12 @@
+# secrets
+backend/token.json
+backend/credentials.json
+
+# python
+backend/.venv/
+backend/__pycache__/
+**/__pycache__/
+
+# local db
+backend/app.db
+backend/app.db.bak
