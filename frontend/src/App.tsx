@@ -4,7 +4,6 @@ import { addPhoto, deletePhoto, listPhotosForJob, type StoredPhoto } from "./lib
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-
 // LocalStorage keys
 const QUEUE_KEY = "crew_event_queue_v1"; // unsynced events only
 const LOG_KEY = "crew_event_log_v1"; // full job activity log (synced + queued)
@@ -577,7 +576,7 @@ export default function App() {
       }
 
       setCalEvents((json?.events ?? []) as CalEvent[]);
-      setCalWarning(String(json?.warning || "")); // NEW: show env warning etc.
+      setCalWarning(String(json?.warning || ""));
       setCalLoading(false);
       setCalLoaded(true);
       setStatus("Calendar loaded");
@@ -997,12 +996,7 @@ export default function App() {
       {/* Top bar */}
       <div className="topbar">
         <div className="brand">
-          <img
-            className="logo"
-            src={logo}
-            alt="Logo"
-            style={{ filter: "invert(1) brightness(1.15) contrast(1.05)" }}
-          />
+          <img className="logo" src={logo} alt="Logo" style={{ filter: "invert(1) brightness(1.15) contrast(1.05)" }} />
           <div>
             <div className="title">Mountaineer Moving Co.</div>
             <div className="small">{clockText === "—" ? "Clock starts at Start" : `Clock: ${clockText}`}</div>
@@ -1050,6 +1044,10 @@ export default function App() {
               <div className="col">
                 <div className="label">Job Name</div>
                 <input value={jobName} onChange={(e) => onChangeJobName(e.target.value)} placeholder="Type job name…" />
+                <div className="small">
+                  Source:{" "}
+                  {jobNameSource === "calendar" ? "Calendar" : jobNameSource === "manual" ? "Manual" : "—"}
+                </div>
               </div>
 
               <div className="row wrap">
@@ -1161,7 +1159,11 @@ export default function App() {
 
           <div className="card">
             <div className="sectionTitle">Notes</div>
-            <textarea value={jobComments} onChange={(e) => setJobComments(e.target.value)} placeholder="Notes for this job…" />
+            <textarea
+              value={jobComments}
+              onChange={(e) => setJobComments(e.target.value)}
+              placeholder="Notes for this job…"
+            />
           </div>
 
           <div className="card">
@@ -1357,7 +1359,11 @@ export default function App() {
                 <div className="row wrap">
                   <div className="col" style={{ flex: 2, minWidth: 220 }}>
                     <div className="label">Custom name</div>
-                    <input value={matCustomName} onChange={(e) => setMatCustomName(e.target.value)} placeholder="Item name…" />
+                    <input
+                      value={matCustomName}
+                      onChange={(e) => setMatCustomName(e.target.value)}
+                      placeholder="Item name…"
+                    />
                   </div>
                   <div className="col" style={{ flex: 1, minWidth: 160 }}>
                     <div className="label">Cost (optional)</div>
