@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import logo from "./assets/logo.png";
 import { addPhoto, deletePhoto, listPhotosForJob, type StoredPhoto } from "./lib/photoStore";
 
-const API = "http://127.0.0.1:8000";
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
 
 // LocalStorage keys
 const QUEUE_KEY = "crew_event_queue_v1"; // unsynced events only
