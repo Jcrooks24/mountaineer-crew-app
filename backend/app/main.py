@@ -12,7 +12,9 @@ from app.routers.jobs import router as jobs_router
 from app.routers.dev import router as dev_router
 from app.routers.sync import router as sync_router
 from app.routers.calendar import router as calendar_router
-from app.db.sheet_exports import ensure_sheet_exports_tables
+from app.db.sheet_exports import ensure_sheet_exports_tables]
+from fastapi.middleware.cors import CORSMiddleware
+
 
 
 from app.jobs_api import router as job_registry_router
@@ -25,13 +27,14 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
+        "https://mountaineer-crew-app.vercel.app",
+        # If you have a different Vercel production domain, add it here too.
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # CORS
 app.add_middleware(
