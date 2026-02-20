@@ -2,18 +2,16 @@
 
 import os
 import smtplib
-from email.message import EmailMessage
-
-
-from __future__ import annotations
-
-import os
-import smtplib
 import traceback
 from email.message import EmailMessage
 
 
 def send_email(to_email: str, subject: str, text: str) -> None:
+    """
+    Minimal SMTP sender.
+    - Uses SMTP_HOST/PORT/USER/PASS/FROM from env.
+    - If SMTP_HOST is missing, prints email to logs (dev mode).
+    """
     host = os.getenv("SMTP_HOST", "").strip()
     if not host:
         print("=== EMAIL (DEV MODE) ===")
@@ -35,9 +33,8 @@ def send_email(to_email: str, subject: str, text: str) -> None:
     msg.set_content(text)
 
     try:
-        # timeout prevents hanging forever
         with smtplib.SMTP(host, port, timeout=20) as s:
-            s.set_debuglevel(1)  # <-- TEMP: logs SMTP conversation in Render logs
+            s.set_debuglevel(1)  # TEMP: emits SMTP dialogue to Render logs
             s.ehlo()
             s.starttls()
             s.ehlo()
