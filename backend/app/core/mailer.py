@@ -5,12 +5,15 @@ import smtplib
 from email.message import EmailMessage
 
 
+from __future__ import annotations
+
+import os
+import smtplib
+import traceback
+from email.message import EmailMessage
+
+
 def send_email(to_email: str, subject: str, text: str) -> None:
-    """
-    Minimal SMTP sender.
-    - If SMTP_HOST isn't set, we print the email to logs (dev mode).
-    - Postmark supports token auth (you set token as SMTP_USER + SMTP_PASS).
-    """
     host = os.getenv("SMTP_HOST", "").strip()
     if not host:
         print("=== EMAIL (DEV MODE) ===")
@@ -31,15 +34,17 @@ def send_email(to_email: str, subject: str, text: str) -> None:
     msg["Subject"] = subject
     msg.set_content(text)
 
-    import traceback
-
     try:
+        # timeout prevents hanging forever
         with smtplib.SMTP(host, port, timeout=20) as s:
-            s.set_debuglevel(1)  # prints SMTP conversation to logs (temporary)
+            s.set_debuglevel(1)  # <-- TEMP: logs SMTP conversation in Render logs
+            s.ehlo()
             s.starttls()
+            s.ehlo()
             if user and password:
                 s.login(user, password)
             s.send_message(msg)
+            print("SMTP SEND OK")
     except Exception as e:
         print("SMTP SEND FAILED:", repr(e))
         traceback.print_exc()
