@@ -10,3 +10,33 @@ backend/__pycache__/
 # local db
 backend/app.db
 backend/app.db.bak
+
+
+
+# =========================
+# Python
+# =========================
+backend/.venv/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/**/__pycache__/
+*.pyc
+
+# SQLite
+backend/app.db
+
+# Alembic bytecode
+backend/alembic/**/__pycache__/
+
+# =========================
+# Node / Frontend
+# =========================
+frontend/node_modules/
+
+# Env files
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db

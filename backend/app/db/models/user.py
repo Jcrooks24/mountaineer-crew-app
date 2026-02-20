@@ -1,6 +1,6 @@
 """
 User model for authentication.
-Minimal fields for now.
+Minimal fields for now + minimal RBAC stub.
 """
 
 from sqlalchemy import Column, Integer, String, Boolean
@@ -14,5 +14,9 @@ class User(Base):
 
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
+
+    # New fields (Phase A / Track 2)
+    name = Column(String, nullable=True)
+    role = Column(String, nullable=False, default="user")
 
     is_active = Column(Boolean, default=True, nullable=False)

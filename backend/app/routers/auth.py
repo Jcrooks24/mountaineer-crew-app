@@ -1,6 +1,15 @@
 """
 Authentication router.
-Provides login endpoint.
+
+Endpoints:
+- POST /api/auth/signup
+- POST /api/auth/login
+- GET  /api/auth/me
+
+Uses:
+- bcrypt (directly)
+- python-jose for JWT
+- get_current_user dependency
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,30 +17,92 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models.user import User
-from app.schemas.auth import LoginRequest, TokenResponse
-from app.core.security import verify_password, create_access_token
-from app.core.deps import get_current_user
+from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse
 from app.schemas.users import UserResponse
+from app.core.security import (
+    create_access_token,
+    hash_password,
+    verify_password,
+)
+from app.core.deps import get_current_user
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+# -----------------------------
+# Signup
+# -----------------------------
+@router.post("/signup", response_model=TokenResponse)
+def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    """
+    Self signup.
+    - Email must be unique.
+    - Password is hashed with bcrypt.
+    - Returns access token immediately.
+    """
+
+    email = payload.email.lower().strip()
+
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # 🔐 Handle bcrypt 72-byte limit cleanly
+    try:
+        pw_hash = hash_password(payload.password)
+    except ValueError as e:
+        # Converts hashing failure into proper user-level error
+        raise HTTPException(status_code=400, detail=str(e))
+
+    user = User(
+        email=email,
+        password_hash=pw_hash,
+        name=payload.name,
+        role="user",
+        is_active=True,
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(subject=str(user.id))
+
+    return TokenResponse(access_token=token)
+
+
+# -----------------------------
+# Login
+# -----------------------------
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
     """
-    Login endpoint:
-    - verifies email + password
-    - returns JWT access token
+    Verify credentials and return JWT.
     """
-    user = db.query(User).filter(User.email == payload.email).first()
-    if not user:
+
+    email = payload.email.lower().strip()
+
+    user = db.query(User).filter(User.email == email).first()
+
+    # Don't leak which part failed
+    if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     token = create_access_token(subject=str(user.id))
-    return {"access_token": token, "token_type": "bearer"}
+
+    return TokenResponse(access_token=token)
+
+
+# -----------------------------
+# Current user
+# -----------------------------
 @router.get("/me", response_model=UserResponse)
-def me(current_user: User = Depends(get_current_user)):
+def me(current_user: User = Depends(get_current_user)) -> UserResponse:
+    """
+    Returns currently authenticated user.
+    """
     return current_user

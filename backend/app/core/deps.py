@@ -18,6 +18,7 @@ def get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
+    # Require a Bearer token
     if creds is None or creds.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -27,6 +28,10 @@ def get_current_user(
         payload = decode_token(token)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Ensure it's an access token (future-proof when we add reset tokens / refresh tokens)
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid token type")
 
     user_id = payload.get("sub")
     if not user_id:

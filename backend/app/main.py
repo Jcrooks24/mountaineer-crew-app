@@ -9,7 +9,8 @@ from app.db.session import Base, engine
 # Routers that exist
 from app.routers.sync import router as sync_router
 from app.routers.jobs import router as jobs_router
-from app.routers.calendar import router as calendar_router  # if your file is app/routers/calendar.py
+from app.routers.calendar import router as calendar_router
+from app.routers.auth import router as auth_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -40,5 +41,6 @@ def root():
 
 # Routers
 app.include_router(sync_router)        # /api/sync
-app.include_router(calendar_router)    # /api/calendar/day (if your calendar router uses prefix="/api")
+app.include_router(calendar_router)    # /api/calendar/day
 app.include_router(jobs_router)        # /jobs (JWT protected)
+app.include_router(auth_router)        # /api/auth/*
