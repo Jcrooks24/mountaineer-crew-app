@@ -117,4 +117,25 @@ def test_email():
         text="If you received this, SMTP is working."
     )
 
-    return {"ok": True}    
+    return {"ok": True} 
+
+@router.get("/email-debug")
+def email_debug():
+    import os
+
+    # DO NOT return tokens; only safe info
+    smtp_host = os.getenv("SMTP_HOST", "")
+    smtp_port = os.getenv("SMTP_PORT", "")
+    smtp_from = os.getenv("SMTP_FROM", "")
+    frontend_url = os.getenv("FRONTEND_URL", "")
+    smtp_user = os.getenv("SMTP_USER", "")
+
+    return {
+        "smtp_host_set": bool(smtp_host.strip()),
+        "smtp_host": smtp_host,               # not secret
+        "smtp_port": smtp_port,               # not secret
+        "smtp_from": smtp_from,               # not secret
+        "frontend_url": frontend_url,         # not secret
+        "smtp_user_len": len(smtp_user.strip()),
+        "smtp_user_prefix": smtp_user.strip()[:6],  # tiny prefix only (safe-ish)
+    }   
