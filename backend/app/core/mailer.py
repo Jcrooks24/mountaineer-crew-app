@@ -31,8 +31,16 @@ def send_email(to_email: str, subject: str, text: str) -> None:
     msg["Subject"] = subject
     msg.set_content(text)
 
-    with smtplib.SMTP(host, port) as s:
-        s.starttls()
-        if user and password:
-            s.login(user, password)
-        s.send_message(msg)
+    import traceback
+
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as s:
+            s.set_debuglevel(1)  # prints SMTP conversation to logs (temporary)
+            s.starttls()
+            if user and password:
+                s.login(user, password)
+            s.send_message(msg)
+    except Exception as e:
+        print("SMTP SEND FAILED:", repr(e))
+        traceback.print_exc()
+        raise
