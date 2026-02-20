@@ -106,3 +106,15 @@ def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     Returns currently authenticated user.
     """
     return current_user
+
+@router.post("/test-email")
+def test_email():
+    from app.core.mailer import send_email
+
+    send_email(
+        to_email="jacob@mountaineermoving.com",
+        subject="Mountaineer Crew App Test",
+        text="If you received this, SMTP is working."
+    )
+
+    return {"ok": True}    
