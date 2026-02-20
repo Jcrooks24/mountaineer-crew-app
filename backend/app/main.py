@@ -15,7 +15,15 @@ from app.routers.auth import router as auth_router
 
 app = FastAPI(title="Mountaineer Crew App Backend")
 
-# CORS: allow your Vercel frontend to call Render backend
+# CORS: allow browser/PWA frontends to call this API
+# Why:
+# - Your frontend is on Vercel, backend is on Render => cross-origin => browser preflight (OPTIONS)
+# - Without CORSMiddleware, OPTIONS hits the route and returns Method Not Allowed
+#
+# What we allow:
+# - Local dev Vite servers
+# - Your known production Vercel domain
+# - Any Vercel preview deployment domain (*.vercel.app) via regex (prevents "sometimes works" issues)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -23,6 +31,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,6 +40,8 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    # Creates tables if they don't exist.
+    # NOTE: Fine for SQLite early on; later you'll likely switch to migrations (Alembic).
     Base.metadata.create_all(bind=engine)
 
 
