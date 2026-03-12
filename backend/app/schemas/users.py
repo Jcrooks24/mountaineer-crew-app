@@ -15,6 +15,12 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     id: int
     email: EmailStr
+    name: str | None = None
+    role: str | None = None
 
     class Config:
         from_attributes = True  # Allows returning SQLAlchemy models directly
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str | None = None

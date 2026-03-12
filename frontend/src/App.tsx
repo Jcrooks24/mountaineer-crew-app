@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import logo from "./assets/logo.png";
 import { addPhoto, deletePhoto, listPhotosForJob, type StoredPhoto } from "./lib/photoStore";
 
@@ -117,6 +118,7 @@ function money(n: number) {
 }
 
 export default function App() {
+  const nav = useNavigate();
   const [tab, setTab] = useState<Tab>("timeline");
 
   const [jobUuid, setJobUuid] = useState<string>(() => localStorage.getItem(JOB_KEY) || "");
@@ -1007,6 +1009,13 @@ export default function App() {
           <span className="chip">{navigator.onLine ? "Online" : "Offline"}</span>
           <span className="chip">Queue {queueLen}</span>
           <span className="chip">{jobStatus}</span>
+          <button
+            className="chip"
+            onClick={() => nav("/profile")}
+            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
+          >
+            Profile
+          </button>
         </div>
       </div>
 

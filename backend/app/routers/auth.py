@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models.user import User
 from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse, ForgotPasswordRequest, ResetPasswordRequest
+from app.schemas.users import UpdateProfileRequest
 from app.schemas.users import UserResponse
 from app.core.security import (
     create_access_token,
@@ -106,6 +107,22 @@ def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     """
     Returns currently authenticated user.
     """
+    return current_user
+
+
+@router.patch("/me", response_model=UserResponse)
+def update_me(
+    payload: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserResponse:
+    """
+    Update the current user's profile (name only for now).
+    """
+    if payload.name is not None:
+        current_user.name = payload.name.strip() or None
+    db.commit()
+    db.refresh(current_user)
     return current_user
 
 # -----------------------------

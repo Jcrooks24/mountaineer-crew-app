@@ -14,6 +14,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import Profile from "./pages/Profile";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -25,6 +26,9 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/signup" element={<Signup />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+
+          {/* Protected */}
+          <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
 
           {/* Everything else requires auth */}
           <Route
