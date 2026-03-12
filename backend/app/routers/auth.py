@@ -149,16 +149,20 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
         frontend_url = os.getenv("FRONTEND_URL", "https://mountaineer-crew-app.vercel.app").rstrip("/")
         reset_link = f"{frontend_url}/reset-password?token={token}"
 
-        send_email(
-            to_email=user.email,
-            subject="Reset your Mountaineer Crew App password",
-            text=(
-                f"Hi{' ' + user.name if user.name else ''},\n\n"
-                f"Click the link below to reset your password. It expires in 1 hour.\n\n"
-                f"{reset_link}\n\n"
-                f"If you didn't request this, you can ignore this email."
-            ),
-        )
+        try:
+            send_email(
+                to_email=user.email,
+                subject="Reset your Mountaineer Crew App password",
+                text=(
+                    f"Hi{' ' + user.name if user.name else ''},\n\n"
+                    f"Click the link below to reset your password. It expires in 1 hour.\n\n"
+                    f"{reset_link}\n\n"
+                    f"If you didn't request this, you can ignore this email."
+                ),
+            )
+        except Exception as exc:
+            # Log so it shows in Render logs, but don't leak the error to the client
+            print(f"[forgot-password] email send FAILED for {user.email}: {exc}")
 
 
 # -----------------------------
@@ -220,4 +224,5 @@ def email_debug():
         "frontend_url": frontend_url,         # not secret
         "smtp_user_len": len(smtp_user.strip()),
         "smtp_user_prefix": smtp_user.strip()[:6],  # tiny prefix only (safe-ish)
-    }   
+        "postmark_token_set": bool(os.getenv("POSTMARK_SERVER_TOKEN", "").strip()),
+    }

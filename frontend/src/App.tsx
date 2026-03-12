@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "./assets/logo.png";
+import { useAuth } from "./auth/AuthContext";
 import { addPhoto, deletePhoto, listPhotosForJob, type StoredPhoto } from "./lib/photoStore";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -119,6 +120,7 @@ function money(n: number) {
 
 export default function App() {
   const nav = useNavigate();
+  const { user } = useAuth();
   const [tab, setTab] = useState<Tab>("timeline");
 
   const [jobUuid, setJobUuid] = useState<string>(() => localStorage.getItem(JOB_KEY) || "");
@@ -1009,6 +1011,15 @@ export default function App() {
           <span className="chip">{navigator.onLine ? "Online" : "Offline"}</span>
           <span className="chip">Queue {queueLen}</span>
           <span className="chip">{jobStatus}</span>
+          {user?.role === "admin" && (
+            <button
+              className="chip"
+              onClick={() => nav("/admin")}
+              style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
+            >
+              Admin
+            </button>
+          )}
           <button
             className="chip"
             onClick={() => nav("/profile")}
