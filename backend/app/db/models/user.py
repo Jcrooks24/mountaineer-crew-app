@@ -3,7 +3,7 @@ User model for authentication.
 Minimal fields for now + minimal RBAC stub.
 """
 
-from sqlalchemy import Column, Integer, String, Boolean
+from sqlalchemy import Column, Integer, String, Boolean, DateTime
 from app.db.session import Base
 
 
@@ -20,3 +20,7 @@ class User(Base):
     role = Column(String, nullable=False, default="user")
 
     is_active = Column(Boolean, default=True, nullable=False)
+
+    # Password reset
+    reset_token = Column(String, nullable=True, index=True)
+    reset_token_expiry = Column(DateTime(timezone=True), nullable=True)

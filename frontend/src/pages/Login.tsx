@@ -66,6 +66,9 @@ export default function Login() {
       <div style={{ marginTop: 12 }}>
         No account? <Link to="/signup">Sign up</Link>
       </div>
+      <div style={{ marginTop: 8 }}>
+        <Link to="/forgot-password">Forgot password?</Link>
+      </div>
     </div>
   );
 }

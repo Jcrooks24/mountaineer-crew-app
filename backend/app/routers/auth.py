@@ -17,10 +17,11 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models.user import User
-from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse
+from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse, ForgotPasswordRequest, ResetPasswordRequest
 from app.schemas.users import UserResponse
 from app.core.security import (
     create_access_token,
+    create_reset_token,
     hash_password,
     verify_password,
 )
@@ -106,6 +107,70 @@ def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     Returns currently authenticated user.
     """
     return current_user
+
+# -----------------------------
+# Forgot password
+# -----------------------------
+@router.post("/forgot-password", status_code=204)
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> None:
+    """
+    Generate a reset token and email a reset link.
+    Always returns 204 to avoid leaking whether the email exists.
+    """
+    import os
+    from app.core.mailer import send_email
+
+    email = payload.email.lower().strip()
+    user = db.query(User).filter(User.email == email).first()
+
+    if user and user.is_active:
+        token, expiry = create_reset_token()
+        user.reset_token = token
+        user.reset_token_expiry = expiry
+        db.commit()
+
+        frontend_url = os.getenv("FRONTEND_URL", "https://mountaineer-crew-app.vercel.app").rstrip("/")
+        reset_link = f"{frontend_url}/reset-password?token={token}"
+
+        send_email(
+            to_email=user.email,
+            subject="Reset your Mountaineer Crew App password",
+            text=(
+                f"Hi{' ' + user.name if user.name else ''},\n\n"
+                f"Click the link below to reset your password. It expires in 1 hour.\n\n"
+                f"{reset_link}\n\n"
+                f"If you didn't request this, you can ignore this email."
+            ),
+        )
+
+
+# -----------------------------
+# Reset password
+# -----------------------------
+@router.post("/reset-password", status_code=204)
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)) -> None:
+    """
+    Validate the reset token and update the password.
+    """
+    from datetime import datetime, timezone
+
+    user = db.query(User).filter(User.reset_token == payload.token).first()
+
+    if not user or not user.reset_token_expiry:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+    if datetime.now(timezone.utc) > user.reset_token_expiry:
+        raise HTTPException(status_code=400, detail="Reset link has expired")
+
+    try:
+        user.password_hash = hash_password(payload.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    user.reset_token = None
+    user.reset_token_expiry = None
+    db.commit()
+
 
 @router.post("/test-email")
 def test_email():

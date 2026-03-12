@@ -9,6 +9,7 @@ Why bcrypt directly (no passlib):
 - bcrypt has a hard 72-byte input limit (we enforce it to avoid silent truncation).
 """
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -75,6 +76,16 @@ def create_access_token(subject: str) -> str:
     }
 
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def create_reset_token() -> tuple[str, datetime]:
+    """
+    Generate a secure random password reset token and its expiry (1 hour).
+    Returns (token, expiry_datetime_utc).
+    """
+    token = secrets.token_urlsafe(32)
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    return token, expiry
 
 
 def decode_token(token: str) -> dict[str, Any]:
