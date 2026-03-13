@@ -1,7 +1,9 @@
 import os
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from app.core.google_cal_oauth import list_events_for_day
+from app.db.session import get_db
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
@@ -31,14 +33,13 @@ def get_events_for_day(
         default=None,
         description="Optional override. If omitted, uses WORKSPACE_CALENDAR_ID or falls back to 'primary' in dev.",
     ),
+    db: Session = Depends(get_db),
 ):
     cal_id = resolve_calendar_id(calendar_id)
 
-    # If we fell back to primary because env is missing, we can still serve the request,
-    # but we should inform the caller how to configure it.
     env_missing = not (os.getenv("WORKSPACE_CALENDAR_ID") or "").strip()
     try:
-        events = list_events_for_day(date_yyyy_mm_dd=date, calendar_id=cal_id)
+        events = list_events_for_day(date_yyyy_mm_dd=date, calendar_id=cal_id, db=db)
         resp = {"ok": True, "date": date, "calendar_id": cal_id, "events": events}
         if env_missing and (calendar_id is None):
             resp["warning"] = "WORKSPACE_CALENDAR_ID not set; using 'primary'. Set WORKSPACE_CALENDAR_ID for production."

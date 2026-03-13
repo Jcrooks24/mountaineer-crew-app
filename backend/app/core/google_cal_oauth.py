@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from google.oauth2.credentials import Credentials
@@ -22,51 +22,88 @@ CREDS_PATH = BASE_DIR / "credentials.json"
 TOKEN_PATH = BASE_DIR / "token.json"
 
 LOCAL_TZ = ZoneInfo("America/Denver")
+DB_TOKEN_KEY = "google_oauth_token"
+
+# Module-level cache — avoids redundant refreshes within the same process lifetime
+_cached_creds: Optional[Credentials] = None
 
 
-def _get_creds() -> Credentials:
+def _load_token_from_db(db) -> Optional[str]:
+    from app.db.models.system_config import SystemConfig
+    row = db.query(SystemConfig).filter(SystemConfig.key == DB_TOKEN_KEY).first()
+    return row.value if row and row.value else None
+
+
+def _save_token_to_db(creds: Credentials, db) -> None:
+    from app.db.models.system_config import SystemConfig
+    token_json = creds.to_json()
+    row = db.query(SystemConfig).filter(SystemConfig.key == DB_TOKEN_KEY).first()
+    if row:
+        row.value = token_json
+    else:
+        db.add(SystemConfig(key=DB_TOKEN_KEY, value=token_json))
+    db.commit()
+
+
+def _creds_from_json(token_json: str) -> Credentials:
+    token_info = json.loads(token_json)
+    return Credentials.from_authorized_user_info(token_info, SCOPES)
+
+
+def _get_creds(db=None) -> Credentials:
     """
-    OAuth installed-app flow.
-
-    Local dev (default):
-      - reads credentials.json + token.json from disk
-      - refreshes token and writes token.json
-
-    Hosted demo (Render free tier):
-      - reads GOOGLE_OAUTH_CREDENTIALS_JSON and GOOGLE_OAUTH_TOKEN_JSON from env
-      - refreshes in-memory if needed (cannot persist without disk)
+    Load Google OAuth credentials. Priority:
+      1. Module-level cache (valid creds reused within same process)
+      2. DB (system_config table) — persists across Render restarts
+      3. GOOGLE_OAUTH_TOKEN_JSON env var
+      4. Local token.json file (dev only)
+    After any refresh, writes back to DB and cache.
     """
-    creds: Credentials | None = None
+    global _cached_creds
 
-    creds_json_env = os.getenv("GOOGLE_OAUTH_CREDENTIALS_JSON", "").strip()
-    token_json_env = os.getenv("GOOGLE_OAUTH_TOKEN_JSON", "").strip()
+    if _cached_creds and _cached_creds.valid:
+        return _cached_creds
 
-    using_env = bool(creds_json_env and token_json_env)
+    token_json: Optional[str] = None
+    source = "unknown"
 
-    if using_env:
-        # Load token from env (authorized user info)
+    # 1. Try DB
+    if db:
+        token_json = _load_token_from_db(db)
+        if token_json:
+            source = "db"
+
+    # 2. Try env var
+    if not token_json:
+        token_json = os.getenv("GOOGLE_OAUTH_TOKEN_JSON", "").strip() or None
+        if token_json:
+            source = "env"
+
+    if token_json:
         try:
-            token_info = json.loads(token_json_env)
+            creds = _creds_from_json(token_json)
         except Exception as e:
-            raise RuntimeError("GOOGLE_OAUTH_TOKEN_JSON is not valid JSON") from e
+            raise RuntimeError(f"Token JSON is invalid ({source}): {e}") from e
 
-        creds = Credentials.from_authorized_user_info(token_info, SCOPES)
-
-        # Refresh if needed (cannot write back to env)
         if not creds.valid:
             if creds.expired and creds.refresh_token:
                 creds.refresh(Request())
+                if db:
+                    _save_token_to_db(creds, db)
             else:
-                # If refresh_token is missing/invalid, you must paste a new token.json into env
                 raise RuntimeError(
-                    "OAuth token invalid and cannot be refreshed. Regenerate token.json locally and update GOOGLE_OAUTH_TOKEN_JSON."
+                    "Google OAuth token is invalid and cannot be refreshed. "
+                    "Paste a fresh token via Admin > Calendar."
                 )
 
+        _cached_creds = creds
         return creds
 
-    # ---- Local file mode ----
+    # 3. Local file mode (dev only)
     if TOKEN_PATH.exists():
         creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+    else:
+        creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -77,22 +114,40 @@ def _get_creds() -> Credentials:
             flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
             creds = flow.run_local_server(port=0)
 
-        # Persist token for local dev
         TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
 
+    _cached_creds = creds
     return creds
 
 
-def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str) -> List[Dict[str, Any]]:
-    """
-    List events for a specific calendar on a local day (America/Denver).
-    Returns {id, summary, start}.
-    """
+def invalidate_cache() -> None:
+    """Call this after updating the token so the next request reloads it."""
+    global _cached_creds
+    _cached_creds = None
+
+
+def get_cal_status(db=None) -> dict:
+    """Return a safe status dict for the admin panel."""
+    try:
+        creds = _get_creds(db)
+        expiry = creds.expiry.isoformat() if creds.expiry else None
+        return {
+            "ok": True,
+            "valid": creds.valid,
+            "expired": creds.expired,
+            "expiry": expiry,
+            "has_refresh_token": bool(creds.refresh_token),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List[Dict[str, Any]]:
     day = datetime.fromisoformat(date_yyyy_mm_dd).date()
     start_local = datetime.combine(day, time(0, 0, 0), tzinfo=LOCAL_TZ)
     end_local = datetime.combine(day, time(23, 59, 59), tzinfo=LOCAL_TZ)
 
-    creds = _get_creds()
+    creds = _get_creds(db)
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     resp = (
@@ -110,15 +165,12 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str) -> List[Dict[str
 
     items = resp.get("items", [])
     out: List[Dict[str, Any]] = []
-
     for it in items:
         start = it.get("start", {}).get("dateTime") or it.get("start", {}).get("date")
-        out.append(
-            {
-                "id": it.get("id"),
-                "summary": it.get("summary") or "(no title)",
-                "start": start,
-            }
-        )
+        out.append({
+            "id": it.get("id"),
+            "summary": it.get("summary") or "(no title)",
+            "start": start,
+        })
 
     return out

@@ -23,6 +23,10 @@ from app.db.session import get_db
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
+class CalTokenRequest(BaseModel):
+    token_json: str
+
+
 class UserAdminResponse(BaseModel):
     id: int
     email: str
@@ -75,6 +79,41 @@ def update_user(
     db.commit()
     db.refresh(user)
     return user
+
+
+# ---------------------------
+# Google Calendar OAuth status
+# ---------------------------
+@router.get("/cal-status")
+def cal_status(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    from app.core.google_cal_oauth import get_cal_status
+    return get_cal_status(db)
+
+
+@router.post("/cal-token", status_code=204)
+def update_cal_token(
+    payload: CalTokenRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Paste a fresh token.json body here to update the stored Google OAuth token."""
+    import json as _json
+    from app.core.google_cal_oauth import _save_token_to_db, invalidate_cache, _creds_from_json
+
+    try:
+        _json.loads(payload.token_json)  # validate JSON
+        creds = _creds_from_json(payload.token_json)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid token JSON: {e}")
+
+    if not creds.refresh_token:
+        raise HTTPException(status_code=400, detail="Token has no refresh_token — run the OAuth flow with access_type=offline")
+
+    _save_token_to_db(creds, db)
+    invalidate_cache()
 
 
 # ---------------------------
