@@ -44,5 +44,14 @@ def get_events_for_day(
             resp["warning"] = "WORKSPACE_CALENDAR_ID not set; using 'primary'. Set WORKSPACE_CALENDAR_ID for production."
         return resp
     except Exception as e:
-        # keep message useful but not insane
-        raise HTTPException(status_code=500, detail=str(e))
+        msg = str(e)
+        if "invalid_grant" in msg:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Google OAuth token has expired or been revoked (invalid_grant). "
+                    "Re-run the OAuth flow locally: cd backend && python -c \"from app.core.google_cal_oauth import _get_creds; _get_creds()\" "
+                    "then copy the contents of token.json into the GOOGLE_OAUTH_TOKEN_JSON env var on Render."
+                ),
+            )
+        raise HTTPException(status_code=500, detail=msg)

@@ -195,34 +195,44 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
 
 @router.post("/test-email")
 def test_email():
+    """
+    Attempt a real Postmark send and return detailed success/error info.
+    """
+    import os
     from app.core.mailer import send_email
 
-    send_email(
-        to_email="jacob@mountaineermoving.com",
-        subject="Mountaineer Crew App Test",
-        text="If you received this, SMTP is working."
-    )
+    token = os.getenv("POSTMARK_SERVER_TOKEN", "").strip()
+    smtp_from = os.getenv("SMTP_FROM", "").strip()
 
-    return {"ok": True} 
+    if not token:
+        return {"ok": False, "error": "POSTMARK_SERVER_TOKEN env var is not set on this server"}
+    if not smtp_from:
+        return {"ok": False, "error": "SMTP_FROM env var is not set on this server"}
+
+    try:
+        send_email(
+            to_email="jacob@mountaineermoving.com",
+            subject="Mountaineer Crew App Test",
+            text="If you received this, Postmark is working correctly."
+        )
+        return {"ok": True, "from": smtp_from}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 
 @router.get("/email-debug")
 def email_debug():
     import os
 
-    # DO NOT return tokens; only safe info
-    smtp_host = os.getenv("SMTP_HOST", "")
-    smtp_port = os.getenv("SMTP_PORT", "")
     smtp_from = os.getenv("SMTP_FROM", "")
     frontend_url = os.getenv("FRONTEND_URL", "")
-    smtp_user = os.getenv("SMTP_USER", "")
+    postmark_token = os.getenv("POSTMARK_SERVER_TOKEN", "").strip()
 
     return {
-        "smtp_host_set": bool(smtp_host.strip()),
-        "smtp_host": smtp_host,               # not secret
-        "smtp_port": smtp_port,               # not secret
-        "smtp_from": smtp_from,               # not secret
-        "frontend_url": frontend_url,         # not secret
-        "smtp_user_len": len(smtp_user.strip()),
-        "smtp_user_prefix": smtp_user.strip()[:6],  # tiny prefix only (safe-ish)
-        "postmark_token_set": bool(os.getenv("POSTMARK_SERVER_TOKEN", "").strip()),
+        "smtp_from": smtp_from,
+        "smtp_from_set": bool(smtp_from.strip()),
+        "frontend_url": frontend_url,
+        "postmark_token_set": bool(postmark_token),
+        # show first 8 chars of token so you can confirm it matches Postmark dashboard
+        "postmark_token_prefix": postmark_token[:8] if postmark_token else None,
     }
