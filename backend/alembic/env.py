@@ -28,19 +28,19 @@ target_metadata = Base.metadata
 def _get_database_url() -> str:
     """
     Keep Alembic's DB URL consistent with app/db/session.py.
-
-    Supports:
-    - SQLITE_PATH env var (Render disk: /var/data/app.db)
-    - default ./app.db for local dev
+    Prefers DATABASE_URL (PostgreSQL on Render), falls back to SQLite locally.
     """
-    sqlite_path = os.getenv("SQLITE_PATH", "./app.db")
+    url = os.getenv("DATABASE_URL", "")
+    if url:
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        return url
 
+    # Local dev: SQLite
+    sqlite_path = os.getenv("SQLITE_PATH", "./app.db")
     if sqlite_path.startswith("/"):
-        # unix absolute path
         return f"sqlite:////{sqlite_path.lstrip('/')}"
-    else:
-        # relative path OR windows absolute path like C:/...
-        return f"sqlite:///{sqlite_path}"
+    return f"sqlite:///{sqlite_path}"
 
 
 def run_migrations_offline() -> None:

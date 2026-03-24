@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db.session import Base, engine
+from app.db.session import Base, engine  # noqa: F401
 import app.db.models.system_config  # noqa: F401 — ensure table is registered
 
 # Routers that exist
@@ -43,11 +43,17 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     import os
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic import command
     from app.db.session import SessionLocal
     from app.db.models.user import User
 
-    # Creates tables if they don't exist.
-    Base.metadata.create_all(bind=engine)
+    # Run all pending Alembic migrations on startup.
+    # This replaces create_all and keeps the schema versioned and up to date.
+    alembic_cfg = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    command.upgrade(alembic_cfg, "head")
+    print("[startup] Alembic migrations applied.")
 
     # Auto-promote ADMIN_EMAIL to admin role on every startup.
     # Set this env var on Render to grant admin access without a shell.
