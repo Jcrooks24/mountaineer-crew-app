@@ -42,9 +42,26 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    import os
+    from app.db.session import SessionLocal
+    from app.db.models.user import User
+
     # Creates tables if they don't exist.
-    # NOTE: Fine for SQLite early on; later you'll likely switch to migrations (Alembic).
     Base.metadata.create_all(bind=engine)
+
+    # Auto-promote ADMIN_EMAIL to admin role on every startup.
+    # Set this env var on Render to grant admin access without a shell.
+    admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    if admin_email:
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.email == admin_email).first()
+            if user and user.role != "admin":
+                user.role = "admin"
+                db.commit()
+                print(f"[startup] Promoted {admin_email} to admin.")
+        finally:
+            db.close()
 
 
 @app.get("/")
