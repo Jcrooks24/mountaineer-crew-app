@@ -10,13 +10,13 @@ def ensure_sheet_exports_tables(engine: Engine) -> None:
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS sheet_event_exports (
             event_id TEXT PRIMARY KEY,
-            exported_at TEXT NOT NULL DEFAULT (datetime('now'))
+            exported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """))
 
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS sheet_material_exports (
             export_key TEXT PRIMARY KEY,
-            exported_at TEXT NOT NULL DEFAULT (datetime('now'))
+            exported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """))
