@@ -51,7 +51,7 @@ def on_startup() -> None:
 
     # Run all pending Alembic migrations on startup.
     # This replaces create_all and keeps the schema versioned and up to date.
-    alembic_cfg = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     command.upgrade(alembic_cfg, "head")
     print("[startup] Alembic migrations applied.")
 
