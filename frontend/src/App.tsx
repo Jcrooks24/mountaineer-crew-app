@@ -393,7 +393,7 @@ export default function App() {
   }
 
   function iconForStatus(s: "queued" | "synced") {
-    return s === "synced" ? "S" : "Q";
+    return s === "synced" ? "✓" : "●";
   }
 
   function markLogEventsSyncedByIds(ids: Set<string>) {
@@ -1059,21 +1059,24 @@ export default function App() {
               <div className="col">
                 <div className="label">Job ID</div>
                 <input
+                  className="mono"
                   value={jobUuid}
                   onChange={(e) => setPersistedJobUuid(e.target.value)}
-                  placeholder="Paste job ID"
+                  placeholder="Tap New Job to start, or paste an existing ID"
                   disabled={jobStatus === "closed"}
+                  style={{ fontSize: 12 }}
                 />
-                <div className="small">{status || "Ready"}</div>
+                {status && <div className="small" style={{ color: "var(--brand)" }}>{status}</div>}
               </div>
 
               <div className="col">
                 <div className="label">Job Name</div>
                 <input value={jobName} onChange={(e) => onChangeJobName(e.target.value)} placeholder="Type job name…" />
-                <div className="small">
-                  Source:{" "}
-                  {jobNameSource === "calendar" ? "Calendar" : jobNameSource === "manual" ? "Manual" : "—"}
-                </div>
+                {jobNameSource ? (
+                  <div className="small">
+                    {jobNameSource === "calendar" ? "From calendar" : "Entered manually"}
+                  </div>
+                ) : null}
               </div>
 
               <div className="row wrap">
@@ -1085,7 +1088,7 @@ export default function App() {
                 <div className="col" style={{ minWidth: 170 }}>
                   <div className="label">Calendar</div>
                   <button onClick={loadCalendarEvents} disabled={calLoading}>
-                    {calLoading ? "Loading…" : "Load"}
+                    {calLoading ? "Loading…" : "Load calendar"}
                   </button>
                 </div>
 
@@ -1156,24 +1159,28 @@ export default function App() {
           <div className="card">
             <div className="sectionTitle">Actions</div>
 
-            <div className="row wrap">
-              <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("ARRIVE")}>
-                Arrive
-              </button>
-              <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("DEPART")}>
-                Depart
-              </button>
-              <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("START")}>
-                Start
-              </button>
-              <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("FINISH")}>
-                Finish
-              </button>
+            <div className="col" style={{ gap: 10 }}>
+              <div className="row wrap">
+                <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("ARRIVE")}>
+                  Arrive
+                </button>
+                <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("DEPART")}>
+                  Depart
+                </button>
+                <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("START")}>
+                  Start
+                </button>
+                <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("FINISH")}>
+                  Finish
+                </button>
+              </div>
 
-              <button disabled={queueLen === 0} onClick={syncQueueNow}>
-                Sync
-              </button>
-              <button onClick={createNewJob}>New Job</button>
+              <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                <button disabled={queueLen === 0} onClick={syncQueueNow}>
+                  {queueLen > 0 ? `Sync (${queueLen} pending)` : "Sync"}
+                </button>
+                <button onClick={createNewJob}>New Job</button>
+              </div>
             </div>
 
             {jobStatus === "closed" ? (
@@ -1198,57 +1205,88 @@ export default function App() {
             {activityLog.length === 0 ? (
               <div className="small">No events yet.</div>
             ) : (
-              <ul style={{ paddingLeft: 18, margin: 0 }}>
-                {activityLog.map((e) => (
-                  <li key={e.event_id} style={{ marginBottom: 10 }}>
-                    <div className="row wrap" style={{ alignItems: "baseline" }}>
-                      <span className="chip" style={{ padding: "4px 8px" }}>
-                        {iconForStatus(e.sync_status)}
-                      </span>
-                      <strong style={{ minWidth: 70 }}>{e.type}</strong>
-                      <span className="small">{new Date(e.timestamp).toLocaleString()}</span>
-                      <span className="small">{e.lat == null ? "" : `±${Math.round(e.accuracy_m ?? 0)}m`}</span>
+              <div>
+                {activityLog.map((e, i) => (
+                  <div
+                    key={e.event_id}
+                    style={{
+                      padding: "10px 0",
+                      borderTop: i > 0 ? "1px solid var(--border)" : "none",
+                    }}
+                  >
+                    <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                      <div className="row" style={{ gap: 8 }}>
+                        <span
+                          className="chip"
+                          style={{
+                            padding: "3px 8px",
+                            fontSize: 11,
+                            color: e.sync_status === "synced" ? "var(--ok)" : "var(--brand2)",
+                            borderColor: e.sync_status === "synced" ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                          }}
+                        >
+                          {iconForStatus(e.sync_status)}
+                        </span>
+                        <strong style={{ fontSize: 14 }}>{e.type}</strong>
+                      </div>
+                      <div className="row" style={{ gap: 8 }}>
+                        {e.lat != null && (
+                          <span className="small">±{Math.round(e.accuracy_m ?? 0)}m</span>
+                        )}
+                        <span className="small">
+                          {new Date(e.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          {" · "}
+                          {new Date(e.timestamp).toLocaleDateString()}
+                        </span>
+                      </div>
                     </div>
 
-                    {e.note ? (
-                      <div className="small" style={{ marginTop: 4, marginLeft: 12 }}>
-                        <em>{e.note}</em>
+                    {e.note && (
+                      <div className="small" style={{ marginTop: 5, fontStyle: "italic", color: "var(--muted)" }}>
+                        "{e.note}"
                       </div>
-                    ) : null}
+                    )}
 
-                    <div style={{ marginTop: 6, marginLeft: 12 }}>
-                      <button onClick={() => addNoteToEntry(e.event_id)} style={{ padding: "6px 10px", fontSize: 12 }}>
-                        Add note
+                    <div style={{ marginTop: 6 }}>
+                      <button onClick={() => addNoteToEntry(e.event_id)} style={{ padding: "4px 10px", fontSize: 12 }}>
+                        + Note
                       </button>
                     </div>
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
           </div>
 
-          <details className="card">
-            <summary className="sectionTitle" style={{ cursor: "pointer" }}>
-              Debug
+          <details style={{ marginTop: 8 }}>
+            <summary className="small" style={{ cursor: "pointer", color: "var(--muted)", opacity: 0.5, userSelect: "none", listStyle: "none" }}>
+              ··· debug
             </summary>
-            <div className="small" style={{ marginTop: 10 }}>
-              Queued: {queueEvents.length} | Log: {activityLog.length}
-            </div>
-            <pre
+            <div
               style={{
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                margin: 0,
-                marginTop: 10,
+                marginTop: 8,
                 padding: 12,
                 borderRadius: 12,
                 border: "1px solid var(--border)",
-                background: "rgba(255,255,255,0.03)",
-                color: "var(--text)",
+                background: "rgba(255,255,255,0.02)",
               }}
             >
-              {JSON.stringify(response, null, 2)}
-            </pre>
+              <div className="small">Queued: {queueEvents.length} · Log: {activityLog.length}</div>
+              {response != null && (
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    margin: 0,
+                    marginTop: 8,
+                    fontSize: 11,
+                    color: "var(--muted)",
+                  }}
+                >
+                  {JSON.stringify(response, null, 2)}
+                </pre>
+              )}
+            </div>
           </details>
         </>
       )}
