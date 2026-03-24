@@ -96,6 +96,13 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    # Auto-promote if this email is designated as admin via env var
+    import os
+    admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    if admin_email and user.email == admin_email and user.role != "admin":
+        user.role = "admin"
+        db.commit()
+
     token = create_access_token(subject=str(user.id))
 
     return TokenResponse(access_token=token)
