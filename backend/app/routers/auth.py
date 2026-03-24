@@ -158,6 +158,9 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
         frontend_url = os.getenv("FRONTEND_URL", "https://mountaineer-crew-app.vercel.app").rstrip("/")
         reset_link = f"{frontend_url}/reset-password?token={token}"
 
+        # Log the link so it's visible in Render logs even if email fails
+        print(f"[forgot-password] reset link for {user.email}: {reset_link}")
+
         try:
             send_email(
                 to_email=user.email,
@@ -169,6 +172,7 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
                     f"If you didn't request this, you can ignore this email."
                 ),
             )
+            print(f"[forgot-password] email sent OK to {user.email}")
         except Exception as exc:
             # Log so it shows in Render logs, but don't leak the error to the client
             print(f"[forgot-password] email send FAILED for {user.email}: {exc}")

@@ -5,10 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
-
-# Reuse your existing OAuth token.json flow (already has sheets scope now)
-from app.core.google_cal_oauth import SCOPES
+from app.core.google_cal_oauth import _get_creds
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 
@@ -58,8 +55,8 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
             "synced",
         ])
 
-    # 3) Append to Sheets
-    creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    # 3) Get credentials from DB / env var (works on Render, no local file needed)
+    creds = _get_creds(db)
     svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     svc.spreadsheets().values().append(
@@ -70,11 +67,13 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
         body={"values": rows},
     ).execute()
 
-    # 4) Mark exported (dedupe) in SQLite
-    # Use INSERT OR IGNORE to be extra safe.
+    # 4) Mark exported (dedupe) — PostgreSQL-compatible ON CONFLICT syntax
     for ev in new_events:
         db.execute(
-            text("INSERT OR IGNORE INTO sheet_event_exports(event_id) VALUES (:event_id)"),
+            text(
+                "INSERT INTO sheet_event_exports(event_id) VALUES (:event_id) "
+                "ON CONFLICT (event_id) DO NOTHING"
+            ),
             {"event_id": str(ev["event_id"])},
         )
     db.commit()
