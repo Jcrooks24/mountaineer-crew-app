@@ -12,6 +12,8 @@ Uses:
 - get_current_user dependency
 """
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -173,14 +175,18 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     """
     Validate the reset token and update the password.
     """
-    from datetime import datetime, timezone
-
     user = db.query(User).filter(User.reset_token == payload.token).first()
 
     if not user or not user.reset_token_expiry:
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    if datetime.now(timezone.utc) > user.reset_token_expiry:
+    # SQLite returns naive datetimes even for DateTime(timezone=True) columns;
+    # treat them as UTC to avoid TypeError on comparison.
+    expiry = user.reset_token_expiry
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+
+    if datetime.now(timezone.utc) > expiry:
         raise HTTPException(status_code=400, detail="Reset link has expired")
 
     try:
