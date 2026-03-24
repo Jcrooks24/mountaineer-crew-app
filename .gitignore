@@ -4,6 +4,7 @@ backend/credentials.json
 
 # python
 backend/.venv/
+backend/.venv312/
 backend/__pycache__/
 **/__pycache__/
 
