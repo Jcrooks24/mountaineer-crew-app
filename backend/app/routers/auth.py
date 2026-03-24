@@ -149,6 +149,11 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == email).first()
 
+    if not user:
+        print(f"[forgot-password] no user found for email: {email}")
+    elif not user.is_active:
+        print(f"[forgot-password] user found but inactive: {email}")
+
     if user and user.is_active:
         token, expiry = create_reset_token()
         user.reset_token = token
