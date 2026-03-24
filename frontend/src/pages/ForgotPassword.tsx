@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
+import logo from "../assets/logo.png";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
@@ -26,40 +27,61 @@ export default function ForgotPassword() {
     }
   }
 
-  if (sent) {
-    return (
-      <div style={{ maxWidth: 420, margin: "40px auto", padding: 16 }}>
-        <h1>Check your email</h1>
-        <p>If that address is registered, you'll receive a reset link shortly.</p>
-        <Link to="/login">Back to login</Link>
-      </div>
-    );
-  }
-
   return (
-    <div style={{ maxWidth: 420, margin: "40px auto", padding: 16 }}>
-      <h1>Forgot password</h1>
-
-      <form onSubmit={onSubmit}>
-        <label>Email</label>
-        <input
-          style={{ width: "100%", padding: 10, margin: "8px 0" }}
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          autoComplete="email"
-          required
+    <div className="container" style={{ maxWidth: 480 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 48, marginBottom: 8, gap: 10 }}>
+        <img
+          src={logo}
+          alt="Logo"
+          style={{ width: 48, height: 48, borderRadius: 14, objectFit: "contain", filter: "invert(1) brightness(1.15) contrast(1.05)" }}
         />
+        <div style={{ fontWeight: 900, fontSize: 18, letterSpacing: 0.2 }}>Mountaineer Moving Co.</div>
+      </div>
 
-        {err && <div style={{ color: "crimson", marginTop: 8 }}>{err}</div>}
+      <div className="card">
+        {sent ? (
+          <div className="col" style={{ gap: 14 }}>
+            <div className="sectionTitle" style={{ fontSize: 18 }}>Check your email</div>
+            <div className="small" style={{ color: "var(--ok)" }}>
+              If that address is registered, you'll receive a reset link shortly.
+            </div>
+            <Link to="/login" style={{ color: "var(--brand)", textDecoration: "none", fontSize: 13, fontWeight: 600 }}>
+              &larr; Back to login
+            </Link>
+          </div>
+        ) : (
+          <>
+            <div className="sectionTitle" style={{ fontSize: 18, marginBottom: 6 }}>Forgot password</div>
+            <div className="small" style={{ marginBottom: 18 }}>
+              Enter your email and we'll send you a reset link.
+            </div>
 
-        <button disabled={busy} style={{ width: "100%", padding: 12, marginTop: 12 }}>
-          {busy ? "Sending..." : "Send reset link"}
-        </button>
-      </form>
+            <form onSubmit={onSubmit} className="col" style={{ gap: 14 }}>
+              <div className="col">
+                <div className="label">Email</div>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                  required
+                />
+              </div>
 
-      <div style={{ marginTop: 12 }}>
-        <Link to="/login">Back to login</Link>
+              {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+
+              <button className="btnPrimary" disabled={busy} style={{ width: "100%", marginTop: 4 }}>
+                {busy ? "Sending…" : "Send reset link"}
+              </button>
+            </form>
+
+            <div className="small" style={{ marginTop: 18 }}>
+              <Link to="/login" style={{ color: "var(--muted)", textDecoration: "none" }}>
+                &larr; Back to login
+              </Link>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

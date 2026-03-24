@@ -1008,9 +1008,15 @@ export default function App() {
         </div>
 
         <div className="row wrap" style={{ justifyContent: "flex-end" }}>
-          <span className="chip">{navigator.onLine ? "Online" : "Offline"}</span>
-          <span className="chip">Queue {queueLen}</span>
-          <span className="chip">{jobStatus}</span>
+          <span className="chip" style={{ color: navigator.onLine ? "var(--ok)" : "var(--danger)" }}>
+            {navigator.onLine ? "Online" : "Offline"}
+          </span>
+          <span className="chip" style={queueLen > 0 ? { color: "var(--brand2)", borderColor: "rgba(106,167,255,0.35)" } : {}}>
+            Queue {queueLen}
+          </span>
+          <span className="chip" style={{ color: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize" }}>
+            {jobStatus}
+          </span>
           {user?.role === "admin" && (
             <button
               className="chip"

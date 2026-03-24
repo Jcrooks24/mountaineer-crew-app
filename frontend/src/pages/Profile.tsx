@@ -69,38 +69,48 @@ export default function Profile() {
     }
   }
 
+  const initials = user?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? "?";
+
   return (
-    <div style={{ maxWidth: 480, margin: "40px auto", padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-        <h1 style={{ margin: 0 }}>Profile</h1>
-        <button onClick={() => nav(-1)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, opacity: 0.6 }}>
+    <div className="container" style={{ maxWidth: 480 }}>
+      {/* Header */}
+      <div className="topbar" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 900, fontSize: 15 }}>Profile</div>
+        <button
+          onClick={() => nav(-1)}
+          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, padding: "4px 8px" }}
+        >
           &larr; Back
         </button>
       </div>
 
-      {/* Profile photo */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 28 }}>
+      {/* Avatar */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
         <div
           style={{
-            width: 100, height: 100, borderRadius: "50%",
-            background: "#ddd", overflow: "hidden",
+            width: 88, height: 88, borderRadius: "50%",
+            background: "linear-gradient(135deg, var(--brand), var(--brand2))",
+            overflow: "hidden",
             display: "flex", alignItems: "center", justifyContent: "center",
-            marginBottom: 10, fontSize: 36, color: "#999",
+            fontSize: 32, fontWeight: 900, color: "#0b1220",
           }}
         >
           {photo
             ? <img src={photo} alt="Profile" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-            : (user?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? "?")}
+            : initials}
         </div>
 
         <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhotoChange} />
 
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="row" style={{ gap: 8 }}>
           <button onClick={() => fileRef.current?.click()} style={{ fontSize: 13 }}>
             {photo ? "Change photo" : "Upload photo"}
           </button>
           {photo && (
-            <button onClick={handleRemovePhoto} style={{ fontSize: 13, background: "none", color: "crimson", border: "1px solid crimson" }}>
+            <button
+              onClick={handleRemovePhoto}
+              style={{ fontSize: 13, background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}
+            >
               Remove
             </button>
           )}
@@ -108,42 +118,52 @@ export default function Profile() {
       </div>
 
       {/* Account info */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 4 }}>Email</div>
-          <div>{user?.email}</div>
-        </div>
-
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 4 }}>Role</div>
-          <div style={{ textTransform: "capitalize" }}>{user?.role ?? "user"}</div>
+      <div className="card">
+        <div className="sectionTitle">Account</div>
+        <div className="col" style={{ gap: 12 }}>
+          <div>
+            <div className="label">Email</div>
+            <div style={{ marginTop: 4 }}>{user?.email}</div>
+          </div>
+          <div>
+            <div className="label">Role</div>
+            <div style={{ marginTop: 4, textTransform: "capitalize" }}>{user?.role ?? "user"}</div>
+          </div>
         </div>
       </div>
 
       {/* Edit name */}
-      <form onSubmit={handleSaveName} style={{ marginBottom: 32 }}>
-        <label style={{ fontSize: 12, opacity: 0.6 }}>Display name</label>
-        <input
-          style={{ width: "100%", padding: 10, margin: "6px 0 10px", boxSizing: "border-box" }}
-          value={name}
-          onChange={(e) => { setName(e.target.value); setSaved(false); }}
-          placeholder="Your name"
-        />
-        {err && <div style={{ color: "crimson", marginBottom: 8, fontSize: 13 }}>{err}</div>}
-        {saved && <div style={{ color: "green", marginBottom: 8, fontSize: 13 }}>Saved</div>}
-        <button disabled={saving} style={{ padding: "10px 20px" }}>
-          {saving ? "Saving..." : "Save name"}
-        </button>
-      </form>
+      <div className="card">
+        <div className="sectionTitle">Display name</div>
+        <form onSubmit={handleSaveName} className="col" style={{ gap: 12 }}>
+          <input
+            value={name}
+            onChange={(e) => { setName(e.target.value); setSaved(false); }}
+            placeholder="Your name"
+          />
+          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+          {saved && <div className="small" style={{ color: "var(--ok)" }}>Saved</div>}
+          <button className="btnPrimary" disabled={saving}>
+            {saving ? "Saving…" : "Save name"}
+          </button>
+        </form>
+      </div>
 
       {/* Sign out */}
-      <hr style={{ marginBottom: 24, opacity: 0.2 }} />
-      <button
-        onClick={handleSignOut}
-        style={{ width: "100%", padding: 12, background: "crimson", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 15 }}
-      >
-        Sign out
-      </button>
+      <div className="card">
+        <button
+          onClick={handleSignOut}
+          style={{
+            width: "100%", padding: 12,
+            background: "linear-gradient(180deg, #3d1a1a, #2e1212)",
+            color: "var(--danger)",
+            border: "1px solid rgba(255,107,107,0.3)",
+            borderRadius: 12, cursor: "pointer", fontSize: 15, fontWeight: 700,
+          }}
+        >
+          Sign out
+        </button>
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import logo from "../assets/logo.png";
 
 type TokenResponse = { access_token: string; token_type: string };
 
@@ -36,44 +37,65 @@ export default function Signup() {
   }
 
   return (
-    <div style={{ maxWidth: 420, margin: "40px auto", padding: 16 }}>
-      <h1>Sign up</h1>
-
-      <form onSubmit={onSubmit}>
-        <label>Name (optional)</label>
-        <input
-          style={{ width: "100%", padding: 10, margin: "8px 0" }}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoComplete="name"
+    <div className="container" style={{ maxWidth: 480 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 48, marginBottom: 8, gap: 10 }}>
+        <img
+          src={logo}
+          alt="Logo"
+          style={{ width: 48, height: 48, borderRadius: 14, objectFit: "contain", filter: "invert(1) brightness(1.15) contrast(1.05)" }}
         />
+        <div style={{ fontWeight: 900, fontSize: 18, letterSpacing: 0.2 }}>Mountaineer Moving Co.</div>
+      </div>
 
-        <label>Email</label>
-        <input
-          style={{ width: "100%", padding: 10, margin: "8px 0" }}
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          autoComplete="email"
-        />
+      <div className="card">
+        <div className="sectionTitle" style={{ fontSize: 18, marginBottom: 18 }}>Create account</div>
 
-        <label>Password</label>
-        <input
-          style={{ width: "100%", padding: 10, margin: "8px 0" }}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          type="password"
-          autoComplete="new-password"
-        />
+        <form onSubmit={onSubmit} className="col" style={{ gap: 14 }}>
+          <div className="col">
+            <div className="label">Name <span style={{ opacity: 0.5 }}>(optional)</span></div>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="name"
+              placeholder="Your name"
+            />
+          </div>
 
-        {err && <div style={{ color: "crimson", marginTop: 8 }}>{err}</div>}
+          <div className="col">
+            <div className="label">Email</div>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              type="email"
+              autoComplete="email"
+              required
+            />
+          </div>
 
-        <button disabled={busy} style={{ width: "100%", padding: 12, marginTop: 12 }}>
-          {busy ? "Creating..." : "Create account"}
-        </button>
-      </form>
+          <div className="col">
+            <div className="label">Password</div>
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              autoComplete="new-password"
+              required
+            />
+          </div>
 
-      <div style={{ marginTop: 12 }}>
-        Already have an account? <Link to="/login">Login</Link>
+          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+
+          <button className="btnPrimary" disabled={busy} style={{ width: "100%", marginTop: 4 }}>
+            {busy ? "Creating…" : "Create account"}
+          </button>
+        </form>
+
+        <div className="small" style={{ marginTop: 18 }}>
+          Already have an account?{" "}
+          <Link to="/login" style={{ color: "var(--brand)", textDecoration: "none", fontWeight: 600 }}>
+            Log in
+          </Link>
+        </div>
       </div>
     </div>
   );
