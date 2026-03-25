@@ -148,31 +148,89 @@ export const RADIUS_OPTIONS: RadiusOption[] = [
   { label: "Sharp", value: "4px" },
 ];
 
+// ─── Shadow options ───────────────────────────────────────────────────────────
+
+export interface ShadowOption {
+  label: string;
+  value: string;
+}
+
+export const SHADOW_OPTIONS: ShadowOption[] = [
+  { label: "None",   value: "none" },
+  { label: "Subtle", value: "0 4px 12px rgba(0,0,0,0.2)" },
+  { label: "Normal", value: "0 10px 30px rgba(0,0,0,0.35)" },
+  { label: "Deep",   value: "0 20px 50px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)" },
+];
+
+// ─── Density options ──────────────────────────────────────────────────────────
+
+export interface DensityOption {
+  label: string;
+  pad: string;
+  cardR: string;
+}
+
+export const DENSITY_OPTIONS: DensityOption[] = [
+  { label: "Compact",   pad: "10px", cardR: "10px" },
+  { label: "Normal",    pad: "14px", cardR: "14px" },
+  { label: "Spacious",  pad: "20px", cardR: "18px" },
+];
+
+// ─── Map pin event types ──────────────────────────────────────────────────────
+
+export const DEFAULT_PIN_COLORS: Record<string, string> = {
+  start:     "#34d399",
+  stop:      "#f87171",
+  arrival:   "#60a5fa",
+  departure: "#fb923c",
+  checkin:   "#a78bfa",
+  checkout:  "#fbbf24",
+  location:  "#9fb0c8",
+  other:     "#e2e8f0",
+};
+
+export const PIN_EVENT_TYPES = Object.keys(DEFAULT_PIN_COLORS);
+
 // ─── Settings shape ───────────────────────────────────────────────────────────
 
 export interface ThemeSettings {
   themeId: string;
-  brandOverride: string | null;   // null = use preset
+  brandOverride: string | null;
   brand2Override: string | null;
   fontValue: string;
   btnRadius: string;
+  cardShadow: string;
+  density: string;          // label of DensityOption
+  cardGlow: boolean;
+  pinSize: number;          // radius in px (6–16)
+  pinColors: Record<string, string>;
 }
 
 const STORAGE_KEY = "crew_theme_settings";
 
-const DEFAULT_SETTINGS: ThemeSettings = {
+export const DEFAULT_SETTINGS: ThemeSettings = {
   themeId: "dark-ocean",
   brandOverride: null,
   brand2Override: null,
   fontValue: FONT_OPTIONS[0].value,
   btnRadius: RADIUS_OPTIONS[0].value,
+  cardShadow: SHADOW_OPTIONS[2].value,
+  density: "Normal",
+  cardGlow: false,
+  pinSize: 9,
+  pinColors: { ...DEFAULT_PIN_COLORS },
 };
 
 function loadSettings(): ThemeSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      pinColors: { ...DEFAULT_PIN_COLORS, ...(parsed.pinColors ?? {}) },
+    };
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -182,26 +240,40 @@ function applySettings(settings: ThemeSettings) {
   const preset = THEME_PRESETS[settings.themeId] ?? THEME_PRESETS["dark-ocean"];
   const root = document.documentElement;
 
-  // Apply all preset vars
+  // Preset vars
   for (const [k, v] of Object.entries(preset.vars)) {
     root.style.setProperty(k, v);
   }
 
-  // Apply overrides if set
+  // Color overrides
   if (settings.brandOverride) root.style.setProperty("--brand", settings.brandOverride);
   if (settings.brand2Override) root.style.setProperty("--brand2", settings.brand2Override);
 
-  // Apply font
+  // Font
   root.style.setProperty("--font", settings.fontValue);
 
-  // Apply button radius
+  // Button radius + card radius
   root.style.setProperty("--btn-r", settings.btnRadius);
-
-  // Also update card radius to stay in sync (but not as extreme as pill)
   const cardR = settings.btnRadius === "999px" ? "20px"
               : settings.btnRadius === "4px"   ? "6px"
               : "14px";
   root.style.setProperty("--r", cardR);
+
+  // Shadow
+  root.style.setProperty("--shadow", settings.cardShadow);
+
+  // Density (padding)
+  const densityOpt = DENSITY_OPTIONS.find((d) => d.label === settings.density) ?? DENSITY_OPTIONS[1];
+  root.style.setProperty("--pad", densityOpt.pad);
+
+  // Card glow
+  const brand = settings.brandOverride ?? preset.vars["--brand"];
+  root.style.setProperty(
+    "--border",
+    settings.cardGlow
+      ? `${brand}44`
+      : preset.vars["--border"]
+  );
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -217,7 +289,6 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<ThemeSettings>(loadSettings);
 
-  // Apply on mount and whenever settings change
   useEffect(() => {
     applySettings(settings);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
