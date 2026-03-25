@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Poppins:wght@400;500;600;700&family=Montserrat:wght@400;500;600;700&display=swap');
 :root{
   --bg: #0b1220;
   --card: #0f1a2e;
@@ -15,6 +15,7 @@
 
   --shadow: 0 10px 30px rgba(0,0,0,0.35);
   --r: 14px;
+  --btn-r: 12px;
   --pad: 14px;
 
   --font: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
@@ -43,7 +44,7 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 input, select, textarea{
   width: 100%;
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--btn-r);
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.04);
   color: var(--text);
@@ -54,7 +55,7 @@ textarea{ min-height: 90px; resize: vertical; }
 
 button{
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: var(--btn-r);
   border: 1px solid rgba(255,255,255,0.15);
   background: linear-gradient(180deg, #1b2945, #162238);
   color: #ffffff;
@@ -121,7 +122,7 @@ button:disabled{
   flex: 1;
   text-align:center;
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--btn-r);
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.04);
   color: var(--muted);
