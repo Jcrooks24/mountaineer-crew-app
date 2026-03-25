@@ -15,6 +15,7 @@ Uses:
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -215,10 +216,14 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     db.commit()
 
 
+class TestEmailRequest(BaseModel):
+    to: str = "jacob@mountaineermoving.com"
+
 @router.post("/test-email")
-def test_email():
+def test_email(payload: TestEmailRequest = TestEmailRequest()):
     """
     Attempt a real Postmark send and return detailed success/error info.
+    Accepts optional JSON body: {"to": "someone@example.com"}
     """
     import os
     from app.core.mailer import send_email
@@ -233,11 +238,11 @@ def test_email():
 
     try:
         send_email(
-            to_email="jacob@mountaineermoving.com",
+            to_email=payload.to,
             subject="Mountaineer Crew App Test",
             text="If you received this, Postmark is working correctly."
         )
-        return {"ok": True, "from": smtp_from}
+        return {"ok": True, "from": smtp_from, "to": payload.to}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
