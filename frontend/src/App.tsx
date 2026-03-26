@@ -709,11 +709,12 @@ export default function App() {
         await refreshPhotos();
         setStatus("Photo saved to Drive");
       } else {
-        await updatePhoto(photoId, { drive_status: "failed" });
+        const errMsg = json?.error ? String(json.error) : `HTTP ${res.status}`;
+        await updatePhoto(photoId, { drive_status: "failed", drive_error: errMsg });
         await refreshPhotos();
       }
-    } catch {
-      await updatePhoto(photoId, { drive_status: "failed" });
+    } catch (uploadErr: any) {
+      await updatePhoto(photoId, { drive_status: "failed", drive_error: uploadErr?.message ?? "Network error" });
       await refreshPhotos();
     }
 
@@ -1377,7 +1378,9 @@ export default function App() {
                               View in Drive
                             </a>
                           ) : driveFail ? (
-                            <span style={{ fontSize: 11, color: "var(--danger)" }}>Drive upload failed</span>
+                            <span style={{ fontSize: 11, color: "var(--danger)" }} title={p.drive_error}>
+                              Drive upload failed{p.drive_error ? ` — ${p.drive_error}` : ""}
+                            </span>
                           ) : p.drive_status === "pending" ? (
                             <span style={{ fontSize: 11, color: "var(--muted)" }}>Uploading…</span>
                           ) : null}

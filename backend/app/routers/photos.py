@@ -1,3 +1,5 @@
+import traceback
+
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from sqlalchemy.orm import Session
@@ -24,14 +26,22 @@ async def upload_photo(
     data = await file.read()
     filename = f"{photo_id}_{file.filename or 'photo.jpg'}"
 
-    result = upload_photo_to_drive(
-        db=db,
-        file_data=data,
-        filename=filename,
-        mime_type=file.content_type or "image/jpeg",
-        job_name=job_name,
-        job_date=job_date,
-    )
+    try:
+        result = upload_photo_to_drive(
+            db=db,
+            file_data=data,
+            filename=filename,
+            mime_type=file.content_type or "image/jpeg",
+            job_name=job_name,
+            job_date=job_date,
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return {
+            "ok": False,
+            "photo_id": photo_id,
+            "error": str(e),
+        }
 
     return {
         "ok": True,

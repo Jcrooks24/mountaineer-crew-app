@@ -11,6 +11,7 @@ export type StoredPhoto = {
   blob: Blob;          // actual image
   drive_status?: "pending" | "uploaded" | "failed";
   drive_url?: string;
+  drive_error?: string;
 };
 
 const DB_NAME = "crew_app_db";
