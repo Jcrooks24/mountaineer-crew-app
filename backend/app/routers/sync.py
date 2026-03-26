@@ -63,6 +63,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
             lng=e.lng,
             accuracy_m=e.accuracy_m,
             note=e.note,
+            job_name=e.job_name or None,
             synced=True,
         )
 

@@ -33,6 +33,9 @@ class Event(Base):
     lng = Column(Float, nullable=True)
     accuracy_m = Column(Float, nullable=True)
 
+    # Human-readable job name (client name) passed from frontend localStorage
+    job_name = Column(String, nullable=True)
+
     # Optional free text
     note = Column(String, nullable=True)
 

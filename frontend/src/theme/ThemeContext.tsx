@@ -179,7 +179,8 @@ export const DENSITY_OPTIONS: DensityOption[] = [
 // ─── Map pin event types ──────────────────────────────────────────────────────
 
 export const DEFAULT_PIN_COLORS: Record<string, string> = {
-  arrived: "#60a5fa",  // blue
+  arrive:  "#60a5fa",  // blue
+  depart:  "#fb923c",  // orange
   start:   "#34d399",  // green
   finish:  "#f87171",  // red
   note:    "#fbbf24",  // yellow

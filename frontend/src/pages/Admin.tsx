@@ -24,6 +24,7 @@ type AdminUser = {
 type GeoEvent = {
   event_id: string;
   job_uuid: string;
+  job_name: string;
   type: string;
   timestamp: string;
   lat: number;
@@ -218,17 +219,25 @@ function MapTab() {
     apiFetch<GeoEvent[]>("/api/admin/events/today")
       .then((data) => {
         setEvents(data);
-        setSelectedJobs(new Set(data.map((e) => e.job_uuid)));
+        setSelectedJobs(new Set(data.map((e: GeoEvent) => e.job_uuid)));
       })
       .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
   }, []);
 
-  // Unique jobs with event counts
+  // Unique jobs with event counts and name
   const jobs = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const e of events) map.set(e.job_uuid, (map.get(e.job_uuid) ?? 0) + 1);
-    return [...map.entries()];
+    const counts = new Map<string, number>();
+    const names = new Map<string, string>();
+    for (const e of events) {
+      counts.set(e.job_uuid, (counts.get(e.job_uuid) ?? 0) + 1);
+      if (e.job_name && !names.has(e.job_uuid)) names.set(e.job_uuid, e.job_name);
+    }
+    return [...counts.entries()].map(([uuid, count]) => ({
+      uuid,
+      count,
+      label: names.get(uuid) || uuid.slice(0, 8),
+    }));
   }, [events]);
 
   // Events filtered by selected jobs
@@ -326,7 +335,7 @@ function MapTab() {
 
         {/* All / None toggles */}
         <button
-          onClick={() => setSelectedJobs(new Set(jobs.map(([uuid]) => uuid)))}
+          onClick={() => setSelectedJobs(new Set(jobs.map((j) => j.uuid)))}
           style={{ fontSize: 11, padding: "3px 9px", borderRadius: 999, border: "1px solid var(--border)", color: "var(--muted)", cursor: "pointer" }}
         >
           All
@@ -340,12 +349,12 @@ function MapTab() {
 
         {/* Job filter chips */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {jobs.map(([uuid, count]) => {
-            const active = selectedJobs.has(uuid);
+          {jobs.map((j) => {
+            const active = selectedJobs.has(j.uuid);
             return (
               <button
-                key={uuid}
-                onClick={() => toggleJob(uuid)}
+                key={j.uuid}
+                onClick={() => toggleJob(j.uuid)}
                 style={{
                   fontSize: 11, padding: "3px 9px", borderRadius: 999,
                   background: active ? "rgba(93,214,194,0.15)" : "rgba(255,255,255,0.04)",
@@ -354,7 +363,7 @@ function MapTab() {
                   fontWeight: 600, cursor: "pointer",
                 }}
               >
-                Job {uuid.slice(0, 8)} · {count}
+                {j.label} · {j.count}
               </button>
             );
           })}
