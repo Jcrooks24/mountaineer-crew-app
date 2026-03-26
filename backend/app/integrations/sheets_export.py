@@ -11,7 +11,7 @@ DEFAULT_MATERIALS_TAB = "Materials"
 
 EVENTS_HEADERS = [
     "event_id", "timestamp", "job_uuid", "job_name", "job_date",
-    "type", "note", "lat", "lng", "accuracy_m", "device_id", "synced",
+    "type", "note", "lat", "lng", "accuracy_m", "device_id", "created_by", "synced",
 ]
 MATERIALS_HEADERS = [
     "submission_id", "created_at", "job_uuid", "job_name", "job_date",
@@ -78,6 +78,7 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
             ev.get("lng"),
             ev.get("accuracy_m"),
             ev.get("device_id") or "",
+            ev.get("created_by") or "",
             "synced",
         ])
 
