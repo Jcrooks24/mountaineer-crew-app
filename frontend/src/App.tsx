@@ -142,7 +142,6 @@ export default function App() {
   // Job metadata (display + persistence)
   const [jobName, setJobName] = useState<string>("");
   const [jobDate, setJobDate] = useState<string>(() => todayLocalYYYYMMDD());
-  const [jobNameSource, setJobNameSource] = useState<"" | "manual" | "calendar">("");
 
   // Comments (per job_uuid)
   const [jobComments, setJobComments] = useState<string>("");
@@ -326,11 +325,9 @@ export default function App() {
     if (meta) {
       setJobName(meta.jobName || "");
       setJobDate(meta.jobDate || todayLocalYYYYMMDD());
-      setJobNameSource(meta.source || "");
     } else {
       const loadedName = loadJobName(val);
       setJobName(loadedName);
-      setJobNameSource(loadedName.trim() ? "manual" : "");
       const storedDate = loadJobDate(val);
       setJobDate(storedDate || todayLocalYYYYMMDD());
     }
@@ -347,35 +344,6 @@ export default function App() {
     localStorage.setItem(JOB_STATUS_KEY, val);
   }
 
-  function createNewJob() {
-    const newId = crypto.randomUUID();
-    setPersistedJobUuid(newId);
-    setPersistedJobStatus("active");
-
-    saveQueue([]);
-    saveLog([]);
-    setResponse(null);
-    setStatus("New job created");
-
-    setJobComments("");
-    saveCommentsForJob(newId, "");
-
-    const d = todayLocalYYYYMMDD();
-    setJobDate(d);
-    saveJobDate(newId, d);
-
-    setJobName("");
-    setJobNameSource("");
-    saveJobName(newId, "");
-
-    saveJobMeta({
-      job_uuid: newId,
-      jobName: "",
-      jobDate: d,
-      source: "",
-      updated_at: new Date().toISOString(),
-    });
-  }
 
   // -----------------------
   // Geolocation + events
@@ -637,7 +605,6 @@ export default function App() {
     bindCalendarEventToJob(jobDate, calId, newId);
 
     setJobName(ev.summary);
-    setJobNameSource("calendar");
 
     saveJobMeta({
       job_uuid: newId,
@@ -655,21 +622,6 @@ export default function App() {
     fetchJobEvents(newId);
   }
 
-  function onChangeJobName(val: string) {
-    setJobName(val);
-    setJobNameSource(val.trim() ? "manual" : "");
-
-    const uuid = jobUuid.trim();
-    if (!uuid) return;
-
-    saveJobMeta({
-      job_uuid: uuid,
-      jobName: val,
-      jobDate,
-      source: val.trim() ? "manual" : "",
-      updated_at: new Date().toISOString(),
-    });
-  }
 
   async function fetchJobEvents(uuid: string) {
     if (!uuid.trim()) return;
@@ -946,11 +898,9 @@ export default function App() {
     if (meta) {
       setJobName(meta.jobName || "");
       setJobDate(meta.jobDate || todayLocalYYYYMMDD());
-      setJobNameSource(meta.source || "");
     } else {
       const loadedName = loadJobName(jobUuid);
       setJobName(loadedName);
-      setJobNameSource(loadedName.trim() ? "manual" : "");
       const storedDate = loadJobDate(jobUuid);
       setJobDate(storedDate || todayLocalYYYYMMDD());
     }
