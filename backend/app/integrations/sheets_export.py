@@ -8,6 +8,7 @@ from googleapiclient.discovery import build
 from app.core.google_cal_oauth import _get_creds
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
+DEFAULT_MATERIALS_TAB = "Materials"
 
 
 def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
@@ -75,6 +76,87 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
                 "ON CONFLICT (event_id) DO NOTHING"
             ),
             {"event_id": str(ev["event_id"])},
+        )
+    db.commit()
+
+    return len(rows)
+
+
+def export_materials_to_sheets(db: Session, submission: dict) -> int:
+    """
+    Append material line items from a submission to the Materials tab in Google Sheets.
+    One row per line item. Deduplicates by submission_id + item_id.
+    Returns number of rows appended.
+    """
+    items = submission.get("items", [])
+    if not items:
+        return 0
+
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    tab = os.getenv("SHEETS_MATERIALS_TAB", DEFAULT_MATERIALS_TAB).strip() or DEFAULT_MATERIALS_TAB
+
+    submission_id = str(submission["id"])
+    job_uuid = submission.get("job_uuid", "")
+    job_name = submission.get("jobName", "")
+    job_date = submission.get("jobDate", "")
+    created_at = submission.get("created_at", "")
+    notes = submission.get("notes", "")
+    total = submission.get("total", 0)
+
+    rows: List[List[Any]] = []
+    for item in items:
+        item_id = str(item.get("id", ""))
+        export_key = f"{submission_id}:{item_id}"
+
+        exists = db.execute(
+            text("SELECT 1 FROM sheet_material_exports WHERE export_key = :key LIMIT 1"),
+            {"key": export_key},
+        ).fetchone()
+        if exists:
+            continue
+
+        qty = item.get("qty", 1)
+        unit_price = item.get("unitPrice")
+        line_total = round(qty * unit_price, 2) if unit_price is not None else ""
+
+        rows.append([
+            submission_id,
+            created_at,
+            job_uuid,
+            job_name,
+            job_date,
+            notes,
+            item.get("name", ""),
+            qty,
+            unit_price if unit_price is not None else "",
+            line_total,
+            total,
+        ])
+
+    if not rows:
+        return 0
+
+    creds = _get_creds(db)
+    svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+    svc.spreadsheets().values().append(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!A1",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": rows},
+    ).execute()
+
+    # Mark exported for deduplication
+    for item in items:
+        item_id = str(item.get("id", ""))
+        export_key = f"{submission_id}:{item_id}"
+        db.execute(
+            text(
+                "INSERT INTO sheet_material_exports(export_key) VALUES (:key) "
+                "ON CONFLICT (export_key) DO NOTHING"
+            ),
+            {"key": export_key},
         )
     db.commit()
 

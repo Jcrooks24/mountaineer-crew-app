@@ -179,14 +179,11 @@ export const DENSITY_OPTIONS: DensityOption[] = [
 // ─── Map pin event types ──────────────────────────────────────────────────────
 
 export const DEFAULT_PIN_COLORS: Record<string, string> = {
-  start:     "#34d399",
-  stop:      "#f87171",
-  arrival:   "#60a5fa",
-  departure: "#fb923c",
-  checkin:   "#a78bfa",
-  checkout:  "#fbbf24",
-  location:  "#9fb0c8",
-  other:     "#e2e8f0",
+  arrived: "#60a5fa",  // blue
+  start:   "#34d399",  // green
+  finish:  "#f87171",  // red
+  note:    "#fbbf24",  // yellow
+  other:   "#e2e8f0",  // gray
 };
 
 export const PIN_EVENT_TYPES = Object.keys(DEFAULT_PIN_COLORS);

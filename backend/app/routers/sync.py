@@ -23,6 +23,8 @@ class EventIn(BaseModel):
     lng: Optional[float] = None
     accuracy_m: Optional[float] = None
     note: Optional[str] = None
+    job_name: Optional[str] = None
+    job_date: Optional[str] = None
 
 
 class SyncIn(BaseModel):
@@ -75,6 +77,8 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
                 "event_id": e.event_id,
                 "timestamp": e.timestamp,
                 "job_uuid": e.job_uuid,
+                "job_name": e.job_name or "",
+                "job_date": e.job_date or "",
                 "type": e.type,
                 "note": e.note,
                 "lat": e.lat,

@@ -13,6 +13,7 @@ from app.routers.jobs import router as jobs_router
 from app.routers.calendar import router as calendar_router
 from app.routers.auth import router as auth_router
 from app.routers.admin import router as admin_router
+from app.routers.materials import router as materials_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -81,3 +82,4 @@ app.include_router(calendar_router)    # /api/calendar/day
 app.include_router(jobs_router)        # /jobs (JWT protected)
 app.include_router(auth_router)        # /api/auth/*
 app.include_router(admin_router)       # /api/admin/*
+app.include_router(materials_router)   # /api/materials

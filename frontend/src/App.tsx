@@ -463,6 +463,8 @@ export default function App() {
         lng: e.lng,
         accuracy_m: e.accuracy_m,
         note: e.note ?? null,
+        job_name: localStorage.getItem(JOB_NAME_PREFIX + e.job_uuid) ?? "",
+        job_date: localStorage.getItem(JOB_DATE_PREFIX + e.job_uuid) ?? "",
       })),
     };
 
@@ -864,6 +866,17 @@ export default function App() {
 
     appendMaterialsSubmission(sub);
     await recordEvent("NOTE", `MATERIALS ${money(total)} (${matItems.length})`);
+
+    // POST to backend for Google Sheets export (non-blocking — don't fail the submission)
+    try {
+      await fetch(`${API}/api/materials`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sub),
+      });
+    } catch (_) {
+      // network failure — materials still saved locally
+    }
 
     setMatNotes("");
     setMatItems([]);

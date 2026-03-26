@@ -324,29 +324,41 @@ function MapTab() {
       <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <span className="small">{visible.length} / {events.length} event{events.length !== 1 ? "s" : ""}</span>
 
+        {/* All / None toggles */}
+        <button
+          onClick={() => setSelectedJobs(new Set(jobs.map(([uuid]) => uuid)))}
+          style={{ fontSize: 11, padding: "3px 9px", borderRadius: 999, border: "1px solid var(--border)", color: "var(--muted)", cursor: "pointer" }}
+        >
+          All
+        </button>
+        <button
+          onClick={() => setSelectedJobs(new Set())}
+          style={{ fontSize: 11, padding: "3px 9px", borderRadius: 999, border: "1px solid var(--border)", color: "var(--muted)", cursor: "pointer" }}
+        >
+          None
+        </button>
+
         {/* Job filter chips */}
-        {jobs.length > 1 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginLeft: 4 }}>
-            {jobs.map(([uuid, count]) => {
-              const active = selectedJobs.has(uuid);
-              return (
-                <button
-                  key={uuid}
-                  onClick={() => toggleJob(uuid)}
-                  style={{
-                    fontSize: 11, padding: "3px 9px", borderRadius: 999,
-                    background: active ? "rgba(93,214,194,0.15)" : "rgba(255,255,255,0.04)",
-                    border: `1px solid ${active ? "var(--brand)" : "var(--border)"}`,
-                    color: active ? "var(--brand)" : "var(--muted)",
-                    fontWeight: 600, cursor: "pointer",
-                  }}
-                >
-                  Job {uuid.slice(0, 8)} · {count}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {jobs.map(([uuid, count]) => {
+            const active = selectedJobs.has(uuid);
+            return (
+              <button
+                key={uuid}
+                onClick={() => toggleJob(uuid)}
+                style={{
+                  fontSize: 11, padding: "3px 9px", borderRadius: 999,
+                  background: active ? "rgba(93,214,194,0.15)" : "rgba(255,255,255,0.04)",
+                  border: `1px solid ${active ? "var(--brand)" : "var(--border)"}`,
+                  color: active ? "var(--brand)" : "var(--muted)",
+                  fontWeight: 600, cursor: "pointer",
+                }}
+              >
+                Job {uuid.slice(0, 8)} · {count}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Map */}
