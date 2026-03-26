@@ -4,8 +4,7 @@ from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from googleapiclient.discovery import build
-from app.core.google_cal_oauth import _get_creds
+from app.core.google_cal_oauth import get_sheets_service
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
@@ -82,9 +81,8 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
             "synced",
         ])
 
-    # 3) Get credentials from DB / env var (works on Render, no local file needed)
-    creds = _get_creds(db)
-    svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    # 3) Get Sheets service (cached at module level — avoids re-fetching discovery doc)
+    svc = get_sheets_service(db)
 
     _ensure_tab(svc, spreadsheet_id, tab, EVENTS_HEADERS)
 
@@ -164,8 +162,7 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     if not rows:
         return 0
 
-    creds = _get_creds(db)
-    svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    svc = get_sheets_service(db)
 
     _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS)
 

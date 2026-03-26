@@ -25,8 +25,10 @@ TOKEN_PATH = BASE_DIR / "token.json"
 LOCAL_TZ = ZoneInfo("America/Denver")
 DB_TOKEN_KEY = "google_oauth_token"
 
-# Module-level cache — avoids redundant refreshes within the same process lifetime
+# Module-level caches — avoids redundant refreshes and discovery-doc fetches
 _cached_creds: Optional[Credentials] = None
+_cached_cal_service = None   # googleapiclient Resource
+_cached_sheets_service = None
 
 
 def _load_token_from_db(db) -> Optional[str]:
@@ -123,8 +125,28 @@ def _get_creds(db=None) -> Credentials:
 
 def invalidate_cache() -> None:
     """Call this after updating the token so the next request reloads it."""
-    global _cached_creds
+    global _cached_creds, _cached_cal_service, _cached_sheets_service
     _cached_creds = None
+    _cached_cal_service = None
+    _cached_sheets_service = None
+
+
+def get_calendar_service(db=None):
+    global _cached_cal_service
+    if _cached_cal_service is not None:
+        return _cached_cal_service
+    creds = _get_creds(db)
+    _cached_cal_service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    return _cached_cal_service
+
+
+def get_sheets_service(db=None):
+    global _cached_sheets_service
+    if _cached_sheets_service is not None:
+        return _cached_sheets_service
+    creds = _get_creds(db)
+    _cached_sheets_service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    return _cached_sheets_service
 
 
 def get_cal_status(db=None) -> dict:
@@ -148,8 +170,7 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List
     start_local = datetime.combine(day, time(0, 0, 0), tzinfo=LOCAL_TZ)
     end_local = datetime.combine(day, time(23, 59, 59), tzinfo=LOCAL_TZ)
 
-    creds = _get_creds(db)
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service = get_calendar_service(db)
 
     resp = (
         service.events()

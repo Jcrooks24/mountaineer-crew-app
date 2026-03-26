@@ -7,10 +7,21 @@ from googleapiclient.http import MediaIoBaseUpload
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.core.google_cal_oauth import _get_creds
+from app.core.google_cal_oauth import _get_creds  # used inside _get_drive_service
 
 PARENT_FOLDER_KEY = "drive_parent_folder_id"
 DEFAULT_PARENT_FOLDER_NAME = "Mountaineer Crew Photos"
+
+_cached_drive_service = None
+
+
+def _get_drive_service(db=None):
+    global _cached_drive_service
+    if _cached_drive_service is not None:
+        return _cached_drive_service
+    creds = _get_creds(db)
+    _cached_drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+    return _cached_drive_service
 
 
 def _get_or_create_folder(svc, name: str, parent_id: Optional[str] = None) -> str:
@@ -77,8 +88,7 @@ def upload_photo_to_drive(
     Job folder is created on first upload only (no empty folders).
     Returns {"file_id": "...", "url": "..."}.
     """
-    creds = _get_creds(db)
-    svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+    svc = _get_drive_service(db)
 
     parent_id = _get_parent_folder_id(svc, db)
 
