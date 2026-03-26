@@ -5,6 +5,7 @@ import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme } from "./theme/ThemeContext";
+import { getToken } from "./auth/token";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -697,7 +698,7 @@ export default function App() {
       form.append("job_date", jobDate);
       form.append("caption", caption);
 
-      const token = localStorage.getItem("auth_token") || "";
+      const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -735,7 +736,7 @@ export default function App() {
       form.append("job_name", jobName);
       form.append("job_date", jobDate);
       form.append("caption", photo.caption);
-      const token = localStorage.getItem("auth_token") || "";
+      const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
