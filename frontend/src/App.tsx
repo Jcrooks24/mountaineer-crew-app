@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import logo from "./assets/logo.png";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
-import { addPhoto, deletePhoto, listPhotosForJob, type StoredPhoto } from "./lib/photoStore";
+import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -158,6 +158,8 @@ export default function App() {
   const [photos, setPhotos] = useState<StoredPhoto[]>([]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string>("");
+  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
+  const [pendingCaption, setPendingCaption] = useState<string>("");
 
   // Materials
   const [matJobLabel, setMatJobLabel] = useState<string>("");
@@ -646,33 +648,76 @@ export default function App() {
     }
   }
 
-  async function onPickPhotoFile(file: File | null) {
+  function onPickPhotoFile(file: File | null) {
     if (!file) return;
-    if (!jobUuid.trim()) {
-      setPhotoError("Set Job first");
-      return;
-    }
+    if (!jobUuid.trim()) { setPhotoError("Select a job first"); return; }
+    setPhotoError("");
+    setPendingPhotoFile(file);
+    setPendingCaption("");
+  }
 
+  async function onSavePendingPhoto() {
+    if (!pendingPhotoFile || !jobUuid.trim()) return;
     setPhotoBusy(true);
     setPhotoError("");
 
+    // Capture before clearing state
+    const fileRef = pendingPhotoFile;
+    const photoId = crypto.randomUUID();
+    const caption = pendingCaption.trim();
+    const stored: StoredPhoto = {
+      id: photoId,
+      job_uuid: jobUuid.trim(),
+      created_at: new Date().toISOString(),
+      mime: fileRef.type || "image/jpeg",
+      caption,
+      blob: fileRef,
+      drive_status: "pending",
+    };
+
     try {
-      const caption = (window.prompt("Caption (optional):", "") ?? "").trim();
-      await addPhoto({
-        id: crypto.randomUUID(),
-        job_uuid: jobUuid.trim(),
-        created_at: new Date().toISOString(),
-        mime: file.type || "image/jpeg",
-        caption,
-        blob: file,
-      });
+      await addPhoto(stored);
+      setPendingPhotoFile(null);
+      setPendingCaption("");
       await refreshPhotos();
-      setStatus("Photo saved");
+      setStatus("Photo saved — uploading to Drive…");
     } catch (e: any) {
       setPhotoError(e?.message ?? "Photo save failed");
-    } finally {
       setPhotoBusy(false);
+      return;
     }
+
+    // Upload to Drive (non-blocking after local save)
+    try {
+      const form = new FormData();
+      form.append("file", fileRef, fileRef.name || "photo.jpg");
+      form.append("photo_id", photoId);
+      form.append("job_uuid", jobUuid.trim());
+      form.append("job_name", jobName);
+      form.append("job_date", jobDate);
+      form.append("caption", caption);
+
+      const token = localStorage.getItem("auth_token") || "";
+      const res = await fetch(`${API}/api/photos/upload`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      const json = await res.json();
+      if (res.ok && json.drive_url) {
+        await updatePhoto(photoId, { drive_status: "uploaded", drive_url: json.drive_url });
+        await refreshPhotos();
+        setStatus("Photo saved to Drive");
+      } else {
+        await updatePhoto(photoId, { drive_status: "failed" });
+        await refreshPhotos();
+      }
+    } catch {
+      await updatePhoto(photoId, { drive_status: "failed" });
+      await refreshPhotos();
+    }
+
+    setPhotoBusy(false);
   }
 
   async function onDeletePhoto(id: string) {
@@ -1245,58 +1290,76 @@ export default function App() {
       {/* Photos */}
       {tab === "photos" && (
         <>
-          <div className="card">
-            <div className="sectionTitle">Photos</div>
-
-            <div className="row wrap" style={{ marginTop: 10 }}>
-              <label className="chip" style={{ cursor: photoBusy ? "not-allowed" : "pointer" }}>
-                {photoBusy ? "Working…" : "Add photo"}
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  style={{ display: "none" }}
-                  disabled={photoBusy}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] ?? null;
-                    e.currentTarget.value = "";
-                    onPickPhotoFile(f);
-                  }}
+          {/* Pending photo — caption + save */}
+          {pendingPhotoFile ? (
+            <div className="card">
+              <div className="sectionTitle">Add Photo</div>
+              <img
+                src={URL.createObjectURL(pendingPhotoFile)}
+                alt="preview"
+                style={{ width: "100%", borderRadius: 8, marginBottom: 10 }}
+              />
+              <div className="col" style={{ gap: 8 }}>
+                <div className="label">Note (optional)</div>
+                <textarea
+                  value={pendingCaption}
+                  onChange={(e) => setPendingCaption(e.target.value)}
+                  placeholder="Describe what's in this photo…"
+                  rows={2}
+                  autoFocus
                 />
-              </label>
-
-              <button onClick={refreshPhotos} disabled={photoBusy}>
-                Refresh
-              </button>
-
-              <span className="chip">{jobUuid.trim() ? `Job ${jobUuid.trim().slice(0, 8)}…` : "Set Job first"}</span>
-            </div>
-
-            {photoError ? (
-              <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>
-                {photoError}
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button className="btnPrimary" onClick={onSavePendingPhoto} disabled={photoBusy}>
+                    {photoBusy ? "Saving…" : "Save Photo"}
+                  </button>
+                  <button onClick={() => { setPendingPhotoFile(null); setPendingCaption(""); }}>
+                    Cancel
+                  </button>
+                </div>
               </div>
-            ) : null}
-          </div>
+            </div>
+          ) : (
+            <div className="card">
+              <div className="sectionTitle">Photos</div>
+              <div className="row wrap" style={{ marginTop: 10, gap: 8 }}>
+                <label className="btnPrimary" style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)" }}>
+                  {photoBusy ? "Working…" : "Add Photo"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    style={{ display: "none" }}
+                    disabled={photoBusy}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      e.currentTarget.value = "";
+                      onPickPhotoFile(f);
+                    }}
+                  />
+                </label>
+                <button onClick={refreshPhotos} disabled={photoBusy}>Refresh</button>
+              </div>
+              {photoError && (
+                <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{photoError}</div>
+              )}
+            </div>
+          )}
 
           <div className="card">
             <div className="sectionTitle">Saved</div>
 
             {photos.length === 0 ? (
-              <div className="small">No photos yet.</div>
+              <div className="small">{jobUuid ? "No photos yet." : "Select a job to see photos."}</div>
             ) : (
               <div className="col" style={{ gap: 12 }}>
                 {photos.map((p) => {
                   const url = URL.createObjectURL(p.blob);
+                  const driveOk = p.drive_status === "uploaded";
+                  const driveFail = p.drive_status === "failed";
                   return (
                     <div
                       key={p.id}
-                      style={{
-                        border: "1px solid var(--border)",
-                        borderRadius: 12,
-                        overflow: "hidden",
-                        background: "rgba(255,255,255,0.02)",
-                      }}
+                      style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "rgba(255,255,255,0.02)" }}
                     >
                       <img
                         src={url}
@@ -1305,11 +1368,23 @@ export default function App() {
                         onLoad={() => URL.revokeObjectURL(url)}
                       />
                       <div style={{ padding: 10 }}>
-                        <div className="small">{new Date(p.created_at).toLocaleString()}</div>
-                        <div style={{ marginTop: 6, fontWeight: 700 }}>{p.caption || "—"}</div>
-                        <div className="row wrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
-                          <span className="chip">{p.mime}</span>
-                          <button onClick={() => onDeletePhoto(p.id)} disabled={photoBusy}>
+                        {p.caption && (
+                          <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
+                        )}
+                        <div className="small" style={{ color: "var(--muted)" }}>{new Date(p.created_at).toLocaleString()}</div>
+                        <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
+                          {driveOk && p.drive_url ? (
+                            <a href={p.drive_url} target="_blank" rel="noopener noreferrer"
+                              style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
+                              View in Drive
+                            </a>
+                          ) : driveFail ? (
+                            <span style={{ fontSize: 11, color: "var(--danger)" }}>Drive upload failed</span>
+                          ) : p.drive_status === "pending" ? (
+                            <span style={{ fontSize: 11, color: "var(--muted)" }}>Uploading…</span>
+                          ) : null}
+                          <button onClick={() => onDeletePhoto(p.id)} disabled={photoBusy}
+                            style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}>
                             Delete
                           </button>
                         </div>
