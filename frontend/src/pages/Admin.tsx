@@ -11,6 +11,8 @@ import {
   DENSITY_OPTIONS,
   PIN_EVENT_TYPES,
   DEFAULT_PIN_COLORS,
+  DEFAULT_HELP_TEXTS,
+  type HelpTexts,
 } from "../theme/ThemeContext";
 
 type AdminUser = {
@@ -775,11 +777,120 @@ function SettingsTab() {
         </div>
       </div>
 
+      {/* ── Help text ── */}
+      <HelpTextCard />
+
+      {/* ── Data management ── */}
+      <DataManagementCard />
+
       {/* ── Reset ── */}
       <div className="card" style={{ display: "flex", justifyContent: "flex-end" }}>
         <button onClick={handleReset} style={{ color: "var(--danger)", borderColor: "var(--danger)", fontSize: 13 }}>
-          Reset to defaults
+          Reset theme to defaults
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Help text editor
+// ─────────────────────────────────────────
+function HelpTextCard() {
+  const { settings, update } = useTheme();
+  const ht = settings.helpTexts;
+
+  function set(key: keyof HelpTexts, val: string) {
+    update({ helpTexts: { ...ht, [key]: val } });
+  }
+
+  const fields: { key: keyof HelpTexts; label: string }[] = [
+    { key: "materialsHint",            label: "Materials hint (below selector)" },
+    { key: "photoCaptionPlaceholder",  label: "Photo caption placeholder" },
+    { key: "jobNotesPlaceholder",      label: "Job notes placeholder" },
+    { key: "materialsNotesPlaceholder",label: "Materials notes placeholder" },
+    { key: "jobLabelPlaceholder",      label: "Job label placeholder" },
+  ];
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Field Help Text</div>
+      <div className="col" style={{ gap: 12 }}>
+        {fields.map(({ key, label }) => (
+          <div key={key} className="col" style={{ gap: 4 }}>
+            <label className="small">{label}</label>
+            <div className="row" style={{ gap: 8 }}>
+              <input
+                value={ht[key]}
+                onChange={(e) => set(key, e.target.value)}
+                style={{ flex: 1, fontSize: 13 }}
+              />
+              <button
+                onClick={() => set(key, DEFAULT_HELP_TEXTS[key])}
+                style={{ fontSize: 11, padding: "4px 10px", color: "var(--muted)", whiteSpace: "nowrap" }}
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Data management / debug
+// ─────────────────────────────────────────
+function DataManagementCard() {
+  const [counts, setCounts] = useState({ queue: 0, log: 0, materials: 0, photos: "?" });
+  const [cleared, setCleared] = useState("");
+
+  function refresh() {
+    try {
+      const q = JSON.parse(localStorage.getItem("crew_event_queue_v1") || "[]");
+      const l = JSON.parse(localStorage.getItem("crew_event_log_v1") || "[]");
+      const m = JSON.parse(localStorage.getItem("crew_materials_submissions_v1") || "[]");
+      setCounts({ queue: q.length, log: l.length, materials: m.length, photos: "IndexedDB" });
+    } catch {
+      setCounts({ queue: 0, log: 0, materials: 0, photos: "?" });
+    }
+  }
+
+  useEffect(() => { refresh(); }, []);
+
+  function clearKey(key: string, label: string) {
+    if (!confirm(`Clear ${label}? This cannot be undone.`)) return;
+    localStorage.removeItem(key);
+    setCleared(`Cleared ${label}`);
+    refresh();
+  }
+
+  const rows: { key: string; label: string; count: number | string }[] = [
+    { key: "crew_event_queue_v1",            label: "Event queue (unsynced)",    count: counts.queue },
+    { key: "crew_event_log_v1",              label: "Activity log (all events)", count: counts.log },
+    { key: "crew_materials_submissions_v1",  label: "Materials submissions",      count: counts.materials },
+  ];
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Data Management</div>
+      <div className="col" style={{ gap: 8 }}>
+        {rows.map((r) => (
+          <div key={r.key} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+            <span className="small">{r.label} <span style={{ color: "var(--muted)" }}>({r.count})</span></span>
+            <button
+              onClick={() => clearKey(r.key, r.label)}
+              style={{ fontSize: 11, padding: "3px 10px", color: "var(--danger)", borderColor: "var(--danger)" }}
+            >
+              Clear
+            </button>
+          </div>
+        ))}
+        {cleared && <div className="small" style={{ color: "var(--ok)", marginTop: 4 }}>{cleared}</div>}
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+          Photos are stored in IndexedDB. Clear via browser dev tools → Application → IndexedDB → crew_app_db.
+        </div>
       </div>
     </div>
   );

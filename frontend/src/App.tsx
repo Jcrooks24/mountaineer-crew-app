@@ -4,6 +4,7 @@ import logo from "./assets/logo.png";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
+import { useTheme } from "./theme/ThemeContext";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -123,6 +124,8 @@ function money(n: number) {
 export default function App() {
   const nav = useNavigate();
   const { user } = useAuth();
+  const { settings: themeSettings } = useTheme();
+  const ht = themeSettings.helpTexts;
   const [tab, setTab] = useState<Tab>("timeline");
 
   const [jobUuid, setJobUuid] = useState<string>(() => localStorage.getItem(JOB_KEY) || "");
@@ -174,6 +177,7 @@ export default function App() {
 
   const [isSending, setIsSending] = useState(false);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
+  const [matSubmissions, setMatSubmissions] = useState<MaterialsSubmission[]>([]);
 
   const canSend = useMemo(() => jobUuid.trim().length > 0, [jobUuid]);
 
@@ -333,12 +337,7 @@ export default function App() {
       const storedDate = loadJobDate(val);
       setJobDate(storedDate || todayLocalYYYYMMDD());
     }
-
-    setCalSelectedId("");
-    setCalEvents([]);
-    setCalError("");
-    setCalWarning("");
-    setCalLoaded(false);
+    // Calendar events stay loaded so user can switch between jobs without reloading
   }
 
   function setPersistedJobStatus(val: "active" | "closed") {
@@ -489,6 +488,7 @@ export default function App() {
       lng: loc.lng,
       accuracy_m: loc.accuracy_m,
       note,
+      created_by: user?.name || user?.email || "",
       sync_status: "queued",
     };
 
@@ -721,6 +721,41 @@ export default function App() {
     setPhotoBusy(false);
   }
 
+  async function onRetryPhotoUpload(photo: StoredPhoto) {
+    if (photoBusy) return;
+    setPhotoBusy(true);
+    setPhotoError("");
+    await updatePhoto(photo.id, { drive_status: "pending", drive_error: undefined });
+    await refreshPhotos();
+    try {
+      const form = new FormData();
+      form.append("file", photo.blob, photo.id + ".jpg");
+      form.append("photo_id", photo.id);
+      form.append("job_uuid", photo.job_uuid);
+      form.append("job_name", jobName);
+      form.append("job_date", jobDate);
+      form.append("caption", photo.caption);
+      const token = localStorage.getItem("auth_token") || "";
+      const res = await fetch(`${API}/api/photos/upload`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      const json = await res.json();
+      if (res.ok && json.drive_url) {
+        await updatePhoto(photo.id, { drive_status: "uploaded", drive_url: json.drive_url });
+        setStatus("Photo uploaded to Drive");
+      } else {
+        const errMsg = json?.error ? String(json.error) : `HTTP ${res.status}`;
+        await updatePhoto(photo.id, { drive_status: "failed", drive_error: errMsg });
+      }
+    } catch (uploadErr: any) {
+      await updatePhoto(photo.id, { drive_status: "failed", drive_error: uploadErr?.message ?? "Network error" });
+    }
+    await refreshPhotos();
+    setPhotoBusy(false);
+  }
+
   async function onDeletePhoto(id: string) {
     const ok = window.confirm("Delete this photo?");
     if (!ok) return;
@@ -904,6 +939,9 @@ export default function App() {
     resetMaterialsAddControls();
     persistMaterialsDraft();
 
+    const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
+    setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
+
     setStatus("Materials submitted");
   }
 
@@ -1004,6 +1042,8 @@ export default function App() {
   useEffect(() => {
     if (tab !== "materials") return;
     loadOrInitMaterialsDraft();
+    const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
+    setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
 
@@ -1028,13 +1068,17 @@ export default function App() {
   const materialsTotal = useMemo(() => computeMaterialsTotal(matItems), [matItems]);
 
   const mergedLog = useMemo(() => {
-    const localQueued = queueEvents.filter((e) => e.job_uuid === jobUuid.trim());
-    const queuedIds = new Set(localQueued.map((e) => e.event_id));
-    const synced = serverEvents.filter((e) => !queuedIds.has(e.event_id));
-    return [...localQueued, ...synced].sort(
+    const uuid = jobUuid.trim();
+    if (!uuid) return [];
+    // All local events for this job (synced + queued, from full localStorage log)
+    const localByJob = activityLog.filter((e) => e.job_uuid === uuid);
+    const localIds = new Set(localByJob.map((e) => e.event_id));
+    // Server events from other users not present locally
+    const serverOnly = serverEvents.filter((e) => !localIds.has(e.event_id));
+    return [...localByJob, ...serverOnly].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
-  }, [serverEvents, queueEvents, jobUuid]);
+  }, [activityLog, serverEvents, jobUuid]);
 
   const calPlaceholder = useMemo(() => {
     if (calLoading) return "Loading…";
@@ -1187,7 +1231,7 @@ export default function App() {
             <textarea
               value={jobComments}
               onChange={(e) => setJobComments(e.target.value)}
-              placeholder="Notes for this job…"
+              placeholder={ht.jobNotesPlaceholder}
             />
           </div>
 
@@ -1303,7 +1347,7 @@ export default function App() {
                 <textarea
                   value={pendingCaption}
                   onChange={(e) => setPendingCaption(e.target.value)}
-                  placeholder="Describe what's in this photo…"
+                  placeholder={ht.photoCaptionPlaceholder}
                   rows={2}
                   autoFocus
                 />
@@ -1378,11 +1422,23 @@ export default function App() {
                               View in Drive
                             </a>
                           ) : driveFail ? (
-                            <span style={{ fontSize: 11, color: "var(--danger)" }} title={p.drive_error}>
-                              Drive upload failed{p.drive_error ? ` — ${p.drive_error}` : ""}
-                            </span>
+                            <>
+                              <span style={{ fontSize: 11, color: "var(--danger)" }} title={p.drive_error}>
+                                Drive upload failed{p.drive_error ? ` — ${p.drive_error}` : ""}
+                              </span>
+                              <button onClick={() => onRetryPhotoUpload(p)} disabled={photoBusy}
+                                style={{ fontSize: 11, padding: "2px 8px" }}>
+                                Retry
+                              </button>
+                            </>
                           ) : p.drive_status === "pending" ? (
-                            <span style={{ fontSize: 11, color: "var(--muted)" }}>Uploading…</span>
+                            <>
+                              <span style={{ fontSize: 11, color: "var(--muted)" }}>Uploading…</span>
+                              <button onClick={() => onRetryPhotoUpload(p)} disabled={photoBusy}
+                                style={{ fontSize: 11, padding: "2px 8px" }}>
+                                Retry
+                              </button>
+                            </>
                           ) : null}
                           <button onClick={() => onDeletePhoto(p.id)} disabled={photoBusy}
                             style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}>
@@ -1408,8 +1464,8 @@ export default function App() {
             <div className="col" style={{ gap: 12 }}>
               <div className="col">
                 <div className="label">Job</div>
-                <input value={matJobLabel} onChange={(e) => setMatJobLabel(e.target.value)} placeholder="Job name…" />
-                <div className="small">Custom items: enter cost → +10%.</div>
+                <input value={matJobLabel} onChange={(e) => setMatJobLabel(e.target.value)} placeholder={ht.jobLabelPlaceholder} />
+                <div className="small">{ht.materialsHint}</div>
               </div>
 
               <div className="row wrap" style={{ alignItems: "flex-end" }}>
@@ -1541,7 +1597,7 @@ export default function App() {
 
           <div className="card">
             <div className="sectionTitle">Notes</div>
-            <textarea value={matNotes} onChange={(e) => setMatNotes(e.target.value)} placeholder="Notes (optional)…" />
+            <textarea value={matNotes} onChange={(e) => setMatNotes(e.target.value)} placeholder={ht.materialsNotesPlaceholder} />
             <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 12 }}>
               <button onClick={cancelMaterials}>Cancel</button>
               <button className="btnPrimary" onClick={submitMaterials}>
@@ -1549,6 +1605,33 @@ export default function App() {
               </button>
             </div>
           </div>
+
+          {/* Past submissions for this job */}
+          {matSubmissions.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Past Submissions ({matSubmissions.length})</div>
+              <div className="col" style={{ gap: 12 }}>
+                {matSubmissions.map((s) => (
+                  <div key={s.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                    <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 4 }}>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>
+                        {money(s.total)}
+                      </span>
+                      <span className="small" style={{ color: "var(--muted)" }}>
+                        {new Date(s.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                      {s.items.map((it) => `${it.qty}× ${it.name}`).join(", ")}
+                    </div>
+                    {s.notes && (
+                      <div className="small" style={{ fontStyle: "italic", marginTop: 2 }}>{s.notes}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

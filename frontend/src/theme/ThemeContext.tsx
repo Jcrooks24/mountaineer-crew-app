@@ -189,6 +189,24 @@ export const DEFAULT_PIN_COLORS: Record<string, string> = {
 
 export const PIN_EVENT_TYPES = Object.keys(DEFAULT_PIN_COLORS);
 
+// ─── Configurable help text ───────────────────────────────────────────────────
+
+export interface HelpTexts {
+  materialsHint: string;    // below material selector
+  photoCaptionPlaceholder: string;
+  jobNotesPlaceholder: string;
+  materialsNotesPlaceholder: string;
+  jobLabelPlaceholder: string;
+}
+
+export const DEFAULT_HELP_TEXTS: HelpTexts = {
+  materialsHint: "Custom items: enter cost → +10%.",
+  photoCaptionPlaceholder: "Describe what's in this photo…",
+  jobNotesPlaceholder: "Notes for this job…",
+  materialsNotesPlaceholder: "Notes (optional)…",
+  jobLabelPlaceholder: "Job name…",
+};
+
 // ─── Settings shape ───────────────────────────────────────────────────────────
 
 export interface ThemeSettings {
@@ -202,6 +220,7 @@ export interface ThemeSettings {
   cardGlow: boolean;
   pinSize: number;          // radius in px (6–16)
   pinColors: Record<string, string>;
+  helpTexts: HelpTexts;
 }
 
 const STORAGE_KEY = "crew_theme_settings";
@@ -217,6 +236,7 @@ export const DEFAULT_SETTINGS: ThemeSettings = {
   cardGlow: false,
   pinSize: 9,
   pinColors: { ...DEFAULT_PIN_COLORS },
+  helpTexts: { ...DEFAULT_HELP_TEXTS },
 };
 
 function loadSettings(): ThemeSettings {
@@ -228,6 +248,7 @@ function loadSettings(): ThemeSettings {
       ...DEFAULT_SETTINGS,
       ...parsed,
       pinColors: { ...DEFAULT_PIN_COLORS, ...(parsed.pinColors ?? {}) },
+      helpTexts: { ...DEFAULT_HELP_TEXTS, ...(parsed.helpTexts ?? {}) },
     };
   } catch {
     return DEFAULT_SETTINGS;
