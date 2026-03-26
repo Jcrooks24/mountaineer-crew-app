@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.db.models.event import Event
 from app.integrations.sheets_export import export_events_to_sheets
+from app.core.deps import get_current_user
+from app.db.models.user import User
 
 
 router = APIRouter(prefix="/api", tags=["sync"])
@@ -25,6 +27,7 @@ class EventIn(BaseModel):
     note: Optional[str] = None
     job_name: Optional[str] = None
     job_date: Optional[str] = None
+    created_by: Optional[str] = None
 
 
 class SyncIn(BaseModel):
@@ -64,6 +67,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
             accuracy_m=e.accuracy_m,
             note=e.note,
             job_name=e.job_name or None,
+            created_by=e.created_by or None,
             synced=True,
         )
 
@@ -117,3 +121,34 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
         "sheets_exported": sheets_exported,     # optional debug signal
         "sheets_error": sheets_error,           # optional debug signal
     }
+
+
+@router.get("/events")
+def get_job_events(
+    job_uuid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch all synced events for a job_uuid (cross-user view)."""
+    events = (
+        db.query(Event)
+        .filter(Event.job_uuid == job_uuid)
+        .order_by(Event.timestamp.desc())
+        .limit(200)
+        .all()
+    )
+    return [
+        {
+            "event_id": e.event_id,
+            "job_uuid": e.job_uuid,
+            "type": e.type,
+            "timestamp": e.timestamp.isoformat() + "Z",
+            "note": e.note,
+            "lat": e.lat,
+            "lng": e.lng,
+            "accuracy_m": e.accuracy_m,
+            "created_by": e.created_by or "",
+            "sync_status": "synced",
+        }
+        for e in events
+    ]

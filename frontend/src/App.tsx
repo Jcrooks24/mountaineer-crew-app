@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "./assets/logo.png";
 import { useAuth } from "./auth/AuthContext";
+import { apiFetch } from "./api/client";
 import { addPhoto, deletePhoto, listPhotosForJob, type StoredPhoto } from "./lib/photoStore";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -32,6 +33,7 @@ type EventRecord = {
   lng: number | null;
   accuracy_m: number | null;
   note?: string | null;
+  created_by?: string;
   sync_status: "queued" | "synced";
 };
 
@@ -170,7 +172,9 @@ export default function App() {
   const [matQty, setMatQty] = useState<number>(1);
 
   const [isSending, setIsSending] = useState(false);
-  const canSend = useMemo(() => jobUuid.trim().length > 0 && jobStatus === "active", [jobUuid, jobStatus]);
+  const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
+
+  const canSend = useMemo(() => jobUuid.trim().length > 0, [jobUuid]);
 
   // -----------------------
   // Storage helpers
@@ -466,6 +470,7 @@ export default function App() {
         note: e.note ?? null,
         job_name: localStorage.getItem(JOB_NAME_PREFIX + e.job_uuid) ?? "",
         job_date: localStorage.getItem(JOB_DATE_PREFIX + e.job_uuid) ?? "",
+        created_by: user?.name || user?.email || "",
       })),
     };
 
@@ -621,6 +626,7 @@ export default function App() {
       saveJobDate(bound, jobDate);
 
       setStatus("Switched job");
+      fetchJobEvents(bound);
       return;
     }
 
@@ -646,6 +652,7 @@ export default function App() {
     saveJobDate(newId, jobDate);
 
     setStatus("New job from calendar");
+    fetchJobEvents(newId);
   }
 
   function onChangeJobName(val: string) {
@@ -662,6 +669,16 @@ export default function App() {
       source: val.trim() ? "manual" : "",
       updated_at: new Date().toISOString(),
     });
+  }
+
+  async function fetchJobEvents(uuid: string) {
+    if (!uuid.trim()) return;
+    try {
+      const data = await apiFetch<EventRecord[]>(`/api/events?job_uuid=${encodeURIComponent(uuid)}`);
+      setServerEvents(data);
+    } catch {
+      // offline or error — server events unavailable, local queue still shown
+    }
   }
 
   // -----------------------
@@ -911,6 +928,11 @@ export default function App() {
   // Effects
   // -----------------------
   useEffect(() => {
+    // Auto-load calendar for today on login
+    loadCalendarEvents();
+    // Load server events for any active job
+    if (jobUuid.trim()) fetchJobEvents(jobUuid.trim());
+
     const q = loadQueue();
     setQueueLen(q.length);
     setQueueEvents(q);
@@ -973,6 +995,8 @@ export default function App() {
     setCalError("");
     setCalWarning("");
     setCalLoaded(false);
+    loadCalendarEvents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobDate]);
 
   useEffect(() => {
@@ -1006,6 +1030,15 @@ export default function App() {
   const optionStyle: React.CSSProperties = { color: "#0b1220", background: "#ffffff" };
 
   const materialsTotal = useMemo(() => computeMaterialsTotal(matItems), [matItems]);
+
+  const mergedLog = useMemo(() => {
+    const localQueued = queueEvents.filter((e) => e.job_uuid === jobUuid.trim());
+    const queuedIds = new Set(localQueued.map((e) => e.event_id));
+    const synced = serverEvents.filter((e) => !queuedIds.has(e.event_id));
+    return [...localQueued, ...synced].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }, [serverEvents, queueEvents, jobUuid]);
 
   const calPlaceholder = useMemo(() => {
     if (calLoading) return "Loading…";
@@ -1074,104 +1107,57 @@ export default function App() {
           <div className="card">
             <div className="sectionTitle">Job</div>
 
-            <div className="col" style={{ gap: 10 }}>
+            <div className="col" style={{ gap: 12 }}>
+              {/* 1 — Date */}
               <div className="col">
-                <div className="label">Job ID</div>
-                <input
-                  className="mono"
-                  value={jobUuid}
-                  onChange={(e) => setPersistedJobUuid(e.target.value)}
-                  placeholder="Tap New Job to start, or paste an existing ID"
-                  disabled={jobStatus === "closed"}
-                  style={{ fontSize: 12 }}
-                />
-                {status && <div className="small" style={{ color: "var(--brand)" }}>{status}</div>}
+                <div className="label">Date</div>
+                <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
               </div>
 
+              {/* 2 — Calendar job selector */}
               <div className="col">
-                <div className="label">Job Name</div>
-                <input value={jobName} onChange={(e) => onChangeJobName(e.target.value)} placeholder="Type job name…" />
-                {jobNameSource ? (
-                  <div className="small">
-                    {jobNameSource === "calendar" ? "From calendar" : "Entered manually"}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="row wrap">
-                <div className="col" style={{ minWidth: 160 }}>
-                  <div className="label">Date</div>
-                  <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
+                <div className="label">
+                  Select Job{" "}
+                  <span className="small" style={{ marginLeft: 8 }}>
+                    {calLoading ? "Loading…" : calEvents.length > 0 ? `(${calEvents.length} found)` : calLoaded ? "(none found)" : ""}
+                  </span>
                 </div>
-
-                <div className="col" style={{ minWidth: 170 }}>
-                  <div className="label">Calendar</div>
-                  <button onClick={loadCalendarEvents} disabled={calLoading}>
-                    {calLoading ? "Loading…" : "Load calendar"}
-                  </button>
-                </div>
-
-                {/* Dropdown is only disabled while loading.
-                    Wrapper z-index/pointerEvents helps if any overlay blocks clicks. */}
-                <div
-                  className="col"
-                  style={{
-                    flex: 1,
-                    minWidth: 220,
-                    position: "relative",
-                    zIndex: 5,
-                    pointerEvents: "auto",
-                  }}
+                <select
+                  value={calSelectedId}
+                  onChange={(e) => onSelectCalendarEvent(e.target.value)}
+                  disabled={calLoading}
+                  style={{ ...selectStyle, cursor: calLoading ? "not-allowed" : "pointer" }}
                 >
-                  <div className="label">
-                    Pick job from calendar{" "}
-                    <span className="small" style={{ marginLeft: 8 }}>
-                      ({calEvents.length} found)
-                    </span>
-                  </div>
-
-                  <select
-                    value={calSelectedId}
-                    onChange={(e) => onSelectCalendarEvent(e.target.value)}
-                    disabled={calLoading}
-                    style={{
-                      ...selectStyle,
-                      cursor: calLoading ? "not-allowed" : "pointer",
-                      position: "relative",
-                      zIndex: 6,
-                      pointerEvents: "auto",
-                    }}
-                  >
-                    <option value="" style={optionStyle}>
-                      {calPlaceholder}
+                  <option value="" style={optionStyle}>
+                    {calLoading ? "Loading calendar…" : calEvents.length > 0 ? "Select a job…" : calLoaded ? "No jobs on this date" : "Loading…"}
+                  </option>
+                  {calEvents.map((ev) => (
+                    <option key={ev.id} value={ev.id} style={optionStyle}>
+                      {ev.summary}
                     </option>
-
-                    {calEvents.map((ev) => (
-                      <option key={ev.id} value={ev.id} style={optionStyle}>
-                        {ev.summary}
-                      </option>
-                    ))}
-                  </select>
-
-                  {calWarning ? (
-                    <div className="small" style={{ marginTop: 6 }}>
-                      {calWarning}
-                    </div>
-                  ) : null}
-
-                  {!calLoading && calLoaded && calEvents.length === 0 ? (
-                    <div className="small" style={{ marginTop: 6 }}>
-                      No calendar jobs on this date.
-                    </div>
-                  ) : null}
-                </div>
+                  ))}
+                </select>
+                {calError && <div className="small" style={{ color: "var(--danger)", marginTop: 4 }}>{calError}</div>}
+                {calWarning && <div className="small" style={{ marginTop: 4 }}>{calWarning}</div>}
               </div>
 
-              {calError ? (
-                <div className="small" style={{ color: "var(--danger)" }}>
-                  {calError}
+              {/* 3 — Job name display */}
+              {jobName && (
+                <div className="col">
+                  <div className="label">Job Name</div>
+                  <div style={{ fontWeight: 600, fontSize: 15 }}>{jobName}</div>
                 </div>
-              ) : null}
+              )}
+
+              {/* 4 — Job ID (auto, read-only) */}
+              {jobUuid && (
+                <div className="col">
+                  <div className="label">Job ID</div>
+                  <div className="mono small" style={{ color: "var(--muted)", fontSize: 11 }}>{jobUuid}</div>
+                </div>
+              )}
+
+              {status && <div className="small" style={{ color: "var(--brand)" }}>{status}</div>}
             </div>
           </div>
 
@@ -1198,15 +1184,8 @@ export default function App() {
                 <button disabled={queueLen === 0} onClick={syncQueueNow}>
                   {queueLen > 0 ? `Sync (${queueLen} pending)` : "Sync"}
                 </button>
-                <button onClick={createNewJob}>New Job</button>
               </div>
             </div>
-
-            {jobStatus === "closed" ? (
-              <div className="small" style={{ marginTop: 10 }}>
-                Job closed. Tap <strong>New Job</strong>.
-              </div>
-            ) : null}
           </div>
 
           <div className="card">
@@ -1221,11 +1200,11 @@ export default function App() {
           <div className="card">
             <div className="sectionTitle">Activity</div>
 
-            {activityLog.length === 0 ? (
-              <div className="small">No events yet.</div>
+            {mergedLog.length === 0 ? (
+              <div className="small">{jobUuid ? "No events yet." : "Select a job to see activity."}</div>
             ) : (
               <div>
-                {activityLog.map((e, i) => (
+                {mergedLog.map((e, i) => (
                   <div
                     key={e.event_id}
                     style={{
@@ -1247,6 +1226,9 @@ export default function App() {
                           {iconForStatus(e.sync_status)}
                         </span>
                         <strong style={{ fontSize: 14 }}>{e.type}</strong>
+                        {e.created_by && (
+                          <span className="small" style={{ color: "var(--muted)" }}>{e.created_by}</span>
+                        )}
                       </div>
                       <div className="row" style={{ gap: 8 }}>
                         {e.lat != null && (

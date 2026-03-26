@@ -36,6 +36,9 @@ class Event(Base):
     # Human-readable job name (client name) passed from frontend localStorage
     job_name = Column(String, nullable=True)
 
+    # Who logged this event (user name or email)
+    created_by = Column(String, nullable=True)
+
     # Optional free text
     note = Column(String, nullable=True)
 
