@@ -1123,9 +1123,7 @@ export default function App() {
                   disabled={calLoading}
                   style={{ ...selectStyle, cursor: calLoading ? "not-allowed" : "pointer" }}
                 >
-                  <option value="" style={optionStyle}>
-                    {calLoading ? "Loading calendar…" : calEvents.length > 0 ? "Select a job…" : calLoaded ? "No jobs on this date" : "Loading…"}
-                  </option>
+                  <option value="" style={optionStyle}>{calPlaceholder}</option>
                   {calEvents.map((ev) => (
                     <option key={ev.id} value={ev.id} style={optionStyle}>
                       {ev.summary}
