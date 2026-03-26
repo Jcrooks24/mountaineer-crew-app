@@ -24,16 +24,19 @@ async def upload_photo(
     _: User = Depends(get_current_user),
 ):
     data = await file.read()
-    filename = f"{photo_id}_{file.filename or 'photo.jpg'}"
+
+    # Use photo_id as the filename seed so Drive filename = "{job} - {date} - {id[:8]}.ext"
+    mime_type = file.content_type or "image/jpeg"
 
     try:
         result = upload_photo_to_drive(
             db=db,
             file_data=data,
-            filename=filename,
-            mime_type=file.content_type or "image/jpeg",
+            filename=photo_id,       # drive_upload uses first 8 chars as short_id
+            mime_type=mime_type,
             job_name=job_name,
             job_date=job_date,
+            caption=caption,
         )
     except Exception as e:
         traceback.print_exc()

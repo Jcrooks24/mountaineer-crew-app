@@ -1,4 +1,5 @@
 import os
+import re
 from io import BytesIO
 from typing import Optional
 
@@ -24,10 +25,17 @@ def _get_drive_service(db=None):
     return _cached_drive_service
 
 
+def _safe(s: str) -> str:
+    """Strip characters that break Drive filenames or query strings."""
+    s = s.replace("'", "\\'")   # escape single quotes in query
+    return re.sub(r'[\\/:*?"<>|]', "-", s).strip()
+
+
 def _get_or_create_folder(svc, name: str, parent_id: Optional[str] = None) -> str:
-    """Find a Drive folder by name (optionally inside a parent), create it if missing."""
+    """Find a Drive folder by name (optionally inside a parent), create if missing."""
+    escaped = name.replace("'", "\\'")
     q = (
-        f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
+        f"name='{escaped}' and mimeType='application/vnd.google-apps.folder'"
         f" and trashed=false"
     )
     if parent_id:
@@ -36,6 +44,7 @@ def _get_or_create_folder(svc, name: str, parent_id: Optional[str] = None) -> st
     resp = svc.files().list(q=q, fields="files(id)", spaces="drive").execute()
     files = resp.get("files", [])
     if files:
+        print(f"[drive] found existing folder '{name}' → {files[0]['id']}")
         return files[0]["id"]
 
     meta: dict = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
@@ -43,19 +52,21 @@ def _get_or_create_folder(svc, name: str, parent_id: Optional[str] = None) -> st
         meta["parents"] = [parent_id]
 
     folder = svc.files().create(body=meta, fields="id").execute()
+    print(f"[drive] created folder '{name}' → {folder['id']}")
     return folder["id"]
 
 
 def _get_parent_folder_id(svc, db: Optional[Session]) -> str:
     folder_name = os.getenv("DRIVE_PARENT_FOLDER_NAME", DEFAULT_PARENT_FOLDER_NAME).strip()
 
-    # Cache in system_config so we don't search Drive on every upload
+    # Cache in system_config to avoid repeated Drive searches
     if db:
         row = db.execute(
             text("SELECT value FROM system_config WHERE key = :key"),
             {"key": PARENT_FOLDER_KEY},
         ).fetchone()
         if row and row[0]:
+            print(f"[drive] using cached parent folder id: {row[0]}")
             return row[0]
 
     folder_id = _get_or_create_folder(svc, folder_name)
@@ -80,28 +91,44 @@ def upload_photo_to_drive(
     mime_type: str,
     job_name: str,
     job_date: str,
+    caption: str = "",
 ) -> dict:
     """
     Upload a photo to Google Drive:
-      <parent folder> / <job_name> - <job_date> / <filename>
+      <parent folder> / <job_name> - <job_date> / <job_name> - <job_date> - <short_id>.jpg
 
-    Job folder is created on first upload only (no empty folders).
+    Folder created on first upload only. Caption stored as Drive file description.
     Returns {"file_id": "...", "url": "..."}.
     """
     svc = _get_drive_service(db)
 
     parent_id = _get_parent_folder_id(svc, db)
 
-    safe_name = (job_name or "Unknown Job").replace("/", "-").strip()
+    safe_name = _safe(job_name or "Unknown Job")
     safe_date = (job_date or "").strip()
     folder_label = f"{safe_name} - {safe_date}" if safe_date else safe_name
     folder_label = folder_label[:100]
 
+    print(f"[drive] job_name={job_name!r} job_date={job_date!r} folder={folder_label!r}")
+
     job_folder_id = _get_or_create_folder(svc, folder_label, parent_id)
+
+    # Build a human-readable filename: "Job Name - YYYY-MM-DD - abc12345.jpg"
+    ext = mime_type.split("/")[-1] if "/" in mime_type else "jpg"
+    ext = ext if ext in ("jpg", "jpeg", "png", "heic", "webp") else "jpg"
+    short_id = filename[:8] if filename else "photo"  # first 8 chars of photo_id
+    drive_filename = f"{safe_name} - {safe_date} - {short_id}.{ext}" if safe_date \
+                     else f"{safe_name} - {short_id}.{ext}"
+
+    print(f"[drive] uploading as '{drive_filename}' into folder '{folder_label}'")
 
     media = MediaIoBaseUpload(BytesIO(file_data), mimetype=mime_type, resumable=False)
     result = svc.files().create(
-        body={"name": filename, "parents": [job_folder_id]},
+        body={
+            "name": drive_filename,
+            "parents": [job_folder_id],
+            "description": caption or "",
+        },
         media_body=media,
         fields="id, webViewLink",
     ).execute()
