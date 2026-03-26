@@ -169,6 +169,7 @@ export default function App() {
   const [matCustomCost, setMatCustomCost] = useState<string>("");
   const [matQty, setMatQty] = useState<number>(1);
 
+  const [isSending, setIsSending] = useState(false);
   const canSend = useMemo(() => jobUuid.trim().length > 0 && jobStatus === "active", [jobUuid, jobStatus]);
 
   // -----------------------
@@ -497,8 +498,9 @@ export default function App() {
   }
 
   async function recordEvent(type: string, note: string | null = null) {
-    if (!canSend) return;
+    if (!canSend || isSending) return;
 
+    setIsSending(true);
     setStatus("Capturing...");
 
     const loc = await tryGetLocation();
@@ -525,7 +527,11 @@ export default function App() {
 
     if (type === "FINISH") setPersistedJobStatus("closed");
 
-    await syncQueueNow();
+    try {
+      await syncQueueNow();
+    } finally {
+      setIsSending(false);
+    }
   }
 
   async function addNoteToEntry(targetEventId: string) {
@@ -1174,17 +1180,17 @@ export default function App() {
 
             <div className="col" style={{ gap: 10 }}>
               <div className="row wrap">
-                <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("ARRIVE")}>
-                  Arrive
+                <button className="btnPrimary" disabled={!canSend || isSending} onClick={() => recordEvent("ARRIVE")}>
+                  {isSending ? "..." : "Arrive"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("DEPART")}>
-                  Depart
+                <button className="btnPrimary" disabled={!canSend || isSending} onClick={() => recordEvent("DEPART")}>
+                  {isSending ? "..." : "Depart"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("START")}>
-                  Start
+                <button className="btnPrimary" disabled={!canSend || isSending} onClick={() => recordEvent("START")}>
+                  {isSending ? "..." : "Start"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend} onClick={() => recordEvent("FINISH")}>
-                  Finish
+                <button className="btnPrimary" disabled={!canSend || isSending} onClick={() => recordEvent("FINISH")}>
+                  {isSending ? "..." : "Finish"}
                 </button>
               </div>
 

@@ -10,6 +10,32 @@ from app.core.google_cal_oauth import _get_creds
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
 
+EVENTS_HEADERS = [
+    "event_id", "timestamp", "job_uuid", "job_name", "job_date",
+    "type", "note", "lat", "lng", "accuracy_m", "device_id", "synced",
+]
+MATERIALS_HEADERS = [
+    "submission_id", "created_at", "job_uuid", "job_name", "job_date",
+    "notes", "item_name", "qty", "unit_price", "line_total", "submission_total",
+]
+
+
+def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> None:
+    """Create the sheet tab with a header row if it doesn't already exist."""
+    meta = svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    existing = [s["properties"]["title"] for s in meta.get("sheets", [])]
+    if tab not in existing:
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": tab}}}]},
+        ).execute()
+        svc.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            body={"values": [headers]},
+        ).execute()
+
 
 def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     """
@@ -59,6 +85,8 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     # 3) Get credentials from DB / env var (works on Render, no local file needed)
     creds = _get_creds(db)
     svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+    _ensure_tab(svc, spreadsheet_id, tab, EVENTS_HEADERS)
 
     svc.spreadsheets().values().append(
         spreadsheetId=spreadsheet_id,
@@ -138,6 +166,8 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
 
     creds = _get_creds(db)
     svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+    _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS)
 
     svc.spreadsheets().values().append(
         spreadsheetId=spreadsheet_id,
