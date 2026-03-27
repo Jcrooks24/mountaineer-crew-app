@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import time as _time
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
+import certifi
+import httplib2
+import google_auth_httplib2
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -29,6 +33,38 @@ DB_TOKEN_KEY = "google_oauth_token"
 _cached_creds: Optional[Credentials] = None
 _cached_cal_service = None   # googleapiclient Resource
 _cached_sheets_service = None
+
+_SSL_ERRORS = ("DECRYPTION_FAILED", "BAD_RECORD_MAC", "SSL", "ssl", "EOF occurred")
+
+
+def _build_authorized_http(creds: Credentials) -> google_auth_httplib2.AuthorizedHttp:
+    """
+    Build an httplib2 HTTP client using certifi's CA bundle.
+    This prevents [SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC] errors that occur
+    when httplib2 uses the system CA store on hosted environments like Render.
+    """
+    http = httplib2.Http(ca_certs=certifi.where())
+    return google_auth_httplib2.AuthorizedHttp(creds, http=http)
+
+
+def _ssl_retry(fn, max_attempts: int = 3):
+    """
+    Call fn(), retrying up to max_attempts times on SSL/TLS transient errors.
+    Raises the last exception if all attempts fail.
+    """
+    last_err: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            msg = str(exc)
+            if any(marker in msg for marker in _SSL_ERRORS):
+                last_err = exc
+                if attempt < max_attempts - 1:
+                    _time.sleep(0.5 * (attempt + 1))
+                    continue
+            raise
+    raise last_err  # type: ignore[misc]
 
 
 def _load_token_from_db(db) -> Optional[str]:
@@ -90,7 +126,7 @@ def _get_creds(db=None) -> Credentials:
 
         if not creds.valid:
             if creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                _ssl_retry(lambda: creds.refresh(Request()))
                 if db:
                     _save_token_to_db(creds, db)
             else:
@@ -110,7 +146,7 @@ def _get_creds(db=None) -> Credentials:
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            _ssl_retry(lambda: creds.refresh(Request()))
         else:
             if not CREDS_PATH.exists():
                 raise RuntimeError(f"Missing credentials.json at: {CREDS_PATH}")
@@ -170,20 +206,25 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List
     start_local = datetime.combine(day, time(0, 0, 0), tzinfo=LOCAL_TZ)
     end_local = datetime.combine(day, time(23, 59, 59), tzinfo=LOCAL_TZ)
 
-    service = get_calendar_service(db)
+    creds = _get_creds(db)
 
-    resp = (
-        service.events()
-        .list(
-            calendarId=calendar_id,
-            timeMin=start_local.isoformat(),
-            timeMax=end_local.isoformat(),
-            singleEvents=True,
-            orderBy="startTime",
-            maxResults=250,
+    def _fetch():
+        authorized_http = _build_authorized_http(creds)
+        svc = build("calendar", "v3", http=authorized_http, cache_discovery=False)
+        return (
+            svc.events()
+            .list(
+                calendarId=calendar_id,
+                timeMin=start_local.isoformat(),
+                timeMax=end_local.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=250,
+            )
+            .execute()
         )
-        .execute()
-    )
+
+    resp = _ssl_retry(_fetch)
 
     items = resp.get("items", [])
     out: List[Dict[str, Any]] = []

@@ -19,6 +19,11 @@
   --pad: 14px;
 
   --font: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+
+  /* Configurable via Settings */
+  --btn-bg-from: #1b2945;
+  --btn-bg-to: #162238;
+  --btn-pad: 10px 14px;
 }
 
 *{ box-sizing: border-box; }
@@ -54,10 +59,10 @@ input, select, textarea{
 textarea{ min-height: 90px; resize: vertical; }
 
 button{
-  padding: 10px 14px;
+  padding: var(--btn-pad);
   border-radius: var(--btn-r);
   border: 1px solid rgba(255,255,255,0.15);
-  background: linear-gradient(180deg, #1b2945, #162238);
+  background: linear-gradient(180deg, var(--btn-bg-from), var(--btn-bg-to));
   color: #ffffff;
   font-weight: 600;
   letter-spacing: 0.3px;
@@ -66,7 +71,7 @@ button{
 }
 
 button:hover{
-  background: linear-gradient(180deg, #22345c, #1a2a47);
+  filter: brightness(1.25);
 }
 
 button:disabled{
@@ -134,5 +139,3 @@ button:disabled{
   border-color: rgba(93,214,194,0.35);
   color: var(--text);
 }
-
-

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
@@ -42,7 +42,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
     errors = 0
     failed = []
 
-    inserted_events_for_sheet = []  # <-- NEW: collect inserted events for sheets export
+    inserted_events_for_sheet = []  # collect inserted events for sheets export
 
     for e in payload.events:
         try:
@@ -77,7 +77,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
             db.commit()
             inserted += 1
 
-            # NEW: collect for sheets export (use original ISO string)
+            # Collect for sheets export (use original ISO string)
             inserted_events_for_sheet.append({
                 "event_id": e.event_id,
                 "timestamp": e.timestamp,
@@ -90,6 +90,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
                 "lng": e.lng,
                 "accuracy_m": e.accuracy_m,
                 "device_id": payload.device_id or "",
+                "created_by": e.created_by or "",
             })
 
         except IntegrityError:
@@ -103,7 +104,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
                 "reason": "db_error",
             })
 
-    # NEW: export to Sheets (non-blocking)
+    # Export to Sheets (non-blocking)
     sheets_exported = 0
     sheets_error = None
     try:
@@ -124,31 +125,37 @@ def sync(payload: SyncIn, db: Session = Depends(get_db)):
 
 
 @router.get("/events")
-def get_job_events(
-    job_uuid: str,
+def get_events_history(
+    job_uuid: Optional[str] = Query(default=None),
+    limit: int = Query(default=1000, ge=1, le=5000),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    """Fetch all synced events for a job_uuid (cross-user view)."""
-    events = (
-        db.query(Event)
-        .filter(Event.job_uuid == job_uuid)
-        .order_by(Event.timestamp.desc())
-        .limit(200)
-        .all()
-    )
-    return [
-        {
-            "event_id": e.event_id,
-            "job_uuid": e.job_uuid,
-            "type": e.type,
-            "timestamp": e.timestamp.isoformat() + "Z",
-            "note": e.note,
-            "lat": e.lat,
-            "lng": e.lng,
-            "accuracy_m": e.accuracy_m,
-            "created_by": e.created_by or "",
-            "sync_status": "synced",
-        }
-        for e in events
-    ]
+    """
+    Return synced events so any device can rebuild its local activity log.
+    If job_uuid is provided, filters to that job only.
+    Sorted newest-first. Used by the frontend on startup to restore history on a new device.
+    """
+    q = db.query(Event)
+    if job_uuid:
+        q = q.filter(Event.job_uuid == job_uuid)
+    rows = q.order_by(Event.timestamp.desc()).limit(limit).all()
+
+    return {
+        "ok": True,
+        "events": [
+            {
+                "event_id": e.event_id,
+                "job_uuid": e.job_uuid,
+                "type": e.type,
+                "timestamp": e.timestamp.isoformat() + "Z",
+                "lat": e.lat,
+                "lng": e.lng,
+                "accuracy_m": e.accuracy_m,
+                "note": e.note,
+                "job_name": e.job_name or "",
+                "created_by": e.created_by or "",
+                "sync_status": "synced",
+            }
+            for e in rows
+        ],
+    }

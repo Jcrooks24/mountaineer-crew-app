@@ -1,6 +1,6 @@
 """
 Application configuration — reads from environment variables with sensible defaults.
-Set on Render (or in a .env file locally):
+Set these on Render (or in a .env file locally):
   JWT_SECRET                    — required in prod; keep it secret
   ACCESS_TOKEN_EXPIRE_MINUTES   — default 10080 (7 days)
 """

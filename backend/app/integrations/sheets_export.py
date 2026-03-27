@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.core.google_cal_oauth import get_sheets_service
+from app.core.google_cal_oauth import get_sheets_service, _build_authorized_http, _ssl_retry, _get_creds
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
@@ -87,13 +87,19 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
 
     _ensure_tab(svc, spreadsheet_id, tab, EVENTS_HEADERS)
 
-    svc.spreadsheets().values().append(
-        spreadsheetId=spreadsheet_id,
-        range=f"{tab}!A1",
-        valueInputOption="RAW",
-        insertDataOption="INSERT_ROWS",
-        body={"values": rows},
-    ).execute()
+    def _append():
+        authorized_http = _build_authorized_http(_get_creds(db))
+        from googleapiclient.discovery import build
+        svc_fresh = build("sheets", "v4", http=authorized_http, cache_discovery=False)
+        svc_fresh.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    _ssl_retry(_append)
 
     # 4) Mark exported (dedupe) — PostgreSQL-compatible ON CONFLICT syntax
     for ev in new_events:

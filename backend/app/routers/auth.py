@@ -5,6 +5,11 @@ Endpoints:
 - POST /api/auth/signup
 - POST /api/auth/login
 - GET  /api/auth/me
+- PATCH /api/auth/me
+- POST /api/auth/forgot-password
+- POST /api/auth/reset-password
+- POST /api/auth/test-email
+- GET  /api/auth/email-debug
 
 Uses:
 - bcrypt (directly)
@@ -12,7 +17,9 @@ Uses:
 - get_current_user dependency
 """
 
-from datetime import datetime, timezone
+import os
+import secrets
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -30,6 +37,7 @@ from app.core.security import (
     verify_password,
 )
 from app.core.deps import get_current_user
+from app.core.mailer import send_email
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -53,7 +61,7 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> TokenRespon
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # 🔐 Handle bcrypt 72-byte limit cleanly
+    # Handle bcrypt 72-byte limit cleanly
     try:
         pw_hash = hash_password(payload.password)
     except ValueError as e:
@@ -98,7 +106,6 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     # Auto-promote if this email is designated as admin via env var
-    import os
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     if admin_email and user.email == admin_email and user.role != "admin":
         user.role = "admin"
@@ -135,6 +142,7 @@ def update_me(
     db.refresh(current_user)
     return current_user
 
+
 # -----------------------------
 # Forgot password
 # -----------------------------
@@ -144,9 +152,6 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     Generate a reset token and email a reset link.
     Always returns 204 to avoid leaking whether the email exists.
     """
-    import os
-    from app.core.mailer import send_email
-
     email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == email).first()
 
@@ -225,7 +230,6 @@ def test_email(payload: TestEmailRequest = TestEmailRequest()):
     Attempt a real Postmark send and return detailed success/error info.
     Accepts optional JSON body: {"to": "someone@example.com"}
     """
-    import os
     from app.core.mailer import send_email
 
     token = os.getenv("POSTMARK_SERVER_TOKEN", "").strip()
@@ -249,8 +253,6 @@ def test_email(payload: TestEmailRequest = TestEmailRequest()):
 
 @router.get("/email-debug")
 def email_debug():
-    import os
-
     smtp_from = os.getenv("SMTP_FROM", "")
     frontend_url = os.getenv("FRONTEND_URL", "")
     postmark_token = os.getenv("POSTMARK_SERVER_TOKEN", "").strip()

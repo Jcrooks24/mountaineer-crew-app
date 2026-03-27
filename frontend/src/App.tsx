@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "./assets/logo.png";
 import { useAuth } from "./auth/AuthContext";
@@ -24,7 +24,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "materials";
+type Tab = "timeline" | "photos" | "materials" | "settings";
 
 type EventRecord = {
   event_id: string;
@@ -88,6 +88,28 @@ type MaterialsSubmission = {
 
 const MATERIALS_DRAFT_PREFIX = "crew_materials_draft_v1:"; // per job_uuid
 const MATERIALS_SUBMISSIONS_KEY = "crew_materials_submissions_v1"; // global list
+const MATERIALS_QUEUE_KEY = "crew_materials_queue_v1"; // unsynced submissions
+const SETTINGS_KEY = "crew_settings_v1";
+
+type AppSettings = {
+  uiBg: string;
+  btnBgFrom: string;
+  btnBgTo: string;
+  btnSize: "sm" | "md" | "lg";
+};
+
+const DEFAULT_SETTINGS: AppSettings = {
+  uiBg: "#0b1220",
+  btnBgFrom: "#1b2945",
+  btnBgTo: "#162238",
+  btnSize: "md",
+};
+
+const BTN_PAD_MAP: Record<string, string> = {
+  sm: "6px 10px",
+  md: "10px 14px",
+  lg: "14px 20px",
+};
 
 const MATERIAL_CATALOG: MaterialCatalogItem[] = [
   { name: "Small Box", unitPrice: 2.0 },
@@ -153,10 +175,10 @@ export default function App() {
   // Calendar
   const [calLoading, setCalLoading] = useState(false);
   const [calError, setCalError] = useState<string>("");
-  const [calWarning, setCalWarning] = useState<string>(""); // NEW
+  const [calWarning, setCalWarning] = useState<string>("");
   const [calEvents, setCalEvents] = useState<CalEvent[]>([]);
   const [calSelectedId, setCalSelectedId] = useState<string>("");
-  const [calLoaded, setCalLoaded] = useState<boolean>(false); // NEW
+  const [calLoaded, setCalLoaded] = useState<boolean>(false);
 
   // Photos
   const [photos, setPhotos] = useState<StoredPhoto[]>([]);
@@ -181,6 +203,25 @@ export default function App() {
   const [matSubmissions, setMatSubmissions] = useState<MaterialsSubmission[]>([]);
 
   const canSend = useMemo(() => jobUuid.trim().length > 0, [jobUuid]);
+
+  // Settings
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return DEFAULT_SETTINGS;
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
+
+  // Calendar "Other" option
+  const [calOtherName, setCalOtherName] = useState<string>("");
+
+  // Map refs
+  const mapDivRef = useRef<HTMLDivElement>(null);
+  const leafletMapRef = useRef<any>(null);
+  const markersLayerRef = useRef<any>(null);
 
   // -----------------------
   // Storage helpers
@@ -345,7 +386,6 @@ export default function App() {
     setJobStatus(val);
     localStorage.setItem(JOB_STATUS_KEY, val);
   }
-
 
   // -----------------------
   // Geolocation + events
@@ -577,6 +617,12 @@ export default function App() {
 
   function onSelectCalendarEvent(calId: string) {
     setCalSelectedId(calId);
+
+    if (calId === "__other__") {
+      setCalOtherName("");
+      return;
+    }
+
     const ev = calEvents.find((x) => x.id === calId);
     if (!ev) return;
 
@@ -625,12 +671,76 @@ export default function App() {
     fetchJobEvents(newId);
   }
 
+  function getJobNameForUuid(uuid: string): string {
+    try {
+      const meta = loadJobMeta(uuid);
+      if (meta?.jobName) return meta.jobName;
+      return localStorage.getItem(jobNameKey(uuid)) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  // Fetch event history from backend and merge into local log.
+  // Runs on startup so mobile devices (with empty localStorage) can see past events.
+  async function loadHistoryFromBackend() {
+    if (!navigator.onLine) return;
+    try {
+      const res = await fetch(`${API}/api/events?limit=2000`);
+      if (!res.ok) return;
+      const json = await res.json();
+      if (!json.ok || !Array.isArray(json.events) || json.events.length === 0) return;
+
+      const localLog = loadLog();
+      const localIds = new Set(localLog.map((e) => e.event_id));
+
+      const incoming: EventRecord[] = json.events
+        .filter((e: any) => !localIds.has(e.event_id))
+        .map((e: any) => ({
+          event_id: e.event_id,
+          job_uuid: e.job_uuid,
+          type: e.type,
+          timestamp: e.timestamp,
+          lat: e.lat ?? null,
+          lng: e.lng ?? null,
+          accuracy_m: e.accuracy_m ?? null,
+          note: e.note ?? null,
+          created_by: e.created_by || "",
+          sync_status: "synced" as const,
+        }));
+
+      if (incoming.length === 0) return;
+
+      // Restore job names into localStorage so the map tooltips and job name fields work
+      incoming.forEach((e: any) => {
+        const raw = json.events.find((r: any) => r.event_id === e.event_id);
+        if (!raw?.job_name) return;
+        const existingMeta = loadJobMeta(e.job_uuid);
+        if (!existingMeta) {
+          saveJobMeta({
+            job_uuid: e.job_uuid,
+            jobName: raw.job_name,
+            jobDate: e.timestamp.slice(0, 10),
+            source: "calendar",
+            updated_at: new Date().toISOString(),
+          });
+        }
+      });
+
+      const merged = [...incoming, ...localLog].sort(
+        (a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp)
+      );
+      saveLog(merged);
+    } catch {
+      // Best-effort — never break startup
+    }
+  }
 
   async function fetchJobEvents(uuid: string) {
     if (!uuid.trim()) return;
     try {
-      const data = await apiFetch<EventRecord[]>(`/api/events?job_uuid=${encodeURIComponent(uuid)}`);
-      setServerEvents(data);
+      const data = await apiFetch<{ ok: boolean; events: EventRecord[] }>(`/api/events?job_uuid=${encodeURIComponent(uuid)}`);
+      if (data?.events) setServerEvents(data.events);
     } catch {
       // offline or error — server events unavailable, local queue still shown
     }
@@ -895,6 +1005,60 @@ export default function App() {
     setMatItems((prev) => prev.filter((x) => x.id !== id));
   }
 
+  // -----------------------
+  // Materials backend sync
+  // -----------------------
+  function loadMaterialsQueue(): MaterialsSubmission[] {
+    return loadJson<MaterialsSubmission[]>(MATERIALS_QUEUE_KEY, []);
+  }
+  function saveMaterialsQueue(q: MaterialsSubmission[]) {
+    saveJson(MATERIALS_QUEUE_KEY, q);
+  }
+
+  async function syncMaterialsQueue() {
+    if (!navigator.onLine) return;
+    const q = loadMaterialsQueue();
+    if (q.length === 0) return;
+
+    const remaining: MaterialsSubmission[] = [];
+    for (const sub of q) {
+      try {
+        const res = await fetch(`${API}/api/materials`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sub),
+        });
+        if (!res.ok) remaining.push(sub);
+      } catch {
+        remaining.push(sub);
+      }
+    }
+    saveMaterialsQueue(remaining);
+  }
+
+  async function loadMaterialsFromBackend() {
+    if (!navigator.onLine) return;
+    try {
+      const res = await fetch(`${API}/api/materials?limit=500`);
+      if (!res.ok) return;
+      const json = await res.json();
+      if (!json.ok || !Array.isArray(json.submissions)) return;
+
+      const existing = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
+      const existingIds = new Set(existing.map((s) => s.id));
+
+      const incoming = json.submissions.filter((s: MaterialsSubmission) => !existingIds.has(s.id));
+      if (incoming.length === 0) return;
+
+      const merged = [...incoming, ...existing].sort(
+        (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)
+      );
+      saveJson(MATERIALS_SUBMISSIONS_KEY, merged);
+    } catch {
+      // best-effort
+    }
+  }
+
   async function submitMaterials() {
     setMatError("");
 
@@ -922,6 +1086,13 @@ export default function App() {
     };
 
     appendMaterialsSubmission(sub);
+
+    // Queue for backend sync (survives offline)
+    const mq = loadMaterialsQueue();
+    mq.unshift(sub);
+    saveMaterialsQueue(mq);
+    syncMaterialsQueue(); // fire-and-forget
+
     await recordEvent("NOTE", `MATERIALS ${money(total)} (${matItems.length})`);
 
     // POST to backend for Google Sheets export (non-blocking — don't fail the submission)
@@ -990,7 +1161,12 @@ export default function App() {
       setJobDate(storedDate || todayLocalYYYYMMDD());
     }
 
-    const onOnline = () => syncQueueNow();
+    // Restore history from backend so mobile devices aren't empty on first load
+    loadHistoryFromBackend();
+    loadMaterialsFromBackend();
+    syncMaterialsQueue();
+
+    const onOnline = () => { syncQueueNow(); syncMaterialsQueue(); };
     window.addEventListener("online", onOnline);
     return () => window.removeEventListener("online", onOnline);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1045,6 +1221,8 @@ export default function App() {
     loadOrInitMaterialsDraft();
     const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
     setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
+    loadMaterialsFromBackend();
+    syncMaterialsQueue();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
 
@@ -1053,6 +1231,63 @@ export default function App() {
     persistMaterialsDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, matJobLabel, matNotes, matItems]);
+
+  // Apply settings as CSS custom properties
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--bg", settings.uiBg);
+    root.style.setProperty("--btn-bg-from", settings.btnBgFrom);
+    root.style.setProperty("--btn-bg-to", settings.btnBgTo);
+    root.style.setProperty("--btn-pad", BTN_PAD_MAP[settings.btnSize] ?? "10px 14px");
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }, [settings]);
+
+  // Leaflet map: init when timeline tab is shown, destroy otherwise
+  useEffect(() => {
+    if (tab !== "timeline") {
+      if (leafletMapRef.current) {
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
+        markersLayerRef.current = null;
+      }
+      return;
+    }
+
+    const div = mapDivRef.current;
+    if (!div) return;
+
+    const L = (window as any).L;
+    if (!L) return;
+
+    if (!leafletMapRef.current) {
+      const map = L.map(div).setView([39.8283, -98.5795], 5);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap contributors",
+      }).addTo(map);
+      leafletMapRef.current = map;
+      markersLayerRef.current = L.layerGroup().addTo(map);
+    }
+
+    // Refresh markers
+    const markers = markersLayerRef.current;
+    if (markers) {
+      markers.clearLayers();
+      const geoEvents = activityLog.filter((e) => e.lat != null && e.lng != null);
+      geoEvents.forEach((e) => {
+        const name = getJobNameForUuid(e.job_uuid) || e.job_uuid.slice(0, 8) + "…";
+        const label = `<strong>${name}</strong><br/>${e.type} · ${new Date(e.timestamp).toLocaleString()}`;
+        L.marker([e.lat as number, e.lng as number])
+          .bindTooltip(label, { direction: "top", sticky: true })
+          .addTo(markers);
+      });
+
+      if (geoEvents.length > 0) {
+        const bounds = L.latLngBounds(geoEvents.map((e) => [e.lat as number, e.lng as number]));
+        leafletMapRef.current.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activityLog]);
 
   // Select visibility on dark theme
   const selectStyle: React.CSSProperties = {
@@ -1140,6 +1375,9 @@ export default function App() {
         <button className={"tab " + (tab === "materials" ? "active" : "")} onClick={() => setTab("materials")}>
           Materials
         </button>
+        <button className={"tab " + (tab === "settings" ? "active" : "")} onClick={() => setTab("settings")}>
+          Settings
+        </button>
       </div>
 
       {/* Timeline */}
@@ -1175,9 +1413,34 @@ export default function App() {
                       {ev.summary}
                     </option>
                   ))}
+                  <option value="__other__" style={optionStyle}>
+                    Other (enter manually)
+                  </option>
                 </select>
+
+                {calSelectedId === "__other__" && (
+                  <div className="col" style={{ marginTop: 8 }}>
+                    <div className="label">Job description (required)</div>
+                    <input
+                      value={calOtherName}
+                      onChange={(e) => {
+                        setCalOtherName(e.target.value);
+                        setJobName(e.target.value);
+                      }}
+                      placeholder="Describe the job…"
+                      autoFocus
+                    />
+                  </div>
+                )}
+
                 {calError && <div className="small" style={{ color: "var(--danger)", marginTop: 4 }}>{calError}</div>}
                 {calWarning && <div className="small" style={{ marginTop: 4 }}>{calWarning}</div>}
+
+                {!calLoading && calLoaded && calEvents.length === 0 ? (
+                  <div className="small" style={{ marginTop: 6 }}>
+                    No calendar jobs on this date.
+                  </div>
+                ) : null}
               </div>
 
               {/* 3 — Job name display */}
@@ -1298,9 +1561,18 @@ export default function App() {
             )}
           </div>
 
-          <details style={{ marginTop: 8 }}>
-            <summary className="small" style={{ cursor: "pointer", color: "var(--muted)", opacity: 0.5, userSelect: "none", listStyle: "none" }}>
-              ··· debug
+          <div className="card">
+            <div className="sectionTitle">Map</div>
+            {activityLog.some((e) => e.lat != null) ? (
+              <div ref={mapDivRef} style={{ height: 280, borderRadius: 10, overflow: "hidden" }} />
+            ) : (
+              <div className="small">No geotagged events yet.</div>
+            )}
+          </div>
+
+          <details className="card">
+            <summary className="sectionTitle" style={{ cursor: "pointer" }}>
+              Debug
             </summary>
             <div
               style={{
@@ -1633,6 +1905,119 @@ export default function App() {
               </div>
             </div>
           )}
+        </>
+      )}
+
+      {/* Settings */}
+      {tab === "settings" && (
+        <>
+          <div className="card">
+            <div className="sectionTitle">Appearance</div>
+            <div className="col" style={{ gap: 14 }}>
+
+              <div className="col">
+                <div className="label">UI Background Color</div>
+                <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={settings.uiBg}
+                    onChange={(e) => setSettings((s) => ({ ...s, uiBg: e.target.value }))}
+                    style={{ width: 48, height: 36, padding: 2, borderRadius: 8, cursor: "pointer" }}
+                  />
+                  <span className="small">{settings.uiBg}</span>
+                  <button
+                    style={{ marginLeft: "auto" }}
+                    onClick={() => setSettings((s) => ({ ...s, uiBg: DEFAULT_SETTINGS.uiBg }))}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+
+              <div className="col">
+                <div className="label">Button Background — Start Color</div>
+                <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={settings.btnBgFrom}
+                    onChange={(e) => setSettings((s) => ({ ...s, btnBgFrom: e.target.value }))}
+                    style={{ width: 48, height: 36, padding: 2, borderRadius: 8, cursor: "pointer" }}
+                  />
+                  <span className="small">{settings.btnBgFrom}</span>
+                  <button
+                    style={{ marginLeft: "auto" }}
+                    onClick={() => setSettings((s) => ({ ...s, btnBgFrom: DEFAULT_SETTINGS.btnBgFrom }))}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+
+              <div className="col">
+                <div className="label">Button Background — End Color</div>
+                <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={settings.btnBgTo}
+                    onChange={(e) => setSettings((s) => ({ ...s, btnBgTo: e.target.value }))}
+                    style={{ width: 48, height: 36, padding: 2, borderRadius: 8, cursor: "pointer" }}
+                  />
+                  <span className="small">{settings.btnBgTo}</span>
+                  <button
+                    style={{ marginLeft: "auto" }}
+                    onClick={() => setSettings((s) => ({ ...s, btnBgTo: DEFAULT_SETTINGS.btnBgTo }))}
+                  >
+                    Reset
+                  </button>
+                </div>
+                <div className="small" style={{ marginTop: 4 }}>
+                  Preview:{" "}
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 80,
+                      height: 20,
+                      borderRadius: 6,
+                      background: `linear-gradient(90deg, ${settings.btnBgFrom}, ${settings.btnBgTo})`,
+                      verticalAlign: "middle",
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="col">
+                <div className="label">Button Size</div>
+                <div className="row" style={{ gap: 8 }}>
+                  {(["sm", "md", "lg"] as const).map((sz) => (
+                    <button
+                      key={sz}
+                      onClick={() => setSettings((s) => ({ ...s, btnSize: sz }))}
+                      style={{
+                        outline: settings.btnSize === sz ? "2px solid var(--brand)" : "none",
+                        outlineOffset: 2,
+                      }}
+                    >
+                      {sz === "sm" ? "Small" : sz === "md" ? "Medium" : "Large"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">Reset</div>
+            <button
+              onClick={() => {
+                if (window.confirm("Reset all settings to defaults?")) {
+                  setSettings(DEFAULT_SETTINGS);
+                }
+              }}
+            >
+              Reset All to Defaults
+            </button>
+          </div>
         </>
       )}
     </div>
