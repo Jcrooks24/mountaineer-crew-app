@@ -36,7 +36,7 @@ export default defineConfig({
           // ✅ Calendar/day (GET, read-mostly)
           {
             urlPattern: ({ url, request }) =>
-              url.origin === "https://mountaineer-crew-app.onrender.com" &&
+              url.origin === "https://mountaineer-crew-app-ar5n.onrender.com" &&
               request.method === "GET" &&
               url.pathname.startsWith("/api/calendar/"),
             handler: "NetworkFirst",
@@ -51,7 +51,7 @@ export default defineConfig({
           // (If offline, returning last-known user can keep UI alive.)
           {
             urlPattern: ({ url, request }) =>
-              url.origin === "https://mountaineer-crew-app.onrender.com" &&
+              url.origin === "https://mountaineer-crew-app-ar5n.onrender.com" &&
               request.method === "GET" &&
               url.pathname === "/api/auth/me",
             handler: "NetworkFirst",
@@ -65,7 +65,7 @@ export default defineConfig({
           // ✅ Jobs router reads (GET)
           {
             urlPattern: ({ url, request }) =>
-              url.origin === "https://mountaineer-crew-app.onrender.com" &&
+              url.origin === "https://mountaineer-crew-app-ar5n.onrender.com" &&
               request.method === "GET" &&
               (url.pathname === "/jobs" || url.pathname.startsWith("/jobs/")),
             handler: "NetworkFirst",
