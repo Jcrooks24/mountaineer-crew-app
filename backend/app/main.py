@@ -47,6 +47,7 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     import os
+    import traceback
     from pathlib import Path
     from alembic.config import Config
     from alembic import command
@@ -55,9 +56,14 @@ def on_startup() -> None:
 
     # Run all pending Alembic migrations on startup.
     # This replaces create_all and keeps the schema versioned and up to date.
-    alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-    command.upgrade(alembic_cfg, "head")
-    print("[startup] Alembic migrations applied.")
+    try:
+        alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+        command.upgrade(alembic_cfg, "head")
+        print("[startup] Alembic migrations applied.")
+    except Exception:
+        print("[startup] ERROR — Alembic migration failed:")
+        traceback.print_exc()
+        raise
 
     # Auto-promote ADMIN_EMAIL to admin role on every startup.
     # Set this env var on Render to grant admin access without a shell.
