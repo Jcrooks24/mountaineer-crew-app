@@ -8,7 +8,7 @@ from googleapiclient.http import MediaIoBaseUpload
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.core.google_cal_oauth import _get_creds  # used inside _get_drive_service
+from app.core.google_cal_oauth import _get_creds, _build_authorized_http
 
 PARENT_FOLDER_KEY = "drive_parent_folder_id"
 DEFAULT_PARENT_FOLDER_NAME = "Mountaineer Crew Photos"
@@ -20,8 +20,9 @@ def _get_drive_service(db=None):
     global _cached_drive_service
     if _cached_drive_service is not None:
         return _cached_drive_service
-    creds = _get_creds(db)
-    _cached_drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+    # Use certifi-backed http to avoid SSL errors on Render
+    authorized_http = _build_authorized_http(_get_creds(db))
+    _cached_drive_service = build("drive", "v3", http=authorized_http, cache_discovery=False)
     return _cached_drive_service
 
 
@@ -133,7 +134,17 @@ def upload_photo_to_drive(
         fields="id, webViewLink",
     ).execute()
 
+    file_id = result["id"]
+
+    # Make file publicly viewable so any crew member can see it without Google login
+    svc.permissions().create(
+        fileId=file_id,
+        body={"type": "anyone", "role": "reader"},
+        fields="id",
+    ).execute()
+
     return {
-        "file_id": result["id"],
+        "file_id": file_id,
         "url": result.get("webViewLink", ""),
+        "thumb_url": f"https://drive.google.com/thumbnail?id={file_id}&sz=w800",
     }

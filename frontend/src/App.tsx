@@ -74,6 +74,18 @@ type MaterialsDraft = {
   items: MaterialLineItem[];
 };
 
+type ServerPhoto = {
+  id: string;
+  job_uuid: string;
+  created_by: string;
+  caption: string;
+  drive_file_id: string;
+  drive_url: string;
+  thumb_url: string;
+  created_at: string;
+  mime_type: string;
+};
+
 type MaterialsSubmission = {
   id: string;
   created_at: string;
@@ -207,6 +219,7 @@ export default function App() {
 
   const [isSending, setIsSending] = useState(false);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
+  const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
   const [matSubmissions, setMatSubmissions] = useState<MaterialsSubmission[]>([]);
 
   const canSend = useMemo(() => jobUuid.trim().length > 0, [jobUuid]);
@@ -647,6 +660,7 @@ export default function App() {
 
     setStatus("Job selected");
     fetchJobEvents(jobId);
+    fetchServerPhotos(jobId);
   }
 
   // Fetch event history from backend and merge into local log.
@@ -717,6 +731,16 @@ export default function App() {
       if (data?.events) setServerEvents(data.events);
     } catch {
       // offline or error — server events unavailable, local queue still shown
+    }
+  }
+
+  async function fetchServerPhotos(uuid: string) {
+    if (!uuid.trim()) return;
+    try {
+      const data = await apiFetch<{ ok: boolean; photos: ServerPhoto[] }>(`/api/photos?job_uuid=${encodeURIComponent(uuid)}`);
+      if (data?.photos) setServerPhotos(data.photos);
+    } catch {
+      // offline — server photos unavailable
     }
   }
 
@@ -1186,6 +1210,7 @@ export default function App() {
   useEffect(() => {
     if (tab !== "photos") return;
     refreshPhotos();
+    fetchServerPhotos(jobUuid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
 
@@ -1589,7 +1614,7 @@ export default function App() {
           <div className="card">
             <div className="sectionTitle">Saved</div>
 
-            {photos.length === 0 ? (
+            {photos.length === 0 && serverPhotos.filter(sp => !photos.some(lp => lp.id === sp.id)).length === 0 ? (
               <div className="small">{jobUuid ? "No photos yet." : "Select a job to see photos."}</div>
             ) : (
               <div className="col" style={{ gap: 12 }}>
@@ -1647,6 +1672,27 @@ export default function App() {
                     </div>
                   );
                 })}
+                {/* Photos from other devices (server-only) */}
+                {serverPhotos.filter(sp => !photos.some(lp => lp.id === sp.id)).map((sp) => (
+                  <div key={sp.id} style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "rgba(255,255,255,0.02)" }}>
+                    <img
+                      src={sp.thumb_url}
+                      alt={sp.caption || "job photo"}
+                      style={{ width: "100%", display: "block" }}
+                    />
+                    <div style={{ padding: 10 }}>
+                      {sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>}
+                      <div className="small" style={{ color: "var(--muted)" }}>{new Date(sp.created_at).toLocaleString()}</div>
+                      {sp.created_by && <div className="small" style={{ color: "var(--muted)" }}>by {sp.created_by}</div>}
+                      <div style={{ marginTop: 8 }}>
+                        <a href={sp.drive_url} target="_blank" rel="noopener noreferrer"
+                          style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
+                          View in Drive
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
