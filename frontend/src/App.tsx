@@ -123,6 +123,35 @@ function money(n: number) {
   return `$${n.toFixed(2)}`;
 }
 
+/**
+ * Derive a deterministic UUID v4 from a Google Calendar event ID.
+ * Any device calling this with the same calId gets the same UUID,
+ * so all crew members on the same job share a single job_uuid.
+ */
+function calEventToJobUuid(calId: string): string {
+  // FNV-1a 32-bit with different seeds to produce 128 bits total
+  const fnv = (s: string, seed: number): number => {
+    let h = seed >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  };
+  const a = fnv(calId, 2166136261);
+  const b = fnv(calId + "\x00", 2166136261);
+  const c = fnv(calId + "\x01", 2166136261);
+  const d = fnv(calId + "\x02", 2166136261);
+  const hex = [a, b, c, d].map((n) => n.toString(16).padStart(8, "0")).join("");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    "4" + hex.slice(13, 16),
+    ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0") + hex.slice(18, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
 export default function App() {
   const nav = useNavigate();
   const { user } = useAuth();
@@ -596,37 +625,19 @@ export default function App() {
     const ev = calEvents.find((x) => x.id === calId);
     if (!ev) return;
 
-    const bound = getBoundJobUuid(jobDate, calId);
-    if (bound) {
-      setPersistedJobUuid(bound);
+    // Deterministic UUID: same calendar event ID → same job UUID on every device
+    const jobId = calEventToJobUuid(calId);
 
-      saveJobMeta({
-        job_uuid: bound,
-        jobName: ev.summary,
-        jobDate,
-        source: "calendar",
-        calendarEventId: calId,
-        updated_at: new Date().toISOString(),
-      });
-
-      saveJobName(bound, ev.summary);
-      saveJobDate(bound, jobDate);
-
-      setStatus("Switched job");
-      fetchJobEvents(bound);
-      return;
-    }
-
-    const newId = crypto.randomUUID();
-    setPersistedJobUuid(newId);
+    setPersistedJobUuid(jobId);
     setPersistedJobStatus("active");
 
-    bindCalendarEventToJob(jobDate, calId, newId);
+    // Keep the cal binding in localStorage for quick lookups
+    bindCalendarEventToJob(jobDate, calId, jobId);
 
     setJobName(ev.summary);
 
     saveJobMeta({
-      job_uuid: newId,
+      job_uuid: jobId,
       jobName: ev.summary,
       jobDate,
       source: "calendar",
@@ -634,11 +645,11 @@ export default function App() {
       updated_at: new Date().toISOString(),
     });
 
-    saveJobName(newId, ev.summary);
-    saveJobDate(newId, jobDate);
+    saveJobName(jobId, ev.summary);
+    saveJobDate(jobId, jobDate);
 
-    setStatus("New job from calendar");
-    fetchJobEvents(newId);
+    setStatus("Job selected");
+    fetchJobEvents(jobId);
   }
 
   function getJobNameForUuid(uuid: string): string {
