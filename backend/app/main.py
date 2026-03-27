@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db.session import Base, engine  # noqa: F401
 import app.db.models.system_config  # noqa: F401 — ensure table is registered
 import app.db.models.materials  # noqa: F401 — ensures table is registered with Base
+import app.db.models.calendar_job  # noqa: F401 — ensures table is registered with Base
 
 # Routers that exist
 from app.routers.sync import router as sync_router

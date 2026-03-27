@@ -99,9 +99,6 @@ export default function Login() {
           </Link>
         </div>
       </div>
-      <div style={{ marginTop: 8 }}>
-        <Link to="/forgot-password">Forgot password?</Link>
-      </div>
     </div>
   );
 }

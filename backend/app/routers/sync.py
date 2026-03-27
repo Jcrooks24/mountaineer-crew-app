@@ -1,3 +1,5 @@
+import uuid as _uuid
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -7,6 +9,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.db.models.event import Event
+from app.db.models.calendar_job import CalendarJob
 from app.integrations.sheets_export import export_events_to_sheets
 from app.core.deps import get_current_user
 from app.db.models.user import User
@@ -159,3 +162,27 @@ def get_events_history(
             for e in rows
         ],
     }
+
+
+@router.get("/jobs/resolve")
+def resolve_calendar_job(
+    calendar_event_id: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Return (or create) the canonical job_uuid for a Google Calendar event ID.
+    All devices calling this with the same calendar_event_id receive the same
+    job_uuid, ensuring cross-device event history is unified under one key.
+    """
+    row = db.query(CalendarJob).filter(
+        CalendarJob.calendar_event_id == calendar_event_id
+    ).first()
+
+    if row:
+        return {"ok": True, "job_uuid": row.job_uuid, "created": False}
+
+    new_uuid = str(_uuid.uuid4())
+    row = CalendarJob(calendar_event_id=calendar_event_id, job_uuid=new_uuid)
+    db.add(row)
+    db.commit()
+    return {"ok": True, "job_uuid": new_uuid, "created": True}

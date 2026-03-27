@@ -221,19 +221,25 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     if not new_rows:
         return 0
 
-    # 2) Ensure tab + headers (adds job_label column if sheet predates this change)
-    svc = get_sheets_service(db)
-    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS)
+    # 2) Build service ONCE with certifi CA bundle (avoids SSL errors on Render).
+    #    Reuse it for both _ensure_tab and append to avoid double discovery-doc download.
+    from googleapiclient.discovery import build as _build
+    authorized_http = _build_authorized_http(_get_creds(db))
+    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
 
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS))
     rows = [_build_row(r, actual_headers) for r in new_rows]
 
-    svc.spreadsheets().values().append(
-        spreadsheetId=spreadsheet_id,
-        range=f"{tab}!A1",
-        valueInputOption="RAW",
-        insertDataOption="INSERT_ROWS",
-        body={"values": rows},
-    ).execute()
+    def _append():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    _ssl_retry(_append)
 
     # 3) Mark exported for deduplication
     for item in items:
