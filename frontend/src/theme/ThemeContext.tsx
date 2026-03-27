@@ -215,6 +215,9 @@ export interface ThemeSettings {
   brand2Override: string | null;
   fontValue: string;
   btnRadius: string;
+  btnBgFrom: string;
+  btnBgTo: string;
+  btnSize: "sm" | "md" | "lg";
   cardShadow: string;
   density: string;          // label of DensityOption
   cardGlow: boolean;
@@ -231,6 +234,9 @@ export const DEFAULT_SETTINGS: ThemeSettings = {
   brand2Override: null,
   fontValue: FONT_OPTIONS[0].value,
   btnRadius: RADIUS_OPTIONS[0].value,
+  btnBgFrom: "#1b2945",
+  btnBgTo: "#162238",
+  btnSize: "md",
   cardShadow: SHADOW_OPTIONS[2].value,
   density: "Normal",
   cardGlow: false,
@@ -277,6 +283,12 @@ function applySettings(settings: ThemeSettings) {
               : settings.btnRadius === "4px"   ? "6px"
               : "14px";
   root.style.setProperty("--r", cardR);
+
+  // Button background gradient and size
+  const BTN_PAD: Record<string, string> = { sm: "6px 10px", md: "10px 14px", lg: "14px 20px" };
+  root.style.setProperty("--btn-bg-from", settings.btnBgFrom);
+  root.style.setProperty("--btn-bg-to", settings.btnBgTo);
+  root.style.setProperty("--btn-pad", BTN_PAD[settings.btnSize] ?? "10px 14px");
 
   // Shadow
   root.style.setProperty("--shadow", settings.cardShadow);

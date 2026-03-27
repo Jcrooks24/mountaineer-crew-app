@@ -4,7 +4,7 @@ import logo from "./assets/logo.png";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
-import { useTheme, THEME_PRESETS, FONT_OPTIONS, RADIUS_OPTIONS, SHADOW_OPTIONS, DENSITY_OPTIONS, PIN_EVENT_TYPES } from "./theme/ThemeContext";
+import { useTheme } from "./theme/ThemeContext";
 import { getToken } from "./auth/token";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -24,7 +24,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "materials" | "settings";
+type Tab = "timeline" | "photos" | "materials";
 
 type EventRecord = {
   event_id: string;
@@ -155,7 +155,7 @@ function calEventToJobUuid(calId: string): string {
 export default function App() {
   const nav = useNavigate();
   const { user } = useAuth();
-  const { settings: themeSettings, update: updateTheme, reset: resetTheme } = useTheme();
+  const { settings: themeSettings } = useTheme();
   const ht = themeSettings.helpTexts;
   const [tab, setTab] = useState<Tab>("timeline");
 
@@ -1302,9 +1302,6 @@ export default function App() {
         <button className={"tab " + (tab === "materials" ? "active" : "")} onClick={() => setTab("materials")}>
           Materials
         </button>
-        <button className={"tab " + (tab === "settings" ? "active" : "")} onClick={() => setTab("settings")}>
-          Settings
-        </button>
       </div>
 
       {/* Timeline */}
@@ -1413,6 +1410,15 @@ export default function App() {
               <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
                 <button disabled={queueLen === 0} onClick={syncQueueNow}>
                   {queueLen > 0 ? `Sync (${queueLen} pending)` : "Sync"}
+                </button>
+                <button
+                  disabled={!jobUuid.trim() || !navigator.onLine}
+                  onClick={() => {
+                    loadHistoryFromBackend();
+                    if (jobUuid.trim()) fetchJobEvents(jobUuid.trim());
+                  }}
+                >
+                  Refresh
                 </button>
               </div>
             </div>
@@ -1827,185 +1833,6 @@ export default function App() {
         </>
       )}
 
-      {/* Settings */}
-      {tab === "settings" && (
-        <>
-          {/* Theme Presets */}
-          <div className="card">
-            <div className="sectionTitle">Theme</div>
-            <div className="row wrap" style={{ gap: 8 }}>
-              {Object.entries(THEME_PRESETS).map(([id, preset]) => (
-                <button
-                  key={id}
-                  onClick={() => updateTheme({ themeId: id })}
-                  style={{
-                    outline: themeSettings.themeId === id ? "2px solid var(--brand)" : "none",
-                    outlineOffset: 2,
-                  }}
-                >
-                  {preset.emoji} {preset.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Brand Colors */}
-          <div className="card">
-            <div className="sectionTitle">Brand Colors</div>
-            <div className="col" style={{ gap: 12 }}>
-              <div className="col">
-                <div className="label">Primary Color</div>
-                <div className="row" style={{ gap: 10, alignItems: "center" }}>
-                  <input
-                    type="color"
-                    value={themeSettings.brandOverride ?? (THEME_PRESETS[themeSettings.themeId]?.vars["--brand"] ?? "#5dd6c2")}
-                    onChange={(e) => updateTheme({ brandOverride: e.target.value })}
-                    style={{ width: 48, height: 36, padding: 2, borderRadius: 8, cursor: "pointer" }}
-                  />
-                  <button onClick={() => updateTheme({ brandOverride: null })}>Reset</button>
-                </div>
-              </div>
-              <div className="col">
-                <div className="label">Secondary Color</div>
-                <div className="row" style={{ gap: 10, alignItems: "center" }}>
-                  <input
-                    type="color"
-                    value={themeSettings.brand2Override ?? (THEME_PRESETS[themeSettings.themeId]?.vars["--brand2"] ?? "#6aa7ff")}
-                    onChange={(e) => updateTheme({ brand2Override: e.target.value })}
-                    style={{ width: 48, height: 36, padding: 2, borderRadius: 8, cursor: "pointer" }}
-                  />
-                  <button onClick={() => updateTheme({ brand2Override: null })}>Reset</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Font */}
-          <div className="card">
-            <div className="sectionTitle">Font</div>
-            <div className="row wrap" style={{ gap: 8 }}>
-              {FONT_OPTIONS.map((f) => (
-                <button
-                  key={f.value}
-                  onClick={() => updateTheme({ fontValue: f.value })}
-                  style={{
-                    outline: themeSettings.fontValue === f.value ? "2px solid var(--brand)" : "none",
-                    outlineOffset: 2,
-                    fontFamily: f.value,
-                  }}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Button Style */}
-          <div className="card">
-            <div className="sectionTitle">Button Style</div>
-            <div className="label">Corner Radius</div>
-            <div className="row" style={{ gap: 8 }}>
-              {RADIUS_OPTIONS.map((r) => (
-                <button
-                  key={r.value}
-                  onClick={() => updateTheme({ btnRadius: r.value })}
-                  style={{
-                    outline: themeSettings.btnRadius === r.value ? "2px solid var(--brand)" : "none",
-                    outlineOffset: 2,
-                    borderRadius: r.value,
-                  }}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Card Appearance */}
-          <div className="card">
-            <div className="sectionTitle">Card Appearance</div>
-            <div className="col" style={{ gap: 12 }}>
-              <div className="col">
-                <div className="label">Shadow</div>
-                <div className="row wrap" style={{ gap: 8 }}>
-                  {SHADOW_OPTIONS.map((s) => (
-                    <button
-                      key={s.label}
-                      onClick={() => updateTheme({ cardShadow: s.value })}
-                      style={{
-                        outline: themeSettings.cardShadow === s.value ? "2px solid var(--brand)" : "none",
-                        outlineOffset: 2,
-                      }}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="row" style={{ alignItems: "center", gap: 10 }}>
-                <div className="label" style={{ margin: 0 }}>Card Glow</div>
-                <input
-                  type="checkbox"
-                  checked={themeSettings.cardGlow}
-                  onChange={(e) => updateTheme({ cardGlow: e.target.checked })}
-                  style={{ width: 18, height: 18, cursor: "pointer" }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Density */}
-          <div className="card">
-            <div className="sectionTitle">Density</div>
-            <div className="row" style={{ gap: 8 }}>
-              {DENSITY_OPTIONS.map((d) => (
-                <button
-                  key={d.label}
-                  onClick={() => updateTheme({ density: d.label })}
-                  style={{
-                    outline: themeSettings.density === d.label ? "2px solid var(--brand)" : "none",
-                    outlineOffset: 2,
-                  }}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Map Pin Colors */}
-          <div className="card">
-            <div className="sectionTitle">Map Pin Colors</div>
-            <div className="col" style={{ gap: 10 }}>
-              {PIN_EVENT_TYPES.map((type) => (
-                <div key={type} className="row" style={{ alignItems: "center", gap: 10 }}>
-                  <div className="label" style={{ margin: 0, minWidth: 60, textTransform: "capitalize" }}>{type}</div>
-                  <input
-                    type="color"
-                    value={themeSettings.pinColors[type] ?? "#ffffff"}
-                    onChange={(e) => updateTheme({ pinColors: { ...themeSettings.pinColors, [type]: e.target.value } })}
-                    style={{ width: 40, height: 32, padding: 2, borderRadius: 6, cursor: "pointer" }}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Reset */}
-          <div className="card">
-            <div className="sectionTitle">Reset</div>
-            <button
-              onClick={() => {
-                if (window.confirm("Reset all settings to defaults?")) {
-                  resetTheme();
-                }
-              }}
-            >
-              Reset All to Defaults
-            </button>
-          </div>
-        </>
-      )}
     </div>
   );
 }

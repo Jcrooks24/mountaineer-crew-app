@@ -635,6 +635,63 @@ function SettingsTab() {
         </div>
       </div>
 
+      {/* ── Button background & size ── */}
+      <div className="card">
+        <div className="sectionTitle">Button Background</div>
+        <div className="col" style={{ gap: 16 }}>
+          <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
+            <div className="col" style={{ gap: 6, flex: 1, minWidth: 140 }}>
+              <label className="small">Gradient start</label>
+              <div className="row" style={{ gap: 8 }}>
+                <input type="color" value={settings.btnBgFrom}
+                  onChange={(e) => update({ btnBgFrom: e.target.value })}
+                  style={{ width: 44, height: 36, padding: 2, cursor: "pointer" }} />
+                <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "monospace" }}>{settings.btnBgFrom}</span>
+              </div>
+            </div>
+            <div className="col" style={{ gap: 6, flex: 1, minWidth: 140 }}>
+              <label className="small">Gradient end</label>
+              <div className="row" style={{ gap: 8 }}>
+                <input type="color" value={settings.btnBgTo}
+                  onChange={(e) => update({ btnBgTo: e.target.value })}
+                  style={{ width: 44, height: 36, padding: 2, cursor: "pointer" }} />
+                <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "monospace" }}>{settings.btnBgTo}</span>
+              </div>
+            </div>
+          </div>
+          <div className="col" style={{ gap: 8 }}>
+            <label className="small">Button size</label>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              {(["sm", "md", "lg"] as const).map((sz) => {
+                const active = settings.btnSize === sz;
+                return (
+                  <button key={sz} onClick={() => update({ btnSize: sz })}
+                    style={{
+                      fontSize: 13, padding: sz === "sm" ? "6px 14px" : sz === "lg" ? "14px 24px" : "10px 18px",
+                      border: `2px solid ${active ? "var(--brand)" : "var(--border)"}`,
+                      color: active ? "var(--brand)" : "var(--muted)",
+                      fontWeight: active ? 700 : 600,
+                    }}>
+                    {sz === "sm" ? "Small" : sz === "md" ? "Medium" : "Large"}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="col" style={{ gap: 6 }}>
+            <label className="small">Preview</label>
+            <button style={{
+              background: `linear-gradient(180deg, ${settings.btnBgFrom}, ${settings.btnBgTo})`,
+              pointerEvents: "none",
+              fontSize: 13,
+              alignSelf: "flex-start",
+            }}>
+              Sample Button
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* ── Font ── */}
       <div className="card">
         <div className="sectionTitle">Font Family</div>
