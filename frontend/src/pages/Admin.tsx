@@ -293,8 +293,9 @@ function MapTab() {
           popupAnchor: [0, -r - 4],
         });
         const time = new Date(e.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const jobLabel = e.job_name || e.job_uuid.slice(0, 8);
         return L.marker([e.lat, e.lng], { icon }).bindPopup(
-          `<b style="text-transform:capitalize">${e.type}</b><br/>${time}${e.note ? `<br/>${e.note}` : ""}<br/><span style="font-size:11px;color:#888">Job: ${e.job_uuid.slice(0, 8)}</span>`
+          `<b style="text-transform:capitalize">${e.type}</b><br/>${time}${e.note ? `<br/>${e.note}` : ""}<br/><span style="font-size:11px;color:#888">${jobLabel}</span>`
         );
       });
 

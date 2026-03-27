@@ -165,10 +165,9 @@ export default function App() {
   );
 
   const [status, setStatus] = useState<string>("");
-  const [response, setResponse] = useState<any>(null);
+
 
   const [queueLen, setQueueLen] = useState<number>(0);
-  const [queueEvents, setQueueEvents] = useState<EventRecord[]>([]);
   const [activityLog, setActivityLog] = useState<EventRecord[]>([]);
 
   const [clockText, setClockText] = useState<string>("—");
@@ -217,10 +216,6 @@ export default function App() {
   // Calendar "Other" option
   const [calOtherName, setCalOtherName] = useState<string>("");
 
-  // Map refs
-  const mapDivRef = useRef<HTMLDivElement>(null);
-  const leafletMapRef = useRef<any>(null);
-  const markersLayerRef = useRef<any>(null);
 
   // -----------------------
   // Storage helpers
@@ -246,7 +241,6 @@ export default function App() {
   function saveQueue(q: EventRecord[]) {
     saveJson(QUEUE_KEY, q);
     setQueueLen(q.length);
-    setQueueEvents(q);
   }
 
   function loadLog(): EventRecord[] {
@@ -452,7 +446,6 @@ export default function App() {
 
     if (!navigator.onLine) {
       setStatus(`Offline (${q.length} queued)`);
-      setResponse({ ok: false, reason: "offline", queued: q.length });
       return;
     }
 
@@ -484,7 +477,6 @@ export default function App() {
       });
 
       const json = await res.json();
-      setResponse(json);
 
       const acceptedAll =
         json?.ok === true && (json.inserted + json.duplicates) === q.length && (json.errors ?? 0) === 0;
@@ -607,7 +599,7 @@ export default function App() {
     }
   }
 
-  function onSelectCalendarEvent(calId: string) {
+  async function onSelectCalendarEvent(calId: string) {
     setCalSelectedId(calId);
 
     if (calId === "__other__") {
@@ -618,13 +610,25 @@ export default function App() {
     const ev = calEvents.find((x) => x.id === calId);
     if (!ev) return;
 
-    // Deterministic UUID: same calendar event ID → same job UUID on every device
-    const jobId = calEventToJobUuid(calId);
+    // Ask the server for the canonical UUID for this calendar event.
+    // All devices get the same UUID back, so cross-device history works.
+    // Falls back to a local deterministic hash if offline.
+    let jobId: string;
+    try {
+      const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`);
+      if (res.ok) {
+        const json = await res.json();
+        jobId = json.job_uuid;
+      } else {
+        jobId = calEventToJobUuid(calId);
+      }
+    } catch {
+      jobId = calEventToJobUuid(calId);
+    }
 
     setPersistedJobUuid(jobId);
     setPersistedJobStatus("active");
 
-    // Keep the cal binding in localStorage for quick lookups
     bindCalendarEventToJob(jobDate, calId, jobId);
 
     setJobName(ev.summary);
@@ -643,16 +647,6 @@ export default function App() {
 
     setStatus("Job selected");
     fetchJobEvents(jobId);
-  }
-
-  function getJobNameForUuid(uuid: string): string {
-    try {
-      const meta = loadJobMeta(uuid);
-      if (meta?.jobName) return meta.jobName;
-      return localStorage.getItem(jobNameKey(uuid)) || "";
-    } catch {
-      return "";
-    }
   }
 
   // Fetch event history from backend and merge into local log.
@@ -1123,7 +1117,6 @@ export default function App() {
 
     const q = loadQueue();
     setQueueLen(q.length);
-    setQueueEvents(q);
 
     const log = loadLog();
     setActivityLog(log);
@@ -1212,53 +1205,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, matJobLabel, matNotes, matItems]);
 
-  // Leaflet map: init when timeline tab is shown, destroy otherwise
-  useEffect(() => {
-    if (tab !== "timeline") {
-      if (leafletMapRef.current) {
-        leafletMapRef.current.remove();
-        leafletMapRef.current = null;
-        markersLayerRef.current = null;
-      }
-      return;
-    }
-
-    const div = mapDivRef.current;
-    if (!div) return;
-
-    const L = (window as any).L;
-    if (!L) return;
-
-    if (!leafletMapRef.current) {
-      const map = L.map(div).setView([39.8283, -98.5795], 5);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap contributors",
-      }).addTo(map);
-      leafletMapRef.current = map;
-      markersLayerRef.current = L.layerGroup().addTo(map);
-    }
-
-    // Refresh markers
-    const markers = markersLayerRef.current;
-    if (markers) {
-      markers.clearLayers();
-      const geoEvents = activityLog.filter((e) => e.lat != null && e.lng != null);
-      geoEvents.forEach((e) => {
-        const name = getJobNameForUuid(e.job_uuid) || e.job_uuid.slice(0, 8) + "…";
-        const label = `<strong>${name}</strong><br/>${e.type} · ${new Date(e.timestamp).toLocaleString()}`;
-        L.marker([e.lat as number, e.lng as number])
-          .bindTooltip(label, { direction: "top", sticky: true })
-          .addTo(markers);
-      });
-
-      if (geoEvents.length > 0) {
-        const bounds = L.latLngBounds(geoEvents.map((e) => [e.lat as number, e.lng as number]));
-        leafletMapRef.current.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, activityLog]);
-
   // Select visibility on dark theme
   const selectStyle: React.CSSProperties = {
     width: "100%",
@@ -1285,6 +1231,17 @@ export default function App() {
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
   }, [activityLog, serverEvents, jobUuid]);
+
+  // Materials submissions for the current job — shown in Timeline for quick reference
+  const jobMaterialsSummary = useMemo(() => {
+    if (!jobUuid.trim()) return [];
+    try {
+      const all = JSON.parse(localStorage.getItem(MATERIALS_SUBMISSIONS_KEY) || "[]") as MaterialsSubmission[];
+      return all
+        .filter((s) => s.job_uuid === jobUuid.trim())
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+    } catch { return []; }
+  }, [jobUuid, matSubmissions]);
 
   const calPlaceholder = useMemo(() => {
     if (calLoading) return "Loading…";
@@ -1532,45 +1489,36 @@ export default function App() {
             )}
           </div>
 
-          <div className="card">
-            <div className="sectionTitle">Map</div>
-            {activityLog.some((e) => e.lat != null) ? (
-              <div ref={mapDivRef} style={{ height: 280, borderRadius: 10, overflow: "hidden" }} />
-            ) : (
-              <div className="small">No geotagged events yet.</div>
-            )}
-          </div>
-
-          <details className="card">
-            <summary className="sectionTitle" style={{ cursor: "pointer" }}>
-              Debug
-            </summary>
-            <div
-              style={{
-                marginTop: 8,
-                padding: 12,
-                borderRadius: 12,
-                border: "1px solid var(--border)",
-                background: "rgba(255,255,255,0.02)",
-              }}
-            >
-              <div className="small">Queued: {queueEvents.length} · Log: {activityLog.length}</div>
-              {response != null && (
-                <pre
-                  style={{
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    margin: 0,
-                    marginTop: 8,
-                    fontSize: 11,
-                    color: "var(--muted)",
-                  }}
-                >
-                  {JSON.stringify(response, null, 2)}
-                </pre>
-              )}
+          {jobMaterialsSummary.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Materials ({jobMaterialsSummary.length})</div>
+              <div className="col" style={{ gap: 12 }}>
+                {jobMaterialsSummary.map((s) => (
+                  <div key={s.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                    <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 4 }}>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{money(s.total)}</span>
+                      <span className="small" style={{ color: "var(--muted)" }}>
+                        {new Date(s.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+                    <div className="col" style={{ gap: 2, marginTop: 6 }}>
+                      {s.items.map((it) => (
+                        <div key={it.id} className="row small" style={{ justifyContent: "space-between", color: "var(--text)" }}>
+                          <span>{it.qty}× {it.name}</span>
+                          <span style={{ color: "var(--muted)" }}>
+                            {it.unitPrice != null ? money(it.qty * it.unitPrice) : "—"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    {s.notes && (
+                      <div className="small" style={{ fontStyle: "italic", color: "var(--muted)", marginTop: 4 }}>{s.notes}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-          </details>
+          )}
         </>
       )}
 
