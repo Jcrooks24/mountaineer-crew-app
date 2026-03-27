@@ -328,13 +328,6 @@ export default function App() {
       localStorage.setItem(jobMetaKey(meta.job_uuid), JSON.stringify(meta));
     } catch {}
   }
-  function getBoundJobUuid(date: string, calId: string) {
-    try {
-      return localStorage.getItem(calBindKey(date, calId)) || "";
-    } catch {
-      return "";
-    }
-  }
   function bindCalendarEventToJob(date: string, calId: string, uuid: string) {
     try {
       localStorage.setItem(calBindKey(date, calId), uuid);
