@@ -14,26 +14,75 @@ EVENTS_HEADERS = [
     "type", "note", "lat", "lng", "accuracy_m", "device_id", "created_by", "synced",
 ]
 MATERIALS_HEADERS = [
-    "submission_id", "created_at", "job_uuid", "job_name", "job_date",
+    "submission_id", "created_at", "job_uuid", "job_name", "job_date", "job_label",
     "notes", "item_name", "qty", "unit_price", "line_total", "submission_total",
 ]
 
 
-def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> None:
-    """Create the sheet tab with a header row if it doesn't already exist."""
+def _col_letter(n: int) -> str:
+    """Convert a 0-based column index to A1-notation letter(s). e.g. 0→A, 25→Z, 26→AA."""
+    result = ""
+    n += 1  # switch to 1-based
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        result = chr(65 + r) + result
+    return result
+
+
+def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> List[str]:
+    """
+    Ensure the sheet tab exists and contains all expected header columns.
+
+    - If the tab does not exist: create it and write the full header row.
+    - If the tab exists: read the current header row; append any columns that
+      are missing (new fields added over time) to the right of the existing ones.
+
+    Returns the final ordered list of headers as they appear in the sheet
+    (existing columns first, any newly-added columns at the end).
+    """
     meta = svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    existing = [s["properties"]["title"] for s in meta.get("sheets", [])]
-    if tab not in existing:
+    existing_tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+
+    if tab not in existing_tabs:
+        # Create the tab
         svc.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": tab}}}]},
         ).execute()
+        # Write full header row
         svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!A1",
             valueInputOption="RAW",
             body={"values": [headers]},
         ).execute()
+        return list(headers)
+
+    # Tab exists — read current header row
+    result = svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!1:1",
+    ).execute()
+    current = result.get("values", [[]])[0] if result.get("values") else []
+
+    # Find any columns we want but that aren't in the sheet yet
+    missing = [h for h in headers if h not in current]
+    if missing:
+        start_letter = _col_letter(len(current))
+        svc.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!{start_letter}1",
+            valueInputOption="RAW",
+            body={"values": [missing]},
+        ).execute()
+        current = current + missing
+
+    return current
+
+
+def _build_row(data: Dict[str, Any], headers: List[str]) -> List[Any]:
+    """Map a data dict to a positional list using the sheet's actual column order."""
+    return [data.get(h, "") for h in headers]
 
 
 def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
@@ -42,7 +91,6 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     Returns number of rows appended.
     Never raises; caller should wrap in try/except anyway.
     """
-
     if not events:
         return 0
 
@@ -63,30 +111,31 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     if not new_events:
         return 0
 
-    # 2) Build rows to append (must match your Events tab headers)
+    # 2) Get Sheets service and ensure tab + headers exist
+    svc = get_sheets_service(db)
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, EVENTS_HEADERS)
+
+    # 3) Build rows keyed by column name so order always matches the sheet
     rows: List[List[Any]] = []
     for ev in new_events:
-        rows.append([
-            ev["event_id"],
-            ev["timestamp"],                # ISO string
-            ev["job_uuid"],
-            ev.get("job_name", ""),         # blank for now (frontend localStorage only)
-            ev.get("job_date", ""),         # blank for now
-            ev["type"],
-            ev.get("note") or "",
-            ev.get("lat"),
-            ev.get("lng"),
-            ev.get("accuracy_m"),
-            ev.get("device_id") or "",
-            ev.get("created_by") or "",
-            "synced",
-        ])
+        row_data: Dict[str, Any] = {
+            "event_id":   ev["event_id"],
+            "timestamp":  ev["timestamp"],
+            "job_uuid":   ev["job_uuid"],
+            "job_name":   ev.get("job_name") or "",
+            "job_date":   ev.get("job_date") or "",
+            "type":       ev["type"],
+            "note":       ev.get("note") or "",
+            "lat":        ev.get("lat") if ev.get("lat") is not None else "",
+            "lng":        ev.get("lng") if ev.get("lng") is not None else "",
+            "accuracy_m": ev.get("accuracy_m") if ev.get("accuracy_m") is not None else "",
+            "device_id":  ev.get("device_id") or "",
+            "created_by": ev.get("created_by") or "",
+            "synced":     "synced",
+        }
+        rows.append(_build_row(row_data, actual_headers))
 
-    # 3) Get Sheets service (cached at module level — avoids re-fetching discovery doc)
-    svc = get_sheets_service(db)
-
-    _ensure_tab(svc, spreadsheet_id, tab, EVENTS_HEADERS)
-
+    # 4) Append rows
     def _append():
         authorized_http = _build_authorized_http(_get_creds(db))
         from googleapiclient.discovery import build
@@ -101,7 +150,7 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
 
     _ssl_retry(_append)
 
-    # 4) Mark exported (dedupe) — PostgreSQL-compatible ON CONFLICT syntax
+    # 5) Mark exported (dedupe)
     for ev in new_events:
         db.execute(
             text(
@@ -129,14 +178,16 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     tab = os.getenv("SHEETS_MATERIALS_TAB", DEFAULT_MATERIALS_TAB).strip() or DEFAULT_MATERIALS_TAB
 
     submission_id = str(submission["id"])
-    job_uuid = submission.get("job_uuid", "")
-    job_name = submission.get("jobName", "")
-    job_date = submission.get("jobDate", "")
+    job_uuid  = submission.get("job_uuid", "")
+    job_name  = submission.get("jobName", "")
+    job_label = submission.get("jobLabel", "")
+    job_date  = submission.get("jobDate", "")
     created_at = submission.get("created_at", "")
     notes = submission.get("notes", "")
     total = submission.get("total", 0)
 
-    rows: List[List[Any]] = []
+    # 1) Build rows, skipping already-exported items
+    new_rows: List[Dict[str, Any]] = []
     for item in items:
         item_id = str(item.get("id", ""))
         export_key = f"{submission_id}:{item_id}"
@@ -152,26 +203,29 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
         unit_price = item.get("unitPrice")
         line_total = round(qty * unit_price, 2) if unit_price is not None else ""
 
-        rows.append([
-            submission_id,
-            created_at,
-            job_uuid,
-            job_name,
-            job_date,
-            notes,
-            item.get("name", ""),
-            qty,
-            unit_price if unit_price is not None else "",
-            line_total,
-            total,
-        ])
+        new_rows.append({
+            "submission_id":    submission_id,
+            "created_at":       created_at,
+            "job_uuid":         job_uuid,
+            "job_name":         job_name,
+            "job_date":         job_date,
+            "job_label":        job_label,
+            "notes":            notes,
+            "item_name":        item.get("name", ""),
+            "qty":              qty,
+            "unit_price":       unit_price if unit_price is not None else "",
+            "line_total":       line_total,
+            "submission_total": total,
+        })
 
-    if not rows:
+    if not new_rows:
         return 0
 
+    # 2) Ensure tab + headers (adds job_label column if sheet predates this change)
     svc = get_sheets_service(db)
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS)
 
-    _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS)
+    rows = [_build_row(r, actual_headers) for r in new_rows]
 
     svc.spreadsheets().values().append(
         spreadsheetId=spreadsheet_id,
@@ -181,7 +235,7 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
         body={"values": rows},
     ).execute()
 
-    # Mark exported for deduplication
+    # 3) Mark exported for deduplication
     for item in items:
         item_id = str(item.get("id", ""))
         export_key = f"{submission_id}:{item_id}"
@@ -194,4 +248,4 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
         )
     db.commit()
 
-    return len(rows)
+    return len(new_rows)

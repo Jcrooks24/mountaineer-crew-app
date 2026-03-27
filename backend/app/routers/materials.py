@@ -82,6 +82,7 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
             "created_at": payload.created_at,
             "job_uuid": payload.job_uuid,
             "jobName": job_name,
+            "jobLabel": job_label,
             "jobDate": job_date,
             "notes": payload.notes or "",
             "items": payload.items,
