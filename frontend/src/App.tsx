@@ -1095,13 +1095,23 @@ export default function App() {
 
     // POST to backend for Google Sheets export (non-blocking — don't fail the submission)
     try {
-      await fetch(`${API}/api/materials`, {
+      const token = getToken();
+      const res = await fetch(`${API}/api/materials`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(sub),
       });
-    } catch (_) {
-      // network failure — materials still saved locally
+      if (res.ok) {
+        const data = await res.json();
+        if (data.sheets_error) console.warn("[materials] Sheets export failed:", data.sheets_error);
+      } else {
+        console.warn("[materials] POST failed:", res.status, await res.text().catch(() => ""));
+      }
+    } catch (err) {
+      console.warn("[materials] Network error:", err);
     }
 
     setMatNotes("");

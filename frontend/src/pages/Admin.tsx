@@ -144,7 +144,8 @@ function EmployeesTab() {
 
   return (
     <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 540 }}>
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
             {["Name", "Email", "Role", "Status", "Actions"].map((h) => (
@@ -201,6 +202,7 @@ function EmployeesTab() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
