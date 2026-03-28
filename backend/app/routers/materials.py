@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -72,6 +72,9 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
     except IntegrityError:
         db.rollback()
         inserted = False
+    except SQLAlchemyError:
+        db.rollback()
+        inserted = False
 
     # Export to Google Sheets (non-blocking — don't fail the submission)
     sheets_exported = 0
@@ -91,6 +94,10 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
         sheets_exported = export_materials_to_sheets(db, submission_dict)
     except Exception as ex:
         sheets_error = str(ex)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     return {
         "ok": True,

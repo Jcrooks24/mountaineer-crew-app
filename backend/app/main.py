@@ -66,6 +66,17 @@ def on_startup() -> None:
         traceback.print_exc()
         raise
 
+    # Ensure sheet export dedup tables exist (idempotent, handles deployments
+    # where the initial migration ran before these tables were added).
+    try:
+        from app.db.sheet_exports import ensure_sheet_exports_tables
+        from app.db.session import engine
+        ensure_sheet_exports_tables(engine)
+        print("[startup] Sheet export tables ensured.")
+    except Exception:
+        print("[startup] WARNING — could not ensure sheet export tables:")
+        traceback.print_exc()
+
     # Auto-promote ADMIN_EMAIL to admin role on every startup.
     # Set this env var on Render to grant admin access without a shell.
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
