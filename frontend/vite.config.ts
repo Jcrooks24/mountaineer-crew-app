@@ -67,7 +67,7 @@ export default defineConfig({
             urlPattern: ({ url, request }) =>
               url.origin === "https://mountaineer-crew-app-ar5n.onrender.com" &&
               request.method === "GET" &&
-              (url.pathname === "/jobs" || url.pathname.startsWith("/jobs/")),
+              (url.pathname === "/api/jobs" || url.pathname.startsWith("/api/jobs/")),
             handler: "NetworkFirst",
             options: {
               cacheName: "api-jobs",

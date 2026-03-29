@@ -28,3 +28,8 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+
+class PendingSignupResponse(BaseModel):
+    pending: bool = True
+    message: str = "Account created. Ask your admin to activate it before logging in."

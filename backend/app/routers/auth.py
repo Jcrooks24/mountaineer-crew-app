@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models.user import User
-from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse, ForgotPasswordRequest, ResetPasswordRequest
+from app.schemas.auth import LoginRequest, SignupRequest, TokenResponse, ForgotPasswordRequest, ResetPasswordRequest, PendingSignupResponse
 from app.schemas.users import UpdateProfileRequest
 from app.schemas.users import UserResponse
 from app.core.security import (
@@ -46,13 +46,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # -----------------------------
 # Signup
 # -----------------------------
-@router.post("/signup", response_model=TokenResponse)
-def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> TokenResponse:
+@router.post("/signup", response_model=PendingSignupResponse, status_code=201)
+def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> PendingSignupResponse:
     """
     Self signup.
     - Email must be unique.
     - Password is hashed with bcrypt.
-    - Returns access token immediately.
+    - Account starts inactive; an admin must enable it before the user can log in.
     """
 
     email = payload.email.lower().strip()
@@ -65,7 +65,6 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> TokenRespon
     try:
         pw_hash = hash_password(payload.password)
     except ValueError as e:
-        # Converts hashing failure into proper user-level error
         raise HTTPException(status_code=400, detail=str(e))
 
     user = User(
@@ -73,16 +72,13 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> TokenRespon
         password_hash=pw_hash,
         name=payload.name,
         role="user",
-        is_active=True,
+        is_active=False,  # admin must activate via Admin > Employees
     )
 
     db.add(user)
     db.commit()
-    db.refresh(user)
 
-    token = create_access_token(subject=str(user.id))
-
-    return TokenResponse(access_token=token)
+    return PendingSignupResponse()
 
 
 # -----------------------------

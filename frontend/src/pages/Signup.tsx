@@ -1,20 +1,17 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
-import { useAuth } from "../auth/AuthContext";
 import logo from "../assets/logo.png";
 
-type TokenResponse = { access_token: string; token_type: string };
+type PendingResponse = { pending: boolean; message: string };
 
 export default function Signup() {
-  const nav = useNavigate();
-  const { loginWithToken } = useAuth();
-
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [pendingMsg, setPendingMsg] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,13 +19,11 @@ export default function Signup() {
     setBusy(true);
 
     try {
-      const res = await apiFetch<TokenResponse>("/api/auth/signup", {
+      const res = await apiFetch<PendingResponse>("/api/auth/signup", {
         method: "POST",
         body: JSON.stringify({ name: name || null, email, password }),
       });
-
-      await loginWithToken(res.access_token);
-      nav("/", { replace: true });
+      setPendingMsg(res.message);
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Signup failed");
     } finally {
@@ -48,54 +43,67 @@ export default function Signup() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle" style={{ fontSize: 18, marginBottom: 18 }}>Create account</div>
-
-        <form onSubmit={onSubmit} className="col" style={{ gap: 14 }}>
-          <div className="col">
-            <div className="label">Name <span style={{ opacity: 0.5 }}>(optional)</span></div>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoComplete="name"
-              placeholder="Your name"
-            />
+        {pendingMsg ? (
+          <div className="col" style={{ gap: 16, textAlign: "center", padding: "8px 0" }}>
+            <div style={{ fontSize: 32 }}>✓</div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>Account requested</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>{pendingMsg}</div>
+            <Link to="/login" style={{ color: "var(--brand)", textDecoration: "none", fontWeight: 600, fontSize: 14 }}>
+              ← Back to login
+            </Link>
           </div>
+        ) : (
+          <>
+            <div className="sectionTitle" style={{ fontSize: 18, marginBottom: 18 }}>Create account</div>
 
-          <div className="col">
-            <div className="label">Email</div>
-            <input
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              type="email"
-              autoComplete="email"
-              required
-            />
-          </div>
+            <form onSubmit={onSubmit} className="col" style={{ gap: 14 }}>
+              <div className="col">
+                <div className="label">Name <span style={{ opacity: 0.5 }}>(optional)</span></div>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoComplete="name"
+                  placeholder="Your name"
+                />
+              </div>
 
-          <div className="col">
-            <div className="label">Password</div>
-            <input
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              type="password"
-              autoComplete="new-password"
-              required
-            />
-          </div>
+              <div className="col">
+                <div className="label">Email</div>
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  type="email"
+                  autoComplete="email"
+                  required
+                />
+              </div>
 
-          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+              <div className="col">
+                <div className="label">Password</div>
+                <input
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
 
-          <button className="btnPrimary" disabled={busy} style={{ width: "100%", marginTop: 4 }}>
-            {busy ? "Creating…" : "Create account"}
-          </button>
-        </form>
+              {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
 
-        <div className="small" style={{ marginTop: 18 }}>
-          Already have an account?{" "}
-          <Link to="/login" style={{ color: "var(--brand)", textDecoration: "none", fontWeight: 600 }}>
-            Log in
-          </Link>
-        </div>
+              <button className="btnPrimary" disabled={busy} style={{ width: "100%", marginTop: 4 }}>
+                {busy ? "Creating…" : "Create account"}
+              </button>
+            </form>
+
+            <div className="small" style={{ marginTop: 18 }}>
+              Already have an account?{" "}
+              <Link to="/login" style={{ color: "var(--brand)", textDecoration: "none", fontWeight: 600 }}>
+                Log in
+              </Link>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
