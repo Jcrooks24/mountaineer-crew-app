@@ -227,7 +227,8 @@ export default function App() {
   const [matCustomCost, setMatCustomCost] = useState<string>("");
   const [matQty, setMatQty] = useState<number>(1);
 
-  const [isSending, setIsSending] = useState(false);
+  const [sendingType, setSendingType] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
   const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
   const [matSubmissions, setMatSubmissions] = useState<MaterialsSubmission[]>([]);
@@ -524,9 +525,9 @@ export default function App() {
   }
 
   async function recordEvent(type: string, note: string | null = null) {
-    if (!canSend || isSending) return;
+    if (!canSend || sendingType !== null) return;
 
-    setIsSending(true);
+    setSendingType(type);
     setStatus("Capturing...");
 
     const loc = await tryGetLocation();
@@ -557,7 +558,7 @@ export default function App() {
     try {
       await syncQueueNow();
     } finally {
-      setIsSending(false);
+      setSendingType(null);
     }
   }
 
@@ -1187,23 +1188,24 @@ export default function App() {
     loadMaterialsFromBackend();
     syncMaterialsQueue();
 
-    const onOnline = () => { syncQueueNow(); syncMaterialsQueue(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); syncMaterialsQueue(); };
+    const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const tick = () => {
-      const log = loadLog();
-      setClockText(computeClockHoursText(log));
-    };
-
+    const tick = () => setClockText(computeClockHoursText(activityLog));
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobUuid, jobStatus]);
+  }, [jobUuid, jobStatus, activityLog]);
 
   useEffect(() => {
     if (!jobUuid.trim()) return;
@@ -1312,8 +1314,8 @@ export default function App() {
         </div>
 
         <div className="row wrap" style={{ justifyContent: "flex-end" }}>
-          <span className="chip" style={{ color: navigator.onLine ? "var(--ok)" : "var(--danger)" }}>
-            {navigator.onLine ? "Online" : "Offline"}
+          <span className="chip" style={{ color: isOnline ? "var(--ok)" : "var(--danger)" }}>
+            {isOnline ? "Online" : "Offline"}
           </span>
           <span className="chip" style={queueLen > 0 ? { color: "var(--brand2)", borderColor: "rgba(106,167,255,0.35)" } : {}}>
             Queue {queueLen}
@@ -1442,17 +1444,17 @@ export default function App() {
 
             <div className="col" style={{ gap: 10 }}>
               <div className="row wrap">
-                <button className="btnPrimary" disabled={!canSend || isSending} onClick={() => recordEvent("ARRIVE")}>
-                  {isSending ? "..." : "Arrive"}
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("ARRIVE")}>
+                  {sendingType === "ARRIVE" ? "..." : "Arrive"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend || isSending} onClick={() => recordEvent("DEPART")}>
-                  {isSending ? "..." : "Depart"}
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("DEPART")}>
+                  {sendingType === "DEPART" ? "..." : "Depart"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend || isSending} onClick={() => recordEvent("START")}>
-                  {isSending ? "..." : "Start"}
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("START")}>
+                  {sendingType === "START" ? "..." : "Start"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend || isSending} onClick={() => recordEvent("FINISH")}>
-                  {isSending ? "..." : "Finish"}
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("FINISH")}>
+                  {sendingType === "FINISH" ? "..." : "Finish"}
                 </button>
               </div>
 
@@ -1461,7 +1463,7 @@ export default function App() {
                   {queueLen > 0 ? `Sync (${queueLen} pending)` : "Sync"}
                 </button>
                 <button
-                  disabled={!jobUuid.trim() || !navigator.onLine}
+                  disabled={!jobUuid.trim() || !isOnline}
                   onClick={() => {
                     loadHistoryFromBackend();
                     if (jobUuid.trim()) fetchJobEvents(jobUuid.trim());
@@ -1617,7 +1619,6 @@ export default function App() {
                   <input
                     type="file"
                     accept="image/*"
-                    capture="environment"
                     style={{ display: "none" }}
                     disabled={photoBusy}
                     onChange={(e) => {
