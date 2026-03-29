@@ -164,6 +164,13 @@ function calEventToJobUuid(calId: string): string {
   ].join("-");
 }
 
+/** Build a fetch-compatible headers object, adding Authorization if a token is present. */
+function makeAuthHeaders(token: string | null, extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
 function getDeviceId(): string {
   const KEY = "crew_device_id_v1";
   let id = localStorage.getItem(KEY);
@@ -497,10 +504,7 @@ export default function App() {
       const token = getToken();
       const res = await fetch(`${API}/api/sync`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: makeAuthHeaders(token, { "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
 
@@ -600,7 +604,7 @@ export default function App() {
     try {
       const token = getToken();
       const res = await fetch(`${API}/api/calendar/day?date=${encodeURIComponent(jobDate)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: makeAuthHeaders(token),
       });
       const json = await res.json();
 
@@ -655,7 +659,7 @@ export default function App() {
     try {
       const token = getToken();
       const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: makeAuthHeaders(token),
       });
       if (res.ok) {
         const json = await res.json();
@@ -699,7 +703,7 @@ export default function App() {
     try {
       const token = getToken();
       const res = await fetch(`${API}/api/events?limit=2000`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: makeAuthHeaders(token),
       });
       if (!res.ok) {
         setHistoryStatus(`History sync failed (HTTP ${res.status})`);
@@ -840,7 +844,7 @@ export default function App() {
       const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: makeAuthHeaders(token),
         body: form,
       });
       const json = await res.json();
@@ -878,7 +882,7 @@ export default function App() {
       const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: makeAuthHeaders(token),
         body: form,
       });
       const json = await res.json();
@@ -1050,13 +1054,12 @@ export default function App() {
     if (q.length === 0) return;
 
     const token = getToken();
-    const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
     const remaining: MaterialsSubmission[] = [];
     for (const sub of q) {
       try {
         const res = await fetch(`${API}/api/materials`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeader },
+          headers: makeAuthHeaders(token, { "Content-Type": "application/json" }),
           body: JSON.stringify(sub),
         });
         if (!res.ok) remaining.push(sub);
@@ -1072,7 +1075,7 @@ export default function App() {
     try {
       const token = getToken();
       const res = await fetch(`${API}/api/materials?limit=500`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: makeAuthHeaders(token),
       });
       if (!res.ok) return;
       const json = await res.json();
