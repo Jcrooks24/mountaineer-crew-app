@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time as _time
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -204,7 +204,7 @@ def get_cal_status(db=None) -> dict:
 def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List[Dict[str, Any]]:
     day = datetime.fromisoformat(date_yyyy_mm_dd).date()
     start_local = datetime.combine(day, time(0, 0, 0), tzinfo=LOCAL_TZ)
-    end_local = datetime.combine(day, time(23, 59, 59), tzinfo=LOCAL_TZ)
+    end_local = start_local + timedelta(days=1)
 
     creds = _get_creds(db)
 

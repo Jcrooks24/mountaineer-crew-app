@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models.materials import MaterialsSubmission
 from app.integrations.sheets_export import export_materials_to_sheets
+from app.core.deps import get_current_user
+from app.db.models.user import User
 
 router = APIRouter(prefix="/api/materials", tags=["materials"])
 
@@ -39,7 +41,7 @@ class MaterialsSubmissionIn(BaseModel):
 
 
 @router.post("")
-def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_db)):
+def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Store a materials submission and export to Google Sheets.
     Idempotent — duplicate submission_id is silently ignored.
@@ -94,10 +96,6 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
         sheets_exported = export_materials_to_sheets(db, submission_dict)
     except Exception as ex:
         sheets_error = str(ex)
-        try:
-            db.rollback()
-        except Exception:
-            pass
 
     return {
         "ok": True,
@@ -111,6 +109,7 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
 def get_materials(
     limit: int = Query(default=500, ge=1, le=2000),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Return all materials submissions newest-first.

@@ -164,6 +164,16 @@ function calEventToJobUuid(calId: string): string {
   ].join("-");
 }
 
+function getDeviceId(): string {
+  const KEY = "crew_device_id_v1";
+  let id = localStorage.getItem(KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(KEY, id);
+  }
+  return id;
+}
+
 export default function App() {
   const nav = useNavigate();
   const { user } = useAuth();
@@ -465,7 +475,7 @@ export default function App() {
     setStatus(`Syncing ${q.length}...`);
 
     const payload = {
-      device_id: "dev-test",
+      device_id: getDeviceId(),
       events: q.map((e) => ({
         event_id: e.event_id,
         job_uuid: e.job_uuid,
@@ -483,9 +493,13 @@ export default function App() {
     };
 
     try {
+      const token = getToken();
       const res = await fetch(`${API}/api/sync`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(payload),
       });
 
@@ -583,7 +597,10 @@ export default function App() {
     setCalLoaded(false);
 
     try {
-      const res = await fetch(`${API}/api/calendar/day?date=${encodeURIComponent(jobDate)}`);
+      const token = getToken();
+      const res = await fetch(`${API}/api/calendar/day?date=${encodeURIComponent(jobDate)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const json = await res.json();
 
       if (!res.ok) {
@@ -616,7 +633,14 @@ export default function App() {
     setCalSelectedId(calId);
 
     if (calId === "__other__") {
+      const newUuid = crypto.randomUUID();
       setCalOtherName("");
+      setPersistedJobUuid(newUuid);
+      setPersistedJobStatus("active");
+      setJobName("");
+      setStatus("Manual job — enter description below");
+      fetchJobEvents(newUuid);
+      fetchServerPhotos(newUuid);
       return;
     }
 
@@ -628,7 +652,10 @@ export default function App() {
     // Falls back to a local deterministic hash if offline.
     let jobId: string;
     try {
-      const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`);
+      const token = getToken();
+      const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (res.ok) {
         const json = await res.json();
         jobId = json.job_uuid;
@@ -669,7 +696,10 @@ export default function App() {
     if (!navigator.onLine) return;
     setHistoryStatus("Syncing history…");
     try {
-      const res = await fetch(`${API}/api/events?limit=2000`);
+      const token = getToken();
+      const res = await fetch(`${API}/api/events?limit=2000`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) {
         setHistoryStatus(`History sync failed (HTTP ${res.status})`);
         return;
@@ -1018,12 +1048,14 @@ export default function App() {
     const q = loadMaterialsQueue();
     if (q.length === 0) return;
 
+    const token = getToken();
+    const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
     const remaining: MaterialsSubmission[] = [];
     for (const sub of q) {
       try {
         const res = await fetch(`${API}/api/materials`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeader },
           body: JSON.stringify(sub),
         });
         if (!res.ok) remaining.push(sub);
@@ -1037,7 +1069,10 @@ export default function App() {
   async function loadMaterialsFromBackend() {
     if (!navigator.onLine) return;
     try {
-      const res = await fetch(`${API}/api/materials?limit=500`);
+      const token = getToken();
+      const res = await fetch(`${API}/api/materials?limit=500`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) return;
       const json = await res.json();
       if (!json.ok || !Array.isArray(json.submissions)) return;
@@ -1092,27 +1127,6 @@ export default function App() {
     syncMaterialsQueue(); // fire-and-forget
 
     await recordEvent("NOTE", `MATERIALS ${money(total)} (${matItems.length})`);
-
-    // POST to backend for Google Sheets export (non-blocking — don't fail the submission)
-    try {
-      const token = getToken();
-      const res = await fetch(`${API}/api/materials`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(sub),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.sheets_error) console.warn("[materials] Sheets export failed:", data.sheets_error);
-      } else {
-        console.warn("[materials] POST failed:", res.status, await res.text().catch(() => ""));
-      }
-    } catch (err) {
-      console.warn("[materials] Network error:", err);
-    }
 
     setMatNotes("");
     setMatItems([]);

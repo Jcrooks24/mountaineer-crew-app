@@ -39,7 +39,7 @@ class SyncIn(BaseModel):
 
 
 @router.post("/sync")
-def sync(payload: SyncIn, db: Session = Depends(get_db)):
+def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     inserted = 0
     duplicates = 0
     errors = 0
@@ -132,6 +132,7 @@ def get_events_history(
     job_uuid: Optional[str] = Query(default=None),
     limit: int = Query(default=1000, ge=1, le=5000),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Return synced events so any device can rebuild its local activity log.
@@ -168,6 +169,7 @@ def get_events_history(
 def resolve_calendar_job(
     calendar_event_id: str = Query(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Return (or create) the canonical job_uuid for a Google Calendar event ID.

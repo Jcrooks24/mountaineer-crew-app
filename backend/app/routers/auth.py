@@ -36,7 +36,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_admin
 from app.core.mailer import send_email
 
 
@@ -225,7 +225,7 @@ class TestEmailRequest(BaseModel):
     to: str = "jacob@mountaineermoving.com"
 
 @router.post("/test-email")
-def test_email(payload: TestEmailRequest = TestEmailRequest()):
+def test_email(payload: TestEmailRequest = TestEmailRequest(), _admin: User = Depends(require_admin)):
     """
     Attempt a real Postmark send and return detailed success/error info.
     Accepts optional JSON body: {"to": "someone@example.com"}
@@ -252,7 +252,7 @@ def test_email(payload: TestEmailRequest = TestEmailRequest()):
 
 
 @router.get("/email-debug")
-def email_debug():
+def email_debug(_admin: User = Depends(require_admin)):
     smtp_from = os.getenv("SMTP_FROM", "")
     frontend_url = os.getenv("FRONTEND_URL", "")
     postmark_token = os.getenv("POSTMARK_SERVER_TOKEN", "").strip()

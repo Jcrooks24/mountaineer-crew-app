@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.google_cal_oauth import list_events_for_day
+from app.core.deps import get_current_user
+from app.db.models.user import User
 from app.db.session import get_db
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
@@ -34,6 +36,7 @@ def get_events_for_day(
         description="Optional override. If omitted, uses WORKSPACE_CALENDAR_ID or falls back to 'primary' in dev.",
     ),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     cal_id = resolve_calendar_id(calendar_id)
 
