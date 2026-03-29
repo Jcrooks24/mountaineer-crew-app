@@ -97,16 +97,14 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
     tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
 
-    # 1) Filter out already-exported event_ids
-    new_events: List[Dict[str, Any]] = []
-    for ev in events:
-        event_id = str(ev["event_id"])
-        exists = db.execute(
-            text("SELECT 1 FROM sheet_event_exports WHERE event_id = :event_id LIMIT 1"),
-            {"event_id": event_id},
-        ).fetchone()
-        if not exists:
-            new_events.append(ev)
+    # 1) Filter out already-exported event_ids (single IN query instead of N queries)
+    all_ids = [str(ev["event_id"]) for ev in events]
+    rows = db.execute(
+        text("SELECT event_id FROM sheet_event_exports WHERE event_id IN :ids"),
+        {"ids": tuple(all_ids)},
+    ).fetchall()
+    already_exported = {r[0] for r in rows}
+    new_events = [ev for ev in events if str(ev["event_id"]) not in already_exported]
 
     if not new_events:
         return 0

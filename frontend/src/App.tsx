@@ -487,8 +487,8 @@ export default function App() {
         lng: e.lng,
         accuracy_m: e.accuracy_m,
         note: e.note ?? null,
-        job_name: localStorage.getItem(JOB_NAME_PREFIX + e.job_uuid) ?? "",
-        job_date: localStorage.getItem(JOB_DATE_PREFIX + e.job_uuid) ?? "",
+        job_name: loadJobMeta(e.job_uuid)?.jobName || localStorage.getItem(JOB_NAME_PREFIX + e.job_uuid) || "",
+        job_date: loadJobMeta(e.job_uuid)?.jobDate || localStorage.getItem(JOB_DATE_PREFIX + e.job_uuid) || "",
         created_by: user?.name || user?.email || "",
       })),
     };

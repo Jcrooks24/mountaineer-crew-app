@@ -100,7 +100,7 @@ def root():
 # Routers
 app.include_router(sync_router)        # /api/sync, /api/events
 app.include_router(calendar_router)    # /api/calendar/day
-app.include_router(jobs_router)        # /jobs (JWT protected)
+app.include_router(jobs_router)        # /api/jobs (JWT protected)
 app.include_router(auth_router)        # /api/auth/*
 app.include_router(admin_router)       # /api/admin/*
 app.include_router(materials_router)   # /api/materials

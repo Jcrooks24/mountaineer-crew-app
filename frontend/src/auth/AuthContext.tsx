@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../api/client";
+import { apiFetch, ApiError } from "../api/client";
 import { clearToken, getToken, setToken } from "./token";
 
 export type User = {
@@ -32,8 +32,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const me = await apiFetch<User>("/api/auth/me");
       setUser(me);
-    } catch {
-      setUser(null);
+    } catch (err) {
+      // Only clear user on a genuine auth rejection (401/403).
+      // Network/connectivity errors (TypeError) leave the token intact so the
+      // user isn't silently logged out when the server is briefly unreachable.
+      if (err instanceof ApiError) {
+        setUser(null);
+      }
     } finally {
       setLoading(false);
     }

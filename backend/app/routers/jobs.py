@@ -15,7 +15,7 @@ from app.db.models.job import Job
 from app.db.models.user import User
 from app.schemas.jobs import JobResponse
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
 @router.get("", response_model=list[JobResponse])

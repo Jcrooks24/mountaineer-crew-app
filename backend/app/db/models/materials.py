@@ -4,7 +4,7 @@ Stores a completed materials form submission for a job.
 Items are serialized as JSON so no separate line-item table is needed.
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Float
+from sqlalchemy import Column, Integer, Numeric, String, DateTime
 from app.db.session import Base
 
 
@@ -28,4 +28,4 @@ class MaterialsSubmission(Base):
     # JSON-encoded list of MaterialLineItem objects
     items_json = Column(String, nullable=False, default="[]")
 
-    total = Column(Float, nullable=False, default=0.0)
+    total = Column(Numeric(precision=10, scale=2), nullable=False, default=0.0)

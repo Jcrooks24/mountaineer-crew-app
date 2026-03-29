@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -29,15 +29,24 @@ class MaterialsSubmissionIn(BaseModel):
     id: str                          # device-generated UUID
     created_at: str                  # ISO datetime string
     job_uuid: str
-    jobLabel: Optional[str] = ""
     job_label: Optional[str] = ""
-    jobName: Optional[str] = ""
     job_name: Optional[str] = ""
-    jobDate: Optional[str] = ""
     job_date: Optional[str] = ""
     notes: Optional[str] = ""
     items: List[Dict[str, Any]]      # list of MaterialLineItem objects
     total: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_camel(cls, v: Any) -> Any:
+        """Accept camelCase keys from the frontend as well as snake_case."""
+        if isinstance(v, dict):
+            for camel, snake in (("jobLabel", "job_label"), ("jobName", "job_name"), ("jobDate", "job_date")):
+                if camel in v and snake not in v:
+                    v[snake] = v.pop(camel)
+                else:
+                    v.pop(camel, None)
+        return v
 
 
 @router.post("")
@@ -51,9 +60,9 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
     except Exception:
         ts = datetime.utcnow()
 
-    job_label = payload.jobLabel or payload.job_label or ""
-    job_name = payload.jobName or payload.job_name or ""
-    job_date = payload.jobDate or payload.job_date or ""
+    job_label = payload.job_label or ""
+    job_name = payload.job_name or ""
+    job_date = payload.job_date or ""
 
     row = MaterialsSubmission(
         submission_id=payload.id,
