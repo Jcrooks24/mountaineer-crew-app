@@ -1459,6 +1459,16 @@ export default function App() {
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("FINISH")}>
                   {sendingType === "FINISH" ? "..." : "Finish"}
                 </button>
+                <button
+                  disabled={!canSend || sendingType !== null}
+                  onClick={async () => {
+                    const text = window.prompt("Note:", "");
+                    if (!text || !text.trim()) return;
+                    await recordEvent("NOTE", text.trim());
+                  }}
+                >
+                  {sendingType === "NOTE" ? "..." : "Note"}
+                </button>
               </div>
 
               <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
