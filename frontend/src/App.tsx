@@ -1539,7 +1539,7 @@ export default function App() {
                     )}
 
                     <div style={{ marginTop: 6 }}>
-                      <button onClick={() => addNoteToEntry(e.event_id)} style={{ padding: "4px 10px", fontSize: 12 }}>
+                      <button onClick={() => addNoteToEntry(e.event_id)} style={{ padding: "4px 10px", fontSize: 12, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.25)", color: "var(--text)" }}>
                         + Note
                       </button>
                     </div>
