@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import DVIRReminderModal from "./DVIRReminderModal";
 
 type BillingMethod =
   | "crew_cash_check"
@@ -47,6 +48,8 @@ export default function JobReport({ jobUuid, jobName }: Props) {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [showDVIRModal, setShowDVIRModal] = useState(false);
+  const pendingSaveRef = useRef<(() => Promise<void>) | null>(null);
 
   // Load existing report when job_uuid changes
   useEffect(() => {
@@ -86,17 +89,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     setSaved(false);
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-
-    if (!jobUuid) return setErr("No job selected.");
-    if (!data.billing_method) return setErr("Select a billing method.");
-    if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
-    if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
-    if (!data.hours_match && !data.hours_mismatch_reason.trim())
-      return setErr("Please explain why the hours don't match.");
-
+  async function doSave() {
     setBusy(true);
     try {
       await apiFetch("/api/job-report", {
@@ -120,6 +113,22 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     }
   }
 
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+
+    if (!jobUuid) return setErr("No job selected.");
+    if (!data.billing_method) return setErr("Select a billing method.");
+    if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
+    if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
+    if (!data.hours_match && !data.hours_mismatch_reason.trim())
+      return setErr("Please explain why the hours don't match.");
+
+    // Show DVIR reminder before saving
+    pendingSaveRef.current = doSave;
+    setShowDVIRModal(true);
+  }
+
   if (!jobUuid) {
     return (
       <div className="card" style={{ color: "var(--muted)", textAlign: "center", padding: "28px 16px" }}>
@@ -133,6 +142,21 @@ export default function JobReport({ jobUuid, jobName }: Props) {
   }
 
   return (
+    <>
+    {showDVIRModal && (
+      <DVIRReminderModal
+        trigger="report"
+        onProceed={() => {
+          setShowDVIRModal(false);
+          pendingSaveRef.current?.();
+          pendingSaveRef.current = null;
+        }}
+        onCancel={() => {
+          setShowDVIRModal(false);
+          pendingSaveRef.current = null;
+        }}
+      />
+    )}
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
       {jobName && (
@@ -282,6 +306,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
         {busy ? "Saving…" : saved ? "Update Report" : "Save Report"}
       </button>
     </form>
+    </>
   );
 }
 

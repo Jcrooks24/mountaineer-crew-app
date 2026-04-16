@@ -5,6 +5,7 @@ import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
 import BillCalculator from "./components/BillCalculator";
+import DVIRReminderModal from "./components/DVIRReminderModal";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme } from "./theme/ThemeContext";
 import { getToken } from "./auth/token";
@@ -261,6 +262,7 @@ export default function App() {
 
   const [sendingType, setSendingType] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [dvirPending, setDvirPending] = useState<{ type: string } | null>(null);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
   const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
   const [matSubmissions, setMatSubmissions] = useState<MaterialsSubmission[]>([]);
@@ -1493,10 +1495,10 @@ export default function App() {
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("DEPART")}>
                   {sendingType === "DEPART" ? "..." : "Depart"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("START")}>
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "START" })}>
                   {sendingType === "START" ? "..." : "Start"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("FINISH")}>
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "FINISH" })}>
                   {sendingType === "FINISH" ? "..." : "Finish"}
                 </button>
                 <button
@@ -1965,6 +1967,19 @@ export default function App() {
       {/* Bill */}
       {tab === "bill" && (
         <BillCalculator jobUuid={jobUuid} jobName={jobName} />
+      )}
+
+      {/* DVIR reminder modal — shown before START or FINISH */}
+      {dvirPending && (
+        <DVIRReminderModal
+          trigger={dvirPending.type === "START" ? "pre-trip" : "post-trip"}
+          onProceed={() => {
+            const type = dvirPending.type;
+            setDvirPending(null);
+            recordEvent(type);
+          }}
+          onCancel={() => setDvirPending(null)}
+        />
       )}
 
     </div>
