@@ -8,9 +8,12 @@ export default defineConfig(({ mode }) => {
   // so we bake the API origin in here. Each deployment (prod vs staging) will get
   // its own compiled SW that only caches requests to its own backend.
   const env = loadEnv(mode, process.cwd(), "");
-  const apiOrigin = env.VITE_API_URL
-    ? new URL(env.VITE_API_URL).origin
-    : "http://127.0.0.1:8000";
+  let apiOrigin = "http://127.0.0.1:8000";
+  try {
+    if (env.VITE_API_URL) apiOrigin = new URL(env.VITE_API_URL).origin;
+  } catch {
+    // malformed URL — fall back to localhost so the build doesn't break
+  }
 
   return {
     plugins: [
