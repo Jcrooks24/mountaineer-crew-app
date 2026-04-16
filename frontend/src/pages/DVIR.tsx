@@ -204,20 +204,9 @@ export default function DVIRPage() {
 
   const hasDefects = defects.size > 0;
   const condition = hasDefects ? "defects_noted" : "satisfactory";
+  const [showDefectWarning, setShowDefectWarning] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-
-    if (!vehicleNumber) return setErr("Select a vehicle unit.");
-    if (!odometer.trim()) return setErr("Odometer reading is required.");
-    if (!driverName.trim()) return setErr("Driver name is required.");
-    if (hasDefects && !defectNotes.trim()) return setErr("Describe the defect(s) — defect notes are required when defects are checked.");
-    if (prevDVIR && !prevReviewed)
-      return setErr("You must confirm you have reviewed the previous inspection report.");
-    if (sigRef.current?.isEmpty()) return setErr("Driver signature is required — please sign above.");
-    if (!eSignConsent) return setErr("You must accept the electronic signature consent to submit.");
-
+  async function doSubmit() {
     setBusy(true);
     try {
       const res = await apiFetch<DVIRResponse>("/api/dvir", {
@@ -248,6 +237,28 @@ export default function DVIRPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+
+    if (!vehicleNumber) return setErr("Select a vehicle unit.");
+    if (!odometer.trim()) return setErr("Odometer reading is required.");
+    if (!driverName.trim()) return setErr("Driver name is required.");
+    if (hasDefects && !defectNotes.trim()) return setErr("Describe the defect(s) — defect notes are required when defects are checked.");
+    if (prevDVIR && !prevReviewed)
+      return setErr("You must confirm you have reviewed the previous inspection report.");
+    if (sigRef.current?.isEmpty()) return setErr("Driver signature is required — please sign above.");
+    if (!eSignConsent) return setErr("You must accept the electronic signature consent to submit.");
+
+    // If defects noted, warn before submitting
+    if (hasDefects) {
+      setShowDefectWarning(true);
+      return;
+    }
+
+    doSubmit();
   }
 
   // ── Success view ───────────────────────────────────────────────────────────
@@ -357,11 +368,17 @@ export default function DVIRPage() {
           )}
         </div>
 
-        {/* Mechanic sign-off form */}
-        <MechanicSignForm
-          dvirId={prevDVIR!.dvir_id}
-          onSigned={() => loadPrevDVIR(vehicleNumber)}
-        />
+        {/* Contact admin — no inline sign-off on crew form */}
+        <div className="card" style={{ textAlign: "center", padding: "20px 16px" }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Mechanic review required</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
+            A qualified mechanic must review the defect, perform repairs as needed, and sign off
+            on this report before <strong>{vehicleNumber}</strong> can return to service.
+            <br /><br />
+            Mechanic sign-off is completed by an admin in the <strong>Admin → DVIR Review</strong> tab.
+            Once signed, return here to submit a new inspection for this vehicle.
+          </div>
+        </div>
       </div>
     );
   }
@@ -631,120 +648,40 @@ export default function DVIRPage() {
           {busy ? "Submitting…" : "Submit DVIR"}
         </button>
       </form>
-    </div>
-  );
-}
 
-// ─── Mechanic sign-off form (shown when previous DVIR has open defect) ───────
-
-function MechanicSignForm({ dvirId, onSigned }: { dvirId: string; onSigned: () => void }) {
-  const [mechanicName, setMechanicName] = useState("");
-  const [repairsMade, setRepairsMade] = useState<boolean | null>(null);
-  const [mechanicNotes, setMechanicNotes] = useState("");
-  const [eSignConsent, setESignConsent] = useState(false);
-  const sigRef = useRef<SignaturePadHandle>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-    if (!mechanicName.trim()) return setErr("Mechanic name is required.");
-    if (repairsMade === null) return setErr("Indicate whether repairs were made.");
-    if (sigRef.current?.isEmpty()) return setErr("Mechanic signature is required.");
-    if (!eSignConsent) return setErr("Accept the electronic signature consent to proceed.");
-
-    setBusy(true);
-    try {
-      await apiFetch(`/api/dvir/${dvirId}/mechanic-sign`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          mechanic_name: mechanicName.trim(),
-          mechanic_signature: sigRef.current!.toDataURL(),
-          repairs_made: repairsMade,
-          mechanic_notes: mechanicNotes.trim() || null,
-        }),
-      });
-      onSigned();
-    } catch (e: any) {
-      const msg = e?.message ?? "Submission failed.";
-      setErr(msg === "Failed to fetch" ? "Cannot reach the server. Check your connection." : msg);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div className="card">
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Mechanic Sign-Off</div>
-
-        <div style={{ marginBottom: 10 }}>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name *</div>
-          <input value={mechanicName} onChange={(e) => setMechanicName(e.target.value)} placeholder="Full name" required style={inputStyle} />
-        </div>
-
-        <div style={{ marginBottom: 10 }}>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Repairs Made? *</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {([true, false] as const).map((v) => (
+      {/* ── Defect warning modal ── */}
+      {showDefectWarning && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowDefectWarning(false); }}
+        >
+          <div style={{ background: "var(--card)", border: "2px solid var(--danger)", borderRadius: "var(--r, 14px)", padding: 24, maxWidth: 380, width: "100%", boxShadow: "var(--shadow)", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: "var(--danger)" }}>⚠ Vehicle Will Be Placed Out of Service</div>
+            <div style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.6 }}>
+              You have noted <strong>{defects.size} defect{defects.size !== 1 ? "s" : ""}</strong> on this vehicle.
+              Submitting this DVIR will flag <strong>{vehicleNumber}</strong> as out of service.
+              <br /><br />
+              The vehicle must not be operated until a mechanic reviews the defect and signs off in the admin dashboard.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <button
-                key={String(v)}
-                type="button"
-                onClick={() => setRepairsMade(v)}
-                style={{
-                  flex: 1, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontSize: 13,
-                  border: repairsMade === v ? `2px solid ${v ? "var(--brand)" : "var(--danger)"}` : "1px solid var(--border)",
-                  background: repairsMade === v ? (v ? "rgba(93,214,194,0.1)" : "rgba(255,107,107,0.08)") : "transparent",
-                  color: repairsMade === v ? (v ? "var(--brand)" : "var(--danger)") : "var(--muted)",
-                  fontWeight: repairsMade === v ? 700 : 400,
-                }}
+                className="btnPrimary"
+                onClick={() => { setShowDefectWarning(false); doSubmit(); }}
+                style={{ fontSize: 14, background: "var(--danger)", borderColor: "var(--danger)" }}
               >
-                {v ? "Yes — repairs made" : "No repairs needed"}
+                Submit & place vehicle out of service
               </button>
-            ))}
+              <button
+                onClick={() => setShowDefectWarning(false)}
+                style={{ padding: "10px 14px", borderRadius: "var(--btn-r, 12px)", border: "1px solid var(--border)", background: "transparent", color: "var(--text)", fontSize: 14, cursor: "pointer" }}
+              >
+                Go back and review
+              </button>
+            </div>
           </div>
         </div>
-
-        <div style={{ marginBottom: 10 }}>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Notes</div>
-          <textarea
-            value={mechanicNotes}
-            onChange={(e) => setMechanicNotes(e.target.value)}
-            placeholder="Describe repairs made or reason no repair was needed…"
-            rows={3}
-            style={{ ...inputStyle, resize: "vertical" }}
-          />
-        </div>
-
-        <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Mechanic Signature * — sign below</div>
-        <SignaturePad ref={sigRef} height={150} />
-        <button type="button" onClick={() => sigRef.current?.clear()}
-          style={{ marginTop: 6, background: "none", border: "none", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: 0 }}>
-          Clear signature
-        </button>
-      </div>
-
-      <div className="card">
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
-          <input type="checkbox" checked={eSignConsent} onChange={(e) => setESignConsent(e.target.checked)}
-            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
-          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
-            I understand and agree that my electronic signature is legally binding for this mechanic review certification.
-          </span>
-        </label>
-      </div>
-
-      {err && (
-        <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
-          {err}
-        </div>
       )}
-
-      <button type="submit" className="btnPrimary" disabled={busy} style={{ marginBottom: 32 }}>
-        {busy ? "Submitting…" : "Submit Mechanic Sign-Off"}
-      </button>
-    </form>
+    </div>
   );
 }
 

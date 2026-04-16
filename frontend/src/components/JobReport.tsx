@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import DVIRReminderModal from "./DVIRReminderModal";
-import BillCalculator from "./BillCalculator";
+import BillCalculator, { type BillHandle } from "./BillCalculator";
 
 type BillingMethod =
   | "crew_cash_check"
@@ -51,6 +51,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [showDVIRModal, setShowDVIRModal] = useState(false);
   const pendingSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const billRef = useRef<BillHandle>(null);
 
   // Load existing report when job_uuid changes
   useEffect(() => {
@@ -91,6 +92,12 @@ export default function JobReport({ jobUuid, jobName }: Props) {
   }
 
   async function doSave() {
+    // Validate bill review checkbox
+    const billData = billRef.current?.getData();
+    if (billData !== null && billData !== undefined && !billData.reviewed) {
+      return setErr("Please confirm you have reviewed the auto-populated bill items before saving.");
+    }
+
     setBusy(true);
     try {
       await apiFetch("/api/job-report", {
@@ -106,6 +113,20 @@ export default function JobReport({ jobUuid, jobName }: Props) {
           hours_mismatch_reason: data.hours_mismatch_reason.trim() || null,
         }),
       });
+
+      // Save bill alongside the report
+      if (billData) {
+        await apiFetch("/api/bill", {
+          method: "POST",
+          body: JSON.stringify({
+            job_uuid: jobUuid,
+            items: billData.items,
+            global_discount: billData.globalDiscount,
+            notes: billData.notes || null,
+          }),
+        });
+      }
+
       setSaved(true);
     } catch (e: any) {
       setErr(e?.message ?? "Save failed. Please try again.");
@@ -158,7 +179,13 @@ export default function JobReport({ jobUuid, jobName }: Props) {
         }}
       />
     )}
-    <BillCalculator jobUuid={jobUuid} jobName={jobName} />
+    <BillCalculator
+      ref={billRef}
+      jobUuid={jobUuid}
+      jobName={jobName}
+      dumpsterPct={data.dumpster_pct}
+      recyclingPct={data.recycling_pct}
+    />
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
       {jobName && (
