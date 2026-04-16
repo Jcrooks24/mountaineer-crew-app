@@ -10,6 +10,7 @@ import app.db.models.materials  # noqa: F401 — ensures table is registered wit
 import app.db.models.calendar_job  # noqa: F401 — ensures table is registered with Base
 import app.db.models.photo         # noqa: F401 — ensures table is registered with Base
 import app.db.models.dvir  # noqa: F401 — ensure dvirs table is registered
+import app.db.models.job_report  # noqa: F401 — ensure job_reports table is registered
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -20,6 +21,7 @@ from app.routers.admin import router as admin_router
 from app.routers.materials import router as materials_router
 from app.routers.photos import router as photos_router
 from app.routers.dvir import router as dvir_router
+from app.routers.job_report import router as job_report_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -108,3 +110,4 @@ app.include_router(admin_router)       # /api/admin/*
 app.include_router(materials_router)   # /api/materials
 app.include_router(photos_router)      # /api/photos/upload
 app.include_router(dvir_router)        # /api/dvir
+app.include_router(job_report_router)  # /api/job-report

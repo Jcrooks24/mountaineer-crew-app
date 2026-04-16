@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import logo from "./assets/logo.png";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
+import JobReport from "./components/JobReport";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme } from "./theme/ThemeContext";
 import { getToken } from "./auth/token";
@@ -47,7 +48,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "materials";
+type Tab = "timeline" | "photos" | "materials" | "report";
 
 type EventRecord = {
   event_id: string;
@@ -1388,6 +1389,9 @@ export default function App() {
         <button className={"tab " + (tab === "materials" ? "active" : "")} onClick={() => setTab("materials")}>
           Materials
         </button>
+        <button className={"tab " + (tab === "report" ? "active" : "")} onClick={() => setTab("report")}>
+          Report
+        </button>
       </div>
 
       {/* Timeline */}
@@ -1947,6 +1951,11 @@ export default function App() {
             </div>
           )}
         </>
+      )}
+
+      {/* Report */}
+      {tab === "report" && (
+        <JobReport jobUuid={jobUuid} jobName={jobName} />
       )}
 
     </div>
