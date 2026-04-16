@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, model_validator
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -166,7 +166,7 @@ def delete_material(
     db.delete(row)
     try:
         db.commit()
-        return {"ok": True, "deleted": True}
     except SQLAlchemyError:
         db.rollback()
-        return {"ok": False, "deleted": False}
+        raise HTTPException(status_code=500, detail="Failed to delete material")
+    return {"ok": True, "deleted": True}
