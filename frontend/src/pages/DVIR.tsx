@@ -110,7 +110,10 @@ type PrevDVIR = {
   inspection_type: string;
   condition: string;
   defects: string[];
+  defect_notes: string | null;
   driver_name: string;
+  mechanic_signature: string | null;
+  mechanic_name: string | null;
 };
 
 type DVIRResponse = {
@@ -154,15 +157,25 @@ export default function DVIRPage() {
   const [prevLoading, setPrevLoading] = useState(false);
   const [prevReviewed, setPrevReviewed] = useState(false);
 
-  useEffect(() => {
-    if (!vehicleNumber) { setPrevDVIR(null); setPrevReviewed(false); return; }
+  function loadPrevDVIR(vehicle: string) {
+    if (!vehicle) { setPrevDVIR(null); setPrevReviewed(false); return; }
     setPrevLoading(true);
-    setPrevReviewed(false);
-    apiFetch<PrevDVIR | null>(`/api/dvir/latest-for-vehicle?vehicle_number=${encodeURIComponent(vehicleNumber)}`)
+    apiFetch<PrevDVIR | null>(`/api/dvir/latest-for-vehicle?vehicle_number=${encodeURIComponent(vehicle)}`)
       .then((r) => setPrevDVIR(r ?? null))
       .catch(() => setPrevDVIR(null))
       .finally(() => setPrevLoading(false));
+  }
+
+  useEffect(() => {
+    setPrevReviewed(false);
+    loadPrevDVIR(vehicleNumber);
   }, [vehicleNumber]);
+
+  // True when previous DVIR has defects that haven't been mechanic-signed yet
+  const prevHasOpenDefect =
+    prevDVIR !== null &&
+    prevDVIR.defects.length > 0 &&
+    !prevDVIR.mechanic_signature;
 
   // ── Checklist ──────────────────────────────────────────────────────────────
   const [defects, setDefects] = useState<Set<string>>(new Set());
@@ -197,7 +210,9 @@ export default function DVIRPage() {
     setErr(null);
 
     if (!vehicleNumber) return setErr("Select a vehicle unit.");
+    if (!odometer.trim()) return setErr("Odometer reading is required.");
     if (!driverName.trim()) return setErr("Driver name is required.");
+    if (hasDefects && !defectNotes.trim()) return setErr("Describe the defect(s) — defect notes are required when defects are checked.");
     if (prevDVIR && !prevReviewed)
       return setErr("You must confirm you have reviewed the previous inspection report.");
     if (sigRef.current?.isEmpty()) return setErr("Driver signature is required — please sign above.");
@@ -291,6 +306,66 @@ export default function DVIRPage() {
     );
   }
 
+  // ── Open-defect block: mechanic must sign before new DVIR ──────────────────
+  if (vehicleNumber && !prevLoading && prevHasOpenDefect) {
+    return (
+      <div className="container">
+        <div className="topbar" style={{ marginBottom: 16 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>Driver Vehicle Inspection Report</div>
+            <div className="small" style={{ color: "var(--muted)" }}>FMCSA 49 CFR §396.11</div>
+          </div>
+          <button onClick={() => nav("/")} style={backBtnStyle}>← Back</button>
+        </div>
+
+        {/* Out-of-service warning */}
+        <div style={{
+          padding: "16px",
+          borderRadius: 12,
+          background: "rgba(255,107,107,0.12)",
+          border: "2px solid var(--danger)",
+          marginBottom: 16,
+        }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: "var(--danger)", marginBottom: 6 }}>
+            ⚠ Vehicle Out of Service — Open Defect
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.5 }}>
+            <strong>{vehicleNumber}</strong> has an unresolved defect from the last inspection on{" "}
+            <strong>{prevDVIR!.inspection_date}</strong>. This vehicle must not be operated and a new DVIR
+            cannot be submitted until a qualified mechanic reviews the defect, makes repairs as needed,
+            and signs the report below.
+          </div>
+        </div>
+
+        {/* Previous defective DVIR summary */}
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>
+            Defective DVIR — {prevDVIR!.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} · {prevDVIR!.inspection_date}
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+            Driver: {prevDVIR!.driver_name}
+          </div>
+          <div style={{ marginBottom: prevDVIR!.defect_notes ? 8 : 0, display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {prevDVIR!.defects.map((d) => (
+              <span key={d} className="chip" style={{ fontSize: 11, background: "rgba(255,107,107,0.15)", color: "var(--danger)" }}>{d}</span>
+            ))}
+          </div>
+          {prevDVIR!.defect_notes && (
+            <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 6, fontStyle: "italic" }}>
+              "{prevDVIR!.defect_notes}"
+            </div>
+          )}
+        </div>
+
+        {/* Mechanic sign-off form */}
+        <MechanicSignForm
+          dvirId={prevDVIR!.dvir_id}
+          onSigned={() => loadPrevDVIR(vehicleNumber)}
+        />
+      </div>
+    );
+  }
+
   // ── Form ───────────────────────────────────────────────────────────────────
   return (
     <div className="container">
@@ -325,12 +400,12 @@ export default function DVIRPage() {
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
             <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trailer #</div>
-              <input value={trailerNumber} onChange={(e) => setTrailerNumber(e.target.value)} placeholder="Optional" style={inputStyle} />
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trailer # (or N/A)</div>
+              <input value={trailerNumber} onChange={(e) => setTrailerNumber(e.target.value)} placeholder="N/A if none" style={inputStyle} />
             </div>
             <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Odometer (miles)</div>
-              <input type="number" value={odometer} onChange={(e) => setOdometer(e.target.value)} placeholder="Optional" min={0} style={inputStyle} />
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Odometer (miles) *</div>
+              <input type="number" value={odometer} onChange={(e) => setOdometer(e.target.value)} placeholder="Required" min={0} required style={inputStyle} />
             </div>
           </div>
 
@@ -557,6 +632,119 @@ export default function DVIRPage() {
         </button>
       </form>
     </div>
+  );
+}
+
+// ─── Mechanic sign-off form (shown when previous DVIR has open defect) ───────
+
+function MechanicSignForm({ dvirId, onSigned }: { dvirId: string; onSigned: () => void }) {
+  const [mechanicName, setMechanicName] = useState("");
+  const [repairsMade, setRepairsMade] = useState<boolean | null>(null);
+  const [mechanicNotes, setMechanicNotes] = useState("");
+  const [eSignConsent, setESignConsent] = useState(false);
+  const sigRef = useRef<SignaturePadHandle>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    if (!mechanicName.trim()) return setErr("Mechanic name is required.");
+    if (repairsMade === null) return setErr("Indicate whether repairs were made.");
+    if (sigRef.current?.isEmpty()) return setErr("Mechanic signature is required.");
+    if (!eSignConsent) return setErr("Accept the electronic signature consent to proceed.");
+
+    setBusy(true);
+    try {
+      await apiFetch(`/api/dvir/${dvirId}/mechanic-sign`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          mechanic_name: mechanicName.trim(),
+          mechanic_signature: sigRef.current!.toDataURL(),
+          repairs_made: repairsMade,
+          mechanic_notes: mechanicNotes.trim() || null,
+        }),
+      });
+      onSigned();
+    } catch (e: any) {
+      const msg = e?.message ?? "Submission failed.";
+      setErr(msg === "Failed to fetch" ? "Cannot reach the server. Check your connection." : msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div className="card">
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Mechanic Sign-Off</div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name *</div>
+          <input value={mechanicName} onChange={(e) => setMechanicName(e.target.value)} placeholder="Full name" required style={inputStyle} />
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Repairs Made? *</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {([true, false] as const).map((v) => (
+              <button
+                key={String(v)}
+                type="button"
+                onClick={() => setRepairsMade(v)}
+                style={{
+                  flex: 1, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontSize: 13,
+                  border: repairsMade === v ? `2px solid ${v ? "var(--brand)" : "var(--danger)"}` : "1px solid var(--border)",
+                  background: repairsMade === v ? (v ? "rgba(93,214,194,0.1)" : "rgba(255,107,107,0.08)") : "transparent",
+                  color: repairsMade === v ? (v ? "var(--brand)" : "var(--danger)") : "var(--muted)",
+                  fontWeight: repairsMade === v ? 700 : 400,
+                }}
+              >
+                {v ? "Yes — repairs made" : "No repairs needed"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Notes</div>
+          <textarea
+            value={mechanicNotes}
+            onChange={(e) => setMechanicNotes(e.target.value)}
+            placeholder="Describe repairs made or reason no repair was needed…"
+            rows={3}
+            style={{ ...inputStyle, resize: "vertical" }}
+          />
+        </div>
+
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Mechanic Signature * — sign below</div>
+        <SignaturePad ref={sigRef} height={150} />
+        <button type="button" onClick={() => sigRef.current?.clear()}
+          style={{ marginTop: 6, background: "none", border: "none", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: 0 }}>
+          Clear signature
+        </button>
+      </div>
+
+      <div className="card">
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+          <input type="checkbox" checked={eSignConsent} onChange={(e) => setESignConsent(e.target.checked)}
+            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
+          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
+            I understand and agree that my electronic signature is legally binding for this mechanic review certification.
+          </span>
+        </label>
+      </div>
+
+      {err && (
+        <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+          {err}
+        </div>
+      )}
+
+      <button type="submit" className="btnPrimary" disabled={busy} style={{ marginBottom: 32 }}>
+        {busy ? "Submitting…" : "Submit Mechanic Sign-Off"}
+      </button>
+    </form>
   );
 }
 

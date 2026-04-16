@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import DVIRReminderModal from "./DVIRReminderModal";
+import BillCalculator from "./BillCalculator";
 
 type BillingMethod =
   | "crew_cash_check"
@@ -157,6 +158,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
         }}
       />
     )}
+    <BillCalculator jobUuid={jobUuid} jobName={jobName} />
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
       {jobName && (
