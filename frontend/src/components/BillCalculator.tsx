@@ -1,9 +1,10 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
+import { MATERIAL_CATALOG } from "../data/catalog";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Unit = "hr" | "flat" | "ea" | "mi";
+type Unit = "hr" | "flat" | "ea" | "mi" | "day" | "lb" | "cu ft";
 
 type LineItem = {
   id: string;
@@ -12,7 +13,7 @@ type LineItem = {
   rate: number;
   unit: Unit;
   discount: number;   // per-line % (0–100)
-  source: "hours" | "materials" | "m1" | "preset" | "custom";
+  source: "hours" | "materials" | "m1" | "charge" | "custom";
 };
 
 type Bill = {
@@ -31,16 +32,56 @@ export type BillHandle = {
   getData: () => { items: LineItem[]; globalDiscount: number; notes: string; reviewed: boolean } | null;
 };
 
-// ── Presets ───────────────────────────────────────────────────────────────────
+// ── Company charges ───────────────────────────────────────────────────────────
 
-const PRESET_ITEMS: { label: string; unit: Unit; rate: number }[] = [
-  { label: "Fuel surcharge", unit: "flat", rate: 0 },
-  { label: "Truck fee", unit: "flat", rate: 0 },
-  { label: "Long carry fee", unit: "hr", rate: 0 },
-  { label: "Stair carry fee", unit: "hr", rate: 0 },
-  { label: "Packing materials", unit: "flat", rate: 0 },
-  { label: "Storage fee", unit: "flat", rate: 0 },
-  { label: "Mileage", unit: "mi", rate: 0 },
+type ChargeItem = { label: string; unit: Unit; rate: number };
+type ChargeCategory = { category: string; items: ChargeItem[] };
+
+const COMPANY_CHARGES: ChargeCategory[] = [
+  {
+    category: "Labor",
+    items: [
+      { label: "Mover (per hour)", unit: "hr", rate: 80 },
+      { label: "Truck (per hour)", unit: "hr", rate: 90 },
+      { label: "Crew transport vehicle", unit: "day", rate: 100 },
+      { label: "Specialty services", unit: "hr", rate: 225 },
+      { label: "Overtime (1.5×)", unit: "hr", rate: 0 },
+      { label: "Holiday rate (2×)", unit: "hr", rate: 0 },
+      { label: "2-hour minimum charge", unit: "flat", rate: 0 },
+    ],
+  },
+  {
+    category: "Fees & Surcharges",
+    items: [
+      { label: "Fuel & mileage surcharge", unit: "mi", rate: 2.25 },
+      { label: "Big Sky trip fee", unit: "flat", rate: 125 },
+      { label: "Change order admin fee", unit: "flat", rate: 150 },
+      { label: "Credit card processing (3.5%)", unit: "flat", rate: 0 },
+      { label: "Late payment fee (1.5%/mo)", unit: "flat", rate: 0 },
+      { label: "Deposit (30%)", unit: "flat", rate: 0 },
+    ],
+  },
+  {
+    category: "Coverage",
+    items: [
+      { label: "Default valuation coverage", unit: "lb", rate: 0.6 },
+      { label: "Full value coverage (1.25%)", unit: "flat", rate: 0 },
+    ],
+  },
+  {
+    category: "Disposal",
+    items: [
+      { label: "Full dumpster", unit: "flat", rate: 700 },
+      { label: "Full truck of trash", unit: "flat", rate: 350 },
+    ],
+  },
+  {
+    category: "Crating",
+    items: [
+      { label: "Stick crate", unit: "cu ft", rate: 32.5 },
+      { label: "Solid crate", unit: "cu ft", rate: 42.5 },
+    ],
+  },
 ];
 
 const DUMPSTER_FULL_COST = 700;
@@ -82,6 +123,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const [loaded, setLoaded] = useState(false);
   const [reviewed, setReviewed] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [addView, setAddView] = useState<"main" | "packing">("main");
   const addMenuRef = useRef<HTMLDivElement>(null);
 
   useImperativeHandle(ref, () => ({
@@ -147,6 +189,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     function handler(e: MouseEvent) {
       if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
         setShowAddMenu(false);
+        setAddView("main");
       }
     }
     document.addEventListener("mousedown", handler);
@@ -169,14 +212,25 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       items: [...prev.items, { id: uuid(), label: "", qty: 1, rate: 0, unit: "flat", discount: 0, source: "custom" }],
     }));
     setShowAddMenu(false);
+    setAddView("main");
   }
 
-  function addPresetItem(preset: typeof PRESET_ITEMS[0]) {
+  function addChargeItem(charge: ChargeItem) {
     setBill((prev) => ({
       ...prev,
-      items: [...prev.items, { id: uuid(), label: preset.label, qty: 1, rate: preset.rate, unit: preset.unit, discount: 0, source: "preset" }],
+      items: [...prev.items, { id: uuid(), label: charge.label, qty: 1, rate: charge.rate, unit: charge.unit, discount: 0, source: "charge" }],
     }));
     setShowAddMenu(false);
+    setAddView("main");
+  }
+
+  function addPackingItem(name: string, unitPrice: number | null) {
+    setBill((prev) => ({
+      ...prev,
+      items: [...prev.items, { id: uuid(), label: name, qty: 1, rate: unitPrice ?? 0, unit: "ea", discount: 0, source: "charge" }],
+    }));
+    setShowAddMenu(false);
+    setAddView("main");
   }
 
   // ── Empty / loading states ────────────────────────────────────────────────────
@@ -237,23 +291,70 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         <div style={{ padding: "10px 12px", borderTop: bill.items.length > 0 ? "1px solid var(--border)" : undefined }} ref={addMenuRef}>
           <button
             type="button"
-            onClick={() => setShowAddMenu((v) => !v)}
+            onClick={() => { setShowAddMenu((v) => !v); setAddView("main"); }}
             style={{ fontSize: 13, color: "var(--brand)", borderColor: "var(--brand)", padding: "6px 14px", borderRadius: 8 }}
           >
             + Add line item
           </button>
           {showAddMenu && (
-            <div style={{ marginTop: 8, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", boxShadow: "var(--shadow)", zIndex: 10 }}>
-              {PRESET_ITEMS.map((p) => (
-                <button key={p.label} type="button" onClick={() => addPresetItem(p)}
-                  style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 14px", background: "none", border: "none", borderBottom: "1px solid var(--border)", color: "var(--text)", fontSize: 13, cursor: "pointer" }}>
-                  {p.label}
-                </button>
-              ))}
-              <button type="button" onClick={addCustomItem}
-                style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 14px", background: "none", border: "none", color: "var(--brand)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                Custom item…
-              </button>
+            <div style={{ marginTop: 8, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", boxShadow: "var(--shadow)", zIndex: 10, maxHeight: 420, overflowY: "auto" }}>
+              {addView === "main" ? (
+                <>
+                  {COMPANY_CHARGES.map((cat) => (
+                    <div key={cat.category}>
+                      <div style={{ padding: "7px 14px 4px", fontSize: 10, fontWeight: 700, color: "var(--brand)", textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.03)" }}>
+                        {cat.category}
+                      </div>
+                      {cat.items.map((charge) => (
+                        <button key={charge.label} type="button" onClick={() => addChargeItem(charge)}
+                          style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", textAlign: "left", padding: "9px 14px", background: "none", border: "none", borderBottom: "1px solid var(--border)", color: "var(--text)", fontSize: 13, cursor: "pointer", gap: 8 }}>
+                          <span>{charge.label}</span>
+                          <span style={{ color: "var(--muted)", fontSize: 11, flexShrink: 0 }}>
+                            {charge.rate > 0 ? `${fmt(charge.rate)}/${charge.unit}` : charge.unit}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                  {/* Packing materials section */}
+                  <div>
+                    <div style={{ padding: "7px 14px 4px", fontSize: 10, fontWeight: 700, color: "var(--brand)", textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.03)" }}>
+                      Packing Materials
+                    </div>
+                    <button type="button" onClick={() => setAddView("packing")}
+                      style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", padding: "9px 14px", background: "none", border: "none", borderBottom: "1px solid var(--border)", color: "var(--brand)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                      <span>Browse packing materials…</span>
+                      <span style={{ fontSize: 16 }}>›</span>
+                    </button>
+                  </div>
+                  {/* Custom */}
+                  <button type="button" onClick={addCustomItem}
+                    style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 14px", background: "none", border: "none", color: "var(--muted)", fontSize: 13, cursor: "pointer" }}>
+                    Custom item…
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.03)" }}>
+                    <button type="button" onClick={() => setAddView("main")}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--brand)", fontSize: 16, lineHeight: 1, padding: 0, flexShrink: 0 }}>
+                      ‹
+                    </button>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--brand)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                      Packing Materials
+                    </span>
+                  </div>
+                  {MATERIAL_CATALOG.map((m) => (
+                    <button key={m.name} type="button" onClick={() => addPackingItem(m.name, m.unitPrice)}
+                      style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", textAlign: "left", padding: "9px 14px", background: "none", border: "none", borderBottom: "1px solid var(--border)", color: "var(--text)", fontSize: 13, cursor: "pointer", gap: 8 }}>
+                      <span>{m.name}</span>
+                      <span style={{ color: "var(--muted)", fontSize: 11, flexShrink: 0 }}>
+                        {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}/ea
+                      </span>
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -329,6 +430,9 @@ function LineItemRow({ item, onChange, onRemove }: {
           <option value="ea">ea</option>
           <option value="flat">flat</option>
           <option value="mi">mi</option>
+          <option value="day">day</option>
+          <option value="lb">lb</option>
+          <option value="cu ft">cu ft</option>
         </select>
       </div>
       <input type="number" min={0} step={0.01} value={item.rate}

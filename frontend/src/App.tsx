@@ -8,6 +8,7 @@ import DVIRReminderModal from "./components/DVIRReminderModal";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme } from "./theme/ThemeContext";
 import { getToken } from "./auth/token";
+import { MATERIAL_CATALOG, type MaterialCatalogItem } from "./data/catalog";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -79,11 +80,6 @@ type JobMeta = {
   updated_at: string;
 };
 
-type MaterialCatalogItem = {
-  name: string;
-  unitPrice: number | null; // null => requires cost input (10% markup rule)
-};
-
 type MaterialLineItem = {
   id: string;
   name: string;
@@ -127,26 +123,6 @@ const MATERIALS_DRAFT_PREFIX = "crew_materials_draft_v1:"; // per job_uuid
 const MATERIALS_SUBMISSIONS_KEY = "crew_materials_submissions_v1"; // global list
 const MATERIALS_QUEUE_KEY = "crew_materials_queue_v1"; // unsynced submissions
 
-const MATERIAL_CATALOG: MaterialCatalogItem[] = [
-  { name: "Small Box", unitPrice: 2.0 },
-  { name: "Medium Moving Box", unitPrice: 2.5 },
-  { name: "Large Box", unitPrice: 3.0 },
-  { name: "Small Wardrobe", unitPrice: 21.0 },
-  { name: "Large Wardrobe", unitPrice: 24.0 },
-  { name: "Dish Barrel", unitPrice: 9.0 },
-  { name: "Four Piece Mirror Pack", unitPrice: 11.0 },
-  { name: "Packing Paper (200 Sheets)", unitPrice: 26.0 },
-  { name: "Packing Paper (500 Sheets)", unitPrice: 44.0 },
-  { name: "Paper Pads", unitPrice: 12.5 },
-  { name: "Bubble Wrap (Per Roll)", unitPrice: 33.0 },
-  { name: "Tape (Per Roll)", unitPrice: 3.0 },
-  { name: "Plastic Couch Cover", unitPrice: 8.0 },
-  { name: "Mattress Bag (Any Size)", unitPrice: 9.5 },
-  { name: "Light Duty Furniture Pad", unitPrice: 10.0 },
-  { name: "Heavy-Duty Pad", unitPrice: 22.0 },
-  { name: "Small Wrap", unitPrice: 12.5 },
-  { name: "Medium Wrap", unitPrice: 22.0 },
-];
 
 function todayLocalYYYYMMDD() {
   const d = new Date();
@@ -253,6 +229,7 @@ export default function App() {
   const [matNotes, setMatNotes] = useState<string>("");
   const [matItems, setMatItems] = useState<MaterialLineItem[]>([]);
   const [matError, setMatError] = useState<string>("");
+  const [matBusy, setMatBusy] = useState(false);
 
   const [matSelectedName, setMatSelectedName] = useState<string>("");
   const [matCustomName, setMatCustomName] = useState<string>("");
@@ -1136,39 +1113,44 @@ export default function App() {
       return;
     }
 
-    const total = computeMaterialsTotal(matItems);
+    setMatBusy(true);
+    try {
+      const total = computeMaterialsTotal(matItems);
 
-    const sub: MaterialsSubmission = {
-      id: crypto.randomUUID(),
-      created_at: new Date().toISOString(),
-      job_uuid: jobUuid.trim(),
-      jobLabel: matJobLabel.trim(),
-      jobName: jobName.trim(),
-      jobDate,
-      notes: matNotes.trim(),
-      items: matItems,
-      total,
-    };
+      const sub: MaterialsSubmission = {
+        id: crypto.randomUUID(),
+        created_at: new Date().toISOString(),
+        job_uuid: jobUuid.trim(),
+        jobLabel: matJobLabel.trim(),
+        jobName: jobName.trim(),
+        jobDate,
+        notes: matNotes.trim(),
+        items: matItems,
+        total,
+      };
 
-    appendMaterialsSubmission(sub);
+      appendMaterialsSubmission(sub);
 
-    // Queue for backend sync (survives offline)
-    const mq = loadMaterialsQueue();
-    mq.unshift(sub);
-    saveMaterialsQueue(mq);
-    syncMaterialsQueue(); // fire-and-forget
+      // Queue for backend sync (survives offline)
+      const mq = loadMaterialsQueue();
+      mq.unshift(sub);
+      saveMaterialsQueue(mq);
+      syncMaterialsQueue(); // fire-and-forget
 
-    await recordEvent("NOTE", `MATERIALS ${money(total)} (${matItems.length})`);
+      await recordEvent("NOTE", `MATERIALS ${money(total)} (${matItems.length})`);
 
-    setMatNotes("");
-    setMatItems([]);
-    resetMaterialsAddControls();
-    persistMaterialsDraft();
+      setMatNotes("");
+      setMatItems([]);
+      resetMaterialsAddControls();
+      persistMaterialsDraft();
 
-    const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-    setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
+      const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
+      setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
 
-    setStatus("Materials submitted");
+      setStatus("Materials submitted");
+    } finally {
+      setMatBusy(false);
+    }
   }
 
   function cancelMaterials() {
@@ -1919,9 +1901,9 @@ export default function App() {
             <div className="sectionTitle">Notes</div>
             <textarea value={matNotes} onChange={(e) => setMatNotes(e.target.value)} placeholder={ht.materialsNotesPlaceholder} />
             <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 12 }}>
-              <button onClick={cancelMaterials}>Cancel</button>
-              <button className="btnPrimary" onClick={submitMaterials}>
-                Submit
+              <button onClick={cancelMaterials} disabled={matBusy}>Cancel</button>
+              <button className="btnPrimary" onClick={submitMaterials} disabled={matBusy}>
+                {matBusy ? "Submitting…" : "Submit"}
               </button>
             </div>
           </div>
