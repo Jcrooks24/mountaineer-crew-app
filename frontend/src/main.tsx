@@ -17,6 +17,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Profile from "./pages/Profile";
 import Admin from "./pages/Admin";
+import DVIRPage from "./pages/DVIR";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -33,6 +34,7 @@ createRoot(document.getElementById("root")!).render(
           {/* Protected */}
           <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
           <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
+          <Route path="/dvir" element={<RequireAuth><DVIRPage /></RequireAuth>} />
 
           {/* Everything else requires auth */}
           <Route

@@ -14,6 +14,7 @@ import {
   DEFAULT_HELP_TEXTS,
   type HelpTexts,
 } from "../theme/ThemeContext";
+import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 
 type AdminUser = {
   id: number;
@@ -43,7 +44,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "calendar" | "settings";
+type Tab = "employees" | "map" | "calendar" | "settings" | "dvir";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -71,14 +72,14 @@ export default function Admin() {
 
       {/* Tabs */}
       <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "calendar", "settings"] as Tab[]).map((t) => (
+        {(["employees", "map", "calendar", "settings", "dvir"] as Tab[]).map((t) => (
           <button
             key={t}
             className={"tab " + (tab === t ? "active" : "")}
             onClick={() => setTab(t)}
             style={{ textTransform: "capitalize" }}
           >
-            {t === "map" ? "Map (Today)" : t}
+            {t === "map" ? "Map (Today)" : t === "dvir" ? "DVIR Review" : t}
           </button>
         ))}
       </div>
@@ -87,6 +88,7 @@ export default function Admin() {
       {tab === "map" && <MapTab />}
       {tab === "calendar" && <CalendarTab />}
       {tab === "settings" && <SettingsTab />}
+      {tab === "dvir" && <DVIRTab />}
     </div>
   );
 }
@@ -899,6 +901,130 @@ function HelpTextCard() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DVIR Review Tab — mechanic signs off on inspections
+// ─────────────────────────────────────────────────────────────────────────────
+
+type DVIRRecord = {
+  id: number;
+  dvir_id: string;
+  vehicle_number: string;
+  trailer_number: string | null;
+  odometer: number | null;
+  inspection_type: string;
+  inspection_date: string;
+  defects: string[];
+  defect_notes: string | null;
+  condition: string;
+  driver_name: string;
+  driver_signature: string;
+  driver_signed_at: string;
+  mechanic_name: string | null;
+  mechanic_signature: string | null;
+  mechanic_signed_at: string | null;
+  repairs_made: boolean | null;
+  mechanic_notes: string | null;
+  created_at: string;
+};
+
+function DVIRTab() {
+  const [dvirs, setDvirs] = useState<DVIRRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [pendingOnly, setPendingOnly] = useState(true);
+  const [selected, setSelected] = useState<DVIRRecord | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setErr(null);
+    apiFetch<DVIRRecord[]>(`/api/dvir?pending_only=${pendingOnly}`)
+      .then(setDvirs)
+      .catch((e) => setErr(e?.message ?? "Failed to load DVIRs"))
+      .finally(() => setLoading(false));
+  }, [pendingOnly]);
+
+  if (selected) {
+    return (
+      <MechanicSignView
+        dvir={selected}
+        onBack={() => setSelected(null)}
+        onSigned={(updated) => {
+          setDvirs((prev) => prev.map((d) => (d.dvir_id === updated.dvir_id ? updated : d)));
+          setSelected(null);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      {/* Filter toggle */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={pendingOnly}
+            onChange={(e) => setPendingOnly(e.target.checked)}
+            style={{ accentColor: "var(--brand)" }}
+          />
+          Show pending mechanic review only
+        </label>
+      </div>
+
+      {loading && <div style={{ color: "var(--muted)", fontSize: 13 }}>Loading DVIRs…</div>}
+      {err && <div style={{ color: "var(--danger)", fontSize: 13 }}>{err}</div>}
+      {!loading && !err && dvirs.length === 0 && (
+        <div style={{ color: "var(--muted)", fontSize: 13 }}>
+          {pendingOnly ? "No DVIRs pending mechanic review." : "No DVIRs found."}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {dvirs.map((d) => (
+          <div
+            key={d.dvir_id}
+            className="card"
+            style={{ cursor: "pointer" }}
+            onClick={() => setSelected(d)}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>
+                  {d.vehicle_number}
+                  {d.trailer_number ? ` / Trailer ${d.trailer_number}` : ""}
+                </div>
+                <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                  {d.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} · {d.inspection_date} · {d.driver_name}
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                <span
+                  className="chip"
+                  style={{
+                    background: d.condition === "satisfactory" ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+                    color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
+                  }}
+                >
+                  {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} Defect${d.defects.length !== 1 ? "s" : ""}`}
+                </span>
+                <span
+                  className="chip"
+                  style={{
+                    background: d.mechanic_signature ? "rgba(45,212,191,0.15)" : "rgba(255,200,50,0.12)",
+                    color: d.mechanic_signature ? "var(--ok)" : "#f0c040",
+                  }}
+                >
+                  {d.mechanic_signature ? "Mech. Signed" : "Awaiting Mechanic"}
+                </span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────
 // Data management / debug
 // ─────────────────────────────────────────
@@ -955,3 +1081,223 @@ function DataManagementCard() {
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+type MechanicSignViewProps = {
+  dvir: DVIRRecord;
+  onBack(): void;
+  onSigned(updated: DVIRRecord): void;
+};
+
+function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
+  const [mechanicName, setMechanicName] = useState("");
+  const [repairsMade, setRepairsMade] = useState<boolean | null>(null);
+  const [mechanicNotes, setMechanicNotes] = useState("");
+  const sigRef = useRef<SignaturePadHandle>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function handleSign(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    if (!mechanicName.trim()) return setErr("Mechanic name is required.");
+    if (repairsMade === null) return setErr("Please indicate whether repairs were made.");
+    if (sigRef.current?.isEmpty()) return setErr("Mechanic signature is required.");
+
+    setBusy(true);
+    try {
+      const updated = await apiFetch<DVIRRecord>(`/api/dvir/${dvir.dvir_id}/mechanic-sign`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          mechanic_name: mechanicName.trim(),
+          mechanic_signature: sigRef.current!.toDataURL(),
+          repairs_made: repairsMade,
+          mechanic_notes: mechanicNotes.trim() || null,
+        }),
+      });
+      onSigned(updated);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to submit mechanic signature.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const isSigned = !!dvir.mechanic_signature;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <button
+        onClick={onBack}
+        style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, marginBottom: 14, padding: 0 }}
+      >
+        ← Back to list
+      </button>
+
+      {/* DVIR summary */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
+          {dvir.vehicle_number}
+          {dvir.trailer_number ? ` / Trailer ${dvir.trailer_number}` : ""}
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+          {dvir.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} · {dvir.inspection_date}
+          {dvir.odometer ? ` · Odometer: ${dvir.odometer.toLocaleString()} mi` : ""}
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <span
+            className="chip"
+            style={{
+              background: dvir.condition === "satisfactory" ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+              color: dvir.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
+            }}
+          >
+            {dvir.condition === "satisfactory" ? "Satisfactory — No Defects" : "Defects Noted"}
+          </span>
+        </div>
+
+        {dvir.defects.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Defects:</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {dvir.defects.map((d) => (
+                <span key={d} className="chip" style={{ background: "rgba(255,107,107,0.12)", color: "var(--danger)" }}>
+                  {d}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {dvir.defect_notes && (
+          <div style={{ marginBottom: 8 }}>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 2 }}>Defect Notes:</div>
+            <div style={{ fontSize: 13 }}>{dvir.defect_notes}</div>
+          </div>
+        )}
+
+        <div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver: {dvir.driver_name}</div>
+          <img
+            src={dvir.driver_signature}
+            alt="Driver signature"
+            style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
+          />
+        </div>
+      </div>
+
+      {/* Already signed view */}
+      {isSigned ? (
+        <div className="card">
+          <div className="label" style={{ fontWeight: 700, marginBottom: 8, color: "var(--ok)" }}>
+            ✓ Mechanic Approved
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
+            Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? new Date(dvir.mechanic_signed_at).toLocaleString() : ""}
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+            Repairs made: {dvir.repairs_made ? "Yes" : "No — no repair needed"}
+          </div>
+          {dvir.mechanic_notes && <div style={{ fontSize: 13, marginBottom: 8 }}>{dvir.mechanic_notes}</div>}
+          <img
+            src={dvir.mechanic_signature!}
+            alt="Mechanic signature"
+            style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
+          />
+        </div>
+      ) : (
+        /* Mechanic sign form */
+        <div className="card">
+          <div className="label" style={{ fontWeight: 700, marginBottom: 12 }}>Mechanic Approval</div>
+
+          <form onSubmit={handleSign} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name *</div>
+              <input
+                value={mechanicName}
+                onChange={(e) => setMechanicName(e.target.value)}
+                placeholder="Full name"
+                style={mechInputStyle}
+              />
+            </div>
+
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Repairs *</div>
+              <div style={{ display: "flex", gap: 10 }}>
+                {[
+                  { label: "Repairs Made", value: true },
+                  { label: "No Repair Needed", value: false },
+                ].map(({ label, value }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => setRepairsMade(value)}
+                    style={{
+                      flex: 1,
+                      padding: "10px 0",
+                      borderRadius: 10,
+                      border: repairsMade === value ? "2px solid var(--brand)" : "1px solid var(--border)",
+                      background: repairsMade === value ? "rgba(93,214,194,0.12)" : "var(--card)",
+                      color: repairsMade === value ? "var(--brand)" : "var(--muted)",
+                      cursor: "pointer",
+                      fontWeight: repairsMade === value ? 700 : 400,
+                      fontSize: 13,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Notes</div>
+              <textarea
+                value={mechanicNotes}
+                onChange={(e) => setMechanicNotes(e.target.value)}
+                placeholder="Optional notes on repairs or inspection…"
+                rows={2}
+                style={{ ...mechInputStyle, resize: "vertical" }}
+              />
+            </div>
+
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Mechanic Signature * — sign below</div>
+              <SignaturePad ref={sigRef} height={140} />
+              <button
+                type="button"
+                onClick={() => sigRef.current?.clear()}
+                style={{ marginTop: 4, background: "none", border: "none", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: 0 }}
+              >
+                Clear signature
+              </button>
+            </div>
+
+            {err && (
+              <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+                {err}
+              </div>
+            )}
+
+            <button type="submit" className="btnPrimary" disabled={busy}>
+              {busy ? "Saving…" : "Approve & Sign DVIR"}
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const mechInputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--border)",
+  background: "var(--bg)",
+  color: "var(--text)",
+  fontSize: 14,
+  boxSizing: "border-box",
+};

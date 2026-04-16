@@ -1351,6 +1351,13 @@ export default function App() {
           <span className="chip" style={{ color: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize" }}>
             {jobStatus}
           </span>
+          <button
+            className="chip"
+            onClick={() => nav("/dvir")}
+            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
+          >
+            DVIR
+          </button>
           {user?.role === "admin" && (
             <button
               className="chip"
