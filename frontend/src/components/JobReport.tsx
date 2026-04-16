@@ -5,16 +5,20 @@ import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 
 type BillingMethod =
-  | "crew_cash_check"
+  | "crew_cash"
+  | "crew_check"
   | "office_invoice"
-  | "office_arrange"
+  | "office_arrange_cash"
+  | "office_arrange_check"
   | "end_of_job";
 
 const BILLING_OPTIONS: { value: BillingMethod; label: string }[] = [
-  { value: "crew_cash_check",  label: "Crew collected cash / check" },
-  { value: "office_invoice",   label: "Office sends invoice" },
-  { value: "office_arrange",   label: "Office arranges drop-off / pick-up" },
-  { value: "end_of_job",       label: "Bill at end of job (multi-day)" },
+  { value: "crew_cash",           label: "Crew collected — cash" },
+  { value: "crew_check",          label: "Crew collected — check" },
+  { value: "office_invoice",      label: "Office sends invoice" },
+  { value: "office_arrange_cash", label: "Office arranges pick-up / drop-off — cash" },
+  { value: "office_arrange_check",label: "Office arranges pick-up / drop-off — check" },
+  { value: "end_of_job",          label: "Bill at end of job (multi-day)" },
 ];
 
 type ReportData = {
