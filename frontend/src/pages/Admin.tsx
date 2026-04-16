@@ -842,6 +842,9 @@ function SettingsTab() {
       {/* ── Help text ── */}
       <HelpTextCard />
 
+      {/* ── DVIR vehicle units ── */}
+      <DVIRUnitsCard />
+
       {/* ── Data management ── */}
       <DataManagementCard />
 
@@ -926,6 +929,116 @@ type DVIRRecord = {
   mechanic_notes: string | null;
   created_at: string;
 };
+
+// ─────────────────────────────────────────
+// DVIR vehicle units editor
+// ─────────────────────────────────────────
+function DVIRUnitsCard() {
+  const [units, setUnits] = useState<string[]>([]);
+  const [newUnit, setNewUnit] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ units: string[] }>("/api/admin/config/dvir-units")
+      .then((r) => setUnits(r.units))
+      .catch(() => setErr("Failed to load units"));
+  }, []);
+
+  function addUnit() {
+    const trimmed = newUnit.trim().toUpperCase();
+    if (!trimmed) return;
+    if (units.includes(trimmed)) { setErr("Unit already exists"); return; }
+    setUnits((prev) => [...prev, trimmed]);
+    setNewUnit("");
+    setSaved(false);
+    setErr(null);
+  }
+
+  function removeUnit(unit: string) {
+    setUnits((prev) => prev.filter((u) => u !== unit));
+    setSaved(false);
+  }
+
+  async function save() {
+    if (units.length === 0) { setErr("At least one unit is required"); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/dvir-units", {
+        method: "PUT",
+        body: JSON.stringify({ units }),
+      });
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">DVIR Vehicle Units</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Vehicle unit options shown in the DVIR form dropdown.
+      </div>
+
+      {/* Current units */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+        {units.map((u) => (
+          <span key={u} style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "4px 10px", borderRadius: 999,
+            background: "rgba(93,214,194,0.12)", border: "1px solid var(--brand)",
+            color: "var(--brand)", fontSize: 13, fontWeight: 600,
+          }}>
+            {u}
+            <button
+              onClick={() => removeUnit(u)}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14, lineHeight: 1, padding: 0 }}
+              aria-label={`Remove ${u}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        {units.length === 0 && (
+          <span className="small" style={{ color: "var(--muted)" }}>No units configured</span>
+        )}
+      </div>
+
+      {/* Add new unit */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          value={newUnit}
+          onChange={(e) => { setNewUnit(e.target.value); setErr(null); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addUnit(); } }}
+          placeholder="e.g. 20FORD"
+          style={{
+            flex: 1, padding: "8px 12px", borderRadius: 8,
+            border: "1px solid var(--border)", background: "var(--bg)",
+            color: "var(--text)", fontSize: 14,
+          }}
+        />
+        <button
+          onClick={addUnit}
+          style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--brand)", color: "var(--brand)", fontSize: 13, cursor: "pointer" }}
+        >
+          Add
+        </button>
+      </div>
+
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 8 }}>{err}</div>}
+      {saved && !busy && <div style={{ color: "var(--ok)", fontSize: 13, marginBottom: 8 }}>✓ Saved</div>}
+
+      <button className="btnPrimary" onClick={save} disabled={busy} style={{ fontSize: 13 }}>
+        {busy ? "Saving…" : "Save Units"}
+      </button>
+    </div>
+  );
+}
 
 function DVIRTab() {
   const [dvirs, setDvirs] = useState<DVIRRecord[]>([]);

@@ -7,8 +7,9 @@ Endpoints:
 - GET  /api/admin/events/today       — geotagged events from today (for map)
 """
 
+import json as _json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -16,8 +17,12 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
 from app.db.models.event import Event
+from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
 from app.db.session import get_db
+
+DVIR_UNITS_KEY = "dvir_units"
+DEFAULT_DVIR_UNITS = ["26INT", "24FR8", "16FORD"]
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -152,3 +157,38 @@ def events_today(
         }
         for e in events
     ]
+
+
+# ---------------------------
+# DVIR unit options config
+# ---------------------------
+
+class DVIRUnitsRequest(BaseModel):
+    units: List[str]
+
+
+@router.get("/config/dvir-units")
+def get_dvir_units(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    row = db.query(SystemConfig).filter(SystemConfig.key == DVIR_UNITS_KEY).first()
+    units = _json.loads(row.value) if row and row.value else DEFAULT_DVIR_UNITS
+    return {"units": units}
+
+
+@router.put("/config/dvir-units", status_code=204)
+def set_dvir_units(
+    payload: DVIRUnitsRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    units = [u.strip() for u in payload.units if u.strip()]
+    if not units:
+        raise HTTPException(status_code=400, detail="At least one unit is required")
+    row = db.query(SystemConfig).filter(SystemConfig.key == DVIR_UNITS_KEY).first()
+    if row:
+        row.value = _json.dumps(units)
+    else:
+        db.add(SystemConfig(key=DVIR_UNITS_KEY, value=_json.dumps(units)))
+    db.commit()

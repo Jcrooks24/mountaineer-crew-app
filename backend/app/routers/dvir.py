@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
 from app.db.models.dvir import DVIR
+from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
 from app.schemas.dvir import DVIRCreate, DVIRResponse, MechanicSignRequest
 
 router = APIRouter(prefix="/api/dvir", tags=["dvir"])
+
+DEFAULT_UNITS = ["26INT", "24FR8", "16FORD"]
+UNITS_CONFIG_KEY = "dvir_units"
 
 
 def _to_response(d: DVIR) -> DVIRResponse:
@@ -43,6 +47,39 @@ def _to_response(d: DVIR) -> DVIRResponse:
         created_at=d.created_at,
     )
 
+
+# ── Vehicle units list (non-admin, crew read-only) ────────────────────────────
+
+@router.get("/units")
+def get_units(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    row = db.query(SystemConfig).filter(SystemConfig.key == UNITS_CONFIG_KEY).first()
+    units = json.loads(row.value) if row and row.value else DEFAULT_UNITS
+    return {"units": units}
+
+
+# ── Latest DVIR for a specific vehicle (must come before /{dvir_id}) ─────────
+
+@router.get("/latest-for-vehicle")
+def latest_for_vehicle(
+    vehicle_number: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Optional[DVIRResponse]:
+    dvir = (
+        db.query(DVIR)
+        .filter(DVIR.vehicle_number == vehicle_number)
+        .order_by(DVIR.created_at.desc())
+        .first()
+    )
+    if not dvir:
+        return None
+    return _to_response(dvir)
+
+
+# ── Create ────────────────────────────────────────────────────────────────────
 
 @router.post("", response_model=DVIRResponse, status_code=status.HTTP_201_CREATED)
 def create_dvir(
@@ -79,6 +116,8 @@ def create_dvir(
     return _to_response(dvir)
 
 
+# ── List ──────────────────────────────────────────────────────────────────────
+
 @router.get("", response_model=List[DVIRResponse])
 def list_dvirs(
     pending_only: bool = False,
@@ -88,9 +127,10 @@ def list_dvirs(
     q = db.query(DVIR)
     if pending_only:
         q = q.filter(DVIR.mechanic_signature.is_(None))
-    dvirs = q.order_by(DVIR.created_at.desc()).all()
-    return [_to_response(d) for d in dvirs]
+    return [_to_response(d) for d in q.order_by(DVIR.created_at.desc()).all()]
 
+
+# ── Get single ────────────────────────────────────────────────────────────────
 
 @router.get("/{dvir_id}", response_model=DVIRResponse)
 def get_dvir(
@@ -103,6 +143,8 @@ def get_dvir(
         raise HTTPException(status_code=404, detail="DVIR not found")
     return _to_response(dvir)
 
+
+# ── Mechanic sign-off ─────────────────────────────────────────────────────────
 
 @router.patch("/{dvir_id}/mechanic-sign", response_model=DVIRResponse)
 def mechanic_sign(
