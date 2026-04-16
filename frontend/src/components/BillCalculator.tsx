@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { MATERIAL_CATALOG } from "../data/catalog";
 
@@ -30,6 +30,33 @@ type SeedData = {
 export type BillHandle = {
   /** Returns current bill data + reviewed status, or null if not loaded. */
   getData: () => { items: LineItem[]; globalDiscount: number; notes: string; reviewed: boolean } | null;
+};
+
+// Shape of an individual material rendered in the live list. Each live item
+// maps 1:1 to a MaterialsSubmission on the backend (one item per submission);
+// submissionId is the handle used to delete it.
+type LiveMaterial = {
+  submissionId: string;
+  name: string;
+  qty: number;
+  unitPrice: number | null;
+  baseCost: number | null;
+  source: "catalog" | "custom";
+  createdAt: string;
+};
+
+type MaterialsSubmissionOut = {
+  id: string;
+  created_at: string;
+  job_uuid: string;
+  items: {
+    id: string;
+    name: string;
+    qty: number;
+    unitPrice?: number | null;
+    baseCost?: number | null;
+    source: string;
+  }[];
 };
 
 // ── Company charges ───────────────────────────────────────────────────────────
@@ -106,6 +133,32 @@ function fmt(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
+function flattenSubmissions(subs: MaterialsSubmissionOut[]): LiveMaterial[] {
+  // Each submission carries exactly one item (that's how the bill helper
+  // posts them). Fall back gracefully if legacy multi-item submissions exist.
+  const out: LiveMaterial[] = [];
+  for (const sub of subs) {
+    for (const it of sub.items || []) {
+      out.push({
+        submissionId: sub.id,
+        name: it.name,
+        qty: Number(it.qty) || 0,
+        unitPrice: it.unitPrice == null ? null : Number(it.unitPrice),
+        baseCost: it.baseCost == null ? null : Number(it.baseCost),
+        source: (it.source === "custom" ? "custom" : "catalog"),
+        createdAt: sub.created_at,
+      });
+    }
+  }
+  // Newest first so the most recent add is visible at the top
+  out.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return out;
+}
+
+function materialExt(m: LiveMaterial): number {
+  return m.unitPrice == null ? 0 : m.unitPrice * m.qty;
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 type Props = {
@@ -123,8 +176,16 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const [loaded, setLoaded] = useState(false);
   const [reviewed, setReviewed] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
-  const [addView, setAddView] = useState<"main" | "packing">("main");
   const addMenuRef = useRef<HTMLDivElement>(null);
+
+  // Materials (live-shared per job)
+  const [materials, setMaterials] = useState<LiveMaterial[]>([]);
+  const [matSelectedName, setMatSelectedName] = useState<string>("");
+  const [matQty, setMatQty] = useState<number>(1);
+  const [matCustomName, setMatCustomName] = useState<string>("");
+  const [matCustomCost, setMatCustomCost] = useState<string>("");
+  const [matBusy, setMatBusy] = useState(false);
+  const [matErr, setMatErr] = useState<string>("");
 
   useImperativeHandle(ref, () => ({
     getData: () => loaded ? { ...bill, reviewed } : null,
@@ -144,15 +205,12 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         setLoaded(true);
       })
       .catch(() => {
-        // No saved bill — seed from events + materials + M1 estimates
+        // No saved bill — seed from events + M1 estimates (materials live separately now)
         apiFetch<SeedData>(`/api/bill/seed?job_uuid=${encodeURIComponent(jobUuid)}`)
           .then((seed) => {
             const items: LineItem[] = [];
             for (const h of seed.hours_lines) {
               items.push({ id: uuid(), label: h.label, qty: h.hours, rate: 0, unit: "hr", discount: 0, source: "hours" });
-            }
-            for (const m of seed.material_lines) {
-              items.push({ id: uuid(), label: m.name, qty: m.qty, rate: m.unit_price, unit: "ea", discount: 0, source: "materials" });
             }
             if (dumpsterPct > 0) {
               items.push({
@@ -184,12 +242,46 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);
 
+  // ── Materials: live fetch from backend ───────────────────────────────────────
+  async function fetchMaterials() {
+    if (!jobUuid) return;
+    try {
+      const r = await apiFetch<{ ok: boolean; submissions: MaterialsSubmissionOut[] }>(
+        `/api/materials?job_uuid=${encodeURIComponent(jobUuid)}&limit=500`
+      );
+      setMaterials(flattenSubmissions(r.submissions || []));
+    } catch {
+      // best-effort
+    }
+  }
+
+  useEffect(() => {
+    setMaterials([]);
+    if (!jobUuid) return;
+    fetchMaterials();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobUuid]);
+
+  useEffect(() => {
+    // Refetch materials when the tab/window regains focus, so adds by
+    // other crew members become visible without a full reload.
+    function onVis() {
+      if (document.visibilityState === "visible") fetchMaterials();
+    }
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobUuid]);
+
   // Close add menu on outside click
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
         setShowAddMenu(false);
-        setAddView("main");
       }
     }
     document.addEventListener("mousedown", handler);
@@ -212,7 +304,6 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       items: [...prev.items, { id: uuid(), label: "", qty: 1, rate: 0, unit: "flat", discount: 0, source: "custom" }],
     }));
     setShowAddMenu(false);
-    setAddView("main");
   }
 
   function addChargeItem(charge: ChargeItem) {
@@ -221,17 +312,114 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       items: [...prev.items, { id: uuid(), label: charge.label, qty: 1, rate: charge.rate, unit: charge.unit, discount: 0, source: "charge" }],
     }));
     setShowAddMenu(false);
-    setAddView("main");
   }
 
-  function addPackingItem(name: string, unitPrice: number | null) {
-    setBill((prev) => ({
-      ...prev,
-      items: [...prev.items, { id: uuid(), label: name, qty: 1, rate: unitPrice ?? 0, unit: "ea", discount: 0, source: "charge" }],
-    }));
-    setShowAddMenu(false);
-    setAddView("main");
+  // ── Materials add/remove (live-persisted) ────────────────────────────────────
+
+  function resetMatControls() {
+    setMatSelectedName("");
+    setMatQty(1);
+    setMatCustomName("");
+    setMatCustomCost("");
   }
+
+  async function addMaterial() {
+    setMatErr("");
+    if (!jobUuid) { setMatErr("No job selected"); return; }
+
+    const qty = Number.isFinite(matQty) ? Math.max(1, Math.floor(matQty)) : 1;
+
+    let itemName: string;
+    let unitPrice: number | null;
+    let baseCost: number | null = null;
+    let source: "catalog" | "custom";
+
+    if (matSelectedName && matSelectedName !== "__custom__") {
+      const found = MATERIAL_CATALOG.find((m) => m.name === matSelectedName);
+      if (!found) { setMatErr("Material not found"); return; }
+      itemName = found.name;
+      unitPrice = found.unitPrice;
+      source = "catalog";
+    } else if (matSelectedName === "__custom__") {
+      const name = matCustomName.trim();
+      if (!name) { setMatErr("Custom name required"); return; }
+      itemName = name;
+      const costRaw = matCustomCost.trim();
+      if (costRaw.length > 0) {
+        const parsed = Number(costRaw);
+        if (!Number.isFinite(parsed) || parsed < 0) { setMatErr("Cost must be a number"); return; }
+        baseCost = parsed;
+        unitPrice = parsed * 1.1;
+      } else {
+        unitPrice = null;
+      }
+      source = "custom";
+    } else {
+      setMatErr("Select a material"); return;
+    }
+
+    const submissionId = uuid();
+    const itemId = uuid();
+    const total = unitPrice == null ? 0 : unitPrice * qty;
+
+    const payload = {
+      id: submissionId,
+      created_at: new Date().toISOString(),
+      job_uuid: jobUuid,
+      jobName,
+      jobLabel: jobName,
+      jobDate: "",
+      notes: "",
+      items: [{
+        id: itemId,
+        name: itemName,
+        qty,
+        unitPrice,
+        baseCost,
+        source,
+      }],
+      total,
+    };
+
+    setMatBusy(true);
+    try {
+      await apiFetch(`/api/materials`, { method: "POST", body: JSON.stringify(payload) });
+      // Optimistic insert
+      setMaterials((prev) => [{
+        submissionId,
+        name: itemName,
+        qty,
+        unitPrice,
+        baseCost,
+        source,
+        createdAt: payload.created_at,
+      }, ...prev]);
+      resetMatControls();
+      // Refetch to pick up other users' recent adds as well
+      fetchMaterials();
+    } catch (e: any) {
+      setMatErr(e?.message ?? "Add failed");
+    } finally {
+      setMatBusy(false);
+    }
+  }
+
+  async function removeMaterial(submissionId: string) {
+    const snapshot = materials;
+    setMaterials((prev) => prev.filter((m) => m.submissionId !== submissionId));
+    try {
+      await apiFetch(`/api/materials/${encodeURIComponent(submissionId)}`, { method: "DELETE" });
+    } catch {
+      // Roll back on failure
+      setMaterials(snapshot);
+      setMatErr("Remove failed");
+    }
+  }
+
+  const materialsTotal = useMemo(
+    () => materials.reduce((s, m) => s + materialExt(m), 0),
+    [materials],
+  );
 
   // ── Empty / loading states ────────────────────────────────────────────────────
 
@@ -248,6 +436,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   }
 
   const { subtotal, discountAmt, total } = calcTotals(bill.items, bill.globalDiscount);
+  const grandTotal = total + materialsTotal;
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -287,74 +476,117 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           <LineItemRow key={item.id} item={item} onChange={(p) => updateItem(item.id, p)} onRemove={() => removeItem(item.id)} />
         ))}
 
-        {/* Add button */}
-        <div style={{ padding: "10px 12px", borderTop: bill.items.length > 0 ? "1px solid var(--border)" : undefined }} ref={addMenuRef}>
+        {/* ── Materials summary + live list ── */}
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 72px 90px 72px 80px 28px",
+          gap: 6, padding: "10px 12px",
+          background: "rgba(93,214,194,0.06)",
+          borderBottom: "1px solid var(--border)",
+          borderTop: bill.items.length > 0 ? "1px solid var(--border)" : undefined,
+          alignItems: "center",
+          fontSize: 13, fontWeight: 700,
+        }}>
+          <span>Materials</span>
+          <span />
+          <span />
+          <span />
+          <span style={{ textAlign: "right", color: materialsTotal > 0 ? "var(--brand)" : "var(--muted)" }}>
+            {fmt(materialsTotal)}
+          </span>
+          <span />
+        </div>
+
+        {materials.length > 0 && (
+          <div>
+            {materials.map((m) => {
+              const unit = m.unitPrice == null ? "TBD" : fmt(m.unitPrice);
+              const ext = m.unitPrice == null ? "—" : fmt(materialExt(m));
+              return (
+                <div key={m.submissionId} style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 60px 90px 80px 28px",
+                  gap: 6, padding: "6px 12px 6px 28px",
+                  borderBottom: "1px solid var(--border)",
+                  alignItems: "center",
+                  fontSize: 12, color: "var(--text)",
+                }}>
+                  <span style={{ color: "var(--muted)" }}>• {m.name}</span>
+                  <span style={{ textAlign: "right", color: "var(--muted)" }}>×{m.qty}</span>
+                  <span style={{ textAlign: "right", color: "var(--muted)" }}>{unit}</span>
+                  <span style={{ textAlign: "right", fontWeight: 600 }}>{ext}</span>
+                  <button type="button" onClick={() => removeMaterial(m.submissionId)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
+                    aria-label="Remove material">×</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Add material controls */}
+        <div style={{ padding: "10px 12px 10px 28px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <select value={matSelectedName} onChange={(e) => setMatSelectedName(e.target.value)}
+              style={{ flex: "1 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }}>
+              <option value="">Select material…</option>
+              {MATERIAL_CATALOG.map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.name} — {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}
+                </option>
+              ))}
+              <option value="__custom__">Custom item…</option>
+            </select>
+            <input type="number" min={1} step={1} value={matQty}
+              onChange={(e) => setMatQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+              style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13, textAlign: "right" }} />
+            <button type="button" onClick={addMaterial} disabled={matBusy}
+              style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--brand)" }}>
+              {matBusy ? "Adding…" : "Add"}
+            </button>
+          </div>
+          {matSelectedName === "__custom__" && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input value={matCustomName} onChange={(e) => setMatCustomName(e.target.value)} placeholder="Custom name"
+                style={{ flex: "2 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+              <input value={matCustomCost} onChange={(e) => setMatCustomCost(e.target.value)} placeholder="Cost (opt.)" inputMode="decimal"
+                style={{ flex: "1 1 120px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+            </div>
+          )}
+          {matErr && <div style={{ fontSize: 12, color: "var(--danger)" }}>{matErr}</div>}
+        </div>
+
+        {/* Add line item (charges / custom) */}
+        <div style={{ padding: "10px 12px" }} ref={addMenuRef}>
           <button
             type="button"
-            onClick={() => { setShowAddMenu((v) => !v); setAddView("main"); }}
+            onClick={() => setShowAddMenu((v) => !v)}
             style={{ fontSize: 13, color: "var(--brand)", borderColor: "var(--brand)", padding: "6px 14px", borderRadius: 8 }}
           >
             + Add line item
           </button>
           {showAddMenu && (
             <div style={{ marginTop: 8, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", boxShadow: "var(--shadow)", zIndex: 10, maxHeight: 420, overflowY: "auto" }}>
-              {addView === "main" ? (
-                <>
-                  {COMPANY_CHARGES.map((cat) => (
-                    <div key={cat.category}>
-                      <div style={{ padding: "7px 14px 4px", fontSize: 10, fontWeight: 700, color: "var(--brand)", textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.03)" }}>
-                        {cat.category}
-                      </div>
-                      {cat.items.map((charge) => (
-                        <button key={charge.label} type="button" onClick={() => addChargeItem(charge)}
-                          style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", textAlign: "left", padding: "9px 14px", background: "none", border: "none", borderBottom: "1px solid var(--border)", color: "var(--text)", fontSize: 13, cursor: "pointer", gap: 8 }}>
-                          <span>{charge.label}</span>
-                          <span style={{ color: "var(--muted)", fontSize: 11, flexShrink: 0 }}>
-                            {charge.rate > 0 ? `${fmt(charge.rate)}/${charge.unit}` : charge.unit}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                  {/* Packing materials section */}
-                  <div>
-                    <div style={{ padding: "7px 14px 4px", fontSize: 10, fontWeight: 700, color: "var(--brand)", textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.03)" }}>
-                      Packing Materials
-                    </div>
-                    <button type="button" onClick={() => setAddView("packing")}
-                      style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", padding: "9px 14px", background: "none", border: "none", borderBottom: "1px solid var(--border)", color: "var(--brand)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-                      <span>Browse packing materials…</span>
-                      <span style={{ fontSize: 16 }}>›</span>
-                    </button>
+              {COMPANY_CHARGES.map((cat) => (
+                <div key={cat.category}>
+                  <div style={{ padding: "7px 14px 4px", fontSize: 10, fontWeight: 700, color: "var(--brand)", textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.03)" }}>
+                    {cat.category}
                   </div>
-                  {/* Custom */}
-                  <button type="button" onClick={addCustomItem}
-                    style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 14px", background: "none", border: "none", color: "var(--muted)", fontSize: 13, cursor: "pointer" }}>
-                    Custom item…
-                  </button>
-                </>
-              ) : (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.03)" }}>
-                    <button type="button" onClick={() => setAddView("main")}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--brand)", fontSize: 16, lineHeight: 1, padding: 0, flexShrink: 0 }}>
-                      ‹
-                    </button>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--brand)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                      Packing Materials
-                    </span>
-                  </div>
-                  {MATERIAL_CATALOG.map((m) => (
-                    <button key={m.name} type="button" onClick={() => addPackingItem(m.name, m.unitPrice)}
+                  {cat.items.map((charge) => (
+                    <button key={charge.label} type="button" onClick={() => addChargeItem(charge)}
                       style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", textAlign: "left", padding: "9px 14px", background: "none", border: "none", borderBottom: "1px solid var(--border)", color: "var(--text)", fontSize: 13, cursor: "pointer", gap: 8 }}>
-                      <span>{m.name}</span>
+                      <span>{charge.label}</span>
                       <span style={{ color: "var(--muted)", fontSize: 11, flexShrink: 0 }}>
-                        {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}/ea
+                        {charge.rate > 0 ? `${fmt(charge.rate)}/${charge.unit}` : charge.unit}
                       </span>
                     </button>
                   ))}
-                </>
-              )}
+                </div>
+              ))}
+              <button type="button" onClick={addCustomItem}
+                style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 14px", background: "none", border: "none", color: "var(--muted)", fontSize: 13, cursor: "pointer" }}>
+                Custom item…
+              </button>
             </div>
           )}
         </div>
@@ -371,16 +603,19 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           </div>
           <div style={{ height: 1, background: "var(--border)" }} />
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
-            <span>Subtotal</span><span>{fmt(subtotal)}</span>
+            <span>Line-items subtotal</span><span>{fmt(subtotal)}</span>
           </div>
           {discountAmt > 0 && (
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--danger)" }}>
               <span>Discount ({bill.globalDiscount}%)</span><span>−{fmt(discountAmt)}</span>
             </div>
           )}
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
+            <span>Materials</span><span>{fmt(materialsTotal)}</span>
+          </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 18 }}>
             <span>Total</span>
-            <span style={{ color: "var(--brand)" }}>{fmt(total)}</span>
+            <span style={{ color: "var(--brand)" }}>{fmt(grandTotal)}</span>
           </div>
         </div>
       </div>

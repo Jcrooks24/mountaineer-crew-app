@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_current_user, get_db
 from app.db.models.event import Event
 from app.db.models.job_bill import JobBill
-from app.db.models.materials import MaterialsSubmission
 from app.db.models.user import User
 
 router = APIRouter(prefix="/api/bill", tags=["bill"])
@@ -105,32 +104,10 @@ def get_bill_seed(
                     "hours": hours,
                 })
 
-    # ── Materials from submissions ────────────────────────────────────────────
-    submissions = (
-        db.query(MaterialsSubmission)
-        .filter(MaterialsSubmission.job_uuid == job_uuid)
-        .order_by(MaterialsSubmission.created_at)
-        .all()
-    )
-
-    material_lines = []
-    seen_names: set[str] = set()
-    for sub in submissions:
-        items = json.loads(sub.items_json or "[]")
-        for item in items:
-            name = item.get("name") or ""
-            if not name:
-                continue
-            # Deduplicate by name+qty to avoid double-counting re-synced submissions
-            key = f"{name}|{item.get('qty', 1)}"
-            if key in seen_names:
-                continue
-            seen_names.add(key)
-            material_lines.append({
-                "name": name,
-                "qty": float(item.get("qty", 1)),
-                "unit_price": float(item.get("unitPrice") or item.get("baseCost") or 0),
-            })
+    # Materials are no longer seeded into the bill's line items — they live
+    # in a dedicated live-shared panel inside the bill helper (see
+    # /api/materials). Keep the field in the response for frontend compat.
+    material_lines: list[dict] = []
 
     return {
         "hours_lines": hours_lines,

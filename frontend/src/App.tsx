@@ -8,7 +8,6 @@ import DVIRReminderModal from "./components/DVIRReminderModal";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme } from "./theme/ThemeContext";
 import { getToken } from "./auth/token";
-import { MATERIAL_CATALOG, type MaterialCatalogItem } from "./data/catalog";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -50,7 +49,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "materials" | "report";
+type Tab = "timeline" | "photos" | "report";
 
 type EventRecord = {
   event_id: string;
@@ -80,21 +79,6 @@ type JobMeta = {
   updated_at: string;
 };
 
-type MaterialLineItem = {
-  id: string;
-  name: string;
-  qty: number;
-  unitPrice: number | null; // null => TBD
-  source: "catalog" | "custom";
-  baseCost?: number | null;
-};
-
-type MaterialsDraft = {
-  jobLabel: string;
-  notes: string;
-  items: MaterialLineItem[];
-};
-
 type ServerPhoto = {
   id: string;
   job_uuid: string;
@@ -107,21 +91,13 @@ type ServerPhoto = {
   mime_type: string;
 };
 
-type MaterialsSubmission = {
-  id: string;
-  created_at: string;
-  job_uuid: string;
-  jobLabel: string;
-  jobName: string;
-  jobDate: string;
-  notes: string;
-  items: MaterialLineItem[];
-  total: number;
+type MaterialSummaryItem = {
+  submissionId: string;
+  createdAt: string;
+  name: string;
+  qty: number;
+  extended: number | null;
 };
-
-const MATERIALS_DRAFT_PREFIX = "crew_materials_draft_v1:"; // per job_uuid
-const MATERIALS_SUBMISSIONS_KEY = "crew_materials_submissions_v1"; // global list
-const MATERIALS_QUEUE_KEY = "crew_materials_queue_v1"; // unsynced submissions
 
 
 function todayLocalYYYYMMDD() {
@@ -224,24 +200,12 @@ export default function App() {
   const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
   const [pendingCaption, setPendingCaption] = useState<string>("");
 
-  // Materials
-  const [matJobLabel, setMatJobLabel] = useState<string>("");
-  const [matNotes, setMatNotes] = useState<string>("");
-  const [matItems, setMatItems] = useState<MaterialLineItem[]>([]);
-  const [matError, setMatError] = useState<string>("");
-  const [matBusy, setMatBusy] = useState(false);
-
-  const [matSelectedName, setMatSelectedName] = useState<string>("");
-  const [matCustomName, setMatCustomName] = useState<string>("");
-  const [matCustomCost, setMatCustomCost] = useState<string>("");
-  const [matQty, setMatQty] = useState<number>(1);
-
   const [sendingType, setSendingType] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [dvirPending, setDvirPending] = useState<{ type: string } | null>(null);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
   const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
-  const [matSubmissions, setMatSubmissions] = useState<MaterialsSubmission[]>([]);
+  const [materialsSummary, setMaterialsSummary] = useState<MaterialSummaryItem[]>([]);
 
   const canSend = useMemo(() => jobUuid.trim().length > 0, [jobUuid]);
 
@@ -360,24 +324,6 @@ export default function App() {
     try {
       localStorage.setItem(calBindKey(date, calId), uuid);
     } catch {}
-  }
-
-  // Materials
-  function materialsDraftKey(uuid: string) {
-    return `${MATERIALS_DRAFT_PREFIX}${uuid || "none"}`;
-  }
-  function loadMaterialsDraft(uuid: string): MaterialsDraft | null {
-    if (!uuid.trim()) return null;
-    return loadJson<MaterialsDraft | null>(materialsDraftKey(uuid.trim()), null);
-  }
-  function saveMaterialsDraft(uuid: string, draft: MaterialsDraft) {
-    if (!uuid.trim()) return;
-    saveJson(materialsDraftKey(uuid.trim()), draft);
-  }
-  function appendMaterialsSubmission(sub: MaterialsSubmission) {
-    const existing = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-    existing.unshift(sub);
-    saveJson(MATERIALS_SUBMISSIONS_KEY, existing);
   }
 
   // -----------------------
@@ -924,248 +870,38 @@ export default function App() {
   }
 
   // -----------------------
-  // Materials
+  // Materials summary — fetch live from backend for current job
   // -----------------------
-  function computeMaterialsTotal(items: MaterialLineItem[]) {
-    return items.reduce((sum, it) => {
-      if (it.unitPrice == null) return sum;
-      return sum + it.unitPrice * it.qty;
-    }, 0);
-  }
-
-  function resetMaterialsAddControls() {
-    setMatSelectedName("");
-    setMatCustomName("");
-    setMatCustomCost("");
-    setMatQty(1);
-  }
-
-  function loadOrInitMaterialsDraft() {
-    setMatError("");
-
-    if (!jobUuid.trim()) {
-      setMatJobLabel(jobName || "");
-      setMatNotes("");
-      setMatItems([]);
-      resetMaterialsAddControls();
-      return;
-    }
-
-    const draft = loadMaterialsDraft(jobUuid.trim());
-    if (draft) {
-      setMatJobLabel(draft.jobLabel || jobName || "");
-      setMatNotes(draft.notes || "");
-      setMatItems(draft.items || []);
-      resetMaterialsAddControls();
-      return;
-    }
-
-    setMatJobLabel(jobName || "");
-    setMatNotes("");
-    setMatItems([]);
-    resetMaterialsAddControls();
-  }
-
-  function persistMaterialsDraft() {
-    if (!jobUuid.trim()) return;
-    saveMaterialsDraft(jobUuid.trim(), { jobLabel: matJobLabel, notes: matNotes, items: matItems });
-  }
-
-  function addMaterialsItem() {
-    setMatError("");
-
-    if (!jobUuid.trim()) {
-      setMatError("Set Job first");
-      return;
-    }
-
-    const qty = Number.isFinite(matQty) ? Math.max(1, Math.floor(matQty)) : 1;
-
-    if (matSelectedName && matSelectedName !== "__custom__") {
-      const found = MATERIAL_CATALOG.find((m) => m.name === matSelectedName);
-      if (!found) {
-        setMatError("Material not found");
-        return;
-      }
-
-      const item: MaterialLineItem = {
-        id: crypto.randomUUID(),
-        name: found.name,
-        qty,
-        unitPrice: found.unitPrice,
-        source: "catalog",
-      };
-
-      setMatItems((prev) => [item, ...prev]);
-      resetMaterialsAddControls();
-      return;
-    }
-
-    if (matSelectedName === "__custom__") {
-      const name = matCustomName.trim();
-      if (!name) {
-        setMatError("Custom name required");
-        return;
-      }
-
-      const costRaw = matCustomCost.trim();
-      let baseCost: number | null = null;
-      let unitPrice: number | null = null;
-
-      if (costRaw.length > 0) {
-        const parsed = Number(costRaw);
-        if (!Number.isFinite(parsed) || parsed < 0) {
-          setMatError("Cost must be a number");
-          return;
-        }
-        baseCost = parsed;
-        unitPrice = parsed * 1.1;
-      }
-
-      const item: MaterialLineItem = {
-        id: crypto.randomUUID(),
-        name,
-        qty,
-        unitPrice,
-        baseCost,
-        source: "custom",
-      };
-
-      setMatItems((prev) => [item, ...prev]);
-      resetMaterialsAddControls();
-      return;
-    }
-
-    setMatError("Select a material");
-  }
-
-  function removeMaterialsItem(id: string) {
-    setMatItems((prev) => prev.filter((x) => x.id !== id));
-  }
-
-  // -----------------------
-  // Materials backend sync
-  // -----------------------
-  function loadMaterialsQueue(): MaterialsSubmission[] {
-    return loadJson<MaterialsSubmission[]>(MATERIALS_QUEUE_KEY, []);
-  }
-  function saveMaterialsQueue(q: MaterialsSubmission[]) {
-    saveJson(MATERIALS_QUEUE_KEY, q);
-  }
-
-  async function syncMaterialsQueue() {
-    if (!navigator.onLine) return;
-    const q = loadMaterialsQueue();
-    if (q.length === 0) return;
-
-    const token = getToken();
-    const remaining: MaterialsSubmission[] = [];
-    for (const sub of q) {
-      try {
-        const res = await fetch(`${API}/api/materials`, {
-          method: "POST",
-          headers: makeAuthHeaders(token, { "Content-Type": "application/json" }),
-          body: JSON.stringify(sub),
-        });
-        if (!res.ok) remaining.push(sub);
-      } catch {
-        remaining.push(sub);
-      }
-    }
-    saveMaterialsQueue(remaining);
-  }
-
-  async function loadMaterialsFromBackend() {
-    if (!navigator.onLine) return;
+  async function loadMaterialsSummary(uuid: string) {
+    if (!uuid.trim()) { setMaterialsSummary([]); return; }
     try {
       const token = getToken();
-      const res = await fetch(`${API}/api/materials?limit=500`, {
+      const res = await fetch(`${API}/api/materials?job_uuid=${encodeURIComponent(uuid.trim())}&limit=500`, {
         headers: makeAuthHeaders(token),
       });
-      if (!res.ok) return;
+      if (!res.ok) { setMaterialsSummary([]); return; }
       const json = await res.json();
-      if (!json.ok || !Array.isArray(json.submissions)) return;
+      if (!json.ok || !Array.isArray(json.submissions)) { setMaterialsSummary([]); return; }
 
-      const existing = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-      const existingIds = new Set(existing.map((s) => s.id));
-
-      const incoming = json.submissions.filter((s: MaterialsSubmission) => !existingIds.has(s.id));
-      if (incoming.length === 0) return;
-
-      const merged = [...incoming, ...existing].sort(
-        (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)
-      );
-      saveJson(MATERIALS_SUBMISSIONS_KEY, merged);
+      const out: MaterialSummaryItem[] = [];
+      for (const s of json.submissions) {
+        for (const it of (s.items || [])) {
+          const unitPrice = it.unitPrice == null ? null : Number(it.unitPrice);
+          const qty = Number(it.qty) || 0;
+          out.push({
+            submissionId: s.id,
+            createdAt: s.created_at,
+            name: it.name || "",
+            qty,
+            extended: unitPrice == null ? null : unitPrice * qty,
+          });
+        }
+      }
+      out.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      setMaterialsSummary(out);
     } catch {
       // best-effort
     }
-  }
-
-  async function submitMaterials() {
-    setMatError("");
-
-    if (!jobUuid.trim()) {
-      setMatError("Set Job first");
-      return;
-    }
-    if (matItems.length === 0) {
-      setMatError("No items");
-      return;
-    }
-
-    setMatBusy(true);
-    try {
-      const total = computeMaterialsTotal(matItems);
-
-      const sub: MaterialsSubmission = {
-        id: crypto.randomUUID(),
-        created_at: new Date().toISOString(),
-        job_uuid: jobUuid.trim(),
-        jobLabel: matJobLabel.trim(),
-        jobName: jobName.trim(),
-        jobDate,
-        notes: matNotes.trim(),
-        items: matItems,
-        total,
-      };
-
-      appendMaterialsSubmission(sub);
-
-      // Queue for backend sync (survives offline)
-      const mq = loadMaterialsQueue();
-      mq.unshift(sub);
-      saveMaterialsQueue(mq);
-      syncMaterialsQueue(); // fire-and-forget
-
-      await recordEvent("NOTE", `MATERIALS ${money(total)} (${matItems.length})`);
-
-      setMatNotes("");
-      setMatItems([]);
-      resetMaterialsAddControls();
-      persistMaterialsDraft();
-
-      const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-      setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
-
-      setStatus("Materials submitted");
-    } finally {
-      setMatBusy(false);
-    }
-  }
-
-  function cancelMaterials() {
-    const ok = window.confirm("Clear draft?");
-    if (!ok) return;
-
-    setMatNotes("");
-    setMatItems([]);
-    resetMaterialsAddControls();
-
-    if (jobUuid.trim()) {
-      saveMaterialsDraft(jobUuid.trim(), { jobLabel: matJobLabel, notes: "", items: [] });
-    }
-
-    setStatus("Draft cleared");
   }
 
   // -----------------------
@@ -1198,10 +934,9 @@ export default function App() {
 
     // Restore history from backend so mobile devices aren't empty on first load
     loadHistoryFromBackend();
-    loadMaterialsFromBackend();
-    syncMaterialsQueue();
+    loadMaterialsSummary(jobUuid);
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); syncMaterialsQueue(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); loadMaterialsSummary(jobUuid); };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
@@ -1253,21 +988,22 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
 
+  // Refresh materials summary when the user returns to the Timeline tab
+  // or re-focuses the window so they see other crew members' additions.
   useEffect(() => {
-    if (tab !== "materials") return;
-    loadOrInitMaterialsDraft();
-    const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-    setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
-    loadMaterialsFromBackend();
-    syncMaterialsQueue();
+    if (tab !== "timeline") return;
+    loadMaterialsSummary(jobUuid);
+    function onVis() {
+      if (document.visibilityState === "visible") loadMaterialsSummary(jobUuid);
+    }
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
-
-  useEffect(() => {
-    if (tab !== "materials") return;
-    persistMaterialsDraft();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, matJobLabel, matNotes, matItems]);
 
   // Select visibility on dark theme
   const selectStyle: React.CSSProperties = {
@@ -1280,8 +1016,6 @@ export default function App() {
     outline: "none",
   };
   const optionStyle: React.CSSProperties = { color: "#0b1220", background: "#ffffff" };
-
-  const materialsTotal = useMemo(() => computeMaterialsTotal(matItems), [matItems]);
 
   const mergedLog = useMemo(() => {
     const uuid = jobUuid.trim();
@@ -1296,16 +1030,12 @@ export default function App() {
     );
   }, [activityLog, serverEvents, jobUuid]);
 
-  // Materials submissions for the current job — shown in Timeline for quick reference
-  const jobMaterialsSummary = useMemo(() => {
-    if (!jobUuid.trim()) return [];
-    try {
-      const all = JSON.parse(localStorage.getItem(MATERIALS_SUBMISSIONS_KEY) || "[]") as MaterialsSubmission[];
-      return all
-        .filter((s) => s.job_uuid === jobUuid.trim())
-        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-    } catch { return []; }
-  }, [jobUuid, matSubmissions]);
+  // Aggregate totals for the current job's materials (populated from the
+  // backend via loadMaterialsSummary)
+  const materialsTotal = useMemo(
+    () => materialsSummary.reduce((s, m) => s + (m.extended ?? 0), 0),
+    [materialsSummary],
+  );
 
   const calPlaceholder = useMemo(() => {
     if (calLoading) return "Loading…";
@@ -1369,9 +1099,6 @@ export default function App() {
         </button>
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
-        </button>
-        <button className={"tab " + (tab === "materials" ? "active" : "")} onClick={() => setTab("materials")}>
-          Materials
         </button>
         <button className={"tab " + (tab === "report" ? "active" : "")} onClick={() => setTab("report")}>
           Report
@@ -1579,33 +1306,24 @@ export default function App() {
             )}
           </div>
 
-          {jobMaterialsSummary.length > 0 && (
+          {materialsSummary.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Materials ({jobMaterialsSummary.length})</div>
-              <div className="col" style={{ gap: 12 }}>
-                {jobMaterialsSummary.map((s) => (
-                  <div key={s.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                    <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 4 }}>
-                      <span style={{ fontWeight: 700, fontSize: 14 }}>{money(s.total)}</span>
-                      <span className="small" style={{ color: "var(--muted)" }}>
-                        {new Date(s.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    </div>
-                    <div className="col" style={{ gap: 2, marginTop: 6 }}>
-                      {s.items.map((it) => (
-                        <div key={it.id} className="row small" style={{ justifyContent: "space-between", color: "var(--text)" }}>
-                          <span>{it.qty}× {it.name}</span>
-                          <span style={{ color: "var(--muted)" }}>
-                            {it.unitPrice != null ? money(it.qty * it.unitPrice) : "—"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    {s.notes && (
-                      <div className="small" style={{ fontStyle: "italic", color: "var(--muted)", marginTop: 4 }}>{s.notes}</div>
-                    )}
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+                <div className="sectionTitle">Materials ({materialsSummary.length})</div>
+                <div style={{ fontWeight: 700 }}>{money(materialsTotal)}</div>
+              </div>
+              <div className="col" style={{ gap: 4, marginTop: 8 }}>
+                {materialsSummary.map((m) => (
+                  <div key={m.submissionId} className="row small" style={{ justifyContent: "space-between", color: "var(--text)" }}>
+                    <span>{m.qty}× {m.name}</span>
+                    <span style={{ color: "var(--muted)" }}>
+                      {m.extended != null ? money(m.extended) : "—"}
+                    </span>
                   </div>
                 ))}
+              </div>
+              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                Manage via the Report tab · Bill Helper · Materials
               </div>
             </div>
           )}
@@ -1754,186 +1472,6 @@ export default function App() {
               </div>
             )}
           </div>
-        </>
-      )}
-
-      {/* Materials */}
-      {tab === "materials" && (
-        <>
-          <div className="card">
-            <div className="sectionTitle">Log Materials</div>
-
-            <div className="col" style={{ gap: 12 }}>
-              <div className="col">
-                <div className="label">Job</div>
-                <input value={matJobLabel} onChange={(e) => setMatJobLabel(e.target.value)} placeholder={ht.jobLabelPlaceholder} />
-                <div className="small">{ht.materialsHint}</div>
-              </div>
-
-              <div className="row wrap" style={{ alignItems: "flex-end" }}>
-                <div className="col" style={{ flex: 1, minWidth: 220 }}>
-                  <div className="label">Material</div>
-                  <select value={matSelectedName} onChange={(e) => setMatSelectedName(e.target.value)} style={selectStyle}>
-                    <option value="" style={optionStyle}>
-                      Select…
-                    </option>
-                    {MATERIAL_CATALOG.map((m) => (
-                      <option key={m.name} value={m.name} style={optionStyle}>
-                        {m.name} — {m.unitPrice != null ? money(m.unitPrice) : "TBD"}
-                      </option>
-                    ))}
-                    <option value="__custom__" style={optionStyle}>
-                      Custom item…
-                    </option>
-                  </select>
-                </div>
-
-                <div className="col" style={{ width: 110 }}>
-                  <div className="label">Qty</div>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={matQty}
-                    onChange={(e) => setMatQty(Math.max(1, Math.floor(Number(e.target.value || 1))))}
-                  />
-                </div>
-
-                <div className="col" style={{ width: 110 }}>
-                  <button onClick={addMaterialsItem}>Add</button>
-                </div>
-              </div>
-
-              {matSelectedName === "__custom__" ? (
-                <div className="row wrap">
-                  <div className="col" style={{ flex: 2, minWidth: 220 }}>
-                    <div className="label">Custom name</div>
-                    <input
-                      value={matCustomName}
-                      onChange={(e) => setMatCustomName(e.target.value)}
-                      placeholder="Item name…"
-                    />
-                  </div>
-                  <div className="col" style={{ flex: 1, minWidth: 160 }}>
-                    <div className="label">Cost (optional)</div>
-                    <input
-                      value={matCustomCost}
-                      onChange={(e) => setMatCustomCost(e.target.value)}
-                      placeholder="15.00"
-                      inputMode="decimal"
-                    />
-                  </div>
-                </div>
-              ) : null}
-
-              {matError ? (
-                <div className="small" style={{ color: "var(--danger)" }}>
-                  {matError}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="sectionTitle">Items</div>
-
-            {matItems.length === 0 ? (
-              <div className="small">No items yet.</div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Material
-                      </th>
-                      <th style={{ textAlign: "right", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Qty
-                      </th>
-                      <th style={{ textAlign: "right", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Unit
-                      </th>
-                      <th style={{ textAlign: "right", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Ext
-                      </th>
-                      <th style={{ textAlign: "right", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Remove
-                      </th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {matItems.map((it) => {
-                      const unit = it.unitPrice == null ? "TBD" : money(it.unitPrice);
-                      const ext = it.unitPrice == null ? "—" : money(it.unitPrice * it.qty);
-
-                      return (
-                        <tr key={it.id}>
-                          <td style={{ padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                            <div style={{ fontWeight: 700 }}>{it.name}</div>
-                          </td>
-                          <td style={{ padding: "8px 6px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
-                            {it.qty}
-                          </td>
-                          <td style={{ padding: "8px 6px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
-                            {unit}
-                          </td>
-                          <td style={{ padding: "8px 6px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
-                            {ext}
-                          </td>
-                          <td style={{ padding: "8px 6px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
-                            <button onClick={() => removeMaterialsItem(it.id)} style={{ padding: "6px 10px", fontSize: 12 }}>
-                              Remove
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div style={{ marginTop: 12, fontWeight: 800, fontSize: 16 }}>Total: {money(materialsTotal)}</div>
-          </div>
-
-          <div className="card">
-            <div className="sectionTitle">Notes</div>
-            <textarea value={matNotes} onChange={(e) => setMatNotes(e.target.value)} placeholder={ht.materialsNotesPlaceholder} />
-            <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 12 }}>
-              <button onClick={cancelMaterials} disabled={matBusy}>Cancel</button>
-              <button className="btnPrimary" onClick={submitMaterials} disabled={matBusy}>
-                {matBusy ? "Submitting…" : "Submit"}
-              </button>
-            </div>
-          </div>
-
-          {/* Past submissions for this job */}
-          {matSubmissions.length > 0 && (
-            <div className="card">
-              <div className="sectionTitle">Past Submissions ({matSubmissions.length})</div>
-              <div className="col" style={{ gap: 12 }}>
-                {matSubmissions.map((s) => (
-                  <div key={s.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                    <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 4 }}>
-                      <span style={{ fontWeight: 700, fontSize: 14 }}>
-                        {money(s.total)}
-                      </span>
-                      <span className="small" style={{ color: "var(--muted)" }}>
-                        {new Date(s.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    </div>
-                    <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                      {s.items.map((it) => `${it.qty}× ${it.name}`).join(", ")}
-                    </div>
-                    {s.notes && (
-                      <div className="small" style={{ fontStyle: "italic", marginTop: 2 }}>{s.notes}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
 
