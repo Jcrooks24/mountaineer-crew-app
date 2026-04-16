@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
   let apiOrigin = "http://127.0.0.1:8000";
   try {
     if (env.VITE_API_URL) apiOrigin = new URL(env.VITE_API_URL).origin;
-  } catch {
+  } catch (_e) {
     // malformed URL — fall back to localhost so the build doesn't break
   }
 
