@@ -9,6 +9,29 @@ import { getToken } from "./auth/token";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
+// Resize + compress a photo before upload so Render stays under its 512MB memory limit.
+// Caps the longest side at 1920px and encodes as JPEG at 80% quality.
+// Typical mobile photo: 8MB → ~600KB after this.
+async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Promise<Blob> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => resolve(blob ?? file), "image/jpeg", quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
 // LocalStorage keys
 const QUEUE_KEY = "crew_event_queue_v1"; // unsynced events only
 const LOG_KEY = "crew_event_log_v1"; // full job activity log (synced + queued)
@@ -834,7 +857,8 @@ export default function App() {
     // Upload to Drive (non-blocking after local save)
     try {
       const form = new FormData();
-      form.append("file", fileRef, fileRef.name || "photo.jpg");
+      const resized = await resizeImage(fileRef);
+      form.append("file", resized, (fileRef.name || "photo.jpg").replace(/.[^.]+$/, ".jpg"));
       form.append("photo_id", photoId);
       form.append("job_uuid", jobUuid.trim());
       form.append("job_name", jobName);
@@ -873,7 +897,8 @@ export default function App() {
     await refreshPhotos();
     try {
       const form = new FormData();
-      form.append("file", photo.blob, photo.id + ".jpg");
+      const resized = await resizeImage(photo.blob);
+      form.append("file", resized, photo.id + ".jpg");
       form.append("photo_id", photo.id);
       form.append("job_uuid", photo.job_uuid);
       form.append("job_name", jobName);
