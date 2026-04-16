@@ -22,6 +22,7 @@ from app.routers.materials import router as materials_router
 from app.routers.photos import router as photos_router
 from app.routers.dvir import router as dvir_router
 from app.routers.job_report import router as job_report_router
+from app.routers.config import router as config_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -111,3 +112,4 @@ app.include_router(materials_router)   # /api/materials
 app.include_router(photos_router)      # /api/photos/upload
 app.include_router(dvir_router)        # /api/dvir
 app.include_router(job_report_router)  # /api/job-report
+app.include_router(config_router)      # /api/config (public)

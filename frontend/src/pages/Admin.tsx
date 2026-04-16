@@ -523,6 +523,24 @@ function SettingsTab() {
 
   const [brandLocal, setBrandLocal] = useState(settings.brandOverride ?? preset.vars["--brand"]);
   const [brand2Local, setBrand2Local] = useState(settings.brand2Override ?? preset.vars["--brand2"]);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyMsg, setApplyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function applyToAllUsers() {
+    setApplyBusy(true);
+    setApplyMsg(null);
+    try {
+      await apiFetch("/api/admin/config/theme", {
+        method: "PUT",
+        body: JSON.stringify(settings),
+      });
+      setApplyMsg({ ok: true, text: "Theme applied to all users." });
+    } catch {
+      setApplyMsg({ ok: false, text: "Failed to save — try again." });
+    } finally {
+      setApplyBusy(false);
+    }
+  }
 
   function selectTheme(id: string) {
     const p = THEME_PRESETS[id];
@@ -848,11 +866,24 @@ function SettingsTab() {
       {/* ── Data management ── */}
       <DataManagementCard />
 
-      {/* ── Reset ── */}
-      <div className="card" style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button onClick={handleReset} style={{ color: "var(--danger)", borderColor: "var(--danger)", fontSize: 13 }}>
-          Reset theme to defaults
-        </button>
+      {/* ── Apply to all users ── */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="small" style={{ color: "var(--muted)" }}>
+          Save your current theme settings as the global default — all crew members will see this theme on their next page load.
+        </div>
+        {applyMsg && (
+          <div style={{ fontSize: 13, color: applyMsg.ok ? "var(--ok)" : "var(--danger)" }}>
+            {applyMsg.ok ? "✓ " : ""}{applyMsg.text}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button className="btnPrimary" onClick={applyToAllUsers} disabled={applyBusy} style={{ fontSize: 13 }}>
+            {applyBusy ? "Saving…" : "Apply to all users"}
+          </button>
+          <button onClick={handleReset} style={{ color: "var(--danger)", borderColor: "var(--danger)", fontSize: 13 }}>
+            Reset to defaults
+          </button>
+        </div>
       </div>
     </div>
   );

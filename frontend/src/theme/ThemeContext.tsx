@@ -227,6 +227,7 @@ export interface ThemeSettings {
 }
 
 const STORAGE_KEY = "crew_theme_settings";
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export const DEFAULT_SETTINGS: ThemeSettings = {
   themeId: "dark-ocean",
@@ -319,6 +320,22 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<ThemeSettings>(loadSettings);
+
+  // On mount: fetch admin-saved theme from server and apply it for all users
+  useEffect(() => {
+    fetch(`${API}/api/config/theme`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((serverSettings: Partial<ThemeSettings> | null) => {
+        if (!serverSettings) return;
+        setSettings((prev) => ({
+          ...prev,
+          ...serverSettings,
+          pinColors: { ...DEFAULT_PIN_COLORS, ...(serverSettings.pinColors ?? {}) },
+          helpTexts: { ...DEFAULT_HELP_TEXTS, ...(serverSettings.helpTexts ?? {}) },
+        }));
+      })
+      .catch(() => { /* network unavailable — use localStorage fallback */ });
+  }, []);
 
   useEffect(() => {
     applySettings(settings);

@@ -9,9 +9,9 @@ Endpoints:
 
 import json as _json
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from app.db.session import get_db
 
 DVIR_UNITS_KEY = "dvir_units"
 DEFAULT_DVIR_UNITS = ["26INT", "24FR8", "16FORD"]
+APP_THEME_KEY = "app_theme"
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -191,4 +192,25 @@ def set_dvir_units(
         row.value = _json.dumps(units)
     else:
         db.add(SystemConfig(key=DVIR_UNITS_KEY, value=_json.dumps(units)))
+    db.commit()
+
+
+# ---------------------------
+# App-wide theme config
+# ---------------------------
+
+@router.put("/config/theme", status_code=204)
+async def set_app_theme(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Save the current theme settings so they apply globally to all users."""
+    body = await request.json()
+    value = _json.dumps(body)
+    row = db.query(SystemConfig).filter(SystemConfig.key == APP_THEME_KEY).first()
+    if row:
+        row.value = value
+    else:
+        db.add(SystemConfig(key=APP_THEME_KEY, value=value))
     db.commit()
