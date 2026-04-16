@@ -1,6 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { MATERIAL_CATALOG } from "../data/catalog";
+import {
+  enqueueAdd as storeEnqueueAdd,
+  enqueueDeleteOrCancel as storeEnqueueDeleteOrCancel,
+  renderedForJob,
+  syncQueue,
+  fetchAndCache,
+  type LiveMaterial,
+} from "../lib/materialsStore";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -30,33 +38,6 @@ type SeedData = {
 export type BillHandle = {
   /** Returns current bill data + reviewed status, or null if not loaded. */
   getData: () => { items: LineItem[]; globalDiscount: number; notes: string; reviewed: boolean } | null;
-};
-
-// Shape of an individual material rendered in the live list. Each live item
-// maps 1:1 to a MaterialsSubmission on the backend (one item per submission);
-// submissionId is the handle used to delete it.
-type LiveMaterial = {
-  submissionId: string;
-  name: string;
-  qty: number;
-  unitPrice: number | null;
-  baseCost: number | null;
-  source: "catalog" | "custom";
-  createdAt: string;
-};
-
-type MaterialsSubmissionOut = {
-  id: string;
-  created_at: string;
-  job_uuid: string;
-  items: {
-    id: string;
-    name: string;
-    qty: number;
-    unitPrice?: number | null;
-    baseCost?: number | null;
-    source: string;
-  }[];
 };
 
 // ── Company charges ───────────────────────────────────────────────────────────
@@ -133,28 +114,6 @@ function fmt(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-function flattenSubmissions(subs: MaterialsSubmissionOut[]): LiveMaterial[] {
-  // Each submission carries exactly one item (that's how the bill helper
-  // posts them). Fall back gracefully if legacy multi-item submissions exist.
-  const out: LiveMaterial[] = [];
-  for (const sub of subs) {
-    for (const it of sub.items || []) {
-      out.push({
-        submissionId: sub.id,
-        name: it.name,
-        qty: Number(it.qty) || 0,
-        unitPrice: it.unitPrice == null ? null : Number(it.unitPrice),
-        baseCost: it.baseCost == null ? null : Number(it.baseCost),
-        source: (it.source === "custom" ? "custom" : "catalog"),
-        createdAt: sub.created_at,
-      });
-    }
-  }
-  // Newest first so the most recent add is visible at the top
-  out.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  return out;
-}
-
 function materialExt(m: LiveMaterial): number {
   return m.unitPrice == null ? 0 : m.unitPrice * m.qty;
 }
@@ -178,14 +137,14 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const [showAddMenu, setShowAddMenu] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
-  // Materials (live-shared per job)
-  const [materials, setMaterials] = useState<LiveMaterial[]>([]);
+  // Materials (live-shared per job, offline-capable via materialsStore)
+  const [materials, setMaterials] = useState<LiveMaterial[]>(() => renderedForJob(jobUuid));
   const [matSelectedName, setMatSelectedName] = useState<string>("");
   const [matQty, setMatQty] = useState<number>(1);
   const [matCustomName, setMatCustomName] = useState<string>("");
   const [matCustomCost, setMatCustomCost] = useState<string>("");
-  const [matBusy, setMatBusy] = useState(false);
   const [matErr, setMatErr] = useState<string>("");
+  const [showAddMaterial, setShowAddMaterial] = useState(false);
 
   useImperativeHandle(ref, () => ({
     getData: () => loaded ? { ...bill, reviewed } : null,
@@ -242,35 +201,38 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);
 
-  // ── Materials: live fetch from backend ───────────────────────────────────────
-  async function fetchMaterials() {
-    if (!jobUuid) return;
-    try {
-      const r = await apiFetch<{ ok: boolean; submissions: MaterialsSubmissionOut[] }>(
-        `/api/materials?job_uuid=${encodeURIComponent(jobUuid)}&limit=500`
-      );
-      setMaterials(flattenSubmissions(r.submissions || []));
-    } catch {
-      // best-effort
-    }
+  // ── Materials: local cache + queue (offline-safe) ────────────────────────────
+  function refreshMaterials() {
+    setMaterials(renderedForJob(jobUuid));
   }
 
   useEffect(() => {
-    setMaterials([]);
-    if (!jobUuid) return;
-    fetchMaterials();
+    // Immediately render from local cache (fast, works offline), then try to
+    // drain any queued ops and refetch from the server in the background.
+    refreshMaterials();
+    (async () => {
+      await syncQueue();
+      const ok = await fetchAndCache(jobUuid);
+      if (ok) refreshMaterials();
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);
 
   useEffect(() => {
-    // Refetch materials when the tab/window regains focus, so adds by
-    // other crew members become visible without a full reload.
-    function onVis() {
-      if (document.visibilityState === "visible") fetchMaterials();
+    async function doSync() {
+      if (!jobUuid) return;
+      await syncQueue();
+      const ok = await fetchAndCache(jobUuid);
+      if (ok) refreshMaterials();
     }
+    function onVis() {
+      if (document.visibilityState === "visible") doSync();
+    }
+    window.addEventListener("online", doSync);
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("focus", onVis);
     return () => {
+      window.removeEventListener("online", doSync);
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("focus", onVis);
     };
@@ -358,62 +320,32 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       setMatErr("Select a material"); return;
     }
 
-    const submissionId = uuid();
-    const itemId = uuid();
-    const total = unitPrice == null ? 0 : unitPrice * qty;
+    // Queue the add locally — persists across refresh/offline.
+    storeEnqueueAdd(jobUuid, jobName, { name: itemName, qty, unitPrice, baseCost, source });
+    refreshMaterials();
+    resetMatControls();
+    setShowAddMaterial(false);
 
-    const payload = {
-      id: submissionId,
-      created_at: new Date().toISOString(),
-      job_uuid: jobUuid,
-      jobName,
-      jobLabel: jobName,
-      jobDate: "",
-      notes: "",
-      items: [{
-        id: itemId,
-        name: itemName,
-        qty,
-        unitPrice,
-        baseCost,
-        source,
-      }],
-      total,
-    };
-
-    setMatBusy(true);
-    try {
-      await apiFetch(`/api/materials`, { method: "POST", body: JSON.stringify(payload) });
-      // Optimistic insert
-      setMaterials((prev) => [{
-        submissionId,
-        name: itemName,
-        qty,
-        unitPrice,
-        baseCost,
-        source,
-        createdAt: payload.created_at,
-      }, ...prev]);
-      resetMatControls();
-      // Refetch to pick up other users' recent adds as well
-      fetchMaterials();
-    } catch (e: any) {
-      setMatErr(e?.message ?? "Add failed");
-    } finally {
-      setMatBusy(false);
-    }
+    // Fire-and-forget: try to sync and refresh from server. Offline → stays queued.
+    (async () => {
+      const synced = await syncQueue();
+      if (synced > 0) {
+        const ok = await fetchAndCache(jobUuid);
+        if (ok) refreshMaterials();
+      }
+    })();
   }
 
-  async function removeMaterial(submissionId: string) {
-    const snapshot = materials;
-    setMaterials((prev) => prev.filter((m) => m.submissionId !== submissionId));
-    try {
-      await apiFetch(`/api/materials/${encodeURIComponent(submissionId)}`, { method: "DELETE" });
-    } catch {
-      // Roll back on failure
-      setMaterials(snapshot);
-      setMatErr("Remove failed");
-    }
+  function removeMaterial(submissionId: string) {
+    storeEnqueueDeleteOrCancel(submissionId, jobUuid);
+    refreshMaterials();
+    (async () => {
+      const synced = await syncQueue();
+      if (synced > 0) {
+        const ok = await fetchAndCache(jobUuid);
+        if (ok) refreshMaterials();
+      }
+    })();
   }
 
   const materialsTotal = useMemo(
@@ -510,8 +442,12 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   borderBottom: "1px solid var(--border)",
                   alignItems: "center",
                   fontSize: 12, color: "var(--text)",
+                  opacity: m.pending ? 0.75 : 1,
                 }}>
-                  <span style={{ color: "var(--muted)" }}>• {m.name}</span>
+                  <span style={{ color: "var(--muted)" }}>
+                    • {m.name}
+                    {m.pending && <span title="Waiting to sync" style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
+                  </span>
                   <span style={{ textAlign: "right", color: "var(--muted)" }}>×{m.qty}</span>
                   <span style={{ textAlign: "right", color: "var(--muted)" }}>{unit}</span>
                   <span style={{ textAlign: "right", fontWeight: 600 }}>{ext}</span>
@@ -524,36 +460,52 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           </div>
         )}
 
-        {/* Add material controls */}
-        <div style={{ padding: "10px 12px 10px 28px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <select value={matSelectedName} onChange={(e) => setMatSelectedName(e.target.value)}
-              style={{ flex: "1 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }}>
-              <option value="">Select material…</option>
-              {MATERIAL_CATALOG.map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.name} — {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}
-                </option>
-              ))}
-              <option value="__custom__">Custom item…</option>
-            </select>
-            <input type="number" min={1} step={1} value={matQty}
-              onChange={(e) => setMatQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
-              style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13, textAlign: "right" }} />
-            <button type="button" onClick={addMaterial} disabled={matBusy}
-              style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--brand)" }}>
-              {matBusy ? "Adding…" : "Add"}
+        {/* Add material — collapsed toggle */}
+        <div style={{ padding: "10px 12px 10px 28px", borderBottom: "1px solid var(--border)" }}>
+          {!showAddMaterial ? (
+            <button
+              type="button"
+              onClick={() => { setShowAddMaterial(true); setMatErr(""); }}
+              style={{ fontSize: 13, color: "var(--brand)", borderColor: "var(--brand)", padding: "6px 14px", borderRadius: 8 }}
+            >
+              + Add material
             </button>
-          </div>
-          {matSelectedName === "__custom__" && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <input value={matCustomName} onChange={(e) => setMatCustomName(e.target.value)} placeholder="Custom name"
-                style={{ flex: "2 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
-              <input value={matCustomCost} onChange={(e) => setMatCustomCost(e.target.value)} placeholder="Cost (opt.)" inputMode="decimal"
-                style={{ flex: "1 1 120px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <select value={matSelectedName} onChange={(e) => setMatSelectedName(e.target.value)}
+                  style={{ flex: "1 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }}>
+                  <option value="">Select material…</option>
+                  {MATERIAL_CATALOG.map((m) => (
+                    <option key={m.name} value={m.name}>
+                      {m.name} — {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}
+                    </option>
+                  ))}
+                  <option value="__custom__">Custom item…</option>
+                </select>
+                <input type="number" min={1} step={1} value={matQty}
+                  onChange={(e) => setMatQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                  style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13, textAlign: "right" }} />
+                <button type="button" onClick={addMaterial}
+                  style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--brand)" }}>
+                  Add
+                </button>
+                <button type="button" onClick={() => { setShowAddMaterial(false); setMatErr(""); resetMatControls(); }}
+                  style={{ padding: "6px 10px", fontSize: 12, borderRadius: 8, color: "var(--muted)", background: "none", border: "none", cursor: "pointer" }}>
+                  Cancel
+                </button>
+              </div>
+              {matSelectedName === "__custom__" && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <input value={matCustomName} onChange={(e) => setMatCustomName(e.target.value)} placeholder="Custom name"
+                    style={{ flex: "2 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+                  <input value={matCustomCost} onChange={(e) => setMatCustomCost(e.target.value)} placeholder="Cost (opt.)" inputMode="decimal"
+                    style={{ flex: "1 1 120px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+                </div>
+              )}
+              {matErr && <div style={{ fontSize: 12, color: "var(--danger)" }}>{matErr}</div>}
             </div>
           )}
-          {matErr && <div style={{ fontSize: 12, color: "var(--danger)" }}>{matErr}</div>}
         </div>
 
         {/* Add line item (charges / custom) */}

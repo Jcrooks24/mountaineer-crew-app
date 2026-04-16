@@ -8,6 +8,12 @@ import DVIRReminderModal from "./components/DVIRReminderModal";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme } from "./theme/ThemeContext";
 import { getToken } from "./auth/token";
+import {
+  renderedForJob as materialsRenderedForJob,
+  syncQueue as syncMaterialsQueue,
+  fetchAndCache as fetchAndCacheMaterials,
+  type LiveMaterial,
+} from "./lib/materialsStore";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -90,15 +96,6 @@ type ServerPhoto = {
   created_at: string;
   mime_type: string;
 };
-
-type MaterialSummaryItem = {
-  submissionId: string;
-  createdAt: string;
-  name: string;
-  qty: number;
-  extended: number | null;
-};
-
 
 function todayLocalYYYYMMDD() {
   const d = new Date();
@@ -205,7 +202,7 @@ export default function App() {
   const [dvirPending, setDvirPending] = useState<{ type: string } | null>(null);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
   const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
-  const [materialsSummary, setMaterialsSummary] = useState<MaterialSummaryItem[]>([]);
+  const [materialsSummary, setMaterialsSummary] = useState<LiveMaterial[]>([]);
 
   const canSend = useMemo(() => jobUuid.trim().length > 0, [jobUuid]);
 
@@ -870,38 +867,20 @@ export default function App() {
   }
 
   // -----------------------
-  // Materials summary — fetch live from backend for current job
+  // Materials summary — read from the offline-capable materialsStore cache,
+  // then fire a background sync + refetch.
   // -----------------------
-  async function loadMaterialsSummary(uuid: string) {
-    if (!uuid.trim()) { setMaterialsSummary([]); return; }
-    try {
-      const token = getToken();
-      const res = await fetch(`${API}/api/materials?job_uuid=${encodeURIComponent(uuid.trim())}&limit=500`, {
-        headers: makeAuthHeaders(token),
-      });
-      if (!res.ok) { setMaterialsSummary([]); return; }
-      const json = await res.json();
-      if (!json.ok || !Array.isArray(json.submissions)) { setMaterialsSummary([]); return; }
+  function refreshMaterialsSummary(uuid: string) {
+    setMaterialsSummary(materialsRenderedForJob(uuid.trim()));
+  }
 
-      const out: MaterialSummaryItem[] = [];
-      for (const s of json.submissions) {
-        for (const it of (s.items || [])) {
-          const unitPrice = it.unitPrice == null ? null : Number(it.unitPrice);
-          const qty = Number(it.qty) || 0;
-          out.push({
-            submissionId: s.id,
-            createdAt: s.created_at,
-            name: it.name || "",
-            qty,
-            extended: unitPrice == null ? null : unitPrice * qty,
-          });
-        }
-      }
-      out.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-      setMaterialsSummary(out);
-    } catch {
-      // best-effort
-    }
+  async function loadMaterialsSummary(uuid: string) {
+    const trimmed = uuid.trim();
+    refreshMaterialsSummary(trimmed);
+    if (!trimmed) return;
+    await syncMaterialsQueue();
+    const ok = await fetchAndCacheMaterials(trimmed);
+    if (ok) refreshMaterialsSummary(trimmed);
   }
 
   // -----------------------
@@ -1033,7 +1012,7 @@ export default function App() {
   // Aggregate totals for the current job's materials (populated from the
   // backend via loadMaterialsSummary)
   const materialsTotal = useMemo(
-    () => materialsSummary.reduce((s, m) => s + (m.extended ?? 0), 0),
+    () => materialsSummary.reduce((s, m) => s + (m.unitPrice == null ? 0 : m.unitPrice * m.qty), 0),
     [materialsSummary],
   );
 
@@ -1313,14 +1292,20 @@ export default function App() {
                 <div style={{ fontWeight: 700 }}>{money(materialsTotal)}</div>
               </div>
               <div className="col" style={{ gap: 4, marginTop: 8 }}>
-                {materialsSummary.map((m) => (
-                  <div key={m.submissionId} className="row small" style={{ justifyContent: "space-between", color: "var(--text)" }}>
-                    <span>{m.qty}× {m.name}</span>
-                    <span style={{ color: "var(--muted)" }}>
-                      {m.extended != null ? money(m.extended) : "—"}
-                    </span>
-                  </div>
-                ))}
+                {materialsSummary.map((m, i) => {
+                  const ext = m.unitPrice == null ? null : m.unitPrice * m.qty;
+                  return (
+                    <div key={`${m.submissionId}:${i}`} className="row small" style={{ justifyContent: "space-between", color: "var(--text)", opacity: m.pending ? 0.7 : 1 }}>
+                      <span>
+                        {m.qty}× {m.name}
+                        {m.pending && <span style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
+                      </span>
+                      <span style={{ color: "var(--muted)" }}>
+                        {ext != null ? money(ext) : "—"}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
               <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
                 Manage via the Report tab · Bill Helper · Materials
