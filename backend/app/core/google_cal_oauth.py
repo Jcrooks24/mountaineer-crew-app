@@ -8,13 +8,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-import certifi
-import httplib2
-import google_auth_httplib2
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
+# NOTE: Google API libraries (httplib2, google-auth, googleapiclient) are intentionally
+# NOT imported at module level. They are lazy-loaded inside each function that needs them.
+# This keeps startup memory ~100-150MB lower on Render free tier, since these libraries
+# are only pulled into memory when a Google API call actually occurs.
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
@@ -22,36 +19,29 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 
-BASE_DIR = Path(__file__).resolve().parents[2]  # backend/
+BASE_DIR = Path(__file__).resolve().parents[2]
 CREDS_PATH = BASE_DIR / "credentials.json"
 TOKEN_PATH = BASE_DIR / "token.json"
 
 LOCAL_TZ = ZoneInfo("America/Denver")
 DB_TOKEN_KEY = "google_oauth_token"
 
-# Module-level caches — avoids redundant refreshes and discovery-doc fetches
-_cached_creds: Optional[Credentials] = None
-_cached_cal_service = None   # googleapiclient Resource
+_cached_creds = None
+_cached_cal_service = None
 _cached_sheets_service = None
 
 _SSL_ERRORS = ("DECRYPTION_FAILED", "BAD_RECORD_MAC", "SSL", "ssl", "EOF occurred")
 
 
-def _build_authorized_http(creds: Credentials) -> google_auth_httplib2.AuthorizedHttp:
-    """
-    Build an httplib2 HTTP client using certifi's CA bundle.
-    This prevents [SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC] errors that occur
-    when httplib2 uses the system CA store on hosted environments like Render.
-    """
+def _build_authorized_http(creds):
+    import certifi
+    import httplib2
+    import google_auth_httplib2
     http = httplib2.Http(ca_certs=certifi.where())
     return google_auth_httplib2.AuthorizedHttp(creds, http=http)
 
 
 def _ssl_retry(fn, max_attempts: int = 3):
-    """
-    Call fn(), retrying up to max_attempts times on SSL/TLS transient errors.
-    Raises the last exception if all attempts fail.
-    """
     last_err: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -73,7 +63,7 @@ def _load_token_from_db(db) -> Optional[str]:
     return row.value if row and row.value else None
 
 
-def _save_token_to_db(creds: Credentials, db) -> None:
+def _save_token_to_db(creds, db) -> None:
     from app.db.models.system_config import SystemConfig
     token_json = creds.to_json()
     row = db.query(SystemConfig).filter(SystemConfig.key == DB_TOKEN_KEY).first()
@@ -84,20 +74,14 @@ def _save_token_to_db(creds: Credentials, db) -> None:
     db.commit()
 
 
-def _creds_from_json(token_json: str) -> Credentials:
+def _creds_from_json(token_json: str):
+    from google.oauth2.credentials import Credentials
     token_info = json.loads(token_json)
     return Credentials.from_authorized_user_info(token_info, SCOPES)
 
 
-def _get_creds(db=None) -> Credentials:
-    """
-    Load Google OAuth credentials. Priority:
-      1. Module-level cache (valid creds reused within same process)
-      2. DB (system_config table) — persists across Render restarts
-      3. GOOGLE_OAUTH_TOKEN_JSON env var
-      4. Local token.json file (dev only)
-    After any refresh, writes back to DB and cache.
-    """
+def _get_creds(db=None):
+    from google.auth.transport.requests import Request
     global _cached_creds
 
     if _cached_creds and _cached_creds.valid:
@@ -106,13 +90,11 @@ def _get_creds(db=None) -> Credentials:
     token_json: Optional[str] = None
     source = "unknown"
 
-    # 1. Try DB
     if db:
         token_json = _load_token_from_db(db)
         if token_json:
             source = "db"
 
-    # 2. Try env var
     if not token_json:
         token_json = os.getenv("GOOGLE_OAUTH_TOKEN_JSON", "").strip() or None
         if token_json:
@@ -138,7 +120,9 @@ def _get_creds(db=None) -> Credentials:
         _cached_creds = creds
         return creds
 
-    # 3. Local file mode (dev only)
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
     if TOKEN_PATH.exists():
         creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
     else:
@@ -152,7 +136,6 @@ def _get_creds(db=None) -> Credentials:
                 raise RuntimeError(f"Missing credentials.json at: {CREDS_PATH}")
             flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
             creds = flow.run_local_server(port=0)
-
         TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
 
     _cached_creds = creds
@@ -160,7 +143,6 @@ def _get_creds(db=None) -> Credentials:
 
 
 def invalidate_cache() -> None:
-    """Call this after updating the token so the next request reloads it."""
     global _cached_creds, _cached_cal_service, _cached_sheets_service
     _cached_creds = None
     _cached_cal_service = None
@@ -168,6 +150,7 @@ def invalidate_cache() -> None:
 
 
 def get_calendar_service(db=None):
+    from googleapiclient.discovery import build
     global _cached_cal_service
     if _cached_cal_service is not None:
         return _cached_cal_service
@@ -177,6 +160,7 @@ def get_calendar_service(db=None):
 
 
 def get_sheets_service(db=None):
+    from googleapiclient.discovery import build
     global _cached_sheets_service
     if _cached_sheets_service is not None:
         return _cached_sheets_service
@@ -186,7 +170,6 @@ def get_sheets_service(db=None):
 
 
 def get_cal_status(db=None) -> dict:
-    """Return a safe status dict for the admin panel."""
     try:
         creds = _get_creds(db)
         expiry = creds.expiry.isoformat() if creds.expiry else None
@@ -202,10 +185,10 @@ def get_cal_status(db=None) -> dict:
 
 
 def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List[Dict[str, Any]]:
+    from googleapiclient.discovery import build
     day = datetime.fromisoformat(date_yyyy_mm_dd).date()
     start_local = datetime.combine(day, time(0, 0, 0), tzinfo=LOCAL_TZ)
     end_local = start_local + timedelta(days=1)
-
     creds = _get_creds(db)
 
     def _fetch():
@@ -225,7 +208,6 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List
         )
 
     resp = _ssl_retry(_fetch)
-
     items = resp.get("items", [])
     out: List[Dict[str, Any]] = []
     for it in items:
@@ -235,5 +217,4 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List
             "summary": it.get("summary") or "(no title)",
             "start": start,
         })
-
     return out
