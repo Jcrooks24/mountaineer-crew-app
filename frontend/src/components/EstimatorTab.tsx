@@ -3,7 +3,6 @@ import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
 import {
   FURNITURE_CATALOG,
-  FURNITURE_CATEGORIES,
   type FurnitureItem,
 } from "../data/furnitureCatalog";
 
