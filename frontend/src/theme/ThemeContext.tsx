@@ -192,19 +192,21 @@ export const PIN_EVENT_TYPES = Object.keys(DEFAULT_PIN_COLORS);
 // ─── Configurable help text ───────────────────────────────────────────────────
 
 export interface HelpTexts {
-  materialsHint: string;    // below material selector
   photoCaptionPlaceholder: string;
   jobNotesPlaceholder: string;
-  materialsNotesPlaceholder: string;
-  jobLabelPlaceholder: string;
+  billNotesPlaceholder: string;
+  hoursMismatchPlaceholder: string;
+  jobDescriptionPlaceholder: string;
+  photosHint: string;
 }
 
 export const DEFAULT_HELP_TEXTS: HelpTexts = {
-  materialsHint: "Custom items: enter cost → +10%.",
   photoCaptionPlaceholder: "Describe what's in this photo…",
   jobNotesPlaceholder: "Notes for this job…",
-  materialsNotesPlaceholder: "Notes (optional)…",
-  jobLabelPlaceholder: "Job name…",
+  billNotesPlaceholder: "Any notes to include with this bill…",
+  hoursMismatchPlaceholder: "e.g. Travel time not billed, job ran over estimate, early finish…",
+  jobDescriptionPlaceholder: "Describe the job…",
+  photosHint: "Submit before-and-after photos, damage photos, and any other photos relevant to this job.",
 };
 
 // ─── Settings shape ───────────────────────────────────────────────────────────

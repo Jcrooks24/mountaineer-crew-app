@@ -18,6 +18,8 @@ class DVIRCreate(BaseModel):
     defects: List[str] = []       # list of defect category names
     defect_notes: Optional[str] = None
     condition: str = "satisfactory"
+    back_of_truck_confirmed: Optional[bool] = None
+    overnight_hold: Optional[bool] = None
     driver_name: str
     driver_signature: str         # base64 PNG data URL
     driver_signed_at: datetime
@@ -43,6 +45,8 @@ class DVIRResponse(BaseModel):
     defects: List[str]
     defect_notes: Optional[str]
     condition: str
+    back_of_truck_confirmed: Optional[bool] = None
+    overnight_hold: Optional[bool] = None
     driver_id: Optional[int]
     driver_name: str
     driver_signature: str

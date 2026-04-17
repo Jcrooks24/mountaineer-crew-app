@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { useTheme } from "../theme/ThemeContext";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 
@@ -22,8 +23,11 @@ const BILLING_OPTIONS: { value: BillingMethod; label: string }[] = [
 ];
 
 type ReportData = {
+  has_personal_vehicles: boolean | null;
   personal_vehicles: number;
+  has_dumpster_use: boolean | null;
   dumpster_pct: number;
+  has_recycling_use: boolean | null;
   recycling_pct: number;
   billing_method: string;
   review_candidate: boolean | null;
@@ -38,10 +42,15 @@ type Props = {
 
 export default function JobReport({ jobUuid, jobName }: Props) {
   const { user } = useAuth();
+  const { settings: themeSettings } = useTheme();
+  const ht = themeSettings.helpTexts;
 
   const [data, setData] = useState<ReportData>({
+    has_personal_vehicles: null,
     personal_vehicles: 0,
+    has_dumpster_use: null,
     dumpster_pct: 0,
+    has_recycling_use: null,
     recycling_pct: 0,
     billing_method: "",
     review_candidate: null,
@@ -65,8 +74,12 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     apiFetch<ReportData & { id: number }>(`/api/job-report?job_uuid=${encodeURIComponent(jobUuid)}`)
       .then((r) => {
         setData({
+          // Existing reports — infer answers from saved values
+          has_personal_vehicles: r.personal_vehicles > 0,
           personal_vehicles: r.personal_vehicles,
+          has_dumpster_use: r.dumpster_pct > 0,
           dumpster_pct: r.dumpster_pct,
+          has_recycling_use: r.recycling_pct > 0,
           recycling_pct: r.recycling_pct,
           billing_method: r.billing_method,
           review_candidate: r.review_candidate,
@@ -78,8 +91,11 @@ export default function JobReport({ jobUuid, jobName }: Props) {
       .catch(() => {
         // 404 = no report yet, start fresh
         setData({
+          has_personal_vehicles: null,
           personal_vehicles: 0,
+          has_dumpster_use: null,
           dumpster_pct: 0,
+          has_recycling_use: null,
           recycling_pct: 0,
           billing_method: "",
           review_candidate: null,
@@ -144,6 +160,12 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     setErr(null);
 
     if (!jobUuid) return setErr("No job selected.");
+    if (data.has_personal_vehicles === null) return setErr("Indicate whether personal vehicles were at the job site.");
+    if (data.has_personal_vehicles && data.personal_vehicles < 1) return setErr("Enter how many personal vehicles were at the job site.");
+    if (data.has_dumpster_use === null) return setErr("Indicate whether the M1 dumpster was used on this job.");
+    if (data.has_dumpster_use && data.dumpster_pct <= 0) return setErr("Select the M1 dumpster fill percentage.");
+    if (data.has_recycling_use === null) return setErr("Indicate whether the M1 recycling bin was used on this job.");
+    if (data.has_recycling_use && data.recycling_pct <= 0) return setErr("Select the M1 recycling bin fill percentage.");
     if (!data.billing_method) return setErr("Select a billing method.");
     if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
     if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
@@ -200,55 +222,113 @@ export default function JobReport({ jobUuid, jobName }: Props) {
 
       {/* ── Personal vehicles ── */}
       <div className="card">
-        <div className="sectionTitle">Personal Vehicles at Job Site</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 10 }}>
-          <button
-            type="button"
-            onClick={() => set("personal_vehicles", Math.max(0, data.personal_vehicles - 1))}
-            style={stepBtnStyle}
-            aria-label="Decrease"
-          >
-            −
-          </button>
-          <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>
-            {data.personal_vehicles}
-          </span>
-          <button
-            type="button"
-            onClick={() => set("personal_vehicles", data.personal_vehicles + 1)}
-            style={stepBtnStyle}
-            aria-label="Increase"
-          >
-            +
-          </button>
-          <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
+        <div className="sectionTitle">Personal Vehicles at Job Site *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Were any crew personal vehicles at the job site?
         </div>
+        <YesNo
+          value={data.has_personal_vehicles}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_personal_vehicles: v,
+              personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_personal_vehicles && (
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
+            <button
+              type="button"
+              onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))}
+              style={stepBtnStyle}
+              aria-label="Decrease"
+            >
+              −
+            </button>
+            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>
+              {data.personal_vehicles}
+            </span>
+            <button
+              type="button"
+              onClick={() => set("personal_vehicles", data.personal_vehicles + 1)}
+              style={stepBtnStyle}
+              aria-label="Increase"
+            >
+              +
+            </button>
+            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
+          </div>
+        )}
       </div>
 
       {/* ── Dumpster & Recycling ── */}
       <div className="card">
-        <div className="sectionTitle">M1 Fill Estimates</div>
-
-        <PctSlider
-          label="Dumpster (trash)"
-          value={data.dumpster_pct}
-          onChange={(v) => set("dumpster_pct", v)}
-          color="var(--danger)"
-        />
-
-        <div style={{ marginTop: 16 }}>
-          <PctSlider
-            label="Recycling bin"
-            value={data.recycling_pct}
-            onChange={(v) => set("recycling_pct", v)}
-            color="var(--ok)"
-          />
+        <div className="sectionTitle">M1 Dumpster Use *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Was the M1 dumpster (trash) used on this job?
         </div>
+        <YesNo
+          value={data.has_dumpster_use}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_dumpster_use: v,
+              dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_dumpster_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider
+              label="Dumpster fill estimate"
+              value={data.dumpster_pct}
+              onChange={(v) => set("dumpster_pct", v)}
+              color="var(--danger)"
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">M1 Recycling Use *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Was the M1 recycling bin used on this job?
+        </div>
+        <YesNo
+          value={data.has_recycling_use}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_recycling_use: v,
+              recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_recycling_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider
+              label="Recycling bin fill estimate"
+              value={data.recycling_pct}
+              onChange={(v) => set("recycling_pct", v)}
+              color="var(--ok)"
+            />
+          </div>
+        )}
       </div>
 
       {/* ── Billing ── */}
       <div className="card">
-        <div className="sectionTitle">Billing Method</div>
+        <div className="sectionTitle">Billing Method *</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
           {BILLING_OPTIONS.map(({ value, label }) => {
             const active = data.billing_method === value;
@@ -278,7 +358,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
 
       {/* ── Review candidate ── */}
       <div className="card">
-        <div className="sectionTitle">Review Candidate</div>
+        <div className="sectionTitle">Review Candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
@@ -292,7 +372,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
 
       {/* ── Hours reconciliation ── */}
       <div className="card">
-        <div className="sectionTitle">Hours Reconciliation</div>
+        <div className="sectionTitle">Hours Reconciliation *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
           Do hours worked match hours billed?
         </div>
@@ -310,7 +390,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
             <textarea
               value={data.hours_mismatch_reason}
               onChange={(e) => set("hours_mismatch_reason", e.target.value)}
-              placeholder="e.g. Travel time not billed, job ran over estimate, early finish…"
+              placeholder={ht.hoursMismatchPlaceholder}
               rows={3}
               style={textareaStyle}
             />

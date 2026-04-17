@@ -25,6 +25,7 @@ from app.routers.dvir import router as dvir_router
 from app.routers.job_report import router as job_report_router
 from app.routers.config import router as config_router
 from app.routers.bill import router as bill_router
+from app.routers.users import router as users_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -116,3 +117,4 @@ app.include_router(dvir_router)        # /api/dvir
 app.include_router(job_report_router)  # /api/job-report
 app.include_router(config_router)      # /api/config (public)
 app.include_router(bill_router)        # /api/bill
+app.include_router(users_router)       # /api/users/directory

@@ -730,7 +730,7 @@ function SettingsTab() {
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                 }}>
                 <span>{opt.label}</span>
-                <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "var(--font)" }}>The quick brown fox</span>
+                <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: opt.value }}>The quick brown fox</span>
               </button>
             );
           })}
@@ -901,11 +901,12 @@ function HelpTextCard() {
   }
 
   const fields: { key: keyof HelpTexts; label: string }[] = [
-    { key: "materialsHint",            label: "Materials hint (below selector)" },
-    { key: "photoCaptionPlaceholder",  label: "Photo caption placeholder" },
-    { key: "jobNotesPlaceholder",      label: "Job notes placeholder" },
-    { key: "materialsNotesPlaceholder",label: "Materials notes placeholder" },
-    { key: "jobLabelPlaceholder",      label: "Job label placeholder" },
+    { key: "photoCaptionPlaceholder",   label: "Photo caption placeholder" },
+    { key: "jobNotesPlaceholder",       label: "Job notes placeholder" },
+    { key: "billNotesPlaceholder",      label: "Bill notes placeholder" },
+    { key: "hoursMismatchPlaceholder",  label: "Hours mismatch reason placeholder" },
+    { key: "jobDescriptionPlaceholder", label: "Manual job description placeholder" },
+    { key: "photosHint",                label: "Photos tab instructions" },
   ];
 
   return (

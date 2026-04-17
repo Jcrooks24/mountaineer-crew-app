@@ -130,10 +130,13 @@ def update_me(
     db: Session = Depends(get_db),
 ) -> UserResponse:
     """
-    Update the current user's profile (name only for now).
+    Update the current user's profile (name and profile photo).
+    Send profile_photo="" to clear the photo.
     """
     if payload.name is not None:
         current_user.name = payload.name.strip() or None
+    if payload.profile_photo is not None:
+        current_user.profile_photo = payload.profile_photo.strip() or None
     db.commit()
     db.refresh(current_user)
     return current_user

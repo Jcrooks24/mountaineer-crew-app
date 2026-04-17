@@ -3,7 +3,7 @@ User model for authentication.
 Minimal fields for now + minimal RBAC stub.
 """
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
 from app.db.session import Base
 
 
@@ -24,3 +24,6 @@ class User(Base):
     # Password reset
     reset_token = Column(String, nullable=True, index=True)
     reset_token_expiry = Column(DateTime(timezone=True), nullable=True)
+
+    # Profile photo — resized ~256px data URL (image/jpeg), shared across devices
+    profile_photo = Column(Text, nullable=True)

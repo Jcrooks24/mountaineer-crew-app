@@ -7,9 +7,11 @@ from pydantic import BaseModel, field_validator
 
 
 BILLING_METHODS = {
-    "crew_cash_check",
+    "crew_cash",
+    "crew_check",
     "office_invoice",
-    "office_arrange",
+    "office_arrange_cash",
+    "office_arrange_check",
     "end_of_job",
 }
 

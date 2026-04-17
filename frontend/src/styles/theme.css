@@ -53,6 +53,7 @@ input, select, textarea{
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.04);
   color: var(--text);
+  font-family: inherit;
   outline: none;
 }
 
@@ -64,6 +65,7 @@ button{
   border: 1px solid rgba(255,255,255,0.15);
   background: linear-gradient(180deg, var(--btn-bg-from), var(--btn-bg-to));
   color: #ffffff;
+  font-family: inherit;
   font-weight: 600;
   letter-spacing: 0.3px;
   cursor: pointer;
@@ -80,7 +82,7 @@ button:disabled{
 }
 
 .btnPrimary{
-  background: linear-gradient(90deg, #5dd6c2, #6aa7ff);
+  background: linear-gradient(90deg, var(--brand), var(--brand2));
   border: none;
   color: #0b1220;
   font-weight: 700;

@@ -194,6 +194,11 @@ export default function DVIRPage() {
   const [driverName, setDriverName] = useState(user?.name || "");
   const sigRef = useRef<SignaturePadHandle>(null);
 
+  // ── Back-of-truck confirmation ─────────────────────────────────────────────
+  const [backOfTruckConfirmed, setBackOfTruckConfirmed] = useState(false);
+  // Post-trip only: truck left loaded overnight (client belongings or trash)
+  const [overnightHold, setOvernightHold] = useState(false);
+
   // ── E-signature consent ────────────────────────────────────────────────────
   const [eSignConsent, setESignConsent] = useState(false);
 
@@ -221,6 +226,9 @@ export default function DVIRPage() {
           defects: Array.from(defects),
           defect_notes: defectNotes.trim() || null,
           condition,
+          back_of_truck_confirmed:
+            inspectionType === "post-trip" && overnightHold ? null : backOfTruckConfirmed,
+          overnight_hold: inspectionType === "post-trip" ? overnightHold : null,
           driver_name: driverName.trim(),
           driver_signature: sigRef.current!.toDataURL(),
           driver_signed_at: new Date().toISOString(),
@@ -249,6 +257,16 @@ export default function DVIRPage() {
     if (hasDefects && !defectNotes.trim()) return setErr("Describe the defect(s) — defect notes are required when defects are checked.");
     if (prevDVIR && !prevReviewed)
       return setErr("You must confirm you have reviewed the previous inspection report.");
+    if (inspectionType === "pre-trip" && !backOfTruckConfirmed) {
+      return setErr(
+        "Confirm you have checked the back of the truck for the job's gear before submitting."
+      );
+    }
+    if (inspectionType === "post-trip" && !overnightHold && !backOfTruckConfirmed) {
+      return setErr(
+        "Confirm the back of the truck has been reset for the next crew, or mark the truck as held loaded overnight."
+      );
+    }
     if (sigRef.current?.isEmpty()) return setErr("Driver signature is required — please sign above.");
     if (!eSignConsent) return setErr("You must accept the electronic signature consent to submit.");
 
@@ -304,6 +322,8 @@ export default function DVIRPage() {
                 setDefectNotes("");
                 setPrevDVIR(null);
                 setPrevReviewed(false);
+                setBackOfTruckConfirmed(false);
+                setOvernightHold(false);
                 setESignConsent(false);
                 sigRef.current?.clear();
               }}
@@ -438,7 +458,11 @@ export default function DVIRPage() {
                   <button
                     key={t}
                     type="button"
-                    onClick={() => setInspectionType(t)}
+                    onClick={() => {
+                      setInspectionType(t);
+                      setBackOfTruckConfirmed(false);
+                      setOvernightHold(false);
+                    }}
                     style={{
                       flex: 1,
                       padding: "9px 0",
@@ -620,6 +644,59 @@ export default function DVIRPage() {
           >
             Clear signature
           </button>
+        </div>
+
+        {/* ── Back-of-truck confirmation ── */}
+        <div className="card">
+          <div className="label" style={{ marginBottom: 8, fontWeight: 700 }}>
+            Back of Truck Check *
+          </div>
+          {inspectionType === "pre-trip" ? (
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={backOfTruckConfirmed}
+                onChange={(e) => setBackOfTruckConfirmed(e.target.checked)}
+                style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+              />
+              <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
+                I have opened the back of the truck and confirmed that everything needed for the job is
+                present and properly secured.
+              </span>
+            </label>
+          ) : (
+            <>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", opacity: overnightHold ? 0.5 : 1 }}>
+                <input
+                  type="checkbox"
+                  checked={backOfTruckConfirmed}
+                  onChange={(e) => setBackOfTruckConfirmed(e.target.checked)}
+                  disabled={overnightHold}
+                  style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+                />
+                <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
+                  I have opened the back of the truck and confirmed it contains the appropriate gear for
+                  the next crew, everything is properly secured, the block heater is plugged in (in
+                  winter), and the truck is clean and free of debris.
+                </span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                <input
+                  type="checkbox"
+                  checked={overnightHold}
+                  onChange={(e) => {
+                    setOvernightHold(e.target.checked);
+                    if (e.target.checked) setBackOfTruckConfirmed(false);
+                  }}
+                  style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+                />
+                <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
+                  Truck is being stowed overnight with a full load (client belongings to unload tomorrow
+                  or trash for the dump) — back-of-truck reset does not apply.
+                </span>
+              </label>
+            </>
+          )}
         </div>
 
         {/* ── E-signature consent ── */}

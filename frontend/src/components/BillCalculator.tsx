@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { MATERIAL_CATALOG } from "../data/catalog";
+import { useTheme } from "../theme/ThemeContext";
 import {
   enqueueAdd as storeEnqueueAdd,
   enqueueDeleteOrCancel as storeEnqueueDeleteOrCancel,
@@ -52,8 +53,7 @@ const COMPANY_CHARGES: ChargeCategory[] = [
       { label: "Mover (per hour)", unit: "hr", rate: 80 },
       { label: "Truck (per hour)", unit: "hr", rate: 90 },
       { label: "Crew transport vehicle", unit: "day", rate: 100 },
-      { label: "Specialty services", unit: "hr", rate: 225 },
-      { label: "Overtime (1.5×)", unit: "hr", rate: 0 },
+      { label: "Overtime (labor only — 1.5 × #movers × $80/hr)", unit: "hr", rate: 0 },
       { label: "Holiday rate (2×)", unit: "hr", rate: 0 },
       { label: "2-hour minimum charge", unit: "flat", rate: 0 },
     ],
@@ -63,17 +63,6 @@ const COMPANY_CHARGES: ChargeCategory[] = [
     items: [
       { label: "Fuel & mileage surcharge", unit: "mi", rate: 2.25 },
       { label: "Big Sky trip fee", unit: "flat", rate: 125 },
-      { label: "Change order admin fee", unit: "flat", rate: 150 },
-      { label: "Credit card processing (3.5%)", unit: "flat", rate: 0 },
-      { label: "Late payment fee (1.5%/mo)", unit: "flat", rate: 0 },
-      { label: "Deposit (30%)", unit: "flat", rate: 0 },
-    ],
-  },
-  {
-    category: "Coverage",
-    items: [
-      { label: "Default valuation coverage", unit: "lb", rate: 0.6 },
-      { label: "Full value coverage (1.25%)", unit: "flat", rate: 0 },
     ],
   },
   {
@@ -81,13 +70,6 @@ const COMPANY_CHARGES: ChargeCategory[] = [
     items: [
       { label: "Full dumpster", unit: "flat", rate: 700 },
       { label: "Full truck of trash", unit: "flat", rate: 350 },
-    ],
-  },
-  {
-    category: "Crating",
-    items: [
-      { label: "Stick crate", unit: "cu ft", rate: 32.5 },
-      { label: "Solid crate", unit: "cu ft", rate: 42.5 },
     ],
   },
 ];
@@ -131,6 +113,8 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0 },
   ref,
 ) {
+  const { settings: themeSettings } = useTheme();
+  const ht = themeSettings.helpTexts;
   const [bill, setBill] = useState<Bill>({ items: [], globalDiscount: 0, notes: "" });
   const [loaded, setLoaded] = useState(false);
   const [reviewed, setReviewed] = useState(false);
@@ -174,7 +158,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             if (dumpsterPct > 0) {
               items.push({
                 id: uuid(),
-                label: "Dumpster use charge",
+                label: `Dumpster use charge (${dumpsterPct}% of full dumpster)`,
                 qty: 1,
                 rate: Math.round((dumpsterPct / 100) * DUMPSTER_FULL_COST * 100) / 100,
                 unit: "flat",
@@ -185,9 +169,9 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             if (recyclingPct > 0) {
               items.push({
                 id: uuid(),
-                label: "Recycling bin use charge",
+                label: `Recycling bin use charge (${recyclingPct}% of full dumpster)`,
                 qty: 1,
-                rate: 0,   // user fills in rate
+                rate: Math.round((recyclingPct / 100) * DUMPSTER_FULL_COST * 100) / 100,
                 unit: "flat",
                 discount: 0,
                 source: "m1",
@@ -374,9 +358,12 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-      <div className="sectionTitle" style={{ marginBottom: 0 }}>
-        Bill Helper {jobName && <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12 }}>— {jobName}</span>}
-      </div>
+      <div className="sectionTitle" style={{ marginBottom: 0 }}>Bill Helper</div>
+      {jobName && (
+        <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
+          Bill for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>
+        </div>
+      )}
 
       {/* ── Line items ── */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -577,7 +564,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         <div className="sectionTitle">Bill Notes</div>
         <textarea value={bill.notes}
           onChange={(e) => setBill((prev) => ({ ...prev, notes: e.target.value }))}
-          placeholder="Any notes to include with this bill…"
+          placeholder={ht.billNotesPlaceholder}
           rows={3}
           style={{ width: "100%", marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, resize: "vertical", boxSizing: "border-box" }} />
       </div>

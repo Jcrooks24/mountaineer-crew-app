@@ -5,6 +5,8 @@ import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
 import DVIRReminderModal from "./components/DVIRReminderModal";
+import UserAvatar from "./components/UserAvatar";
+import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme } from "./theme/ThemeContext";
 import { getToken } from "./auth/token";
@@ -915,6 +917,10 @@ export default function App() {
     loadHistoryFromBackend();
     loadMaterialsSummary(jobUuid);
 
+    // Fetch the user directory so we can show crew members' profile photos in
+    // activity entries and photo attributions.
+    ensureDirectory().catch(() => { /* offline — fall back to initials */ });
+
     const onOnline = () => { setIsOnline(true); syncQueueNow(); loadMaterialsSummary(jobUuid); };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
@@ -1079,8 +1085,13 @@ export default function App() {
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
         </button>
-        <button className={"tab " + (tab === "report" ? "active" : "")} onClick={() => setTab("report")}>
-          Report
+        <button
+          className={"tab " + (tab === "report" ? "active" : "")}
+          onClick={() => setTab("report")}
+          style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.1, gap: 2 }}
+        >
+          <span>Report</span>
+          <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>Complete at end of job</span>
         </button>
       </div>
 
@@ -1131,7 +1142,7 @@ export default function App() {
                         setCalOtherName(e.target.value);
                         setJobName(e.target.value);
                       }}
-                      placeholder="Describe the job…"
+                      placeholder={ht.jobDescriptionPlaceholder}
                       autoFocus
                     />
                   </div>
@@ -1253,7 +1264,10 @@ export default function App() {
                         </span>
                         <strong style={{ fontSize: 14 }}>{e.type}</strong>
                         {e.created_by && (
-                          <span className="small" style={{ color: "var(--muted)" }}>{e.created_by}</span>
+                          <span className="row" style={{ gap: 6 }}>
+                            <UserAvatar displayName={e.created_by} size={18} />
+                            <span className="small" style={{ color: "var(--muted)" }}>{e.created_by}</span>
+                          </span>
                         )}
                       </div>
                       <div className="row" style={{ gap: 8 }}>
@@ -1349,6 +1363,11 @@ export default function App() {
           ) : (
             <div className="card">
               <div className="sectionTitle">Photos</div>
+              {ht.photosHint && (
+                <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 2 }}>
+                  {ht.photosHint}
+                </div>
+              )}
               <div className="row wrap" style={{ marginTop: 10, gap: 8 }}>
                 <label className="btnPrimary" style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)" }}>
                   {photoBusy ? "Working…" : "Add Photo"}
@@ -1444,7 +1463,12 @@ export default function App() {
                     <div style={{ padding: 10 }}>
                       {sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>}
                       <div className="small" style={{ color: "var(--muted)" }}>{new Date(sp.created_at).toLocaleString()}</div>
-                      {sp.created_by && <div className="small" style={{ color: "var(--muted)" }}>by {sp.created_by}</div>}
+                      {sp.created_by && (
+                        <div className="row" style={{ gap: 6, marginTop: 4 }}>
+                          <UserAvatar displayName={sp.created_by} size={18} />
+                          <span className="small" style={{ color: "var(--muted)" }}>by {sp.created_by}</span>
+                        </div>
+                      )}
                       <div style={{ marginTop: 8 }}>
                         <a href={sp.drive_url} target="_blank" rel="noopener noreferrer"
                           style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>

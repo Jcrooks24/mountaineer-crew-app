@@ -35,6 +35,15 @@ class DVIR(Base):
     # "satisfactory" or "defects_noted"
     condition = Column(String, nullable=False, default="satisfactory")
 
+    # ── Back-of-truck confirmation ───────────────────────────────────────────
+    # Pre-trip: driver confirmed truck loaded with everything needed for the job
+    # Post-trip: driver confirmed truck reset for next crew (gear, secured,
+    #   block heater in winter, clean/free of debris)
+    back_of_truck_confirmed = Column(Boolean, nullable=True)
+    # Post-trip only: truck was left loaded overnight (client belongings or trash
+    # for disposal) — back-of-truck post-trip confirmation does not apply.
+    overnight_hold = Column(Boolean, nullable=True)
+
     # ── Driver authorization ─────────────────────────────────────────────────
     driver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     driver_name = Column(String, nullable=False)

@@ -1,30 +1,40 @@
 import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth, type User } from "../auth/AuthContext";
+import { refreshDirectory } from "../lib/userDirectory";
 
-const PHOTO_KEY = "crew_profile_photo_v1";
+const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
-function loadPhoto(): string | null {
-  return localStorage.getItem(PHOTO_KEY);
-}
-
-function savePhoto(dataUrl: string) {
-  localStorage.setItem(PHOTO_KEY, dataUrl);
-}
-
-function removePhoto() {
-  localStorage.removeItem(PHOTO_KEY);
+async function resizeToDataUrl(file: File, maxPx = 256, quality = 0.8): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not read image")); };
+    img.src = url;
+  });
 }
 
 export default function Profile() {
-  const { user, logout } = useAuth();
+  const { user, logout, setUser } = useAuth();
   const nav = useNavigate();
 
-  const [photo, setPhoto] = useState<string | null>(loadPhoto);
+  const [photo, setPhoto] = useState<string | null>(user?.profile_photo ?? null);
   const [name, setName] = useState(user?.name ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -33,22 +43,47 @@ export default function Profile() {
     nav("/login", { replace: true });
   }
 
-  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      savePhoto(dataUrl);
-      setPhoto(dataUrl);
-    };
-    reader.readAsDataURL(file);
+    setErr(null);
+    setPhotoBusy(true);
+    try {
+      const dataUrl = await resizeToDataUrl(file);
+      const updated = await apiFetch<User>("/api/auth/me", {
+        method: "PATCH",
+        body: JSON.stringify({ profile_photo: dataUrl }),
+      });
+      setPhoto(updated.profile_photo ?? null);
+      setUser(updated);
+      refreshDirectory().catch(() => {});
+      // Clean up legacy local-only copy now that the photo is saved on the server
+      localStorage.removeItem(LEGACY_PHOTO_KEY);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to upload photo");
+    } finally {
+      setPhotoBusy(false);
+    }
   }
 
-  function handleRemovePhoto() {
-    removePhoto();
-    setPhoto(null);
-    if (fileRef.current) fileRef.current.value = "";
+  async function handleRemovePhoto() {
+    setErr(null);
+    setPhotoBusy(true);
+    try {
+      const updated = await apiFetch<User>("/api/auth/me", {
+        method: "PATCH",
+        body: JSON.stringify({ profile_photo: "" }),
+      });
+      setPhoto(null);
+      setUser(updated);
+      refreshDirectory().catch(() => {});
+      if (fileRef.current) fileRef.current.value = "";
+      localStorage.removeItem(LEGACY_PHOTO_KEY);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to remove photo");
+    } finally {
+      setPhotoBusy(false);
+    }
   }
 
   async function handleSaveName(e: React.FormEvent) {
@@ -57,10 +92,11 @@ export default function Profile() {
     setSaving(true);
     setSaved(false);
     try {
-      await apiFetch("/api/auth/me", {
+      const updated = await apiFetch<User>("/api/auth/me", {
         method: "PATCH",
         body: JSON.stringify({ name }),
       });
+      setUser(updated);
       setSaved(true);
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to save");
@@ -100,21 +136,27 @@ export default function Profile() {
             : initials}
         </div>
 
+        <div className="small" style={{ color: "var(--muted)", textAlign: "center", maxWidth: 260 }}>
+          Your profile photo is visible to other crew members across the app.
+        </div>
+
         <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhotoChange} />
 
         <div className="row" style={{ gap: 8 }}>
-          <button onClick={() => fileRef.current?.click()} style={{ fontSize: 13 }}>
-            {photo ? "Change photo" : "Upload photo"}
+          <button onClick={() => fileRef.current?.click()} disabled={photoBusy} style={{ fontSize: 13 }}>
+            {photoBusy ? "Uploading…" : photo ? "Change photo" : "Upload photo"}
           </button>
           {photo && (
             <button
               onClick={handleRemovePhoto}
+              disabled={photoBusy}
               style={{ fontSize: 13, background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}
             >
               Remove
             </button>
           )}
         </div>
+        {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
       </div>
 
       {/* Account info */}
@@ -141,7 +183,6 @@ export default function Profile() {
             onChange={(e) => { setName(e.target.value); setSaved(false); }}
             placeholder="Your name"
           />
-          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
           {saved && <div className="small" style={{ color: "var(--ok)" }}>Saved</div>}
           <button className="btnPrimary" disabled={saving}>
             {saving ? "Saving…" : "Save name"}
