@@ -63,13 +63,7 @@ const COMPANY_CHARGES: ChargeCategory[] = [
     items: [
       { label: "Fuel & mileage surcharge", unit: "mi", rate: 2.25 },
       { label: "Big Sky trip fee", unit: "flat", rate: 125 },
-    ],
-  },
-  {
-    category: "Disposal",
-    items: [
-      { label: "Full dumpster", unit: "flat", rate: 700 },
-      { label: "Full truck of trash", unit: "flat", rate: 350 },
+      { label: "Dump fee (weight-based — enter rate charged by the dump)", unit: "flat", rate: 0 },
     ],
   },
 ];
@@ -155,28 +149,8 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             for (const h of seed.hours_lines) {
               items.push({ id: uuid(), label: h.label, qty: h.hours, rate: 0, unit: "hr", discount: 0, source: "hours" });
             }
-            if (dumpsterPct > 0) {
-              items.push({
-                id: uuid(),
-                label: `Dumpster use charge (${dumpsterPct}% of full dumpster)`,
-                qty: 1,
-                rate: Math.round((dumpsterPct / 100) * DUMPSTER_FULL_COST * 100) / 100,
-                unit: "flat",
-                discount: 0,
-                source: "m1",
-              });
-            }
-            if (recyclingPct > 0) {
-              items.push({
-                id: uuid(),
-                label: `Recycling bin use charge (${recyclingPct}% of full dumpster)`,
-                qty: 1,
-                rate: Math.round((recyclingPct / 100) * DUMPSTER_FULL_COST * 100) / 100,
-                unit: "flat",
-                discount: 0,
-                source: "m1",
-              });
-            }
+            // Dumpster/recycling m1 lines are populated live from the sliders —
+            // see the dumpsterPct/recyclingPct sync effect below.
             setBill({ items, globalDiscount: 0, notes: "" });
           })
           .catch(() => {})
@@ -184,6 +158,56 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);
+
+  // ── Keep M1 line items (dumpster/recycling) in sync with the Report sliders.
+  // Runs after initial load, whenever either slider changes.
+  useEffect(() => {
+    if (!loaded) return;
+    setBill((prev) => {
+      function computeLine(
+        items: LineItem[],
+        matchLabel: RegExp,
+        pct: number,
+        labelTemplate: (pct: number, rate: number) => string,
+      ): LineItem[] {
+        const idx = items.findIndex((it) => it.source === "m1" && matchLabel.test(it.label));
+        const rate = Math.round((pct / 100) * DUMPSTER_FULL_COST * 100) / 100;
+        if (pct <= 0) {
+          // Remove if present
+          return idx >= 0 ? items.filter((_, i) => i !== idx) : items;
+        }
+        const label = labelTemplate(pct, rate);
+        if (idx < 0) {
+          return [
+            ...items,
+            { id: uuid(), label, qty: 1, rate, unit: "flat", discount: 0, source: "m1" },
+          ];
+        }
+        const existing = items[idx];
+        if (existing.rate === rate && existing.label === label) return items;
+        const next = items.slice();
+        next[idx] = { ...existing, rate, label };
+        return next;
+      }
+
+      let items = prev.items;
+      items = computeLine(
+        items,
+        /Dumpster/i,
+        dumpsterPct,
+        (p, _r) => `Dumpster use charge (${p}% of full dumpster)`,
+      );
+      items = computeLine(
+        items,
+        /Recycling/i,
+        recyclingPct,
+        (p, _r) => `Recycling bin use charge (${p}% of full dumpster)`,
+      );
+
+      if (items === prev.items) return prev;
+      return { ...prev, items };
+    });
+  }, [loaded, dumpsterPct, recyclingPct]);
 
   // ── Materials: local cache + queue (offline-safe) ────────────────────────────
   function refreshMaterials() {

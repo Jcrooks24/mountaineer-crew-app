@@ -18,16 +18,21 @@ const SignaturePad = forwardRef<SignaturePadHandle, Props>(function SignaturePad
   const drawing = useRef(false);
   const empty = useRef(true);
 
+  function themeColor(varName: string, fallback: string) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+    return v || fallback;
+  }
+
   function fillBackground() {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#0b1220";
+    ctx.fillStyle = themeColor("--card", "#0b1220");
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
   function getCtx() {
     const ctx = canvasRef.current!.getContext("2d")!;
-    ctx.strokeStyle = "#5dd6c2";
+    ctx.strokeStyle = themeColor("--brand", "#5dd6c2");
     ctx.lineWidth = 2.5;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";

@@ -1,0 +1,67 @@
+"""
+Estimator — admin-only in-home estimate records with inventory and site notes.
+
+Photos reuse the existing photos table via job_uuid (set to the estimate's
+own estimate_uuid) so the existing Drive upload pipeline and photo viewer
+work without changes.
+"""
+
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
+from app.db.session import Base
+
+
+class Estimate(Base):
+    __tablename__ = "estimates"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Offline-friendly client-generated UUID (used as job_uuid for photos)
+    estimate_uuid = Column(String, unique=True, index=True, nullable=False)
+
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_by_name = Column(String, nullable=True)
+
+    customer_name = Column(String, nullable=False)
+    customer_email = Column(String, nullable=True)
+    customer_phone = Column(String, nullable=True)
+
+    origin_address = Column(String, nullable=True)
+    destination_address = Column(String, nullable=True)
+
+    move_date = Column(String, nullable=True)   # YYYY-MM-DD, blank = TBD
+
+    origin_access_notes = Column(Text, nullable=True)  # stairs, parking, elevator
+    destination_access_notes = Column(Text, nullable=True)
+    special_items_notes = Column(Text, nullable=True)  # pianos, safes, art
+    general_notes = Column(Text, nullable=True)
+
+    # Rolled-up totals (recomputed on item add/remove)
+    estimated_weight_lbs = Column(Float, nullable=False, default=0)
+    estimated_cubic_ft = Column(Float, nullable=False, default=0)
+
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    items = relationship(
+        "EstimateItem",
+        back_populates="estimate",
+        cascade="all, delete-orphan",
+        order_by="EstimateItem.id",
+    )
+
+
+class EstimateItem(Base):
+    __tablename__ = "estimate_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    estimate_id = Column(Integer, ForeignKey("estimates.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    name = Column(String, nullable=False)
+    qty = Column(Integer, nullable=False, default=1)
+    weight_lbs = Column(Float, nullable=False, default=0)
+    cubic_ft = Column(Float, nullable=False, default=0)
+    notes = Column(Text, nullable=True)
+
+    estimate = relationship("Estimate", back_populates="items")

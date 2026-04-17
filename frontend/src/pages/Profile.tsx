@@ -190,6 +190,24 @@ export default function Profile() {
         </form>
       </div>
 
+      {/* Compliance & reference resources */}
+      <div className="card">
+        <div className="sectionTitle">Compliance & Reference</div>
+        <div className="col" style={{ gap: 8 }}>
+          <button onClick={() => nav("/long-distance")} style={{ textAlign: "left" }}>
+            Long Distance Compliance
+          </button>
+          <button onClick={() => nav("/documents")} style={{ textAlign: "left" }}>
+            Document Library
+          </button>
+          {user?.role === "admin" && (
+            <button onClick={() => nav("/estimator")} style={{ textAlign: "left" }}>
+              Estimator (admin)
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Sign out */}
       <div className="card">
         <button

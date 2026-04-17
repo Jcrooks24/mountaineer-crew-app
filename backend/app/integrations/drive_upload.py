@@ -148,3 +148,83 @@ def upload_photo_to_drive(
         "url": result.get("webViewLink", ""),
         "thumb_url": f"https://drive.google.com/thumbnail?id={file_id}&sz=w800",
     }
+
+
+# ── Generic uploader for the Document Library and other non-photo files ──────
+
+DOCUMENTS_PARENT_KEY = "drive_documents_folder_id"
+DEFAULT_DOCUMENTS_FOLDER_NAME = "Mountaineer Crew Documents"
+
+
+def _get_documents_folder_id(svc, db: Optional[Session]) -> str:
+    folder_name = os.getenv(
+        "DRIVE_DOCUMENTS_FOLDER_NAME", DEFAULT_DOCUMENTS_FOLDER_NAME
+    ).strip()
+
+    if db:
+        row = db.execute(
+            text("SELECT value FROM system_config WHERE key = :key"),
+            {"key": DOCUMENTS_PARENT_KEY},
+        ).fetchone()
+        if row and row[0]:
+            return row[0]
+
+    folder_id = _get_or_create_folder(svc, folder_name)
+
+    if db:
+        db.execute(
+            text(
+                "INSERT INTO system_config(key, value) VALUES(:key, :val) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            ),
+            {"key": DOCUMENTS_PARENT_KEY, "val": folder_id},
+        )
+        db.commit()
+
+    return folder_id
+
+
+def upload_file_to_drive(
+    db: Session,
+    file_data: bytes,
+    filename: str,
+    mime_type: str,
+    category: str = "general",
+) -> dict:
+    """Upload an arbitrary file to the Mountaineer Crew Documents folder,
+    organized by category subfolder. Publicly readable."""
+    svc = _get_drive_service(db)
+    parent_id = _get_documents_folder_id(svc, db)
+
+    safe_category = _safe(category or "general")[:80] or "general"
+    category_folder = _get_or_create_folder(svc, safe_category, parent_id)
+
+    safe_filename = _safe(filename)[:160] or "document"
+
+    media = MediaIoBaseUpload(BytesIO(file_data), mimetype=mime_type, resumable=False)
+    result = svc.files().create(
+        body={
+            "name": safe_filename,
+            "parents": [category_folder],
+        },
+        media_body=media,
+        fields="id, webViewLink",
+    ).execute()
+
+    file_id = result["id"]
+
+    svc.permissions().create(
+        fileId=file_id,
+        body={"type": "anyone", "role": "reader"},
+        fields="id",
+    ).execute()
+
+    return {
+        "file_id": file_id,
+        "url": result.get("webViewLink", ""),
+    }
+
+
+def delete_drive_file(db: Session, file_id: str) -> None:
+    svc = _get_drive_service(db)
+    svc.files().delete(fileId=file_id).execute()

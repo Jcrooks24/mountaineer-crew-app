@@ -18,6 +18,9 @@ import ResetPassword from "./pages/ResetPassword";
 import Profile from "./pages/Profile";
 import Admin from "./pages/Admin";
 import DVIRPage from "./pages/DVIR";
+import LongDistance from "./pages/LongDistance";
+import DocumentLibrary from "./pages/DocumentLibrary";
+import Estimator from "./pages/Estimator";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -35,6 +38,9 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
           <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
           <Route path="/dvir" element={<RequireAuth><DVIRPage /></RequireAuth>} />
+          <Route path="/long-distance" element={<RequireAuth><LongDistance /></RequireAuth>} />
+          <Route path="/documents" element={<RequireAuth><DocumentLibrary /></RequireAuth>} />
+          <Route path="/estimator" element={<RequireAuth><Estimator /></RequireAuth>} />
 
           {/* Everything else requires auth */}
           <Route
