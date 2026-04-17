@@ -1,5 +1,7 @@
+import json
 import os
-from typing import List, Dict, Any
+from datetime import datetime
+from typing import List, Dict, Any, Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -253,3 +255,406 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     db.commit()
 
     return len(new_rows)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generic helpers for newer forms (job reports, bills, DVIRs, prior-hours,
+# RODS, estimates). Each kind has its own SHEETS_<KIND>_TAB env var so staging
+# can point at a dedicated worksheet like "JobReportsStaging".
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _generic_already_exported(db: Session, kind: str, export_key: str) -> bool:
+    row = db.execute(
+        text(
+            "SELECT 1 FROM sheet_generic_exports WHERE kind = :kind AND export_key = :key LIMIT 1"
+        ),
+        {"kind": kind, "key": export_key},
+    ).fetchone()
+    return row is not None
+
+
+def _generic_mark_exported(db: Session, kind: str, export_keys: List[str]) -> None:
+    for k in export_keys:
+        db.execute(
+            text(
+                "INSERT INTO sheet_generic_exports(kind, export_key) VALUES (:kind, :key) "
+                "ON CONFLICT (kind, export_key) DO NOTHING"
+            ),
+            {"kind": kind, "key": k},
+        )
+    db.commit()
+
+
+def _append_rows(
+    db: Session,
+    tab: str,
+    headers: List[str],
+    rows_data: List[Dict[str, Any]],
+) -> int:
+    """Append one or more row dicts to `tab`, creating the tab + headers if needed."""
+    if not rows_data:
+        return 0
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    from googleapiclient.discovery import build as _build
+    authorized_http = _build_authorized_http(_get_creds(db))
+    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, headers))
+    rows = [_build_row(r, actual_headers) for r in rows_data]
+
+    def _append():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    _ssl_retry(_append)
+    return len(rows)
+
+
+def _iso(dt: Any) -> str:
+    if dt is None:
+        return ""
+    if isinstance(dt, datetime):
+        return dt.isoformat()
+    return str(dt)
+
+
+# ── Job Reports ──────────────────────────────────────────────────────────────
+
+JOB_REPORT_HEADERS = [
+    "job_uuid", "job_name", "submitted_by", "personal_vehicles",
+    "dumpster_pct", "recycling_pct", "billing_method",
+    "review_candidate", "hours_match", "hours_mismatch_reason",
+    "created_at", "updated_at",
+]
+
+
+def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
+    tab = os.getenv("SHEETS_JOB_REPORTS_TAB", "JobReports").strip() or "JobReports"
+    key = f'{report.get("job_uuid","")}:{_iso(report.get("updated_at"))}'
+    if _generic_already_exported(db, "job_report", key):
+        return 0
+    row = {
+        "job_uuid": report.get("job_uuid", ""),
+        "job_name": report.get("job_name", ""),
+        "submitted_by": report.get("submitted_by_name", "") or "",
+        "personal_vehicles": report.get("personal_vehicles", ""),
+        "dumpster_pct": report.get("dumpster_pct", ""),
+        "recycling_pct": report.get("recycling_pct", ""),
+        "billing_method": report.get("billing_method", ""),
+        "review_candidate": "Yes" if report.get("review_candidate") else "No",
+        "hours_match": "Yes" if report.get("hours_match") else "No",
+        "hours_mismatch_reason": report.get("hours_mismatch_reason", "") or "",
+        "created_at": _iso(report.get("created_at")),
+        "updated_at": _iso(report.get("updated_at")),
+    }
+    written = _append_rows(db, tab, JOB_REPORT_HEADERS, [row])
+    if written:
+        _generic_mark_exported(db, "job_report", [key])
+    return written
+
+
+# ── Bills ────────────────────────────────────────────────────────────────────
+
+BILL_HEADERS = [
+    "job_uuid", "saved_by", "item_label", "item_qty", "item_unit", "item_rate",
+    "item_discount_pct", "item_amount", "item_source",
+    "global_discount_pct", "bill_notes", "updated_at",
+]
+
+
+def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
+    tab = os.getenv("SHEETS_BILLS_TAB", "Bills").strip() or "Bills"
+    job_uuid = bill.get("job_uuid", "")
+    updated_at = _iso(bill.get("updated_at"))
+    items = bill.get("items") or []
+
+    rows: List[Dict[str, Any]] = []
+    keys: List[str] = []
+    for idx, it in enumerate(items):
+        item_id = it.get("id") or f"idx{idx}"
+        key = f"{job_uuid}:{updated_at}:{item_id}"
+        if _generic_already_exported(db, "bill", key):
+            continue
+        qty = it.get("qty", 0) or 0
+        rate = it.get("rate", 0) or 0
+        discount = it.get("discount", 0) or 0
+        amount = round(qty * rate * (1 - (discount / 100.0)), 2)
+        rows.append({
+            "job_uuid": job_uuid,
+            "saved_by": bill.get("saved_by_name", "") or "",
+            "item_label": it.get("label", ""),
+            "item_qty": qty,
+            "item_unit": it.get("unit", ""),
+            "item_rate": rate,
+            "item_discount_pct": discount,
+            "item_amount": amount,
+            "item_source": it.get("source", ""),
+            "global_discount_pct": bill.get("global_discount", 0) or 0,
+            "bill_notes": bill.get("notes", "") or "",
+            "updated_at": updated_at,
+        })
+        keys.append(key)
+
+    written = _append_rows(db, tab, BILL_HEADERS, rows)
+    if written:
+        _generic_mark_exported(db, "bill", keys)
+    return written
+
+
+# ── DVIRs ────────────────────────────────────────────────────────────────────
+
+DVIR_HEADERS = [
+    "dvir_id", "phase", "inspection_type", "inspection_date",
+    "vehicle_number", "trailer_number", "odometer",
+    "driver_name", "condition", "defects", "defect_notes",
+    "back_of_truck_confirmed", "overnight_hold",
+    "mechanic_name", "repairs_made", "mechanic_notes",
+    "driver_signed_at", "mechanic_signed_at", "created_at",
+]
+
+
+def _dvir_row(d: Dict[str, Any], phase: str) -> Dict[str, Any]:
+    defects = d.get("defects")
+    if isinstance(defects, list):
+        defects_str = ", ".join(defects)
+    elif isinstance(defects, str):
+        defects_str = defects
+    else:
+        defects_str = ""
+    return {
+        "dvir_id": d.get("dvir_id", ""),
+        "phase": phase,   # "driver" or "mechanic"
+        "inspection_type": d.get("inspection_type", ""),
+        "inspection_date": d.get("inspection_date", ""),
+        "vehicle_number": d.get("vehicle_number", ""),
+        "trailer_number": d.get("trailer_number", "") or "",
+        "odometer": d.get("odometer", "") if d.get("odometer") is not None else "",
+        "driver_name": d.get("driver_name", ""),
+        "condition": d.get("condition", ""),
+        "defects": defects_str,
+        "defect_notes": d.get("defect_notes", "") or "",
+        "back_of_truck_confirmed":
+            "" if d.get("back_of_truck_confirmed") is None
+            else ("Yes" if d.get("back_of_truck_confirmed") else "No"),
+        "overnight_hold":
+            "" if d.get("overnight_hold") is None
+            else ("Yes" if d.get("overnight_hold") else "No"),
+        "mechanic_name": d.get("mechanic_name", "") or "",
+        "repairs_made":
+            "" if d.get("repairs_made") is None
+            else ("Yes" if d.get("repairs_made") else "No"),
+        "mechanic_notes": d.get("mechanic_notes", "") or "",
+        "driver_signed_at": _iso(d.get("driver_signed_at")),
+        "mechanic_signed_at": _iso(d.get("mechanic_signed_at")),
+        "created_at": _iso(d.get("created_at")),
+    }
+
+
+def export_dvir_to_sheets(db: Session, dvir: Dict[str, Any], phase: str = "driver") -> int:
+    """phase: "driver" on initial submit, "mechanic" after mechanic sign-off."""
+    tab = os.getenv("SHEETS_DVIRS_TAB", "DVIRs").strip() or "DVIRs"
+    dvir_id = dvir.get("dvir_id", "")
+    key = f"{dvir_id}:{phase}"
+    if _generic_already_exported(db, "dvir", key):
+        return 0
+    row = _dvir_row(dvir, phase)
+    written = _append_rows(db, tab, DVIR_HEADERS, [row])
+    if written:
+        _generic_mark_exported(db, "dvir", [key])
+    return written
+
+
+# ── Prior On-Duty Hours Statements ───────────────────────────────────────────
+
+PRIOR_HOURS_HEADERS = [
+    "statement_id", "driver_name", "statement_date", "hours_last_24",
+    "total_last_7", "daily_breakdown", "signed_at", "created_at",
+]
+
+
+def export_prior_hours_to_sheets(db: Session, statement: Dict[str, Any]) -> int:
+    tab = os.getenv("SHEETS_PRIOR_HOURS_TAB", "PriorOnDuty").strip() or "PriorOnDuty"
+    key = statement.get("statement_id", "")
+    if not key or _generic_already_exported(db, "prior_hours", key):
+        return 0
+
+    daily = statement.get("daily_hours") or []
+    total = 0.0
+    daily_bits = []
+    for entry in daily:
+        try:
+            hrs = float(entry.get("hours", 0) or 0)
+        except Exception:
+            hrs = 0.0
+        total += hrs
+        daily_bits.append(f"{entry.get('date','')}={hrs}")
+
+    row = {
+        "statement_id": key,
+        "driver_name": statement.get("driver_name", ""),
+        "statement_date": statement.get("statement_date", ""),
+        "hours_last_24": statement.get("hours_last_24", ""),
+        "total_last_7": round(total, 2),
+        "daily_breakdown": "; ".join(daily_bits),
+        "signed_at": _iso(statement.get("signed_at")),
+        "created_at": _iso(statement.get("created_at")),
+    }
+    written = _append_rows(db, tab, PRIOR_HOURS_HEADERS, [row])
+    if written:
+        _generic_mark_exported(db, "prior_hours", [key])
+    return written
+
+
+# ── RODS ─────────────────────────────────────────────────────────────────────
+
+RODS_HEADERS = [
+    "rods_id", "log_date", "driver_name", "co_driver_name",
+    "vehicle_number", "trailer_number", "origin", "destination",
+    "total_miles", "shipping_docs", "carrier", "main_office_address",
+    "total_off_duty", "total_sleeper", "total_driving", "total_on_duty",
+    "duty_changes", "remarks", "signed_at", "created_at",
+]
+
+
+def export_rods_to_sheets(db: Session, rods: Dict[str, Any]) -> int:
+    tab = os.getenv("SHEETS_RODS_TAB", "RODS").strip() or "RODS"
+    key = rods.get("rods_id", "")
+    if not key or _generic_already_exported(db, "rods", key):
+        return 0
+
+    changes = rods.get("duty_changes") or []
+    duty_str = " | ".join(
+        f"{c.get('time','')} {c.get('status','')}"
+        + (f" @ {c.get('location','')}" if c.get("location") else "")
+        + (f" — {c.get('remarks','')}" if c.get("remarks") else "")
+        for c in changes
+    )
+
+    row = {
+        "rods_id": key,
+        "log_date": rods.get("log_date", ""),
+        "driver_name": rods.get("driver_name", ""),
+        "co_driver_name": rods.get("co_driver_name", "") or "",
+        "vehicle_number": rods.get("vehicle_number", "") or "",
+        "trailer_number": rods.get("trailer_number", "") or "",
+        "origin": rods.get("origin", "") or "",
+        "destination": rods.get("destination", "") or "",
+        "total_miles": rods.get("total_miles", "") or "",
+        "shipping_docs": rods.get("shipping_docs", "") or "",
+        "carrier": rods.get("carrier", "") or "",
+        "main_office_address": rods.get("main_office_address", "") or "",
+        "total_off_duty": rods.get("total_off_duty", "") or "",
+        "total_sleeper": rods.get("total_sleeper", "") or "",
+        "total_driving": rods.get("total_driving", "") or "",
+        "total_on_duty": rods.get("total_on_duty", "") or "",
+        "duty_changes": duty_str,
+        "remarks": rods.get("remarks", "") or "",
+        "signed_at": _iso(rods.get("signed_at")),
+        "created_at": _iso(rods.get("created_at")),
+    }
+    written = _append_rows(db, tab, RODS_HEADERS, [row])
+    if written:
+        _generic_mark_exported(db, "rods", [key])
+    return written
+
+
+# ── Estimates ────────────────────────────────────────────────────────────────
+
+ESTIMATE_HEADERS = [
+    "estimate_uuid", "created_by", "customer_name", "customer_email",
+    "customer_phone", "move_date", "origin_address", "destination_address",
+    "origin_access_notes", "destination_access_notes",
+    "special_items_notes", "general_notes",
+    "estimated_weight_lbs", "estimated_cubic_ft", "item_count",
+    "created_at", "updated_at",
+]
+
+ESTIMATE_ITEM_HEADERS = [
+    "estimate_uuid", "customer_name", "item_id", "room", "subcategory",
+    "item_name", "qty", "weight_lbs_each", "cubic_ft_each",
+    "total_weight_lbs", "total_cubic_ft", "notes", "exported_at",
+]
+
+
+def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
+    """Writes one row to the Estimates tab (summary) and one row per item to
+    the EstimateItems tab. Dedup key per summary is (estimate_uuid, updated_at)
+    — each save creates a new snapshot so you get an audit trail."""
+    summary_tab = os.getenv("SHEETS_ESTIMATES_TAB", "Estimates").strip() or "Estimates"
+    items_tab = os.getenv("SHEETS_ESTIMATE_ITEMS_TAB", "EstimateItems").strip() or "EstimateItems"
+
+    estimate_uuid = estimate.get("estimate_uuid", "")
+    updated_at = _iso(estimate.get("updated_at"))
+    summary_key = f"{estimate_uuid}:{updated_at}"
+
+    total_written = 0
+
+    # Summary row
+    if not _generic_already_exported(db, "estimate", summary_key):
+        items = estimate.get("items") or []
+        summary_row = {
+            "estimate_uuid": estimate_uuid,
+            "created_by": estimate.get("created_by_name", "") or "",
+            "customer_name": estimate.get("customer_name", ""),
+            "customer_email": estimate.get("customer_email", "") or "",
+            "customer_phone": estimate.get("customer_phone", "") or "",
+            "move_date": estimate.get("move_date", "") or "",
+            "origin_address": estimate.get("origin_address", "") or "",
+            "destination_address": estimate.get("destination_address", "") or "",
+            "origin_access_notes": estimate.get("origin_access_notes", "") or "",
+            "destination_access_notes": estimate.get("destination_access_notes", "") or "",
+            "special_items_notes": estimate.get("special_items_notes", "") or "",
+            "general_notes": estimate.get("general_notes", "") or "",
+            "estimated_weight_lbs": round(estimate.get("estimated_weight_lbs", 0) or 0, 2),
+            "estimated_cubic_ft": round(estimate.get("estimated_cubic_ft", 0) or 0, 2),
+            "item_count": len(items),
+            "created_at": _iso(estimate.get("created_at")),
+            "updated_at": updated_at,
+        }
+        written = _append_rows(db, summary_tab, ESTIMATE_HEADERS, [summary_row])
+        if written:
+            _generic_mark_exported(db, "estimate", [summary_key])
+            total_written += written
+
+    # Items — one row per item per save, deduped by (estimate_uuid, item_id, updated_at)
+    item_rows: List[Dict[str, Any]] = []
+    item_keys: List[str] = []
+    customer_name = estimate.get("customer_name", "")
+    for it in estimate.get("items") or []:
+        item_id = it.get("id")
+        item_key = f"{estimate_uuid}:{item_id}:{updated_at}"
+        if _generic_already_exported(db, "estimate_item", item_key):
+            continue
+        qty = it.get("qty", 0) or 0
+        w = it.get("weight_lbs", 0) or 0
+        v = it.get("cubic_ft", 0) or 0
+        item_rows.append({
+            "estimate_uuid": estimate_uuid,
+            "customer_name": customer_name,
+            "item_id": item_id,
+            "room": it.get("room", "") or "",
+            "subcategory": it.get("subcategory", "") or "",
+            "item_name": it.get("name", ""),
+            "qty": qty,
+            "weight_lbs_each": w,
+            "cubic_ft_each": v,
+            "total_weight_lbs": round(w * qty, 2),
+            "total_cubic_ft": round(v * qty, 2),
+            "notes": it.get("notes", "") or "",
+            "exported_at": updated_at,
+        })
+        item_keys.append(item_key)
+
+    if item_rows:
+        written = _append_rows(db, items_tab, ESTIMATE_ITEM_HEADERS, item_rows)
+        if written:
+            _generic_mark_exported(db, "estimate_item", item_keys)
+            total_written += written
+
+    return total_written

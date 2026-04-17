@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
+from app.db.models.event import Event
 from app.db.models.job_report import JobReport
 from app.db.models.user import User
+from app.integrations.sheets_export import export_job_report_to_sheets
 from app.schemas.job_report import JobReportResponse, JobReportUpsert
 
 router = APIRouter(prefix="/api/job-report", tags=["job-report"])
@@ -29,6 +31,38 @@ def _to_response(r: JobReport) -> JobReportResponse:
         created_at=r.created_at,
         updated_at=r.updated_at,
     )
+
+
+def _job_name_for(db: Session, job_uuid: str) -> str:
+    """Best-effort job name lookup — grab the most recent non-empty job_name from events."""
+    row = (
+        db.query(Event.job_name)
+        .filter(Event.job_uuid == job_uuid, Event.job_name.isnot(None), Event.job_name != "")
+        .order_by(Event.timestamp.desc())
+        .first()
+    )
+    return row[0] if row and row[0] else ""
+
+
+def _export_report_to_sheets(db: Session, report: JobReport) -> None:
+    try:
+        export_job_report_to_sheets(db, {
+            "job_uuid": report.job_uuid,
+            "job_name": _job_name_for(db, report.job_uuid),
+            "submitted_by_name": report.submitted_by_name,
+            "personal_vehicles": report.personal_vehicles,
+            "dumpster_pct": report.dumpster_pct,
+            "recycling_pct": report.recycling_pct,
+            "billing_method": report.billing_method,
+            "review_candidate": report.review_candidate,
+            "hours_match": report.hours_match,
+            "hours_mismatch_reason": report.hours_mismatch_reason,
+            "created_at": report.created_at,
+            "updated_at": report.updated_at,
+        })
+    except Exception as exc:
+        # Never break the API because of a sheets failure
+        print(f"[sheets] job_report export failed: {exc}")
 
 
 @router.post("", response_model=JobReportResponse)
@@ -53,6 +87,7 @@ def upsert_job_report(
         existing.updated_at = now
         db.commit()
         db.refresh(existing)
+        _export_report_to_sheets(db, existing)
         return _to_response(existing)
 
     report = JobReport(
@@ -72,6 +107,7 @@ def upsert_job_report(
     db.add(report)
     db.commit()
     db.refresh(report)
+    _export_report_to_sheets(db, report)
     return _to_response(report)
 
 

@@ -214,58 +214,8 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     />
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-      {jobName && (
-        <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
-          Report for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>
-        </div>
-      )}
-
-      {/* ── Personal vehicles ── */}
-      <div className="card">
-        <div className="sectionTitle">Personal Vehicles at Job Site *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Were any crew personal vehicles at the job site?
-        </div>
-        <YesNo
-          value={data.has_personal_vehicles}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_personal_vehicles: v,
-              personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_personal_vehicles && (
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))}
-              style={stepBtnStyle}
-              aria-label="Decrease"
-            >
-              −
-            </button>
-            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>
-              {data.personal_vehicles}
-            </span>
-            <button
-              type="button"
-              onClick={() => set("personal_vehicles", data.personal_vehicles + 1)}
-              style={stepBtnStyle}
-              aria-label="Increase"
-            >
-              +
-            </button>
-            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
-          </div>
-        )}
-      </div>
-
-      {/* ── Dumpster & Recycling ── */}
+      {/* ── Dumpster & Recycling (sit under the Bill Helper because the
+             sliders drive bill line items) ── */}
       <div className="card">
         <div className="sectionTitle">M1 Dumpster Use *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
@@ -322,6 +272,57 @@ export default function JobReport({ jobUuid, jobName }: Props) {
               onChange={(v) => set("recycling_pct", v)}
               color="var(--ok)"
             />
+          </div>
+        )}
+      </div>
+
+      {jobName && (
+        <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
+          Report for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>
+        </div>
+      )}
+
+      {/* ── Personal vehicles ── */}
+      <div className="card">
+        <div className="sectionTitle">Personal Vehicles at Job Site *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Were any crew personal vehicles at the job site?
+        </div>
+        <YesNo
+          value={data.has_personal_vehicles}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_personal_vehicles: v,
+              personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_personal_vehicles && (
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
+            <button
+              type="button"
+              onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))}
+              style={stepBtnStyle}
+              aria-label="Decrease"
+            >
+              −
+            </button>
+            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>
+              {data.personal_vehicles}
+            </span>
+            <button
+              type="button"
+              onClick={() => set("personal_vehicles", data.personal_vehicles + 1)}
+              style={stepBtnStyle}
+              aria-label="Increase"
+            >
+              +
+            </button>
+            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
           </div>
         )}
       </div>

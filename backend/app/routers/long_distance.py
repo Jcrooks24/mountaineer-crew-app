@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_current_user, get_db
 from app.db.models.long_distance import PriorOnDutyStatement, RodsLog
 from app.db.models.user import User
+from app.integrations.sheets_export import (
+    export_prior_hours_to_sheets,
+    export_rods_to_sheets,
+)
 from app.schemas.long_distance import (
     DailyHours,
     DutyChange,
@@ -67,6 +71,12 @@ def create_prior_hours(
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    try:
+        export_prior_hours_to_sheets(db, _to_response(row).model_dump())
+    except Exception as exc:
+        print(f"[sheets] prior_hours export failed: {exc}")
+
     return _to_response(row)
 
 
@@ -155,6 +165,12 @@ def create_rods(
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    try:
+        export_rods_to_sheets(db, _rods_to_response(row).model_dump())
+    except Exception as exc:
+        print(f"[sheets] rods export failed: {exc}")
+
     return _rods_to_response(row)
 
 
