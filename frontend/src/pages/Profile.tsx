@@ -200,11 +200,6 @@ export default function Profile() {
           <button onClick={() => nav("/documents")} style={{ textAlign: "left" }}>
             Document Library
           </button>
-          {user?.role === "admin" && (
-            <button onClick={() => nav("/estimator")} style={{ textAlign: "left" }}>
-              Estimator (admin)
-            </button>
-          )}
         </div>
       </div>
 

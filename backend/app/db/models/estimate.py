@@ -62,6 +62,25 @@ class EstimateItem(Base):
     qty = Column(Integer, nullable=False, default=1)
     weight_lbs = Column(Float, nullable=False, default=0)
     cubic_ft = Column(Float, nullable=False, default=0)
+    # Room/subcategory let the estimator group inventory tile-style (e.g.
+    # "Living Room" → "Going"/"Not Going")
+    room = Column(String, nullable=True)
+    subcategory = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
 
     estimate = relationship("Estimate", back_populates="items")
+
+
+class FurnitureCatalogItem(Base):
+    """Admin-editable catalog of common furniture/items. Merges with the
+    static FURNITURE_CATALOG on the frontend to power autocomplete."""
+
+    __tablename__ = "furniture_catalog"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)
+    weight_lbs = Column(Float, nullable=False, default=0)
+    cubic_ft = Column(Float, nullable=False, default=0)
+    category = Column(String, nullable=True)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, nullable=False)

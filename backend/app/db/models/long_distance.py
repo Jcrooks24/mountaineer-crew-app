@@ -33,3 +33,42 @@ class PriorOnDutyStatement(Base):
     signature = Column(Text, nullable=False)   # base64 PNG data URL
     signed_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, nullable=False)
+
+
+class RodsLog(Base):
+    """Record of Duty Status (FMCSR §395.8) — one row per driver per day."""
+
+    __tablename__ = "rods_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    rods_id = Column(String, unique=True, index=True, nullable=False)
+
+    driver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    driver_name = Column(String, nullable=False)
+
+    log_date = Column(String, nullable=False)  # YYYY-MM-DD
+    co_driver_name = Column(String, nullable=True)
+    vehicle_number = Column(String, nullable=True)
+    trailer_number = Column(String, nullable=True)
+
+    origin = Column(String, nullable=True)
+    destination = Column(String, nullable=True)
+    total_miles = Column(String, nullable=True)        # stored as string to stay flexible
+    shipping_docs = Column(String, nullable=True)      # BOL / manifest / order numbers
+    carrier = Column(String, nullable=True, default="Mountaineer Moving Co.")
+    main_office_address = Column(String, nullable=True)
+
+    # JSON array of { time: "HH:MM", status: "off_duty"|"sleeper"|"driving"|"on_duty", location, remarks }
+    duty_changes_json = Column(Text, nullable=False)
+    remarks = Column(Text, nullable=True)
+
+    # Computed daily totals (also recomputed on the frontend)
+    total_off_duty = Column(String, nullable=True)
+    total_sleeper = Column(String, nullable=True)
+    total_driving = Column(String, nullable=True)
+    total_on_duty = Column(String, nullable=True)
+
+    signature = Column(Text, nullable=False)  # base64 PNG data URL
+    signed_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False)

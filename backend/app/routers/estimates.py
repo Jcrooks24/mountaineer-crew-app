@@ -7,12 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db, require_admin
-from app.db.models.estimate import Estimate, EstimateItem
+from app.db.models.estimate import Estimate, EstimateItem, FurnitureCatalogItem
 from app.db.models.user import User
 from app.schemas.estimate import (
+    CatalogItemIn,
+    CatalogItemOut,
     EstimateCreate,
     EstimateItemIn,
     EstimateItemOut,
+    EstimateItemPatch,
     EstimateResponse,
     EstimateUpdate,
 )
@@ -27,6 +30,73 @@ def _recalc_totals(e: Estimate) -> None:
 
 def _touch(e: Estimate) -> None:
     e.updated_at = datetime.now(timezone.utc)
+
+
+# ── Furniture catalog (admin-editable).
+# Declared before the `/{estimate_uuid}` routes so FastAPI doesn't treat
+# "catalog" as an estimate UUID.
+
+@router.get("/catalog", response_model=List[CatalogItemOut])
+def list_catalog(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    return (
+        db.query(FurnitureCatalogItem)
+        .order_by(FurnitureCatalogItem.category.asc().nullsfirst(), FurnitureCatalogItem.name.asc())
+        .all()
+    )
+
+
+@router.post("/catalog", response_model=CatalogItemOut, status_code=status.HTTP_201_CREATED)
+def add_catalog(
+    body: CatalogItemIn,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    existing = db.query(FurnitureCatalogItem).filter(FurnitureCatalogItem.name == name).first()
+    if existing:
+        # Upsert weight/cu ft if supplied; return existing row
+        if body.weight_lbs > 0:
+            existing.weight_lbs = float(body.weight_lbs)
+        if body.cubic_ft > 0:
+            existing.cubic_ft = float(body.cubic_ft)
+        if body.category:
+            existing.category = body.category.strip() or None
+        db.commit()
+        db.refresh(existing)
+        return existing
+    row = FurnitureCatalogItem(
+        name=name,
+        weight_lbs=float(body.weight_lbs or 0),
+        cubic_ft=float(body.cubic_ft or 0),
+        category=(body.category or "").strip() or None,
+        created_by_id=admin.id,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/catalog/{item_id}", status_code=204)
+def remove_catalog(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    row = db.query(FurnitureCatalogItem).filter(FurnitureCatalogItem.id == item_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Catalog item not found")
+    db.delete(row)
+    db.commit()
+
+
+# ── Estimate CRUD
 
 
 @router.get("", response_model=List[EstimateResponse])
@@ -153,11 +223,57 @@ def add_item(
         qty=max(1, int(body.qty or 1)),
         weight_lbs=float(body.weight_lbs or 0),
         cubic_ft=float(body.cubic_ft or 0),
+        room=(body.room or "").strip() or None,
+        subcategory=(body.subcategory or "").strip() or None,
         notes=(body.notes or "").strip() or None,
     )
     db.add(item)
     db.flush()
     e.items.append(item)
+    _recalc_totals(e)
+    _touch(e)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.patch("/{estimate_uuid}/items/{item_id}", response_model=EstimateItemOut)
+def update_item(
+    estimate_uuid: str,
+    item_id: int,
+    body: EstimateItemPatch,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    e = db.query(Estimate).filter(Estimate.estimate_uuid == estimate_uuid).first()
+    if not e:
+        raise HTTPException(status_code=404, detail="Estimate not found")
+    item = (
+        db.query(EstimateItem)
+        .filter(EstimateItem.id == item_id, EstimateItem.estimate_id == e.id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name cannot be blank")
+        item.name = name
+    if body.qty is not None:
+        item.qty = max(1, int(body.qty))
+    if body.weight_lbs is not None:
+        item.weight_lbs = max(0.0, float(body.weight_lbs))
+    if body.cubic_ft is not None:
+        item.cubic_ft = max(0.0, float(body.cubic_ft))
+    if body.room is not None:
+        item.room = body.room.strip() or None
+    if body.subcategory is not None:
+        item.subcategory = body.subcategory.strip() or None
+    if body.notes is not None:
+        item.notes = body.notes.strip() or None
+
     _recalc_totals(e)
     _touch(e)
     db.commit()

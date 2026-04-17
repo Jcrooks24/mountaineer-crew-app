@@ -14,7 +14,7 @@ import app.db.models.job_report  # noqa: F401 — ensure job_reports table is re
 import app.db.models.job_bill  # noqa: F401 — ensure job_bills table is registered
 import app.db.models.long_distance  # noqa: F401 — register prior_on_duty_statements table
 import app.db.models.document  # noqa: F401 — register documents table
-import app.db.models.estimate  # noqa: F401 — register estimates + estimate_items tables
+import app.db.models.estimate  # noqa: F401 — register estimates + estimate_items + furniture_catalog tables
 
 # Routers that exist
 from app.routers.sync import router as sync_router

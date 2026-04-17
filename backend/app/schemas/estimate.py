@@ -11,6 +11,18 @@ class EstimateItemIn(BaseModel):
     qty: int = 1
     weight_lbs: float = 0
     cubic_ft: float = 0
+    room: Optional[str] = None
+    subcategory: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class EstimateItemPatch(BaseModel):
+    name: Optional[str] = None
+    qty: Optional[int] = None
+    weight_lbs: Optional[float] = None
+    cubic_ft: Optional[float] = None
+    room: Optional[str] = None
+    subcategory: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -20,7 +32,27 @@ class EstimateItemOut(BaseModel):
     qty: int
     weight_lbs: float
     cubic_ft: float
+    room: Optional[str] = None
+    subcategory: Optional[str] = None
     notes: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CatalogItemIn(BaseModel):
+    name: str
+    weight_lbs: float = 0
+    cubic_ft: float = 0
+    category: Optional[str] = None
+
+
+class CatalogItemOut(BaseModel):
+    id: int
+    name: str
+    weight_lbs: float
+    cubic_ft: float
+    category: Optional[str] = None
 
     class Config:
         from_attributes = True

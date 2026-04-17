@@ -15,6 +15,7 @@ import {
   type HelpTexts,
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
+import EstimatorTab from "../components/EstimatorTab";
 
 type AdminUser = {
   id: number;
@@ -44,7 +45,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "calendar" | "settings" | "dvir";
+type Tab = "employees" | "map" | "calendar" | "settings" | "dvir" | "estimator";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -72,7 +73,7 @@ export default function Admin() {
 
       {/* Tabs */}
       <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "calendar", "settings", "dvir"] as Tab[]).map((t) => (
+        {(["employees", "map", "calendar", "settings", "dvir", "estimator"] as Tab[]).map((t) => (
           <button
             key={t}
             className={"tab " + (tab === t ? "active" : "")}
@@ -89,6 +90,7 @@ export default function Admin() {
       {tab === "calendar" && <CalendarTab />}
       {tab === "settings" && <SettingsTab />}
       {tab === "dvir" && <DVIRTab />}
+      {tab === "estimator" && <EstimatorTab />}
     </div>
   );
 }
