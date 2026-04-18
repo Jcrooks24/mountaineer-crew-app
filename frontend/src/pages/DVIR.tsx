@@ -133,9 +133,30 @@ function newUUID() {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// Shared with App.tsx — the currently-selected job is stored here. DVIR pulls
+// it directly from localStorage so a fresh DVIR auto-attaches to the job the
+// crew is on, which is what puts DVIRs on the Admin Job Summary.
+const ACTIVE_JOB_KEY = "crew_active_job_uuid_v1";
+const JOB_NAME_PREFIX = "crew_job_name_v1:";
+
 export default function DVIRPage() {
   const nav = useNavigate();
   const { user } = useAuth();
+
+  // ── Attached job (optional, auto-picked from home screen selection) ───────
+  const [attachedJobUuid, setAttachedJobUuid] = useState<string>("");
+  const [attachedJobName, setAttachedJobName] = useState<string>("");
+  useEffect(() => {
+    try {
+      const uuid = localStorage.getItem(ACTIVE_JOB_KEY) || "";
+      setAttachedJobUuid(uuid);
+      if (uuid) {
+        setAttachedJobName(localStorage.getItem(JOB_NAME_PREFIX + uuid) || "");
+      }
+    } catch {
+      /* localStorage unavailable */
+    }
+  }, []);
 
   // ── Units list ─────────────────────────────────────────────────────────────
   const [units, setUnits] = useState<string[]>([]);
@@ -223,6 +244,7 @@ export default function DVIRPage() {
           odometer: odometer ? parseInt(odometer, 10) : null,
           inspection_type: inspectionType,
           inspection_date: inspectionDate,
+          job_uuid: attachedJobUuid || null,
           defects: Array.from(defects),
           defect_notes: defectNotes.trim() || null,
           condition,
@@ -415,6 +437,35 @@ export default function DVIRPage() {
       </div>
 
       <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+        {/* ── Job attachment ── */}
+        <div className="card">
+          <div className="label" style={{ marginBottom: 8, fontWeight: 700 }}>Job</div>
+          {attachedJobUuid ? (
+            <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  {attachedJobName || "(unnamed job)"}
+                </div>
+                <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace", wordBreak: "break-all" }}>
+                  {attachedJobUuid}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setAttachedJobUuid(""); setAttachedJobName(""); }}
+                style={{ fontSize: 12 }}
+              >
+                Detach
+              </button>
+            </div>
+          ) : (
+            <div className="small" style={{ color: "var(--muted)" }}>
+              No job attached — this DVIR will be filed as a standalone inspection.
+              To attach, select a job on the home screen before starting the DVIR.
+            </div>
+          )}
+        </div>
 
         {/* ── Vehicle Information ── */}
         <div className="card">

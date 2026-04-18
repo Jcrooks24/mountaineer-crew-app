@@ -477,7 +477,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             <button
               type="button"
               onClick={() => { setShowAddMaterial(true); setMatErr(""); }}
-              style={{ fontSize: 13, color: "var(--brand)", borderColor: "var(--brand)", padding: "6px 14px", borderRadius: 8 }}
+              style={{ fontSize: 13, color: "var(--text)", borderColor: "var(--brand)", padding: "6px 14px", borderRadius: 8 }}
             >
               + Add material
             </button>
@@ -498,7 +498,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   onChange={(e) => setMatQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
                   style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13, textAlign: "right" }} />
                 <button type="button" onClick={addMaterial}
-                  style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--brand)" }}>
+                  style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--text)" }}>
                   Add
                 </button>
                 <button type="button" onClick={() => { setShowAddMaterial(false); setMatErr(""); resetMatControls(); }}
@@ -524,7 +524,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           <button
             type="button"
             onClick={() => setShowAddMenu((v) => !v)}
-            style={{ fontSize: 13, color: "var(--brand)", borderColor: "var(--brand)", padding: "6px 14px", borderRadius: 8 }}
+            style={{ fontSize: 13, color: "var(--text)", borderColor: "var(--brand)", padding: "6px 14px", borderRadius: 8 }}
           >
             + Add line item
           </button>

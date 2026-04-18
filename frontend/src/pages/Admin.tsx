@@ -1553,10 +1553,13 @@ type PatchNoteRecord = {
   updated_at: string;
 };
 
+const NOTES_TAB_INITIAL = 3;
+
 function NotesTab() {
   const [notes, setNotes] = useState<PatchNoteRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -1663,7 +1666,7 @@ function NotesTab() {
           <div className="small" style={{ color: "var(--muted)" }}>No patch notes yet.</div>
         )}
         <div className="col" style={{ gap: 10 }}>
-          {notes.map((n) => (
+          {(expanded ? notes : notes.slice(0, NOTES_TAB_INITIAL)).map((n) => (
             <div key={n.id} className="card" style={{ padding: 12 }}>
               <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -1686,6 +1689,16 @@ function NotesTab() {
               </div>
             </div>
           ))}
+          {notes.length > NOTES_TAB_INITIAL && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              style={{ fontSize: 12, alignSelf: "flex-start" }}
+            >
+              {expanded
+                ? "Show recent only"
+                : `Show ${notes.length - NOTES_TAB_INITIAL} older note${notes.length - NOTES_TAB_INITIAL === 1 ? "" : "s"}`}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1716,8 +1729,54 @@ function AdminNotesSection() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [jobUuid, setJobUuid] = useState("");
+  const [jobDisplay, setJobDisplay] = useState("");  // "Customer — YYYY-MM-DD" once picked
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Job-picker state (date + name → job-search → pick candidate)
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerDate, setPickerDate] = useState("");
+  const [pickerName, setPickerName] = useState("");
+  const [pickerResults, setPickerResults] = useState<JobCandidate[] | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerErr, setPickerErr] = useState<string | null>(null);
+
+  async function runJobSearch() {
+    if (!pickerDate && !pickerName.trim()) {
+      setPickerErr("Enter a date, a customer name, or both.");
+      return;
+    }
+    setPickerLoading(true);
+    setPickerErr(null);
+    setPickerResults(null);
+    try {
+      const params = new URLSearchParams();
+      if (pickerDate) params.set("date", pickerDate);
+      if (pickerName.trim()) params.set("name", pickerName.trim());
+      const rows = await apiFetch<JobCandidate[]>(`/api/admin/job-search?${params.toString()}`);
+      setPickerResults(rows);
+    } catch (e: any) {
+      setPickerErr(e instanceof ApiError ? e.message : "Search failed");
+    } finally {
+      setPickerLoading(false);
+    }
+  }
+
+  function attachJob(c: JobCandidate) {
+    setJobUuid(c.job_uuid);
+    const dateLabel = c.dates.length ? c.dates[c.dates.length - 1] : "";
+    setJobDisplay(`${c.job_name || "(unnamed)"}${dateLabel ? ` — ${dateLabel}` : ""}`);
+    setPickerOpen(false);
+    setPickerResults(null);
+    setPickerDate("");
+    setPickerName("");
+    setPickerErr(null);
+  }
+
+  function detachJob() {
+    setJobUuid("");
+    setJobDisplay("");
+  }
 
   function load() {
     setLoading(true);
@@ -1734,6 +1793,9 @@ function AdminNotesSection() {
     setTitle(n.title);
     setBody(n.body);
     setJobUuid(n.job_uuid ?? "");
+    // Editing an existing note just shows the raw uuid; picker stays closed
+    // until the admin explicitly re-picks.
+    setJobDisplay(n.job_uuid ? `Job ${n.job_uuid.slice(0, 8)}…` : "");
   }
 
   function clearForm() {
@@ -1741,6 +1803,8 @@ function AdminNotesSection() {
     setTitle("");
     setBody("");
     setJobUuid("");
+    setJobDisplay("");
+    setPickerOpen(false);
   }
 
   async function save() {
@@ -1788,9 +1852,8 @@ function AdminNotesSection() {
       <div className="card">
         <div className="sectionTitle">{editingId == null ? "New Admin Note" : "Edit Admin Note"}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-          Leave Job UUID blank for a global note (shown to every crew member).
-          Provide a job UUID to scope the note — it only surfaces when that job
-          is selected.
+          Leave "Attached job" empty for a global note (shown to every crew member).
+          Attach a job to scope the note — it only surfaces when that job is selected.
         </div>
         <div className="col" style={{ gap: 10 }}>
           <input
@@ -1798,11 +1861,101 @@ function AdminNotesSection() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
-          <input
-            placeholder="Job UUID (leave blank for global)"
-            value={jobUuid}
-            onChange={(e) => setJobUuid(e.target.value)}
-          />
+
+          {/* Attached-job row — chip + picker */}
+          <div className="col" style={{ gap: 6 }}>
+            <div className="small" style={{ color: "var(--muted)" }}>Attached job</div>
+            {jobUuid ? (
+              <div className="row" style={{ justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                <span
+                  className="chip"
+                  style={{ color: "var(--brand2)", fontSize: 12, maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  title={jobUuid}
+                >
+                  {jobDisplay || `Job ${jobUuid.slice(0, 8)}…`}
+                </span>
+                <div className="row" style={{ gap: 6 }}>
+                  <button type="button" onClick={() => setPickerOpen(true)} style={{ fontSize: 12 }}>Change</button>
+                  <button type="button" onClick={detachJob} style={{ fontSize: 12 }}>Make global</button>
+                </div>
+              </div>
+            ) : (
+              <div className="row" style={{ gap: 8 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Global (no job)</span>
+                <button type="button" onClick={() => setPickerOpen(true)} style={{ fontSize: 12 }}>
+                  Attach to job…
+                </button>
+              </div>
+            )}
+
+            {pickerOpen && (
+              <div
+                className="card"
+                style={{ marginTop: 6, padding: 12, border: "1px solid var(--brand)", background: "rgba(93,214,194,0.05)" }}
+              >
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                  Search by date and/or customer name. Pick one to attach.
+                </div>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <label className="col" style={{ gap: 4, flex: "1 1 140px" }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Job date</span>
+                    <input type="date" value={pickerDate} onChange={(e) => setPickerDate(e.target.value)} />
+                  </label>
+                  <label className="col" style={{ gap: 4, flex: "2 1 160px" }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Customer name</span>
+                    <input
+                      value={pickerName}
+                      onChange={(e) => setPickerName(e.target.value)}
+                      placeholder="e.g. Smith"
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runJobSearch(); } }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btnPrimary"
+                    onClick={runJobSearch}
+                    disabled={pickerLoading}
+                    style={{ alignSelf: "flex-end" }}
+                  >
+                    {pickerLoading ? "Searching…" : "Search"}
+                  </button>
+                  <button type="button" onClick={() => setPickerOpen(false)} style={{ alignSelf: "flex-end" }}>
+                    Close
+                  </button>
+                </div>
+                {pickerErr && <div className="small" style={{ color: "var(--danger)", marginTop: 6 }}>{pickerErr}</div>}
+                {pickerResults != null && (
+                  pickerResults.length === 0 ? (
+                    <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                      No jobs match those filters.
+                    </div>
+                  ) : (
+                    <div className="col" style={{ gap: 6, marginTop: 8 }}>
+                      {pickerResults.map((c) => (
+                        <button
+                          key={c.job_uuid}
+                          type="button"
+                          onClick={() => attachJob(c)}
+                          style={{ textAlign: "left" }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{c.job_name || "(unnamed)"}</div>
+                          <div className="small" style={{ color: "var(--muted)" }}>
+                            {c.dates.length > 0
+                              ? c.dates.length === 1
+                                ? c.dates[0]
+                                : `${c.dates[0]} → ${c.dates[c.dates.length - 1]}`
+                              : "no dates"}
+                            {" · "}{c.event_count} event{c.event_count === 1 ? "" : "s"}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+
           <textarea
             rows={5}
             placeholder="What the crew needs to know…"
