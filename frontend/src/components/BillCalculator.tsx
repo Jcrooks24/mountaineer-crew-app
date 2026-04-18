@@ -37,8 +37,9 @@ type SeedData = {
 };
 
 export type BillHandle = {
-  /** Returns current bill data + reviewed status, or null if not loaded. */
-  getData: () => { items: LineItem[]; globalDiscount: number; notes: string; reviewed: boolean } | null;
+  /** Returns current bill data, or null if not loaded. The "reviewed"
+   * confirmation lives on the Report (after the M1 sliders) — not here. */
+  getData: () => { items: LineItem[]; globalDiscount: number; notes: string } | null;
 };
 
 // ── Company charges ───────────────────────────────────────────────────────────
@@ -111,7 +112,6 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const ht = themeSettings.helpTexts;
   const [bill, setBill] = useState<Bill>({ items: [], globalDiscount: 0, notes: "" });
   const [loaded, setLoaded] = useState(false);
-  const [reviewed, setReviewed] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -125,14 +125,13 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const [showAddMaterial, setShowAddMaterial] = useState(false);
 
   useImperativeHandle(ref, () => ({
-    getData: () => loaded ? { ...bill, reviewed } : null,
+    getData: () => loaded ? { ...bill } : null,
   }));
 
   // ── Load: saved bill first, then seed ────────────────────────────────────────
   useEffect(() => {
     if (!jobUuid) { setLoaded(false); return; }
     setLoaded(false);
-    setReviewed(false);
 
     apiFetch<{ items: LineItem[]; global_discount: number; notes: string }>(
       `/api/bill?job_uuid=${encodeURIComponent(jobUuid)}`
@@ -593,16 +592,6 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           style={{ width: "100%", marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, resize: "vertical", boxSizing: "border-box" }} />
       </div>
 
-      {/* ── Review confirmation ── */}
-      <div className="card">
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
-          <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)}
-            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
-          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
-            I have reviewed and confirmed the correctness of the auto-populated line items above.
-          </span>
-        </label>
-      </div>
     </div>
   );
 });

@@ -63,6 +63,10 @@ export default function JobReport({ jobUuid, jobName }: Props) {
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showDVIRModal, setShowDVIRModal] = useState(false);
+  // Crew must confirm the auto-populated bill rows before the report submits.
+  // The checkbox lives below the M1 sliders so crew see the M1-driven
+  // charges populate before acknowledging them.
+  const [billReviewed, setBillReviewed] = useState(false);
   const pendingSaveRef = useRef<(() => Promise<void>) | null>(null);
   const billRef = useRef<BillHandle>(null);
 
@@ -71,6 +75,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     if (!jobUuid) { setLoaded(false); return; }
     setLoaded(false);
     setSaved(false);
+    setBillReviewed(false);
     apiFetch<ReportData & { id: number }>(`/api/job-report?job_uuid=${encodeURIComponent(jobUuid)}`)
       .then((r) => {
         setData({
@@ -114,7 +119,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
   async function doSave() {
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
-    if (billData !== null && billData !== undefined && !billData.reviewed) {
+    if (billData !== null && billData !== undefined && !billReviewed) {
       return setErr("Please confirm you have reviewed the auto-populated bill items before saving.");
     }
 
@@ -274,6 +279,25 @@ export default function JobReport({ jobUuid, jobName }: Props) {
             />
           </div>
         )}
+      </div>
+
+      {/* ── Bill auto-populate review ──
+          Placed here so the crew sees the M1 sliders drive new bill
+          line items before confirming them. */}
+      <div className="card">
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={billReviewed}
+            onChange={(e) => { setBillReviewed(e.target.checked); setSaved(false); }}
+            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+          />
+          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
+            I have reviewed and confirmed the correctness of the auto-populated line items
+            in the Bill Helper above (including any dumpster / recycling charges from the
+            sliders).
+          </span>
+        </label>
       </div>
 
       {jobName && (
