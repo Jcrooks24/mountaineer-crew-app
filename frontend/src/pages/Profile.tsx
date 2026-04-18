@@ -137,7 +137,7 @@ export default function Profile() {
             background: "linear-gradient(135deg, var(--brand), var(--brand2))",
             overflow: "hidden",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 32, fontWeight: 900, color: "#0b1220",
+            fontSize: 32, fontWeight: 900, color: "var(--on-brand)",
           }}
         >
           {photo
@@ -219,9 +219,9 @@ export default function Profile() {
           onClick={handleSignOut}
           style={{
             width: "100%", padding: 12,
-            background: "linear-gradient(180deg, #3d1a1a, #2e1212)",
+            background: "rgba(255,107,107,0.08)",
             color: "var(--danger)",
-            border: "1px solid rgba(255,107,107,0.3)",
+            border: "1px solid var(--danger)",
             borderRadius: 12, cursor: "pointer", fontSize: 15, fontWeight: 700,
           }}
         >

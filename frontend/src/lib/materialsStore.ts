@@ -21,7 +21,7 @@
  * from the queue (no DELETE is needed because the server never saw the add).
  */
 
-import { apiFetch } from "../api/client";
+import { apiFetch, ApiError } from "../api/client";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -275,8 +275,10 @@ export function enqueueDeleteOrCancel(submissionId: string, jobUuid: string): bo
 let syncing = false;
 
 /**
- * Drain the queue. Network errors keep the op for retry; other errors (400/422)
- * also keep the op — caller should inspect logs if ops pile up indefinitely.
+ * Drain the queue. Transient failures (network / 5xx / 408) are retried on
+ * next drain — the op stays in the queue. Permanent rejections (4xx except
+ * 408) are dropped so one malformed op can't wedge the queue behind it,
+ * and a warning is logged so the problem isn't completely invisible.
  * Returns how many ops were confirmed this run.
  */
 export async function syncQueue(): Promise<number> {
@@ -302,8 +304,20 @@ export async function syncQueue(): Promise<number> {
           );
         }
         synced++;
-      } catch {
-        remaining.push(op);
+      } catch (e) {
+        const isPermanent =
+          e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408;
+        if (isPermanent) {
+          const label = op.op === "delete" ? `delete ${op.submissionId}` : `add ${op.payload.id}`;
+          console.warn(
+            `[materials] dropping poison-pill op (${label}): ${
+              e instanceof Error ? e.message : e
+            }`,
+          );
+          // Drop — do NOT push onto remaining
+        } else {
+          remaining.push(op);
+        }
       }
     }
     saveQueue(remaining);

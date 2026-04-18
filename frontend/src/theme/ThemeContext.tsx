@@ -414,7 +414,3 @@ export function useResolvedLogo(): { src: string; variant: "light" | "dark" } {
           : "light";
   return { src: variant === "light" ? logoLight : logoDark, variant };
 }
-
-export function useLogoSrc(): string {
-  return useResolvedLogo().src;
-}

@@ -388,12 +388,16 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         </div>
       )}
 
-      {/* ── Line items ── */}
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      {/* ── Line items ──
+          Card owns the horizontal scroll so the six-column grid can stay
+          intact on a narrow phone rather than wrapping chaotically. Every
+          inner row uses minWidth: 430 so the scroll position lines up. */}
+      <div className="card" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
         {/* Header */}
         <div style={{
           display: "grid",
-          gridTemplateColumns: "1fr 72px 90px 72px 80px 28px",
+          gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
+          minWidth: 430,
           gap: 6, padding: "10px 12px",
           background: "rgba(255,255,255,0.04)",
           borderBottom: "1px solid var(--border)",
@@ -421,7 +425,8 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         {/* ── Materials summary + live list ── */}
         <div style={{
           display: "grid",
-          gridTemplateColumns: "1fr 72px 90px 72px 80px 28px",
+          gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
+          minWidth: 430,
           gap: 6, padding: "10px 12px",
           background: "rgba(93,214,194,0.06)",
           borderBottom: "1px solid var(--border)",
@@ -607,7 +612,7 @@ function LineItemRow({ item, onChange, onRemove }: {
 }) {
   const subtotal = lineSubtotal(item);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 72px 90px 72px 80px 28px", gap: 6, padding: "8px 12px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px", minWidth: 430, gap: 6, padding: "8px 12px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
       <input value={item.label} onChange={(e) => onChange({ label: e.target.value })} placeholder="Description" style={{ ...cellInputStyle, fontSize: 13 }} />
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <input type="number" min={0} step={0.25} value={item.qty}

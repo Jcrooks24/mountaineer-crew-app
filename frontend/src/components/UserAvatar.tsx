@@ -55,7 +55,7 @@ export default function UserAvatar({ displayName, size = 20 }: Props) {
         height: size,
         borderRadius: "50%",
         background: "linear-gradient(135deg, var(--brand), var(--brand2))",
-        color: "#0b1220",
+        color: "var(--on-brand)",
         fontSize: Math.max(10, Math.round(size * 0.5)),
         fontWeight: 700,
         flexShrink: 0,

@@ -625,7 +625,12 @@ export default function DVIRPage() {
                     <button
                       type="button"
                       onClick={() => setExpandedItem(expanded ? null : item.name)}
-                      style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}
+                      style={{
+                        background: "none", border: "none", color: "var(--muted)",
+                        cursor: "pointer", fontSize: 14, lineHeight: 1,
+                        width: 40, height: 40, padding: 0,
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      }}
                       aria-label="Toggle description"
                     >
                       {expanded ? "▲" : "▼"}

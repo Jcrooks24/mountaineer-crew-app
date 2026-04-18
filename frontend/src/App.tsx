@@ -525,16 +525,27 @@ export default function App() {
 
       const json = await res.json();
 
-      const acceptedAll =
-        json?.ok === true && (json.inserted + json.duplicates) === q.length && (json.errors ?? 0) === 0;
-
-      if (acceptedAll) {
+      // Any event that arrived at the server has been "handled" — either
+      // inserted, deduped, or permanently rejected. Retrying rejected events
+      // just wedges the queue forever. So: if we got any well-formed
+      // response back, drop the whole batch and warn on the failures.
+      // Only keep the queue when the HTTP request itself errored (catch).
+      if (json?.ok === true) {
+        const failed: { event_id: string; reason?: string }[] = json.failed ?? [];
         const ids = new Set(q.map((e) => e.event_id));
         markLogEventsSyncedByIds(ids);
         saveQueue([]);
-        setStatus("Synced");
+        if (failed.length > 0) {
+          console.warn(
+            `[sync] server rejected ${failed.length} event(s):`,
+            failed.map((f) => `${f.event_id} (${f.reason ?? "unknown"})`).join(", "),
+          );
+          setStatus(`Synced — ${failed.length} rejected`);
+        } else {
+          setStatus("Synced");
+        }
       } else {
-        setStatus("Partial sync (kept queued)");
+        setStatus("Sync failed (kept queued)");
         saveQueue(q);
       }
     } catch (e: any) {
