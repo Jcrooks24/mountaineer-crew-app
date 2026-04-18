@@ -20,6 +20,15 @@ DEFAULT_UNITS = ["26INT", "24FR8", "16FORD"]
 UNITS_CONFIG_KEY = "dvir_units"
 
 
+def _needs_mechanic_review(d: DVIR) -> bool:
+    # A DVIR needs mechanic review only if defects were noted. Satisfactory
+    # inspections with no defects auto-clear and do not sit in the queue.
+    if d.condition != "satisfactory":
+        return True
+    defects = json.loads(d.defects_json) if d.defects_json else []
+    return len(defects) > 0
+
+
 def _to_response(d: DVIR) -> DVIRResponse:
     defects = json.loads(d.defects_json) if d.defects_json else []
     return DVIRResponse(
@@ -48,6 +57,7 @@ def _to_response(d: DVIR) -> DVIRResponse:
         repairs_made=d.repairs_made,
         mechanic_notes=d.mechanic_notes,
         created_at=d.created_at,
+        needs_mechanic_review=_needs_mechanic_review(d),
     )
 
 
@@ -136,7 +146,12 @@ def list_dvirs(
 ):
     q = db.query(DVIR)
     if pending_only:
-        q = q.filter(DVIR.mechanic_signature.is_(None))
+        # Only DVIRs with defects need mechanic review. Satisfactory/no-defect
+        # inspections auto-clear and are excluded from the pending queue.
+        q = q.filter(
+            DVIR.mechanic_signature.is_(None),
+            DVIR.condition != "satisfactory",
+        )
     return [_to_response(d) for d in q.order_by(DVIR.created_at.desc()).all()]
 
 
@@ -168,6 +183,11 @@ def mechanic_sign(
         raise HTTPException(status_code=404, detail="DVIR not found")
     if dvir.mechanic_signature:
         raise HTTPException(status_code=409, detail="DVIR already signed by mechanic")
+    if not _needs_mechanic_review(dvir):
+        raise HTTPException(
+            status_code=400,
+            detail="DVIR has no defects — mechanic review is not required.",
+        )
 
     dvir.mechanic_id = current_user.id
     dvir.mechanic_name = body.mechanic_name

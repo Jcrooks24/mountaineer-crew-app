@@ -962,6 +962,7 @@ type DVIRRecord = {
   repairs_made: boolean | null;
   mechanic_notes: string | null;
   created_at: string;
+  needs_mechanic_review: boolean;
 };
 
 // ─────────────────────────────────────────
@@ -1154,15 +1155,22 @@ function DVIRTab() {
                 >
                   {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} Defect${d.defects.length !== 1 ? "s" : ""}`}
                 </span>
-                <span
-                  className="chip"
-                  style={{
-                    background: d.mechanic_signature ? "rgba(45,212,191,0.15)" : "rgba(255,200,50,0.12)",
-                    color: d.mechanic_signature ? "var(--ok)" : "#f0c040",
-                  }}
-                >
-                  {d.mechanic_signature ? "Mech. Signed" : "Awaiting Mechanic"}
-                </span>
+                {(() => {
+                  const signed = !!d.mechanic_signature;
+                  const awaiting = !signed && d.needs_mechanic_review;
+                  const label = signed
+                    ? "Mech. Signed"
+                    : awaiting
+                      ? "Awaiting Mechanic"
+                      : "No Review Needed";
+                  const bg = awaiting ? "rgba(255,200,50,0.12)" : "rgba(45,212,191,0.15)";
+                  const color = awaiting ? "#f0c040" : "var(--ok)";
+                  return (
+                    <span className="chip" style={{ background: bg, color }}>
+                      {label}
+                    </span>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -1353,6 +1361,15 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             alt="Mechanic signature"
             style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
           />
+        </div>
+      ) : !dvir.needs_mechanic_review ? (
+        <div className="card">
+          <div className="label" style={{ fontWeight: 700, marginBottom: 8, color: "var(--ok)" }}>
+            ✓ No Mechanic Review Required
+          </div>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Driver reported no defects — vehicle auto-cleared as satisfactory.
+          </div>
         </div>
       ) : (
         /* Mechanic sign form */

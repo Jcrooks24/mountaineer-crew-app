@@ -58,6 +58,7 @@ class DVIRResponse(BaseModel):
     repairs_made: Optional[bool]
     mechanic_notes: Optional[str]
     created_at: datetime
+    needs_mechanic_review: bool = False
 
     class Config:
         from_attributes = True
