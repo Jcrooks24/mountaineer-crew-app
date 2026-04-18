@@ -212,11 +212,8 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Patch Notes */}
-      <PatchNotesCard />
-
-
-      {/* Sign out intentionally below patch notes */}
+      {/* Sign out — placed above Patch Notes so a long changelog
+          never buries it off-screen */}
       <div className="card">
         <button
           onClick={handleSignOut}
@@ -231,12 +228,18 @@ export default function Profile() {
           Sign out
         </button>
       </div>
+
+      {/* Patch Notes — shows most recent 3 by default with an expander */}
+      <PatchNotesCard />
     </div>
   );
 }
 
+const PATCH_NOTES_INITIAL = 3;
+
 function PatchNotesCard() {
   const [notes, setNotes] = useState<PatchNote[] | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -247,6 +250,13 @@ function PatchNotesCard() {
       })
       .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"));
   }, []);
+
+  const visible = notes == null
+    ? []
+    : expanded
+      ? notes
+      : notes.slice(0, PATCH_NOTES_INITIAL);
+  const hiddenCount = notes == null ? 0 : Math.max(0, notes.length - PATCH_NOTES_INITIAL);
 
   return (
     <div className="card">
@@ -259,7 +269,7 @@ function PatchNotesCard() {
         <div className="small" style={{ color: "var(--muted)" }}>No updates yet.</div>
       )}
       <div className="col" style={{ gap: 12 }}>
-        {(notes ?? []).map((n) => (
+        {visible.map((n) => (
           <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
@@ -269,6 +279,14 @@ function PatchNotesCard() {
             <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
           </div>
         ))}
+        {hiddenCount > 0 && (
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            style={{ fontSize: 12, alignSelf: "flex-start" }}
+          >
+            {expanded ? "Show recent only" : `Show ${hiddenCount} older note${hiddenCount === 1 ? "" : "s"}`}
+          </button>
+        )}
       </div>
     </div>
   );

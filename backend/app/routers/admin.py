@@ -11,8 +11,9 @@ import json as _json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
@@ -220,6 +221,73 @@ async def set_app_theme(
     else:
         db.add(SystemConfig(key=APP_THEME_KEY, value=value))
     db.commit()
+
+
+# ---------------------------
+# Job search — by date + name, returns candidate job_uuids
+# ---------------------------
+
+@router.get("/job-search")
+def job_search(
+    date: Optional[str] = Query(None, description="YYYY-MM-DD (event date or materials job_date)"),
+    name: Optional[str] = Query(None, description="Partial, case-insensitive match on job_name"),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Find candidate jobs for the Job Summary view without needing a UUID.
+
+    A "job" here is any job_uuid that appears in events or materials with a
+    matching date/name. Admins rarely remember the UUID, but they do know
+    the date and the customer name.
+    """
+    needle = (name or "").strip().lower()
+    candidates: Dict[str, Dict[str, Any]] = {}
+
+    # Events — date comes from timestamp
+    eq = db.query(Event).filter(Event.job_uuid.isnot(None))
+    if date:
+        eq = eq.filter(func.date(Event.timestamp) == date)
+    if needle:
+        eq = eq.filter(func.lower(Event.job_name).like(f"%{needle}%"))
+    for e in eq.limit(2000).all():
+        c = candidates.setdefault(e.job_uuid, {"names": [], "dates": set(), "events": 0, "materials": 0})
+        if e.job_name:
+            c["names"].append(e.job_name)
+        if e.timestamp:
+            c["dates"].add(e.timestamp.date().isoformat())
+        c["events"] += 1
+
+    # Materials — date comes from job_date (YYYY-MM-DD string)
+    mq = db.query(MaterialsSubmission).filter(MaterialsSubmission.job_uuid.isnot(None))
+    if date:
+        mq = mq.filter(MaterialsSubmission.job_date == date)
+    if needle:
+        mq = mq.filter(func.lower(MaterialsSubmission.job_name).like(f"%{needle}%"))
+    for m in mq.limit(2000).all():
+        c = candidates.setdefault(m.job_uuid, {"names": [], "dates": set(), "events": 0, "materials": 0})
+        if m.job_name:
+            c["names"].append(m.job_name)
+        if m.job_date:
+            c["dates"].add(m.job_date)
+        c["materials"] += 1
+
+    results: List[Dict[str, Any]] = []
+    for job_uuid, c in candidates.items():
+        names = c["names"]
+        best_name = max(set(names), key=names.count) if names else ""
+        dates_sorted = sorted(c["dates"])
+        results.append({
+            "job_uuid": job_uuid,
+            "job_name": best_name,
+            "dates": dates_sorted,
+            "event_count": c["events"],
+            "material_count": c["materials"],
+        })
+
+    # Newest first by latest known date
+    results.sort(key=lambda r: (r["dates"][-1] if r["dates"] else "", r["job_name"]), reverse=True)
+    return results[:limit]
 
 
 # ---------------------------

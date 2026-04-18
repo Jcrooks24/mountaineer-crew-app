@@ -294,13 +294,20 @@ function applySettings(settings: ThemeSettings) {
   if (settings.brandOverride) root.style.setProperty("--brand", settings.brandOverride);
   if (settings.brand2Override) root.style.setProperty("--brand2", settings.brand2Override);
 
-  // Text contrast override
+  // Text contrast override. Also drives `--on-brand`, the color used for
+  // text on bright brand-coloured surfaces (primary buttons, active tabs),
+  // so the whole app follows the setting end-to-end.
   if (settings.textMode === "light") {
     root.style.setProperty("--text", "#f5f7fa");
     root.style.setProperty("--muted", "#c6cedb");
+    root.style.setProperty("--on-brand", "#f5f7fa");
   } else if (settings.textMode === "dark") {
     root.style.setProperty("--text", "#1a2030");
     root.style.setProperty("--muted", "#5a6a7e");
+    root.style.setProperty("--on-brand", "#0b1220");
+  } else {
+    // "preset": brand buttons stay on their default dark ink.
+    root.style.setProperty("--on-brand", "#0b1220");
   }
 
   // Font
@@ -395,9 +402,19 @@ export function useTheme() {
 // `logo_light.png` is the light-pixel variant (for dark backgrounds);
 // `logo_dark.png` is the dark-pixel variant (for light backgrounds).
 // In "auto", "light" preset → dark-pixel logo; every other preset → light-pixel.
-export function useLogoSrc(): string {
+export function useResolvedLogo(): { src: string; variant: "light" | "dark" } {
   const { settings } = useTheme();
-  if (settings.logoMode === "light") return logoLight;
-  if (settings.logoMode === "dark") return logoDark;
-  return settings.themeId === "light" ? logoDark : logoLight;
+  const variant: "light" | "dark" =
+    settings.logoMode === "light"
+      ? "light"
+      : settings.logoMode === "dark"
+        ? "dark"
+        : settings.themeId === "light"
+          ? "dark"
+          : "light";
+  return { src: variant === "light" ? logoLight : logoDark, variant };
+}
+
+export function useLogoSrc(): string {
+  return useResolvedLogo().src;
 }

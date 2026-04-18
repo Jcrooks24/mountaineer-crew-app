@@ -7,7 +7,7 @@ import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
-import { useTheme, useLogoSrc } from "./theme/ThemeContext";
+import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
 import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
 import AdminNotesBanner from "./components/AdminNotesBanner";
 import { getToken } from "./auth/token";
@@ -162,7 +162,7 @@ export default function App() {
   const nav = useNavigate();
   const { user } = useAuth();
   const { settings: themeSettings } = useTheme();
-  const logo = useLogoSrc();
+  const { src: logo, variant: logoVariant } = useResolvedLogo();
   const ht = themeSettings.helpTexts;
   const [tab, setTab] = useState<Tab>("timeline");
 
@@ -1046,7 +1046,20 @@ export default function App() {
       {/* Top bar */}
       <div className="topbar">
         <div className="brand">
-          <img className="logo" src={logo} alt="Logo" style={{ filter: "invert(1) brightness(1.15) contrast(1.05)" }} />
+          <img
+            className="logo"
+            src={logo}
+            alt="Logo"
+            style={{
+              // Inversion is only applied to the "light" variant — the
+              // placeholder file is the original dark-pixel logo, so inverting
+              // makes it readable on dark backgrounds. The "dark" variant
+              // renders as-is for use on light backgrounds. When real
+              // pre-coloured art is dropped into logo_light.png /
+              // logo_dark.png, delete the filter entirely.
+              filter: logoVariant === "light" ? "invert(1) brightness(1.15) contrast(1.05)" : undefined,
+            }}
+          />
           <div>
             <div className="title">Mountaineer Moving Co.</div>
             <div className="small">{clockText === "—" ? "Clock starts at Start" : `Clock: ${clockText}`}</div>

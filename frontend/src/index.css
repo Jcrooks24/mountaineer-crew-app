@@ -24,6 +24,11 @@
   --btn-bg-from: #22345c;
   --btn-bg-to: #1a2a47;
   --btn-pad: 10px 14px;
+
+  /* Text color that sits on top of bright brand-coloured surfaces
+     (.btnPrimary, active tab). Follows the Text-Color setting so "Light
+     text" mode flips button copy to light too. */
+  --on-brand: #0b1220;
 }
 
 *{ box-sizing: border-box; }
@@ -79,7 +84,7 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
 .btnPrimary{
   background: linear-gradient(90deg, var(--brand), var(--brand2));
   border: none;
-  color: #0b1220;
+  color: var(--on-brand);
   font-weight: 900;
 }
 
@@ -133,6 +138,6 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
 
 .tab.active{
   background: linear-gradient(90deg, var(--brand), var(--brand2));
-  color: #0b1220;
+  color: var(--on-brand);
   border: none;
 }

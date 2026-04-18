@@ -1922,20 +1922,50 @@ type JobSummary = {
   admin_notes: Array<{ id: number; title: string; body: string; created_by_name: string | null; updated_at: string | null }>;
 };
 
+type JobCandidate = {
+  job_uuid: string;
+  job_name: string;
+  dates: string[];
+  event_count: number;
+  material_count: number;
+};
+
 function JobSummaryTab() {
-  const [query, setQuery] = useState("");
+  const [date, setDate] = useState("");
+  const [name, setName] = useState("");
+  const [candidates, setCandidates] = useState<JobCandidate[] | null>(null);
   const [summary, setSummary] = useState<JobSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function fetchSummary() {
-    const q = query.trim();
-    if (!q) return;
+  async function search() {
+    if (!date && !name.trim()) {
+      setErr("Enter a date, a job name, or both.");
+      return;
+    }
+    setLoading(true);
+    setErr(null);
+    setSummary(null);
+    setCandidates(null);
+    try {
+      const params = new URLSearchParams();
+      if (date) params.set("date", date);
+      if (name.trim()) params.set("name", name.trim());
+      const rows = await apiFetch<JobCandidate[]>(`/api/admin/job-search?${params.toString()}`);
+      setCandidates(rows);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Search failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadSummary(jobUuid: string) {
     setLoading(true);
     setErr(null);
     setSummary(null);
     try {
-      const data = await apiFetch<JobSummary>(`/api/admin/job-summary/${encodeURIComponent(q)}`);
+      const data = await apiFetch<JobSummary>(`/api/admin/job-summary/${encodeURIComponent(jobUuid)}`);
       setSummary(data);
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to load summary");
@@ -1959,23 +1989,82 @@ function JobSummaryTab() {
       <div className="card">
         <div className="sectionTitle">Look up job</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-          Paste a job UUID to pull every event, DVIR, materials submission,
-          job report, bill, photo, and admin note tied to it.
+          Search by date and/or customer name. Results below link through to
+          the full summary.
         </div>
-        <div className="row" style={{ gap: 8 }}>
-          <input
-            placeholder="job_uuid"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") fetchSummary(); }}
-            style={{ flex: 1 }}
-          />
-          <button className="btnPrimary" onClick={fetchSummary} disabled={loading}>
-            {loading ? "Loading…" : "Load"}
+        <div className="row wrap" style={{ gap: 8 }}>
+          <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Job date</span>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+          <label className="col" style={{ gap: 4, flex: "2 1 200px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Customer name (partial)</span>
+            <input
+              type="text"
+              placeholder="e.g. Smith"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") search(); }}
+            />
+          </label>
+          <button
+            className="btnPrimary"
+            onClick={search}
+            disabled={loading}
+            style={{ alignSelf: "flex-end" }}
+          >
+            {loading ? "Searching…" : "Search"}
           </button>
         </div>
         {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
       </div>
+
+      {candidates != null && !summary && (
+        <div className="card">
+          <div className="sectionTitle">
+            Matches ({candidates.length})
+          </div>
+          {candidates.length === 0 ? (
+            <div className="small" style={{ color: "var(--muted)" }}>
+              No jobs match those filters.
+            </div>
+          ) : (
+            <div className="col" style={{ gap: 8 }}>
+              {candidates.map((c) => (
+                <button
+                  key={c.job_uuid}
+                  onClick={() => loadSummary(c.job_uuid)}
+                  style={{ textAlign: "left" }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>
+                    {c.job_name || "(unnamed job)"}
+                  </div>
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                    {c.dates.length > 0
+                      ? c.dates.length === 1
+                        ? c.dates[0]
+                        : `${c.dates[0]} → ${c.dates[c.dates.length - 1]}`
+                      : "no dates"}
+                    {" · "}{c.event_count} event{c.event_count === 1 ? "" : "s"}
+                    {" · "}{c.material_count} material{c.material_count === 1 ? "" : "s"}
+                  </div>
+                  <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace", fontSize: 11, marginTop: 2 }}>
+                    {c.job_uuid}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {summary && (
+        <div className="card">
+          <button onClick={() => { setSummary(null); }} style={{ fontSize: 12 }}>
+            ← Back to matches
+          </button>
+        </div>
+      )}
 
       {summary && (
         <>
