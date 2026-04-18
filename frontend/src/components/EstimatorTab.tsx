@@ -1172,6 +1172,9 @@ function EstimatePhotos({
       form.append("job_name", `Estimate - ${customerName}`);
       form.append("job_date", moveDate || new Date().toISOString().slice(0, 10));
       form.append("caption", caption.trim());
+      // Routes the upload to the estimator-photos Drive parent folder so
+      // estimator captures don't mix into the crew-job photos folder.
+      form.append("folder", "estimator");
 
       const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {

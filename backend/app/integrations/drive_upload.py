@@ -13,6 +13,12 @@ from app.core.google_cal_oauth import _get_creds, _build_authorized_http
 PARENT_FOLDER_KEY = "drive_parent_folder_id"
 DEFAULT_PARENT_FOLDER_NAME = "Mountaineer Crew Photos"
 
+# Estimator photos land in a separate top-level folder so the crew-job
+# parent stays clean. Set DRIVE_ESTIMATOR_PARENT_FOLDER_ID on the Render
+# service to the ID of the target Drive folder (grab it from the folder's
+# URL — the bit between /folders/ and any ?query).
+ESTIMATOR_PARENT_ENV_VAR = "DRIVE_ESTIMATOR_PARENT_FOLDER_ID"
+
 _cached_drive_service = None
 
 
@@ -93,17 +99,33 @@ def upload_photo_to_drive(
     job_name: str,
     job_date: str,
     caption: str = "",
+    is_estimator: bool = False,
 ) -> dict:
     """
     Upload a photo to Google Drive:
       <parent folder> / <job_name> - <job_date> / <job_name> - <job_date> - <short_id>.jpg
+
+    When `is_estimator` is True and DRIVE_ESTIMATOR_PARENT_FOLDER_ID is set
+    on the environment, the photo lands under that folder instead of the
+    default crew-photos parent. Falls back to the default parent if the
+    env var is missing (so photos never fail the upload just because the
+    admin forgot to wire it).
 
     Folder created on first upload only. Caption stored as Drive file description.
     Returns {"file_id": "...", "url": "..."}.
     """
     svc = _get_drive_service(db)
 
-    parent_id = _get_parent_folder_id(svc, db)
+    if is_estimator:
+        estimator_parent = os.getenv(ESTIMATOR_PARENT_ENV_VAR, "").strip()
+        parent_id = estimator_parent or _get_parent_folder_id(svc, db)
+        if not estimator_parent:
+            print(
+                f"[drive] {ESTIMATOR_PARENT_ENV_VAR} not set — estimator photo landing "
+                f"in default crew-photos parent instead"
+            )
+    else:
+        parent_id = _get_parent_folder_id(svc, db)
 
     safe_name = _safe(job_name or "Unknown Job")
     safe_date = (job_date or "").strip()
