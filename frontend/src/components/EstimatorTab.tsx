@@ -299,6 +299,37 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     }
   }
 
+  type ItemPayload = Omit<EstimateItem, "id">;
+
+  // Optimistic add: append a temp item to local state immediately, close the
+  // modal, and POST in the background. On success replace the temp id with
+  // the server id; on failure remove the temp item and surface the error.
+  // Estimators can add items very quickly without waiting on Render.
+  function submitItemOptimistic(payload: ItemPayload) {
+    const tempId = -(Date.now() + Math.floor(Math.random() * 1000));
+    const optimistic: EstimateItem = { id: tempId, ...payload };
+
+    setLocal((prev) => ({ ...prev, items: [...prev.items, optimistic] }));
+
+    apiFetch<EstimateItem>(`/api/estimates/${local.estimate_uuid}/items`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+      .then((server) => {
+        setLocal((prev) => ({
+          ...prev,
+          items: prev.items.map((it) => (it.id === tempId ? server : it)),
+        }));
+      })
+      .catch((e: any) => {
+        setLocal((prev) => ({
+          ...prev,
+          items: prev.items.filter((it) => it.id !== tempId),
+        }));
+        setErr(e instanceof ApiError ? e.message : "Add failed");
+      });
+  }
+
   function addRoom() {
     const name = prompt("Room name (e.g. Living Room, Kitchen, Garage):")?.trim();
     if (!name) return;
@@ -414,6 +445,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
                   r === "Unassigned" ? !it.room : (it.room ?? "").trim() === r,
                 )}
                 onChanged={refreshEstimate}
+                onAddItem={submitItemOptimistic}
                 onRemovePendingRoom={() =>
                   setPendingRooms((prev) => prev.filter((p) => p !== r))
                 }
@@ -451,12 +483,14 @@ function RoomTile({
   estimateUuid,
   items,
   onChanged,
+  onAddItem,
   onRemovePendingRoom,
 }: {
   room: string;
   estimateUuid: string;
   items: EstimateItem[];
   onChanged: () => void;
+  onAddItem: (payload: Omit<EstimateItem, "id">) => void;
   onRemovePendingRoom: () => void;
 }) {
   const [addingItem, setAddingItem] = useState(false);
@@ -560,12 +594,15 @@ function RoomTile({
 
       {addingItem && (
         <AddItemDialog
-          estimateUuid={estimateUuid}
           room={isUnassigned ? "" : room}
           subcategory={preSubcategory ?? ""}
           knownSubcategories={subcategories.filter((s) => s !== "—")}
           onClose={() => { setAddingItem(false); setPreSubcategory(null); }}
-          onAdded={() => { setAddingItem(false); setPreSubcategory(null); onChanged(); }}
+          onAdd={(payload) => {
+            onAddItem(payload);
+            setAddingItem(false);
+            setPreSubcategory(null);
+          }}
         />
       )}
     </div>
@@ -736,19 +773,17 @@ function useCatalog(): { list: Match[]; refresh: () => Promise<void> } {
 }
 
 function AddItemDialog({
-  estimateUuid,
   room,
   subcategory,
   knownSubcategories,
   onClose,
-  onAdded,
+  onAdd,
 }: {
-  estimateUuid: string;
   room: string;
   subcategory: string;
   knownSubcategories: string[];
   onClose: () => void;
-  onAdded: () => void;
+  onAdd: (payload: Omit<EstimateItem, "id">) => void;
 }) {
   const { list: catalog, refresh: refreshCatalog } = useCatalog();
 
@@ -760,7 +795,6 @@ function AddItemDialog({
   const [notes, setNotes] = useState("");
   const [saveToCatalog, setSaveToCatalog] = useState(false);
   const [sub, setSub] = useState(subcategory);
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const suggestions = useMemo(() => {
@@ -787,44 +821,36 @@ function AddItemDialog({
     setCuft("");
   }
 
-  async function submit(e: React.FormEvent) {
+  function submit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
     const name = (selected?.name ?? query).trim();
     if (!name) return setErr("Item name required.");
     const w = Number(weight) || 0;
     const v = Number(cuft) || 0;
+    const q = Math.max(1, Math.floor(qty || 1));
 
-    setBusy(true);
-    try {
-      if (saveToCatalog && !selected) {
-        // New item → save to user catalog first (best-effort)
-        try {
-          await apiFetch("/api/estimates/catalog", {
-            method: "POST",
-            body: JSON.stringify({ name, weight_lbs: w, cubic_ft: v }),
-          });
-          await refreshCatalog();
-        } catch { /* non-fatal */ }
-      }
-      await apiFetch(`/api/estimates/${estimateUuid}/items`, {
+    // Save to user catalog in the background — never blocks the add.
+    if (saveToCatalog && !selected) {
+      apiFetch("/api/estimates/catalog", {
         method: "POST",
-        body: JSON.stringify({
-          name,
-          qty: Math.max(1, Math.floor(qty || 1)),
-          weight_lbs: w,
-          cubic_ft: v,
-          room: room || null,
-          subcategory: sub.trim() || null,
-          notes: notes.trim() || null,
-        }),
-      });
-      onAdded();
-    } catch (e: any) {
-      setErr(e instanceof ApiError ? e.message : "Add failed");
-    } finally {
-      setBusy(false);
+        body: JSON.stringify({ name, weight_lbs: w, cubic_ft: v }),
+      })
+        .then(() => refreshCatalog())
+        .catch(() => {/* non-fatal */});
     }
+
+    // Hand the optimistic payload to the parent, which closes the modal,
+    // appends it locally, and POSTs the item in the background.
+    onAdd({
+      name,
+      qty: q,
+      weight_lbs: w,
+      cubic_ft: v,
+      room: room || null,
+      subcategory: sub.trim() || null,
+      notes: notes.trim() || null,
+    });
   }
 
   return (
@@ -961,8 +987,8 @@ function AddItemDialog({
           {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
 
           <div className="row" style={{ gap: 8, marginTop: 4 }}>
-            <button type="submit" className="btnPrimary" disabled={busy} style={{ flex: 1 }}>
-              {busy ? "Adding…" : "Add to inventory"}
+            <button type="submit" className="btnPrimary" style={{ flex: 1 }}>
+              Add to inventory
             </button>
             <button type="button" onClick={onClose}>Cancel</button>
           </div>
