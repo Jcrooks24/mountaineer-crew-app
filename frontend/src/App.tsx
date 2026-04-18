@@ -8,6 +8,7 @@ import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme, useLogoSrc } from "./theme/ThemeContext";
+import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
 import { getToken } from "./auth/token";
 import {
   renderedForJob as materialsRenderedForJob,
@@ -176,6 +177,16 @@ export default function App() {
   const [activityLog, setActivityLog] = useState<EventRecord[]>([]);
 
   const [clockText, setClockText] = useState<string>("—");
+  const [patchNotesUnseen, setPatchNotesUnseen] = useState<boolean>(false);
+
+  useEffect(() => {
+    apiFetch<{ id: number; updated_at: string }[]>("/api/patch-notes")
+      .then((rows) => {
+        const latest = rows[0]?.updated_at ?? null;
+        setPatchNotesUnseen(hasUnseenPatchNotes(latest));
+      })
+      .catch(() => {/* non-fatal — no indicator */});
+  }, []);
 
   // Job metadata (display + persistence)
   const [jobName, setJobName] = useState<string>("");
@@ -1069,10 +1080,25 @@ export default function App() {
           )}
           <button
             className="chip"
-            onClick={() => nav("/profile")}
-            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
+            onClick={() => { setPatchNotesUnseen(false); nav("/profile"); }}
+            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)", position: "relative" }}
           >
             Profile
+            {patchNotesUnseen && (
+              <span
+                title="New patch notes — view on Profile"
+                style={{
+                  position: "absolute",
+                  top: -2,
+                  right: -2,
+                  width: 9,
+                  height: 9,
+                  borderRadius: "50%",
+                  background: "var(--brand)",
+                  boxShadow: "0 0 0 2px var(--bg)",
+                }}
+              />
+            )}
           </button>
         </div>
       </div>

@@ -45,7 +45,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "calendar" | "settings" | "dvir" | "estimator";
+type Tab = "employees" | "map" | "calendar" | "settings" | "dvir" | "estimator" | "notes";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -73,14 +73,14 @@ export default function Admin() {
 
       {/* Tabs */}
       <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "calendar", "settings", "dvir", "estimator"] as Tab[]).map((t) => (
+        {(["employees", "map", "calendar", "settings", "dvir", "estimator", "notes"] as Tab[]).map((t) => (
           <button
             key={t}
             className={"tab " + (tab === t ? "active" : "")}
             onClick={() => setTab(t)}
             style={{ textTransform: "capitalize" }}
           >
-            {t === "map" ? "Map (Today)" : t === "dvir" ? "DVIR Review" : t}
+            {t === "map" ? "Map (Today)" : t === "dvir" ? "DVIR Review" : t === "notes" ? "Notes" : t}
           </button>
         ))}
       </div>
@@ -91,6 +91,7 @@ export default function Admin() {
       {tab === "settings" && <SettingsTab />}
       {tab === "dvir" && <DVIRTab />}
       {tab === "estimator" && <EstimatorTab />}
+      {tab === "notes" && <NotesTab />}
     </div>
   );
 }
@@ -1533,3 +1534,155 @@ const mechInputStyle: React.CSSProperties = {
   fontSize: 14,
   boxSizing: "border-box",
 };
+
+// ─────────────────────────────────────────
+// Notes tab — Patch Notes authoring
+// ─────────────────────────────────────────
+
+type PatchNoteRecord = {
+  id: number;
+  title: string;
+  body: string;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function NotesTab() {
+  const [notes, setNotes] = useState<PatchNoteRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  function load() {
+    setLoading(true);
+    apiFetch<PatchNoteRecord[]>("/api/patch-notes")
+      .then(setNotes)
+      .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(load, []);
+
+  function startEdit(n: PatchNoteRecord) {
+    setEditingId(n.id);
+    setTitle(n.title);
+    setBody(n.body);
+  }
+
+  function clearForm() {
+    setEditingId(null);
+    setTitle("");
+    setBody("");
+  }
+
+  async function save() {
+    if (!title.trim() || !body.trim()) {
+      setErr("Title and body are required.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      if (editingId == null) {
+        await apiFetch<PatchNoteRecord>("/api/patch-notes", {
+          method: "POST",
+          body: JSON.stringify({ title: title.trim(), body: body.trim() }),
+        });
+      } else {
+        await apiFetch<PatchNoteRecord>(`/api/patch-notes/${editingId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title: title.trim(), body: body.trim() }),
+        });
+      }
+      clearForm();
+      load();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!confirm("Delete this patch note?")) return;
+    try {
+      await apiFetch(`/api/patch-notes/${id}`, { method: "DELETE" });
+      if (editingId === id) clearForm();
+      load();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Delete failed");
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="card">
+        <div className="sectionTitle">{editingId == null ? "New Patch Note" : "Edit Patch Note"}</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Shows up on every crew member's Profile tab. Updating a note re-triggers the
+          "new patch notes" indicator on the home screen.
+        </div>
+        <div className="col" style={{ gap: 10 }}>
+          <input
+            placeholder="Title (e.g. v1.4 — Faster Estimator)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <textarea
+            rows={5}
+            placeholder="What changed…"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+          />
+          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btnPrimary" onClick={save} disabled={busy}>
+              {busy ? "Saving…" : editingId == null ? "Publish" : "Save changes"}
+            </button>
+            {editingId != null && (
+              <button onClick={clearForm} type="button">Cancel</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">Published Patch Notes</div>
+        {loading && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
+        {!loading && notes.length === 0 && (
+          <div className="small" style={{ color: "var(--muted)" }}>No patch notes yet.</div>
+        )}
+        <div className="col" style={{ gap: 10 }}>
+          {notes.map((n) => (
+            <div key={n.id} className="card" style={{ padding: 12 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                    Updated {new Date(n.updated_at).toLocaleString()}
+                    {n.created_by_name ? ` · by ${n.created_by_name}` : ""}
+                  </div>
+                  <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
+                </div>
+                <div className="col" style={{ gap: 4 }}>
+                  <button onClick={() => startEdit(n)} style={{ fontSize: 12 }}>Edit</button>
+                  <button
+                    onClick={() => remove(n.id)}
+                    style={{ fontSize: 12, color: "var(--danger)", borderColor: "var(--danger)" }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

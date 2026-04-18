@@ -15,6 +15,7 @@ import app.db.models.job_bill  # noqa: F401 — ensure job_bills table is regist
 import app.db.models.long_distance  # noqa: F401 — register prior_on_duty_statements table
 import app.db.models.document  # noqa: F401 — register documents table
 import app.db.models.estimate  # noqa: F401 — register estimates + estimate_items + furniture_catalog tables
+import app.db.models.patch_note  # noqa: F401 — register patch_notes table
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -32,6 +33,7 @@ from app.routers.users import router as users_router
 from app.routers.long_distance import router as long_distance_router
 from app.routers.documents import router as documents_router
 from app.routers.estimates import router as estimates_router
+from app.routers.patch_notes import router as patch_notes_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -127,3 +129,4 @@ app.include_router(users_router)       # /api/users/directory
 app.include_router(long_distance_router)  # /api/long-distance/*
 app.include_router(documents_router)      # /api/documents
 app.include_router(estimates_router)      # /api/estimates
+app.include_router(patch_notes_router)    # /api/patch-notes

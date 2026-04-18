@@ -1,10 +1,19 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { refreshDirectory } from "../lib/userDirectory";
+import { markPatchNotesSeenNow } from "../lib/patchNotesSeen";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
+
+type PatchNote = {
+  id: number;
+  title: string;
+  body: string;
+  created_by_name: string | null;
+  updated_at: string;
+};
 
 async function resizeToDataUrl(file: File, maxPx = 256, quality = 0.8): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -203,7 +212,11 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Sign out */}
+      {/* Patch Notes */}
+      <PatchNotesCard />
+
+
+      {/* Sign out intentionally below patch notes */}
       <div className="card">
         <button
           onClick={handleSignOut}
@@ -217,6 +230,45 @@ export default function Profile() {
         >
           Sign out
         </button>
+      </div>
+    </div>
+  );
+}
+
+function PatchNotesCard() {
+  const [notes, setNotes] = useState<PatchNote[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<PatchNote[]>("/api/patch-notes")
+      .then((rows) => {
+        setNotes(rows);
+        if (rows.length > 0) markPatchNotesSeenNow(rows[0].updated_at);
+      })
+      .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"));
+  }, []);
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Patch Notes</div>
+      {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+      {notes == null && !err && (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      )}
+      {notes && notes.length === 0 && (
+        <div className="small" style={{ color: "var(--muted)" }}>No updates yet.</div>
+      )}
+      <div className="col" style={{ gap: 12 }}>
+        {(notes ?? []).map((n) => (
+          <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+              {new Date(n.updated_at).toLocaleDateString()}
+              {n.created_by_name ? ` · ${n.created_by_name}` : ""}
+            </div>
+            <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
+          </div>
+        ))}
       </div>
     </div>
   );
