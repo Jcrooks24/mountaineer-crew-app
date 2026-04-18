@@ -1360,7 +1360,7 @@ export default function App() {
                     }}
                   >
                     <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
-                      <div className="row" style={{ gap: 8 }}>
+                      <div className="row" style={{ gap: 8, flexWrap: "wrap", minWidth: 0 }}>
                         <span
                           className="chip"
                           style={{
@@ -1374,19 +1374,36 @@ export default function App() {
                         </span>
                         <strong style={{ fontSize: 14 }}>{e.type}</strong>
                         {e.created_by && (
-                          <span className="row" style={{ gap: 6 }}>
+                          <span className="row" style={{ gap: 6, minWidth: 0 }}>
                             <UserAvatar displayName={e.created_by} size={18} />
-                            <span className="small" style={{ color: "var(--muted)" }}>{e.created_by}</span>
+                            <span
+                              className="small"
+                              style={{
+                                color: "var(--muted)",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                maxWidth: 180,
+                              }}
+                            >
+                              {e.created_by}
+                            </span>
                           </span>
                         )}
                       </div>
-                      <div className="row" style={{ gap: 8 }}>
+                      {/* Time + date — wrap independently so the date can
+                          drop to its own line on narrow phones instead of
+                          running off the tile. */}
+                      <div className="row" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         {e.lat != null && (
-                          <span className="small">±{Math.round(e.accuracy_m ?? 0)}m</span>
+                          <span className="small" style={{ whiteSpace: "nowrap" }}>
+                            ±{Math.round(e.accuracy_m ?? 0)}m
+                          </span>
                         )}
-                        <span className="small">
+                        <span className="small" style={{ whiteSpace: "nowrap" }}>
                           {new Date(e.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          {" · "}
+                        </span>
+                        <span className="small" style={{ whiteSpace: "nowrap" }}>
                           {new Date(e.timestamp).toLocaleDateString()}
                         </span>
                       </div>
