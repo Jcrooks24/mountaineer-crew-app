@@ -486,7 +486,12 @@ export default function DVIRPage() {
             </select>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+            gap: 10,
+            marginBottom: 10,
+          }}>
             <div>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trailer # (or N/A)</div>
               <input value={trailerNumber} onChange={(e) => setTrailerNumber(e.target.value)} placeholder="N/A if none" style={inputStyle} />
@@ -497,7 +502,14 @@ export default function DVIRPage() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+          {/* Date + Type — stack on phones (below ~360px column width) so
+              the Pre-Trip / Post-Trip buttons don't crowd the date input. */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 10,
+            marginBottom: 10,
+          }}>
             <div>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Inspection Date *</div>
               <input type="date" value={inspectionDate} onChange={(e) => setInspectionDate(e.target.value)} required style={inputStyle} />
@@ -516,14 +528,15 @@ export default function DVIRPage() {
                     }}
                     style={{
                       flex: 1,
-                      padding: "9px 0",
+                      padding: "9px 6px",
                       borderRadius: 10,
                       border: inspectionType === t ? "2px solid var(--brand)" : "1px solid var(--border)",
                       background: inspectionType === t ? "rgba(93,214,194,0.12)" : "var(--card)",
                       color: inspectionType === t ? "var(--brand)" : "var(--muted)",
                       cursor: "pointer",
                       fontWeight: inspectionType === t ? 700 : 400,
-                      fontSize: 12,
+                      fontSize: 13,
+                      whiteSpace: "nowrap",
                     }}
                   >
                     {t === "pre-trip" ? "Pre-Trip" : "Post-Trip"}
