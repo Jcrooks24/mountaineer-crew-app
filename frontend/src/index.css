@@ -47,7 +47,10 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 
 .row{ display:flex; gap:10px; align-items:center; }
 .row.wrap{ flex-wrap: wrap; }
-.col{ display:flex; flex-direction:column; gap:6px; }
+/* min-width:0 lets column-flex items shrink below their intrinsic content
+   size when the parent is narrow — without this, wide children like
+   native date inputs push their container past the tile edge on phones. */
+.col{ display:flex; flex-direction:column; gap:6px; min-width: 0; }
 
 .label{ font-size: 12px; color: var(--muted); }
 .small{ font-size: 12px; color: var(--muted); }
@@ -61,6 +64,18 @@ input, select, textarea{
   color: var(--text);
   font-family: inherit;
   outline: none;
+}
+
+/* Strip the native iOS styling on date/time inputs so they respect
+   their container width instead of snapping to a ~170-200px minimum
+   intrinsic width. Kept in one place so both DVIR and Timeline (and
+   anywhere else using a date input) pick this up automatically. */
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
 }
 
 textarea{ min-height: 90px; resize: vertical; }

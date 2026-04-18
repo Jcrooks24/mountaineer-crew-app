@@ -503,18 +503,20 @@ export default function DVIRPage() {
           </div>
 
           {/* Date + Type — stack on phones (below ~360px column width) so
-              the Pre-Trip / Post-Trip buttons don't crowd the date input. */}
+              the Pre-Trip / Post-Trip buttons don't crowd the date input.
+              minWidth:0 on the cells lets the native date input shrink
+              to match its cell instead of pushing the cell wider than the tile. */}
           <div style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             gap: 10,
             marginBottom: 10,
           }}>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Inspection Date *</div>
               <input type="date" value={inspectionDate} onChange={(e) => setInspectionDate(e.target.value)} required style={inputStyle} />
             </div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Type *</div>
               <div style={{ display: "flex", gap: 8 }}>
                 {(["pre-trip", "post-trip"] as const).map((t) => (
