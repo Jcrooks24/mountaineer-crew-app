@@ -2,13 +2,14 @@ import React, { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import logo from "../assets/logo.png";
+import { useResolvedLogo } from "../theme/ThemeContext";
 
 type TokenResponse = { access_token: string; token_type: string };
 
 export default function Login() {
   const nav = useNavigate();
   const { loginWithToken } = useAuth();
+  const { src: logo, variant: logoVariant } = useResolvedLogo();
   const [searchParams] = useSearchParams();
   const didReset = searchParams.get("reset") === "1";
 
@@ -43,7 +44,10 @@ export default function Login() {
         <img
           src={logo}
           alt="Logo"
-          style={{ width: 48, height: 48, borderRadius: 14, objectFit: "contain", filter: "invert(1) brightness(1.15) contrast(1.05)" }}
+          style={{
+            width: 48, height: 48, borderRadius: 14, objectFit: "contain",
+            filter: logoVariant === "light" ? "invert(1) brightness(1.15) contrast(1.05)" : undefined,
+          }}
         />
         <div style={{ fontWeight: 900, fontSize: 18, letterSpacing: 0.2 }}>Mountaineer Moving Co.</div>
       </div>

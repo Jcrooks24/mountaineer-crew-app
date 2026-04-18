@@ -8,6 +8,14 @@ export type User = {
   name?: string | null;
   role?: string;
   is_active?: boolean;
+  profile_photo?: string | null;
+};
+
+export type DirectoryEntry = {
+  id: number;
+  email: string;
+  name?: string | null;
+  profile_photo?: string | null;
 };
 
 type AuthState = {
@@ -15,6 +23,7 @@ type AuthState = {
   loading: boolean;
   loginWithToken: (token: string) => Promise<void>;
   logout: () => void;
+  setUser: (user: User | null) => void;
 };
 
 const AuthCtx = createContext<AuthState | null>(null);
@@ -60,7 +69,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }
 
-  const value = useMemo(() => ({ user, loading, loginWithToken, logout }), [user, loading]);
+  const value = useMemo(
+    () => ({ user, loading, loginWithToken, logout, setUser }),
+    [user, loading],
+  );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }

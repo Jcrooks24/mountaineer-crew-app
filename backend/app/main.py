@@ -9,6 +9,14 @@ import app.db.models.system_config  # noqa: F401 — ensure table is registered
 import app.db.models.materials  # noqa: F401 — ensures table is registered with Base
 import app.db.models.calendar_job  # noqa: F401 — ensures table is registered with Base
 import app.db.models.photo         # noqa: F401 — ensures table is registered with Base
+import app.db.models.dvir  # noqa: F401 — ensure dvirs table is registered
+import app.db.models.job_report  # noqa: F401 — ensure job_reports table is registered
+import app.db.models.job_bill  # noqa: F401 — ensure job_bills table is registered
+import app.db.models.long_distance  # noqa: F401 — register prior_on_duty_statements table
+import app.db.models.document  # noqa: F401 — register documents table
+import app.db.models.estimate  # noqa: F401 — register estimates + estimate_items + furniture_catalog tables
+import app.db.models.patch_note  # noqa: F401 — register patch_notes table
+import app.db.models.admin_note  # noqa: F401 — register admin_notes table
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -18,6 +26,16 @@ from app.routers.auth import router as auth_router
 from app.routers.admin import router as admin_router
 from app.routers.materials import router as materials_router
 from app.routers.photos import router as photos_router
+from app.routers.dvir import router as dvir_router
+from app.routers.job_report import router as job_report_router
+from app.routers.config import router as config_router
+from app.routers.bill import router as bill_router
+from app.routers.users import router as users_router
+from app.routers.long_distance import router as long_distance_router
+from app.routers.documents import router as documents_router
+from app.routers.estimates import router as estimates_router
+from app.routers.patch_notes import router as patch_notes_router
+from app.routers.admin_notes import router as admin_notes_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -105,3 +123,13 @@ app.include_router(auth_router)        # /api/auth/*
 app.include_router(admin_router)       # /api/admin/*
 app.include_router(materials_router)   # /api/materials
 app.include_router(photos_router)      # /api/photos/upload
+app.include_router(dvir_router)        # /api/dvir
+app.include_router(job_report_router)  # /api/job-report
+app.include_router(config_router)      # /api/config (public)
+app.include_router(bill_router)        # /api/bill
+app.include_router(users_router)       # /api/users/directory
+app.include_router(long_distance_router)  # /api/long-distance/*
+app.include_router(documents_router)      # /api/documents
+app.include_router(estimates_router)      # /api/estimates
+app.include_router(patch_notes_router)    # /api/patch-notes
+app.include_router(admin_notes_router)    # /api/admin-notes

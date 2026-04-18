@@ -17,6 +17,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     name: str | None = None
     role: str | None = None
+    profile_photo: str | None = None
 
     class Config:
         from_attributes = True  # Allows returning SQLAlchemy models directly
@@ -24,3 +25,15 @@ class UserResponse(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     name: str | None = None
+    # Data URL (e.g. "data:image/jpeg;base64,..."). Send "" or null to clear.
+    profile_photo: str | None = None
+
+
+class DirectoryEntry(BaseModel):
+    id: int
+    email: EmailStr
+    name: str | None = None
+    profile_photo: str | None = None
+
+    class Config:
+        from_attributes = True

@@ -7,17 +7,30 @@ Endpoints:
 - GET  /api/admin/events/today       — geotagged events from today (for map)
 """
 
+import json as _json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
+from app.db.models.admin_note import AdminNote
+from app.db.models.dvir import DVIR
 from app.db.models.event import Event
+from app.db.models.job_bill import JobBill
+from app.db.models.job_report import JobReport
+from app.db.models.materials import MaterialsSubmission
+from app.db.models.photo import Photo
+from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
 from app.db.session import get_db
+
+DVIR_UNITS_KEY = "dvir_units"
+DEFAULT_DVIR_UNITS = ["26INT", "24FR8", "16FORD"]
+APP_THEME_KEY = "app_theme"
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -152,3 +165,284 @@ def events_today(
         }
         for e in events
     ]
+
+
+# ---------------------------
+# DVIR unit options config
+# ---------------------------
+
+class DVIRUnitsRequest(BaseModel):
+    units: List[str]
+
+
+@router.get("/config/dvir-units")
+def get_dvir_units(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    row = db.query(SystemConfig).filter(SystemConfig.key == DVIR_UNITS_KEY).first()
+    units = _json.loads(row.value) if row and row.value else DEFAULT_DVIR_UNITS
+    return {"units": units}
+
+
+@router.put("/config/dvir-units", status_code=204)
+def set_dvir_units(
+    payload: DVIRUnitsRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    units = [u.strip() for u in payload.units if u.strip()]
+    if not units:
+        raise HTTPException(status_code=400, detail="At least one unit is required")
+    row = db.query(SystemConfig).filter(SystemConfig.key == DVIR_UNITS_KEY).first()
+    if row:
+        row.value = _json.dumps(units)
+    else:
+        db.add(SystemConfig(key=DVIR_UNITS_KEY, value=_json.dumps(units)))
+    db.commit()
+
+
+# ---------------------------
+# App-wide theme config
+# ---------------------------
+
+@router.put("/config/theme", status_code=204)
+async def set_app_theme(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Save the current theme settings so they apply globally to all users."""
+    body = await request.json()
+    value = _json.dumps(body)
+    row = db.query(SystemConfig).filter(SystemConfig.key == APP_THEME_KEY).first()
+    if row:
+        row.value = value
+    else:
+        db.add(SystemConfig(key=APP_THEME_KEY, value=value))
+    db.commit()
+
+
+# ---------------------------
+# Job search — by date + name, returns candidate job_uuids
+# ---------------------------
+
+@router.get("/job-search")
+def job_search(
+    date: Optional[str] = Query(None, description="YYYY-MM-DD (event date or materials job_date)"),
+    name: Optional[str] = Query(None, description="Partial, case-insensitive match on job_name"),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Find candidate jobs for the Job Summary view without needing a UUID.
+
+    A "job" here is any job_uuid that appears in events or materials with a
+    matching date/name. Admins rarely remember the UUID, but they do know
+    the date and the customer name.
+    """
+    needle = (name or "").strip().lower()
+    candidates: Dict[str, Dict[str, Any]] = {}
+
+    # Events — date comes from timestamp
+    eq = db.query(Event).filter(Event.job_uuid.isnot(None))
+    if date:
+        eq = eq.filter(func.date(Event.timestamp) == date)
+    if needle:
+        eq = eq.filter(func.lower(Event.job_name).like(f"%{needle}%"))
+    for e in eq.limit(2000).all():
+        c = candidates.setdefault(e.job_uuid, {"names": [], "dates": set(), "events": 0, "materials": 0})
+        if e.job_name:
+            c["names"].append(e.job_name)
+        if e.timestamp:
+            c["dates"].add(e.timestamp.date().isoformat())
+        c["events"] += 1
+
+    # Materials — date comes from job_date (YYYY-MM-DD string)
+    mq = db.query(MaterialsSubmission).filter(MaterialsSubmission.job_uuid.isnot(None))
+    if date:
+        mq = mq.filter(MaterialsSubmission.job_date == date)
+    if needle:
+        mq = mq.filter(func.lower(MaterialsSubmission.job_name).like(f"%{needle}%"))
+    for m in mq.limit(2000).all():
+        c = candidates.setdefault(m.job_uuid, {"names": [], "dates": set(), "events": 0, "materials": 0})
+        if m.job_name:
+            c["names"].append(m.job_name)
+        if m.job_date:
+            c["dates"].add(m.job_date)
+        c["materials"] += 1
+
+    results: List[Dict[str, Any]] = []
+    for job_uuid, c in candidates.items():
+        names = c["names"]
+        best_name = max(set(names), key=names.count) if names else ""
+        dates_sorted = sorted(c["dates"])
+        results.append({
+            "job_uuid": job_uuid,
+            "job_name": best_name,
+            "dates": dates_sorted,
+            "event_count": c["events"],
+            "material_count": c["materials"],
+        })
+
+    # Newest first by latest known date
+    results.sort(key=lambda r: (r["dates"][-1] if r["dates"] else "", r["job_name"]), reverse=True)
+    return results[:limit]
+
+
+# ---------------------------
+# Per-job summary (all sources collated by job_uuid)
+# ---------------------------
+
+def _iso(dt: Any) -> Optional[str]:
+    if dt is None:
+        return None
+    if hasattr(dt, "isoformat"):
+        return dt.isoformat()
+    return str(dt)
+
+
+@router.get("/job-summary/{job_uuid}")
+def job_summary(
+    job_uuid: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Aggregate everything the app has collected for one job into a single
+    admin-facing payload. Returns lists even when empty so the UI can render
+    consistently. Resource shapes mirror what each source router returns but
+    trimmed to fields useful for reviewing a job end-to-end.
+    """
+    events = (
+        db.query(Event)
+        .filter(Event.job_uuid == job_uuid)
+        .order_by(Event.timestamp.asc())
+        .all()
+    )
+    dvirs = (
+        db.query(DVIR)
+        .filter(DVIR.job_uuid == job_uuid)
+        .order_by(DVIR.created_at.asc())
+        .all()
+    )
+    materials = (
+        db.query(MaterialsSubmission)
+        .filter(MaterialsSubmission.job_uuid == job_uuid)
+        .order_by(MaterialsSubmission.created_at.asc())
+        .all()
+    )
+    report = (
+        db.query(JobReport)
+        .filter(JobReport.job_uuid == job_uuid)
+        .first()
+    )
+    bill = (
+        db.query(JobBill)
+        .filter(JobBill.job_uuid == job_uuid)
+        .first()
+    )
+    photos = (
+        db.query(Photo)
+        .filter(Photo.job_uuid == job_uuid)
+        .order_by(Photo.created_at.asc())
+        .all()
+    )
+    admin_notes = (
+        db.query(AdminNote)
+        .filter(AdminNote.job_uuid == job_uuid)
+        .order_by(AdminNote.updated_at.desc())
+        .all()
+    )
+
+    # Pick the most-common job_name from events/materials so the header reads cleanly.
+    name_candidates: List[str] = []
+    for e in events:
+        if e.job_name:
+            name_candidates.append(e.job_name)
+    for m in materials:
+        if m.job_name:
+            name_candidates.append(m.job_name)
+    job_name = max(set(name_candidates), key=name_candidates.count) if name_candidates else ""
+
+    return {
+        "job_uuid": job_uuid,
+        "job_name": job_name,
+        "events": [
+            {
+                "event_id": e.event_id,
+                "type": e.type,
+                "timestamp": _iso(e.timestamp),
+                "note": e.note,
+                "lat": e.lat,
+                "lng": e.lng,
+                "created_by": e.created_by,
+            }
+            for e in events
+        ],
+        "dvirs": [
+            {
+                "dvir_id": d.dvir_id,
+                "inspection_type": d.inspection_type,
+                "inspection_date": d.inspection_date,
+                "vehicle_number": d.vehicle_number,
+                "trailer_number": d.trailer_number,
+                "condition": d.condition,
+                "defects": _json.loads(d.defects_json) if d.defects_json else [],
+                "defect_notes": d.defect_notes,
+                "driver_name": d.driver_name,
+                "mechanic_name": d.mechanic_name,
+                "mechanic_signed_at": _iso(d.mechanic_signed_at),
+                "created_at": _iso(d.created_at),
+            }
+            for d in dvirs
+        ],
+        "materials": [
+            {
+                "id": m.submission_id,
+                "created_at": _iso(m.created_at),
+                "notes": m.notes or "",
+                "items": _json.loads(m.items_json or "[]"),
+                "total": float(m.total or 0),
+            }
+            for m in materials
+        ],
+        "job_report": None if not report else {
+            "submitted_by_name": report.submitted_by_name,
+            "personal_vehicles": report.personal_vehicles,
+            "dumpster_pct": report.dumpster_pct,
+            "recycling_pct": report.recycling_pct,
+            "billing_method": report.billing_method,
+            "review_candidate": report.review_candidate,
+            "hours_match": report.hours_match,
+            "hours_mismatch_reason": report.hours_mismatch_reason,
+            "created_at": _iso(report.created_at),
+            "updated_at": _iso(report.updated_at),
+        },
+        "bill": None if not bill else {
+            "saved_by_name": bill.saved_by_name,
+            "items": _json.loads(bill.items_json or "[]"),
+            "global_discount": float(bill.global_discount or 0),
+            "notes": bill.notes or "",
+            "updated_at": _iso(bill.updated_at),
+        },
+        "photos": [
+            {
+                "id": p.id,
+                "caption": p.caption,
+                "drive_url": p.drive_url,
+                "created_by": p.created_by,
+                "created_at": _iso(p.created_at),
+            }
+            for p in photos
+        ],
+        "admin_notes": [
+            {
+                "id": n.id,
+                "title": n.title,
+                "body": n.body,
+                "created_by_name": n.created_by_name,
+                "updated_at": _iso(n.updated_at),
+            }
+            for n in admin_notes
+        ],
+    }

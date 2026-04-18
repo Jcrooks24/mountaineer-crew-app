@@ -20,3 +20,14 @@ def ensure_sheet_exports_tables(engine: Engine) -> None:
             exported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """))
+
+        # Generic dedup table for any other sheet export.
+        # Key is (kind, export_key) — e.g. ("job_report", "<job_uuid>:<updated_at>").
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS sheet_generic_exports (
+            kind TEXT NOT NULL,
+            export_key TEXT NOT NULL,
+            exported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (kind, export_key)
+        );
+        """))

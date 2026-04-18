@@ -1,9 +1,10 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
-import logo from "../assets/logo.png";
+import { useResolvedLogo } from "../theme/ThemeContext";
 
 export default function ForgotPassword() {
+  const { src: logo, variant: logoVariant } = useResolvedLogo();
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
@@ -33,7 +34,10 @@ export default function ForgotPassword() {
         <img
           src={logo}
           alt="Logo"
-          style={{ width: 48, height: 48, borderRadius: 14, objectFit: "contain", filter: "invert(1) brightness(1.15) contrast(1.05)" }}
+          style={{
+            width: 48, height: 48, borderRadius: 14, objectFit: "contain",
+            filter: logoVariant === "light" ? "invert(1) brightness(1.15) contrast(1.05)" : undefined,
+          }}
         />
         <div style={{ fontWeight: 900, fontSize: 18, letterSpacing: 0.2 }}>Mountaineer Moving Co.</div>
       </div>

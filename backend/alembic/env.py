@@ -20,8 +20,15 @@ from app.db.session import Base  # noqa: E402
 from app.db.models import user  # noqa: F401,E402
 from app.db.models import job  # noqa: F401,E402
 from app.db.models import event  # noqa: F401,E402
+from app.db.models import dvir        # noqa: F401,E402
+from app.db.models import job_report  # noqa: F401,E402
+from app.db.models import system_config  # noqa: F401,E402
+from app.db.models import materials     # noqa: F401,E402
+from app.db.models import calendar_job  # noqa: F401,E402
+from app.db.models import photo         # noqa: F401,E402
 # Add any other model modules that define tables:
 from app.db import sheet_exports  # noqa: F401,E402  (if this defines Base tables)
+from app.db.models import job_bill  # noqa: F401,E402
 target_metadata = Base.metadata
 
 

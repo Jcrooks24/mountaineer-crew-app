@@ -2,14 +2,18 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, model_validator
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models.materials import MaterialsSubmission
-from app.integrations.sheets_export import export_materials_to_sheets
+from app.integrations.sheets_export import (
+    delete_materials_from_sheets,
+    export_materials_to_sheets,
+    run_export_in_background,
+)
 from app.core.deps import get_current_user
 from app.db.models.user import User
 
@@ -117,19 +121,18 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
 @router.get("")
 def get_materials(
     limit: int = Query(default=500, ge=1, le=2000),
+    job_uuid: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Return all materials submissions newest-first.
-    Used by devices on startup to restore history.
+    Return materials submissions newest-first. If job_uuid is provided,
+    returns only submissions for that job.
     """
-    rows = (
-        db.query(MaterialsSubmission)
-        .order_by(MaterialsSubmission.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    q = db.query(MaterialsSubmission)
+    if job_uuid:
+        q = q.filter(MaterialsSubmission.job_uuid == job_uuid)
+    rows = q.order_by(MaterialsSubmission.created_at.desc()).limit(limit).all()
     return {
         "ok": True,
         "submissions": [
@@ -147,3 +150,32 @@ def get_materials(
             for r in rows
         ],
     }
+
+
+@router.delete("/{submission_id}")
+def delete_material(
+    submission_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a single materials submission (used to remove one item from
+    the live per-job materials list). Idempotent — returns ok even if absent."""
+    row = (
+        db.query(MaterialsSubmission)
+        .filter(MaterialsSubmission.submission_id == submission_id)
+        .first()
+    )
+    if row is None:
+        return {"ok": True, "deleted": False}
+    db.delete(row)
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete material")
+
+    # Mirror the removal to the Google Sheet so admins reading the sheet
+    # for cost analysis don't see ghost rows for deleted materials.
+    run_export_in_background(delete_materials_from_sheets, submission_id)
+
+    return {"ok": True, "deleted": True}

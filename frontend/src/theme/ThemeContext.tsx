@@ -1,5 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
+import logoLight from "../assets/logo_light.png";
+import logoDark from "../assets/logo_dark.png";
+
 // ─── Preset themes ────────────────────────────────────────────────────────────
 
 export interface ThemeVars {
@@ -192,27 +195,41 @@ export const PIN_EVENT_TYPES = Object.keys(DEFAULT_PIN_COLORS);
 // ─── Configurable help text ───────────────────────────────────────────────────
 
 export interface HelpTexts {
-  materialsHint: string;    // below material selector
   photoCaptionPlaceholder: string;
   jobNotesPlaceholder: string;
-  materialsNotesPlaceholder: string;
-  jobLabelPlaceholder: string;
+  billNotesPlaceholder: string;
+  hoursMismatchPlaceholder: string;
+  jobDescriptionPlaceholder: string;
+  photosHint: string;
 }
 
 export const DEFAULT_HELP_TEXTS: HelpTexts = {
-  materialsHint: "Custom items: enter cost → +10%.",
   photoCaptionPlaceholder: "Describe what's in this photo…",
   jobNotesPlaceholder: "Notes for this job…",
-  materialsNotesPlaceholder: "Notes (optional)…",
-  jobLabelPlaceholder: "Job name…",
+  billNotesPlaceholder: "Any notes to include with this bill…",
+  hoursMismatchPlaceholder: "e.g. Travel time not billed, job ran over estimate, early finish…",
+  jobDescriptionPlaceholder: "Describe the job…",
+  photosHint: "Submit before-and-after photos, damage photos, and any other photos relevant to this job.",
 };
 
 // ─── Settings shape ───────────────────────────────────────────────────────────
+
+// Text-contrast override. "preset" uses whatever the current theme preset
+// ships with; "light" forces light body text + muted (use on dark themes),
+// "dark" forces dark body text + muted (use on light themes or pale customs).
+export type TextMode = "preset" | "light" | "dark";
+
+// Logo variant selector. "light" serves logo_light.png (light-pixel logo,
+// reads on dark backgrounds); "dark" serves logo_dark.png (dark-pixel logo,
+// reads on light backgrounds); "auto" picks based on the theme preset.
+export type LogoMode = "auto" | "light" | "dark";
 
 export interface ThemeSettings {
   themeId: string;
   brandOverride: string | null;
   brand2Override: string | null;
+  textMode: TextMode;
+  logoMode: LogoMode;
   fontValue: string;
   btnRadius: string;
   btnBgFrom: string;
@@ -227,11 +244,14 @@ export interface ThemeSettings {
 }
 
 const STORAGE_KEY = "crew_theme_settings";
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export const DEFAULT_SETTINGS: ThemeSettings = {
   themeId: "dark-ocean",
   brandOverride: null,
   brand2Override: null,
+  textMode: "preset",
+  logoMode: "auto",
   fontValue: FONT_OPTIONS[0].value,
   btnRadius: RADIUS_OPTIONS[0].value,
   btnBgFrom: "#1b2945",
@@ -273,6 +293,22 @@ function applySettings(settings: ThemeSettings) {
   // Color overrides
   if (settings.brandOverride) root.style.setProperty("--brand", settings.brandOverride);
   if (settings.brand2Override) root.style.setProperty("--brand2", settings.brand2Override);
+
+  // Text contrast override. Also drives `--on-brand`, the color used for
+  // text on bright brand-coloured surfaces (primary buttons, active tabs),
+  // so the whole app follows the setting end-to-end.
+  if (settings.textMode === "light") {
+    root.style.setProperty("--text", "#f5f7fa");
+    root.style.setProperty("--muted", "#c6cedb");
+    root.style.setProperty("--on-brand", "#f5f7fa");
+  } else if (settings.textMode === "dark") {
+    root.style.setProperty("--text", "#1a2030");
+    root.style.setProperty("--muted", "#5a6a7e");
+    root.style.setProperty("--on-brand", "#0b1220");
+  } else {
+    // "preset": brand buttons stay on their default dark ink.
+    root.style.setProperty("--on-brand", "#0b1220");
+  }
 
   // Font
   root.style.setProperty("--font", settings.fontValue);
@@ -320,6 +356,22 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<ThemeSettings>(loadSettings);
 
+  // On mount: fetch admin-saved theme from server and apply it for all users
+  useEffect(() => {
+    fetch(`${API}/api/config/theme`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((serverSettings: Partial<ThemeSettings> | null) => {
+        if (!serverSettings) return;
+        setSettings((prev) => ({
+          ...prev,
+          ...serverSettings,
+          pinColors: { ...DEFAULT_PIN_COLORS, ...(serverSettings.pinColors ?? {}) },
+          helpTexts: { ...DEFAULT_HELP_TEXTS, ...(serverSettings.helpTexts ?? {}) },
+        }));
+      })
+      .catch(() => { /* network unavailable — use localStorage fallback */ });
+  }, []);
+
   useEffect(() => {
     applySettings(settings);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
@@ -344,4 +396,21 @@ export function useTheme() {
   const ctx = useContext(ThemeContext);
   if (!ctx) throw new Error("useTheme must be used within ThemeProvider");
   return ctx;
+}
+
+// Resolve which logo file to serve for the current theme + logoMode.
+// `logo_light.png` is the light-pixel variant (for dark backgrounds);
+// `logo_dark.png` is the dark-pixel variant (for light backgrounds).
+// In "auto", "light" preset → dark-pixel logo; every other preset → light-pixel.
+export function useResolvedLogo(): { src: string; variant: "light" | "dark" } {
+  const { settings } = useTheme();
+  const variant: "light" | "dark" =
+    settings.logoMode === "light"
+      ? "light"
+      : settings.logoMode === "dark"
+        ? "dark"
+        : settings.themeId === "light"
+          ? "dark"
+          : "light";
+  return { src: variant === "light" ? logoLight : logoDark, variant };
 }

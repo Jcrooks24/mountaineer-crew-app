@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import logo from "./assets/logo.png";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
+import JobReport from "./components/JobReport";
+import DVIRReminderModal from "./components/DVIRReminderModal";
+import UserAvatar from "./components/UserAvatar";
+import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
-import { useTheme } from "./theme/ThemeContext";
+import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
+import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
+import AdminNotesBanner from "./components/AdminNotesBanner";
 import { getToken } from "./auth/token";
+import {
+  renderedForJob as materialsRenderedForJob,
+  syncQueue as syncMaterialsQueue,
+  fetchAndCache as fetchAndCacheMaterials,
+  type LiveMaterial,
+} from "./lib/materialsStore";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -35,6 +46,21 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
 // LocalStorage keys
 const QUEUE_KEY = "crew_event_queue_v1"; // unsynced events only
 const LOG_KEY = "crew_event_log_v1"; // full job activity log (synced + queued)
+
+// Retention — the Google Sheet is the long-term record; the client log is a
+// working buffer for the offline-first UX. Trim anything older than the
+// retention window (and cap length as a hard ceiling) on boot so
+// localStorage doesn't silently blow out its quota after months of use.
+const LOG_RETENTION_DAYS = 14;
+const LOG_MAX_ENTRIES = 2000;
+const QUEUE_MAX_AGE_DAYS = 14; // unsynced ops this old are almost certainly dead
+
+function withinRetention(iso: string | undefined, days: number): boolean {
+  if (!iso) return true; // keep entries with no timestamp (defensive)
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return true;
+  return Date.now() - t < days * 86_400_000;
+}
 const JOB_KEY = "crew_active_job_uuid_v1";
 const JOB_STATUS_KEY = "crew_job_status_v1"; // "active" | "closed"
 const COMMENTS_PREFIX = "crew_job_comments_v1:"; // per job_uuid
@@ -47,7 +73,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "materials";
+type Tab = "timeline" | "photos" | "report";
 
 type EventRecord = {
   event_id: string;
@@ -77,26 +103,6 @@ type JobMeta = {
   updated_at: string;
 };
 
-type MaterialCatalogItem = {
-  name: string;
-  unitPrice: number | null; // null => requires cost input (10% markup rule)
-};
-
-type MaterialLineItem = {
-  id: string;
-  name: string;
-  qty: number;
-  unitPrice: number | null; // null => TBD
-  source: "catalog" | "custom";
-  baseCost?: number | null;
-};
-
-type MaterialsDraft = {
-  jobLabel: string;
-  notes: string;
-  items: MaterialLineItem[];
-};
-
 type ServerPhoto = {
   id: string;
   job_uuid: string;
@@ -108,43 +114,6 @@ type ServerPhoto = {
   created_at: string;
   mime_type: string;
 };
-
-type MaterialsSubmission = {
-  id: string;
-  created_at: string;
-  job_uuid: string;
-  jobLabel: string;
-  jobName: string;
-  jobDate: string;
-  notes: string;
-  items: MaterialLineItem[];
-  total: number;
-};
-
-const MATERIALS_DRAFT_PREFIX = "crew_materials_draft_v1:"; // per job_uuid
-const MATERIALS_SUBMISSIONS_KEY = "crew_materials_submissions_v1"; // global list
-const MATERIALS_QUEUE_KEY = "crew_materials_queue_v1"; // unsynced submissions
-
-const MATERIAL_CATALOG: MaterialCatalogItem[] = [
-  { name: "Small Box", unitPrice: 2.0 },
-  { name: "Medium Moving Box", unitPrice: 2.5 },
-  { name: "Large Box", unitPrice: 3.0 },
-  { name: "Small Wardrobe", unitPrice: 21.0 },
-  { name: "Large Wardrobe", unitPrice: 24.0 },
-  { name: "Dish Barrel", unitPrice: 9.0 },
-  { name: "Four Piece Mirror Pack", unitPrice: 11.0 },
-  { name: "Packing Paper (200 Sheets)", unitPrice: 26.0 },
-  { name: "Packing Paper (500 Sheets)", unitPrice: 44.0 },
-  { name: "Paper Pads", unitPrice: 12.5 },
-  { name: "Bubble Wrap (Per Roll)", unitPrice: 33.0 },
-  { name: "Tape (Per Roll)", unitPrice: 3.0 },
-  { name: "Plastic Couch Cover", unitPrice: 8.0 },
-  { name: "Mattress Bag (Any Size)", unitPrice: 9.5 },
-  { name: "Light Duty Furniture Pad", unitPrice: 10.0 },
-  { name: "Heavy-Duty Pad", unitPrice: 22.0 },
-  { name: "Small Wrap", unitPrice: 12.5 },
-  { name: "Medium Wrap", unitPrice: 22.0 },
-];
 
 function todayLocalYYYYMMDD() {
   const d = new Date();
@@ -208,6 +177,7 @@ export default function App() {
   const nav = useNavigate();
   const { user } = useAuth();
   const { settings: themeSettings } = useTheme();
+  const { src: logo, variant: logoVariant } = useResolvedLogo();
   const ht = themeSettings.helpTexts;
   const [tab, setTab] = useState<Tab>("timeline");
 
@@ -223,6 +193,45 @@ export default function App() {
   const [activityLog, setActivityLog] = useState<EventRecord[]>([]);
 
   const [clockText, setClockText] = useState<string>("—");
+  const [patchNotesUnseen, setPatchNotesUnseen] = useState<boolean>(false);
+
+  useEffect(() => {
+    apiFetch<{ id: number; updated_at: string }[]>("/api/patch-notes")
+      .then((rows) => {
+        const latest = rows[0]?.updated_at ?? null;
+        setPatchNotesUnseen(hasUnseenPatchNotes(latest));
+      })
+      .catch(() => {/* non-fatal — no indicator */});
+  }, []);
+
+  // Retention prune on boot — drop stale log entries and stuck queue ops
+  // so localStorage stays well clear of its per-origin quota. The Google
+  // Sheet is authoritative long-term; this buffer only needs a couple of
+  // weeks of history.
+  useEffect(() => {
+    try {
+      const rawLog = localStorage.getItem(LOG_KEY);
+      if (rawLog) {
+        const log: EventRecord[] = JSON.parse(rawLog);
+        const trimmed = log
+          .filter((e) => withinRetention(e.timestamp, LOG_RETENTION_DAYS))
+          .slice(0, LOG_MAX_ENTRIES);
+        if (trimmed.length !== log.length) {
+          localStorage.setItem(LOG_KEY, JSON.stringify(trimmed));
+        }
+      }
+      const rawQ = localStorage.getItem(QUEUE_KEY);
+      if (rawQ) {
+        const q: EventRecord[] = JSON.parse(rawQ);
+        const trimmedQ = q.filter((e) => withinRetention(e.timestamp, QUEUE_MAX_AGE_DAYS));
+        if (trimmedQ.length !== q.length) {
+          localStorage.setItem(QUEUE_KEY, JSON.stringify(trimmedQ));
+        }
+      }
+    } catch {
+      /* corrupted JSON — ignore; next write will overwrite */
+    }
+  }, []);
 
   // Job metadata (display + persistence)
   const [jobName, setJobName] = useState<string>("");
@@ -246,22 +255,12 @@ export default function App() {
   const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
   const [pendingCaption, setPendingCaption] = useState<string>("");
 
-  // Materials
-  const [matJobLabel, setMatJobLabel] = useState<string>("");
-  const [matNotes, setMatNotes] = useState<string>("");
-  const [matItems, setMatItems] = useState<MaterialLineItem[]>([]);
-  const [matError, setMatError] = useState<string>("");
-
-  const [matSelectedName, setMatSelectedName] = useState<string>("");
-  const [matCustomName, setMatCustomName] = useState<string>("");
-  const [matCustomCost, setMatCustomCost] = useState<string>("");
-  const [matQty, setMatQty] = useState<number>(1);
-
   const [sendingType, setSendingType] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [dvirPending, setDvirPending] = useState<{ type: string } | null>(null);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
   const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
-  const [matSubmissions, setMatSubmissions] = useState<MaterialsSubmission[]>([]);
+  const [materialsSummary, setMaterialsSummary] = useState<LiveMaterial[]>([]);
 
   const canSend = useMemo(() => jobUuid.trim().length > 0, [jobUuid]);
 
@@ -285,7 +284,13 @@ export default function App() {
   }
 
   function saveJson<T>(key: string, val: T) {
-    localStorage.setItem(key, JSON.stringify(val));
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch {
+      // Quota exceeded or similar — surface once so the problem isn't silent.
+      // Retention pruning on boot should keep us well clear of this.
+      console.warn(`[storage] failed to write ${key}; log retention may need review`);
+    }
   }
 
   function loadQueue(): EventRecord[] {
@@ -302,8 +307,13 @@ export default function App() {
   }
 
   function saveLog(log: EventRecord[]) {
-    saveJson(LOG_KEY, log);
-    setActivityLog(log);
+    // Defensive cap — saveLog is called from many paths; enforce the ceiling
+    // on every write rather than trusting each caller to prune.
+    const capped = log.length > LOG_MAX_ENTRIES
+      ? log.slice(0, LOG_MAX_ENTRIES)
+      : log;
+    saveJson(LOG_KEY, capped);
+    setActivityLog(capped);
   }
 
   function commentsKeyForJob(uuid: string) {
@@ -380,24 +390,6 @@ export default function App() {
     try {
       localStorage.setItem(calBindKey(date, calId), uuid);
     } catch {}
-  }
-
-  // Materials
-  function materialsDraftKey(uuid: string) {
-    return `${MATERIALS_DRAFT_PREFIX}${uuid || "none"}`;
-  }
-  function loadMaterialsDraft(uuid: string): MaterialsDraft | null {
-    if (!uuid.trim()) return null;
-    return loadJson<MaterialsDraft | null>(materialsDraftKey(uuid.trim()), null);
-  }
-  function saveMaterialsDraft(uuid: string, draft: MaterialsDraft) {
-    if (!uuid.trim()) return;
-    saveJson(materialsDraftKey(uuid.trim()), draft);
-  }
-  function appendMaterialsSubmission(sub: MaterialsSubmission) {
-    const existing = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-    existing.unshift(sub);
-    saveJson(MATERIALS_SUBMISSIONS_KEY, existing);
   }
 
   // -----------------------
@@ -533,16 +525,27 @@ export default function App() {
 
       const json = await res.json();
 
-      const acceptedAll =
-        json?.ok === true && (json.inserted + json.duplicates) === q.length && (json.errors ?? 0) === 0;
-
-      if (acceptedAll) {
+      // Any event that arrived at the server has been "handled" — either
+      // inserted, deduped, or permanently rejected. Retrying rejected events
+      // just wedges the queue forever. So: if we got any well-formed
+      // response back, drop the whole batch and warn on the failures.
+      // Only keep the queue when the HTTP request itself errored (catch).
+      if (json?.ok === true) {
+        const failed: { event_id: string; reason?: string }[] = json.failed ?? [];
         const ids = new Set(q.map((e) => e.event_id));
         markLogEventsSyncedByIds(ids);
         saveQueue([]);
-        setStatus("Synced");
+        if (failed.length > 0) {
+          console.warn(
+            `[sync] server rejected ${failed.length} event(s):`,
+            failed.map((f) => `${f.event_id} (${f.reason ?? "unknown"})`).join(", "),
+          );
+          setStatus(`Synced — ${failed.length} rejected`);
+        } else {
+          setStatus("Synced");
+        }
       } else {
-        setStatus("Partial sync (kept queued)");
+        setStatus("Sync failed (kept queued)");
         saveQueue(q);
       }
     } catch (e: any) {
@@ -944,243 +947,20 @@ export default function App() {
   }
 
   // -----------------------
-  // Materials
+  // Materials summary — read from the offline-capable materialsStore cache,
+  // then fire a background sync + refetch.
   // -----------------------
-  function computeMaterialsTotal(items: MaterialLineItem[]) {
-    return items.reduce((sum, it) => {
-      if (it.unitPrice == null) return sum;
-      return sum + it.unitPrice * it.qty;
-    }, 0);
+  function refreshMaterialsSummary(uuid: string) {
+    setMaterialsSummary(materialsRenderedForJob(uuid.trim()));
   }
 
-  function resetMaterialsAddControls() {
-    setMatSelectedName("");
-    setMatCustomName("");
-    setMatCustomCost("");
-    setMatQty(1);
-  }
-
-  function loadOrInitMaterialsDraft() {
-    setMatError("");
-
-    if (!jobUuid.trim()) {
-      setMatJobLabel(jobName || "");
-      setMatNotes("");
-      setMatItems([]);
-      resetMaterialsAddControls();
-      return;
-    }
-
-    const draft = loadMaterialsDraft(jobUuid.trim());
-    if (draft) {
-      setMatJobLabel(draft.jobLabel || jobName || "");
-      setMatNotes(draft.notes || "");
-      setMatItems(draft.items || []);
-      resetMaterialsAddControls();
-      return;
-    }
-
-    setMatJobLabel(jobName || "");
-    setMatNotes("");
-    setMatItems([]);
-    resetMaterialsAddControls();
-  }
-
-  function persistMaterialsDraft() {
-    if (!jobUuid.trim()) return;
-    saveMaterialsDraft(jobUuid.trim(), { jobLabel: matJobLabel, notes: matNotes, items: matItems });
-  }
-
-  function addMaterialsItem() {
-    setMatError("");
-
-    if (!jobUuid.trim()) {
-      setMatError("Set Job first");
-      return;
-    }
-
-    const qty = Number.isFinite(matQty) ? Math.max(1, Math.floor(matQty)) : 1;
-
-    if (matSelectedName && matSelectedName !== "__custom__") {
-      const found = MATERIAL_CATALOG.find((m) => m.name === matSelectedName);
-      if (!found) {
-        setMatError("Material not found");
-        return;
-      }
-
-      const item: MaterialLineItem = {
-        id: crypto.randomUUID(),
-        name: found.name,
-        qty,
-        unitPrice: found.unitPrice,
-        source: "catalog",
-      };
-
-      setMatItems((prev) => [item, ...prev]);
-      resetMaterialsAddControls();
-      return;
-    }
-
-    if (matSelectedName === "__custom__") {
-      const name = matCustomName.trim();
-      if (!name) {
-        setMatError("Custom name required");
-        return;
-      }
-
-      const costRaw = matCustomCost.trim();
-      let baseCost: number | null = null;
-      let unitPrice: number | null = null;
-
-      if (costRaw.length > 0) {
-        const parsed = Number(costRaw);
-        if (!Number.isFinite(parsed) || parsed < 0) {
-          setMatError("Cost must be a number");
-          return;
-        }
-        baseCost = parsed;
-        unitPrice = parsed * 1.1;
-      }
-
-      const item: MaterialLineItem = {
-        id: crypto.randomUUID(),
-        name,
-        qty,
-        unitPrice,
-        baseCost,
-        source: "custom",
-      };
-
-      setMatItems((prev) => [item, ...prev]);
-      resetMaterialsAddControls();
-      return;
-    }
-
-    setMatError("Select a material");
-  }
-
-  function removeMaterialsItem(id: string) {
-    setMatItems((prev) => prev.filter((x) => x.id !== id));
-  }
-
-  // -----------------------
-  // Materials backend sync
-  // -----------------------
-  function loadMaterialsQueue(): MaterialsSubmission[] {
-    return loadJson<MaterialsSubmission[]>(MATERIALS_QUEUE_KEY, []);
-  }
-  function saveMaterialsQueue(q: MaterialsSubmission[]) {
-    saveJson(MATERIALS_QUEUE_KEY, q);
-  }
-
-  async function syncMaterialsQueue() {
-    if (!navigator.onLine) return;
-    const q = loadMaterialsQueue();
-    if (q.length === 0) return;
-
-    const token = getToken();
-    const remaining: MaterialsSubmission[] = [];
-    for (const sub of q) {
-      try {
-        const res = await fetch(`${API}/api/materials`, {
-          method: "POST",
-          headers: makeAuthHeaders(token, { "Content-Type": "application/json" }),
-          body: JSON.stringify(sub),
-        });
-        if (!res.ok) remaining.push(sub);
-      } catch {
-        remaining.push(sub);
-      }
-    }
-    saveMaterialsQueue(remaining);
-  }
-
-  async function loadMaterialsFromBackend() {
-    if (!navigator.onLine) return;
-    try {
-      const token = getToken();
-      const res = await fetch(`${API}/api/materials?limit=500`, {
-        headers: makeAuthHeaders(token),
-      });
-      if (!res.ok) return;
-      const json = await res.json();
-      if (!json.ok || !Array.isArray(json.submissions)) return;
-
-      const existing = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-      const existingIds = new Set(existing.map((s) => s.id));
-
-      const incoming = json.submissions.filter((s: MaterialsSubmission) => !existingIds.has(s.id));
-      if (incoming.length === 0) return;
-
-      const merged = [...incoming, ...existing].sort(
-        (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)
-      );
-      saveJson(MATERIALS_SUBMISSIONS_KEY, merged);
-    } catch {
-      // best-effort
-    }
-  }
-
-  async function submitMaterials() {
-    setMatError("");
-
-    if (!jobUuid.trim()) {
-      setMatError("Set Job first");
-      return;
-    }
-    if (matItems.length === 0) {
-      setMatError("No items");
-      return;
-    }
-
-    const total = computeMaterialsTotal(matItems);
-
-    const sub: MaterialsSubmission = {
-      id: crypto.randomUUID(),
-      created_at: new Date().toISOString(),
-      job_uuid: jobUuid.trim(),
-      jobLabel: matJobLabel.trim(),
-      jobName: jobName.trim(),
-      jobDate,
-      notes: matNotes.trim(),
-      items: matItems,
-      total,
-    };
-
-    appendMaterialsSubmission(sub);
-
-    // Queue for backend sync (survives offline)
-    const mq = loadMaterialsQueue();
-    mq.unshift(sub);
-    saveMaterialsQueue(mq);
-    syncMaterialsQueue(); // fire-and-forget
-
-    await recordEvent("NOTE", `MATERIALS ${money(total)} (${matItems.length})`);
-
-    setMatNotes("");
-    setMatItems([]);
-    resetMaterialsAddControls();
-    persistMaterialsDraft();
-
-    const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-    setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
-
-    setStatus("Materials submitted");
-  }
-
-  function cancelMaterials() {
-    const ok = window.confirm("Clear draft?");
-    if (!ok) return;
-
-    setMatNotes("");
-    setMatItems([]);
-    resetMaterialsAddControls();
-
-    if (jobUuid.trim()) {
-      saveMaterialsDraft(jobUuid.trim(), { jobLabel: matJobLabel, notes: "", items: [] });
-    }
-
-    setStatus("Draft cleared");
+  async function loadMaterialsSummary(uuid: string) {
+    const trimmed = uuid.trim();
+    refreshMaterialsSummary(trimmed);
+    if (!trimmed) return;
+    await syncMaterialsQueue();
+    const ok = await fetchAndCacheMaterials(trimmed);
+    if (ok) refreshMaterialsSummary(trimmed);
   }
 
   // -----------------------
@@ -1213,10 +993,13 @@ export default function App() {
 
     // Restore history from backend so mobile devices aren't empty on first load
     loadHistoryFromBackend();
-    loadMaterialsFromBackend();
-    syncMaterialsQueue();
+    loadMaterialsSummary(jobUuid);
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); syncMaterialsQueue(); };
+    // Fetch the user directory so we can show crew members' profile photos in
+    // activity entries and photo attributions.
+    ensureDirectory().catch(() => { /* offline — fall back to initials */ });
+
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); loadMaterialsSummary(jobUuid); };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
@@ -1268,21 +1051,22 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
 
+  // Refresh materials summary when the user returns to the Timeline tab
+  // or re-focuses the window so they see other crew members' additions.
   useEffect(() => {
-    if (tab !== "materials") return;
-    loadOrInitMaterialsDraft();
-    const all = loadJson<MaterialsSubmission[]>(MATERIALS_SUBMISSIONS_KEY, []);
-    setMatSubmissions(all.filter((s) => s.job_uuid === jobUuid.trim()));
-    loadMaterialsFromBackend();
-    syncMaterialsQueue();
+    if (tab !== "timeline") return;
+    loadMaterialsSummary(jobUuid);
+    function onVis() {
+      if (document.visibilityState === "visible") loadMaterialsSummary(jobUuid);
+    }
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
-
-  useEffect(() => {
-    if (tab !== "materials") return;
-    persistMaterialsDraft();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, matJobLabel, matNotes, matItems]);
 
   // Select visibility on dark theme
   const selectStyle: React.CSSProperties = {
@@ -1295,8 +1079,6 @@ export default function App() {
     outline: "none",
   };
   const optionStyle: React.CSSProperties = { color: "#0b1220", background: "#ffffff" };
-
-  const materialsTotal = useMemo(() => computeMaterialsTotal(matItems), [matItems]);
 
   const mergedLog = useMemo(() => {
     const uuid = jobUuid.trim();
@@ -1311,16 +1093,12 @@ export default function App() {
     );
   }, [activityLog, serverEvents, jobUuid]);
 
-  // Materials submissions for the current job — shown in Timeline for quick reference
-  const jobMaterialsSummary = useMemo(() => {
-    if (!jobUuid.trim()) return [];
-    try {
-      const all = JSON.parse(localStorage.getItem(MATERIALS_SUBMISSIONS_KEY) || "[]") as MaterialsSubmission[];
-      return all
-        .filter((s) => s.job_uuid === jobUuid.trim())
-        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-    } catch { return []; }
-  }, [jobUuid, matSubmissions]);
+  // Aggregate totals for the current job's materials (populated from the
+  // backend via loadMaterialsSummary)
+  const materialsTotal = useMemo(
+    () => materialsSummary.reduce((s, m) => s + (m.unitPrice == null ? 0 : m.unitPrice * m.qty), 0),
+    [materialsSummary],
+  );
 
   const calPlaceholder = useMemo(() => {
     if (calLoading) return "Loading…";
@@ -1334,7 +1112,20 @@ export default function App() {
       {/* Top bar */}
       <div className="topbar">
         <div className="brand">
-          <img className="logo" src={logo} alt="Logo" style={{ filter: "invert(1) brightness(1.15) contrast(1.05)" }} />
+          <img
+            className="logo"
+            src={logo}
+            alt="Logo"
+            style={{
+              // Inversion is only applied to the "light" variant — the
+              // placeholder file is the original dark-pixel logo, so inverting
+              // makes it readable on dark backgrounds. The "dark" variant
+              // renders as-is for use on light backgrounds. When real
+              // pre-coloured art is dropped into logo_light.png /
+              // logo_dark.png, delete the filter entirely.
+              filter: logoVariant === "light" ? "invert(1) brightness(1.15) contrast(1.05)" : undefined,
+            }}
+          />
           <div>
             <div className="title">Mountaineer Moving Co.</div>
             <div className="small">{clockText === "—" ? "Clock starts at Start" : `Clock: ${clockText}`}</div>
@@ -1351,6 +1142,13 @@ export default function App() {
           <span className="chip" style={{ color: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize" }}>
             {jobStatus}
           </span>
+          <button
+            className="chip"
+            onClick={() => nav("/dvir")}
+            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
+          >
+            DVIR
+          </button>
           {user?.role === "admin" && (
             <button
               className="chip"
@@ -1362,13 +1160,32 @@ export default function App() {
           )}
           <button
             className="chip"
-            onClick={() => nav("/profile")}
-            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
+            onClick={() => { setPatchNotesUnseen(false); nav("/profile"); }}
+            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)", position: "relative" }}
           >
             Profile
+            {patchNotesUnseen && (
+              <span
+                title="New patch notes — view on Profile"
+                style={{
+                  position: "absolute",
+                  top: -2,
+                  right: -2,
+                  width: 9,
+                  height: 9,
+                  borderRadius: "50%",
+                  background: "var(--brand)",
+                  boxShadow: "0 0 0 2px var(--bg)",
+                }}
+              />
+            )}
           </button>
         </div>
       </div>
+
+      {/* Admin notes — global, then per-job when a job is selected */}
+      <AdminNotesBanner scope="global" />
+      {jobUuid && <AdminNotesBanner key={jobUuid} scope={jobUuid} />}
 
       {/* Tabs */}
       <div className="tabbar">
@@ -1378,8 +1195,13 @@ export default function App() {
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
         </button>
-        <button className={"tab " + (tab === "materials" ? "active" : "")} onClick={() => setTab("materials")}>
-          Materials
+        <button
+          className={"tab " + (tab === "report" ? "active" : "")}
+          onClick={() => setTab("report")}
+          style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.1, gap: 2 }}
+        >
+          <span>Report</span>
+          <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>Complete at end of job</span>
         </button>
       </div>
 
@@ -1430,7 +1252,7 @@ export default function App() {
                         setCalOtherName(e.target.value);
                         setJobName(e.target.value);
                       }}
-                      placeholder="Describe the job…"
+                      placeholder={ht.jobDescriptionPlaceholder}
                       autoFocus
                     />
                   </div>
@@ -1478,10 +1300,10 @@ export default function App() {
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("DEPART")}>
                   {sendingType === "DEPART" ? "..." : "Depart"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("START")}>
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "START" })}>
                   {sendingType === "START" ? "..." : "Start"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("FINISH")}>
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "FINISH" })}>
                   {sendingType === "FINISH" ? "..." : "Finish"}
                 </button>
                 <button
@@ -1552,7 +1374,10 @@ export default function App() {
                         </span>
                         <strong style={{ fontSize: 14 }}>{e.type}</strong>
                         {e.created_by && (
-                          <span className="small" style={{ color: "var(--muted)" }}>{e.created_by}</span>
+                          <span className="row" style={{ gap: 6 }}>
+                            <UserAvatar displayName={e.created_by} size={18} />
+                            <span className="small" style={{ color: "var(--muted)" }}>{e.created_by}</span>
+                          </span>
                         )}
                       </div>
                       <div className="row" style={{ gap: 8 }}>
@@ -1584,33 +1409,30 @@ export default function App() {
             )}
           </div>
 
-          {jobMaterialsSummary.length > 0 && (
+          {materialsSummary.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Materials ({jobMaterialsSummary.length})</div>
-              <div className="col" style={{ gap: 12 }}>
-                {jobMaterialsSummary.map((s) => (
-                  <div key={s.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                    <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 4 }}>
-                      <span style={{ fontWeight: 700, fontSize: 14 }}>{money(s.total)}</span>
-                      <span className="small" style={{ color: "var(--muted)" }}>
-                        {new Date(s.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+                <div className="sectionTitle">Materials ({materialsSummary.length})</div>
+                <div style={{ fontWeight: 700 }}>{money(materialsTotal)}</div>
+              </div>
+              <div className="col" style={{ gap: 4, marginTop: 8 }}>
+                {materialsSummary.map((m, i) => {
+                  const ext = m.unitPrice == null ? null : m.unitPrice * m.qty;
+                  return (
+                    <div key={`${m.submissionId}:${i}`} className="row small" style={{ justifyContent: "space-between", color: "var(--text)", opacity: m.pending ? 0.7 : 1 }}>
+                      <span>
+                        {m.qty}× {m.name}
+                        {m.pending && <span style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
+                      </span>
+                      <span style={{ color: "var(--muted)" }}>
+                        {ext != null ? money(ext) : "—"}
                       </span>
                     </div>
-                    <div className="col" style={{ gap: 2, marginTop: 6 }}>
-                      {s.items.map((it) => (
-                        <div key={it.id} className="row small" style={{ justifyContent: "space-between", color: "var(--text)" }}>
-                          <span>{it.qty}× {it.name}</span>
-                          <span style={{ color: "var(--muted)" }}>
-                            {it.unitPrice != null ? money(it.qty * it.unitPrice) : "—"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    {s.notes && (
-                      <div className="small" style={{ fontStyle: "italic", color: "var(--muted)", marginTop: 4 }}>{s.notes}</div>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
+              </div>
+              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                Manage via the Report tab · Bill Helper · Materials
               </div>
             </div>
           )}
@@ -1651,6 +1473,11 @@ export default function App() {
           ) : (
             <div className="card">
               <div className="sectionTitle">Photos</div>
+              {ht.photosHint && (
+                <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 2 }}>
+                  {ht.photosHint}
+                </div>
+              )}
               <div className="row wrap" style={{ marginTop: 10, gap: 8 }}>
                 <label className="btnPrimary" style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)" }}>
                   {photoBusy ? "Working…" : "Add Photo"}
@@ -1746,7 +1573,12 @@ export default function App() {
                     <div style={{ padding: 10 }}>
                       {sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>}
                       <div className="small" style={{ color: "var(--muted)" }}>{new Date(sp.created_at).toLocaleString()}</div>
-                      {sp.created_by && <div className="small" style={{ color: "var(--muted)" }}>by {sp.created_by}</div>}
+                      {sp.created_by && (
+                        <div className="row" style={{ gap: 6, marginTop: 4 }}>
+                          <UserAvatar displayName={sp.created_by} size={18} />
+                          <span className="small" style={{ color: "var(--muted)" }}>by {sp.created_by}</span>
+                        </div>
+                      )}
                       <div style={{ marginTop: 8 }}>
                         <a href={sp.drive_url} target="_blank" rel="noopener noreferrer"
                           style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
@@ -1762,184 +1594,22 @@ export default function App() {
         </>
       )}
 
-      {/* Materials */}
-      {tab === "materials" && (
-        <>
-          <div className="card">
-            <div className="sectionTitle">Log Materials</div>
+      {/* Report */}
+      {tab === "report" && (
+        <JobReport jobUuid={jobUuid} jobName={jobName} />
+      )}
 
-            <div className="col" style={{ gap: 12 }}>
-              <div className="col">
-                <div className="label">Job</div>
-                <input value={matJobLabel} onChange={(e) => setMatJobLabel(e.target.value)} placeholder={ht.jobLabelPlaceholder} />
-                <div className="small">{ht.materialsHint}</div>
-              </div>
-
-              <div className="row wrap" style={{ alignItems: "flex-end" }}>
-                <div className="col" style={{ flex: 1, minWidth: 220 }}>
-                  <div className="label">Material</div>
-                  <select value={matSelectedName} onChange={(e) => setMatSelectedName(e.target.value)} style={selectStyle}>
-                    <option value="" style={optionStyle}>
-                      Select…
-                    </option>
-                    {MATERIAL_CATALOG.map((m) => (
-                      <option key={m.name} value={m.name} style={optionStyle}>
-                        {m.name} — {m.unitPrice != null ? money(m.unitPrice) : "TBD"}
-                      </option>
-                    ))}
-                    <option value="__custom__" style={optionStyle}>
-                      Custom item…
-                    </option>
-                  </select>
-                </div>
-
-                <div className="col" style={{ width: 110 }}>
-                  <div className="label">Qty</div>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={matQty}
-                    onChange={(e) => setMatQty(Math.max(1, Math.floor(Number(e.target.value || 1))))}
-                  />
-                </div>
-
-                <div className="col" style={{ width: 110 }}>
-                  <button onClick={addMaterialsItem}>Add</button>
-                </div>
-              </div>
-
-              {matSelectedName === "__custom__" ? (
-                <div className="row wrap">
-                  <div className="col" style={{ flex: 2, minWidth: 220 }}>
-                    <div className="label">Custom name</div>
-                    <input
-                      value={matCustomName}
-                      onChange={(e) => setMatCustomName(e.target.value)}
-                      placeholder="Item name…"
-                    />
-                  </div>
-                  <div className="col" style={{ flex: 1, minWidth: 160 }}>
-                    <div className="label">Cost (optional)</div>
-                    <input
-                      value={matCustomCost}
-                      onChange={(e) => setMatCustomCost(e.target.value)}
-                      placeholder="15.00"
-                      inputMode="decimal"
-                    />
-                  </div>
-                </div>
-              ) : null}
-
-              {matError ? (
-                <div className="small" style={{ color: "var(--danger)" }}>
-                  {matError}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="sectionTitle">Items</div>
-
-            {matItems.length === 0 ? (
-              <div className="small">No items yet.</div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Material
-                      </th>
-                      <th style={{ textAlign: "right", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Qty
-                      </th>
-                      <th style={{ textAlign: "right", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Unit
-                      </th>
-                      <th style={{ textAlign: "right", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Ext
-                      </th>
-                      <th style={{ textAlign: "right", padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                        Remove
-                      </th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {matItems.map((it) => {
-                      const unit = it.unitPrice == null ? "TBD" : money(it.unitPrice);
-                      const ext = it.unitPrice == null ? "—" : money(it.unitPrice * it.qty);
-
-                      return (
-                        <tr key={it.id}>
-                          <td style={{ padding: "8px 6px", borderBottom: "1px solid var(--border)" }}>
-                            <div style={{ fontWeight: 700 }}>{it.name}</div>
-                          </td>
-                          <td style={{ padding: "8px 6px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
-                            {it.qty}
-                          </td>
-                          <td style={{ padding: "8px 6px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
-                            {unit}
-                          </td>
-                          <td style={{ padding: "8px 6px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
-                            {ext}
-                          </td>
-                          <td style={{ padding: "8px 6px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
-                            <button onClick={() => removeMaterialsItem(it.id)} style={{ padding: "6px 10px", fontSize: 12 }}>
-                              Remove
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div style={{ marginTop: 12, fontWeight: 800, fontSize: 16 }}>Total: {money(materialsTotal)}</div>
-          </div>
-
-          <div className="card">
-            <div className="sectionTitle">Notes</div>
-            <textarea value={matNotes} onChange={(e) => setMatNotes(e.target.value)} placeholder={ht.materialsNotesPlaceholder} />
-            <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 12 }}>
-              <button onClick={cancelMaterials}>Cancel</button>
-              <button className="btnPrimary" onClick={submitMaterials}>
-                Submit
-              </button>
-            </div>
-          </div>
-
-          {/* Past submissions for this job */}
-          {matSubmissions.length > 0 && (
-            <div className="card">
-              <div className="sectionTitle">Past Submissions ({matSubmissions.length})</div>
-              <div className="col" style={{ gap: 12 }}>
-                {matSubmissions.map((s) => (
-                  <div key={s.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                    <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 4 }}>
-                      <span style={{ fontWeight: 700, fontSize: 14 }}>
-                        {money(s.total)}
-                      </span>
-                      <span className="small" style={{ color: "var(--muted)" }}>
-                        {new Date(s.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    </div>
-                    <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                      {s.items.map((it) => `${it.qty}× ${it.name}`).join(", ")}
-                    </div>
-                    {s.notes && (
-                      <div className="small" style={{ fontStyle: "italic", marginTop: 2 }}>{s.notes}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
+      {/* DVIR reminder modal — shown before START or FINISH */}
+      {dvirPending && (
+        <DVIRReminderModal
+          trigger={dvirPending.type === "START" ? "pre-trip" : "post-trip"}
+          onProceed={() => {
+            const type = dvirPending.type;
+            setDvirPending(null);
+            recordEvent(type);
+          }}
+          onCancel={() => setDvirPending(null)}
+        />
       )}
 
     </div>

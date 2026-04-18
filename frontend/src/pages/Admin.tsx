@@ -14,6 +14,8 @@ import {
   DEFAULT_HELP_TEXTS,
   type HelpTexts,
 } from "../theme/ThemeContext";
+import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
+import EstimatorTab from "../components/EstimatorTab";
 
 type AdminUser = {
   id: number;
@@ -43,7 +45,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "calendar" | "settings";
+type Tab = "employees" | "map" | "calendar" | "settings" | "dvir" | "estimator" | "notes" | "summary";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -71,14 +73,18 @@ export default function Admin() {
 
       {/* Tabs */}
       <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "calendar", "settings"] as Tab[]).map((t) => (
+        {(["employees", "map", "calendar", "settings", "dvir", "estimator", "notes", "summary"] as Tab[]).map((t) => (
           <button
             key={t}
             className={"tab " + (tab === t ? "active" : "")}
             onClick={() => setTab(t)}
             style={{ textTransform: "capitalize" }}
           >
-            {t === "map" ? "Map (Today)" : t}
+            {t === "map" ? "Map (Today)"
+              : t === "dvir" ? "DVIR Review"
+              : t === "notes" ? "Notes"
+              : t === "summary" ? "Job Summary"
+              : t}
           </button>
         ))}
       </div>
@@ -87,6 +93,10 @@ export default function Admin() {
       {tab === "map" && <MapTab />}
       {tab === "calendar" && <CalendarTab />}
       {tab === "settings" && <SettingsTab />}
+      {tab === "dvir" && <DVIRTab />}
+      {tab === "estimator" && <EstimatorTab />}
+      {tab === "notes" && <NotesTab />}
+      {tab === "summary" && <JobSummaryTab />}
     </div>
   );
 }
@@ -521,6 +531,24 @@ function SettingsTab() {
 
   const [brandLocal, setBrandLocal] = useState(settings.brandOverride ?? preset.vars["--brand"]);
   const [brand2Local, setBrand2Local] = useState(settings.brand2Override ?? preset.vars["--brand2"]);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyMsg, setApplyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function applyToAllUsers() {
+    setApplyBusy(true);
+    setApplyMsg(null);
+    try {
+      await apiFetch("/api/admin/config/theme", {
+        method: "PUT",
+        body: JSON.stringify(settings),
+      });
+      setApplyMsg({ ok: true, text: "Theme applied to all users." });
+    } catch {
+      setApplyMsg({ ok: false, text: "Failed to save — try again." });
+    } finally {
+      setApplyBusy(false);
+    }
+  }
 
   function selectTheme(id: string) {
     const p = THEME_PRESETS[id];
@@ -572,6 +600,74 @@ function SettingsTab() {
                 <span style={{ fontSize: 18 }}>{p.emoji}</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: p.vars["--text"] }}>{p.label}</span>
                 {active && <span style={{ fontSize: 10, color: p.vars["--brand"], fontWeight: 700 }}>ACTIVE</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Text contrast + logo variant ── */}
+      <div className="card">
+        <div className="sectionTitle">Text Color</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Override body text for readability on customized themes.
+        </div>
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          {([
+            { id: "preset", label: "Use preset" },
+            { id: "light", label: "Light text" },
+            { id: "dark", label: "Dark text" },
+          ] as const).map((opt) => {
+            const active = settings.textMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => update({ textMode: opt.id })}
+                style={{
+                  border: `2px solid ${active ? "var(--brand)" : "var(--border)"}`,
+                  color: active ? "var(--brand)" : "var(--muted)",
+                  fontWeight: active ? 700 : 600,
+                  padding: "8px 16px",
+                  fontSize: 13,
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="small" style={{ color: "var(--text)", marginTop: 12 }}>
+          Sample body text at this setting — a quick brown fox jumps over the lazy dog.
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">Logo Variant</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          "Auto" picks the light logo for dark themes and the dark logo for the
+          Light preset. Drop replacements at <code>frontend/src/assets/logo_light.png</code>
+          and <code>logo_dark.png</code>.
+        </div>
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          {([
+            { id: "auto", label: "Auto (match theme)" },
+            { id: "light", label: "Light logo" },
+            { id: "dark", label: "Dark logo" },
+          ] as const).map((opt) => {
+            const active = settings.logoMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => update({ logoMode: opt.id })}
+                style={{
+                  border: `2px solid ${active ? "var(--brand)" : "var(--border)"}`,
+                  color: active ? "var(--brand)" : "var(--muted)",
+                  fontWeight: active ? 700 : 600,
+                  padding: "8px 16px",
+                  fontSize: 13,
+                }}
+              >
+                {opt.label}
               </button>
             );
           })}
@@ -710,7 +806,7 @@ function SettingsTab() {
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                 }}>
                 <span>{opt.label}</span>
-                <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "var(--font)" }}>The quick brown fox</span>
+                <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: opt.value }}>The quick brown fox</span>
               </button>
             );
           })}
@@ -840,14 +936,30 @@ function SettingsTab() {
       {/* ── Help text ── */}
       <HelpTextCard />
 
+      {/* ── DVIR vehicle units ── */}
+      <DVIRUnitsCard />
+
       {/* ── Data management ── */}
       <DataManagementCard />
 
-      {/* ── Reset ── */}
-      <div className="card" style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button onClick={handleReset} style={{ color: "var(--danger)", borderColor: "var(--danger)", fontSize: 13 }}>
-          Reset theme to defaults
-        </button>
+      {/* ── Apply to all users ── */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="small" style={{ color: "var(--muted)" }}>
+          Save your current theme settings as the global default — all crew members will see this theme on their next page load.
+        </div>
+        {applyMsg && (
+          <div style={{ fontSize: 13, color: applyMsg.ok ? "var(--ok)" : "var(--danger)" }}>
+            {applyMsg.ok ? "✓ " : ""}{applyMsg.text}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button className="btnPrimary" onClick={applyToAllUsers} disabled={applyBusy} style={{ fontSize: 13 }}>
+            {applyBusy ? "Saving…" : "Apply to all users"}
+          </button>
+          <button onClick={handleReset} style={{ color: "var(--danger)", borderColor: "var(--danger)", fontSize: 13 }}>
+            Reset to defaults
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -865,11 +977,12 @@ function HelpTextCard() {
   }
 
   const fields: { key: keyof HelpTexts; label: string }[] = [
-    { key: "materialsHint",            label: "Materials hint (below selector)" },
-    { key: "photoCaptionPlaceholder",  label: "Photo caption placeholder" },
-    { key: "jobNotesPlaceholder",      label: "Job notes placeholder" },
-    { key: "materialsNotesPlaceholder",label: "Materials notes placeholder" },
-    { key: "jobLabelPlaceholder",      label: "Job label placeholder" },
+    { key: "photoCaptionPlaceholder",   label: "Photo caption placeholder" },
+    { key: "jobNotesPlaceholder",       label: "Job notes placeholder" },
+    { key: "billNotesPlaceholder",      label: "Bill notes placeholder" },
+    { key: "hoursMismatchPlaceholder",  label: "Hours mismatch reason placeholder" },
+    { key: "jobDescriptionPlaceholder", label: "Manual job description placeholder" },
+    { key: "photosHint",                label: "Photos tab instructions" },
   ];
 
   return (
@@ -891,6 +1004,248 @@ function HelpTextCard() {
               >
                 Reset
               </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DVIR Review Tab — mechanic signs off on inspections
+// ─────────────────────────────────────────────────────────────────────────────
+
+type DVIRRecord = {
+  id: number;
+  dvir_id: string;
+  vehicle_number: string;
+  trailer_number: string | null;
+  odometer: number | null;
+  inspection_type: string;
+  inspection_date: string;
+  defects: string[];
+  defect_notes: string | null;
+  condition: string;
+  driver_name: string;
+  driver_signature: string;
+  driver_signed_at: string;
+  mechanic_name: string | null;
+  mechanic_signature: string | null;
+  mechanic_signed_at: string | null;
+  repairs_made: boolean | null;
+  mechanic_notes: string | null;
+  created_at: string;
+  needs_mechanic_review: boolean;
+};
+
+// ─────────────────────────────────────────
+// DVIR vehicle units editor
+// ─────────────────────────────────────────
+function DVIRUnitsCard() {
+  const [units, setUnits] = useState<string[]>([]);
+  const [newUnit, setNewUnit] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ units: string[] }>("/api/admin/config/dvir-units")
+      .then((r) => setUnits(r.units))
+      .catch(() => setErr("Failed to load units"));
+  }, []);
+
+  function addUnit() {
+    const trimmed = newUnit.trim().toUpperCase();
+    if (!trimmed) return;
+    if (units.includes(trimmed)) { setErr("Unit already exists"); return; }
+    setUnits((prev) => [...prev, trimmed]);
+    setNewUnit("");
+    setSaved(false);
+    setErr(null);
+  }
+
+  function removeUnit(unit: string) {
+    setUnits((prev) => prev.filter((u) => u !== unit));
+    setSaved(false);
+  }
+
+  async function save() {
+    if (units.length === 0) { setErr("At least one unit is required"); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/dvir-units", {
+        method: "PUT",
+        body: JSON.stringify({ units }),
+      });
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">DVIR Vehicle Units</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Vehicle unit options shown in the DVIR form dropdown.
+      </div>
+
+      {/* Current units */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+        {units.map((u) => (
+          <span key={u} style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "4px 10px", borderRadius: 999,
+            background: "rgba(93,214,194,0.12)", border: "1px solid var(--brand)",
+            color: "var(--brand)", fontSize: 13, fontWeight: 600,
+          }}>
+            {u}
+            <button
+              onClick={() => removeUnit(u)}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14, lineHeight: 1, padding: 0 }}
+              aria-label={`Remove ${u}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        {units.length === 0 && (
+          <span className="small" style={{ color: "var(--muted)" }}>No units configured</span>
+        )}
+      </div>
+
+      {/* Add new unit */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          value={newUnit}
+          onChange={(e) => { setNewUnit(e.target.value); setErr(null); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addUnit(); } }}
+          placeholder="e.g. 20FORD"
+          style={{
+            flex: 1, padding: "8px 12px", borderRadius: 8,
+            border: "1px solid var(--border)", background: "var(--bg)",
+            color: "var(--text)", fontSize: 14,
+          }}
+        />
+        <button
+          onClick={addUnit}
+          style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--brand)", color: "var(--brand)", fontSize: 13, cursor: "pointer" }}
+        >
+          Add
+        </button>
+      </div>
+
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 8 }}>{err}</div>}
+      {saved && !busy && <div style={{ color: "var(--ok)", fontSize: 13, marginBottom: 8 }}>✓ Saved</div>}
+
+      <button className="btnPrimary" onClick={save} disabled={busy} style={{ fontSize: 13 }}>
+        {busy ? "Saving…" : "Save Units"}
+      </button>
+    </div>
+  );
+}
+
+function DVIRTab() {
+  const [dvirs, setDvirs] = useState<DVIRRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [pendingOnly, setPendingOnly] = useState(true);
+  const [selected, setSelected] = useState<DVIRRecord | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setErr(null);
+    apiFetch<DVIRRecord[]>(`/api/dvir?pending_only=${pendingOnly}`)
+      .then(setDvirs)
+      .catch((e) => setErr(e?.message ?? "Failed to load DVIRs"))
+      .finally(() => setLoading(false));
+  }, [pendingOnly]);
+
+  if (selected) {
+    return (
+      <MechanicSignView
+        dvir={selected}
+        onBack={() => setSelected(null)}
+        onSigned={(updated) => {
+          setDvirs((prev) => prev.map((d) => (d.dvir_id === updated.dvir_id ? updated : d)));
+          setSelected(null);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      {/* Filter toggle */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={pendingOnly}
+            onChange={(e) => setPendingOnly(e.target.checked)}
+            style={{ accentColor: "var(--brand)" }}
+          />
+          Show pending mechanic review only
+        </label>
+      </div>
+
+      {loading && <div style={{ color: "var(--muted)", fontSize: 13 }}>Loading DVIRs…</div>}
+      {err && <div style={{ color: "var(--danger)", fontSize: 13 }}>{err}</div>}
+      {!loading && !err && dvirs.length === 0 && (
+        <div style={{ color: "var(--muted)", fontSize: 13 }}>
+          {pendingOnly ? "No DVIRs pending mechanic review." : "No DVIRs found."}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {dvirs.map((d) => (
+          <div
+            key={d.dvir_id}
+            className="card"
+            style={{ cursor: "pointer" }}
+            onClick={() => setSelected(d)}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>
+                  {d.vehicle_number}
+                  {d.trailer_number ? ` / Trailer ${d.trailer_number}` : ""}
+                </div>
+                <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                  {d.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} · {d.inspection_date} · {d.driver_name}
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                <span
+                  className="chip"
+                  style={{
+                    background: d.condition === "satisfactory" ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+                    color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
+                  }}
+                >
+                  {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} Defect${d.defects.length !== 1 ? "s" : ""}`}
+                </span>
+                {(() => {
+                  const signed = !!d.mechanic_signature;
+                  const awaiting = !signed && d.needs_mechanic_review;
+                  const label = signed
+                    ? "Mech. Signed"
+                    : awaiting
+                      ? "Awaiting Mechanic"
+                      : "No Review Needed";
+                  const bg = awaiting ? "rgba(255,200,50,0.12)" : "rgba(45,212,191,0.15)";
+                  const color = awaiting ? "#f0c040" : "var(--ok)";
+                  return (
+                    <span className="chip" style={{ background: bg, color }}>
+                      {label}
+                    </span>
+                  );
+                })()}
+              </div>
             </div>
           </div>
         ))}
@@ -952,6 +1307,1117 @@ function DataManagementCard() {
           Photos are stored in IndexedDB. Clear via browser dev tools → Application → IndexedDB → crew_app_db.
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+type MechanicSignViewProps = {
+  dvir: DVIRRecord;
+  onBack(): void;
+  onSigned(updated: DVIRRecord): void;
+};
+
+function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
+  const [mechanicName, setMechanicName] = useState("");
+  const [repairsMade, setRepairsMade] = useState<boolean | null>(null);
+  const [mechanicNotes, setMechanicNotes] = useState("");
+  const sigRef = useRef<SignaturePadHandle>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function handleSign(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    if (!mechanicName.trim()) return setErr("Mechanic name is required.");
+    if (repairsMade === null) return setErr("Please indicate whether repairs were made.");
+    if (sigRef.current?.isEmpty()) return setErr("Mechanic signature is required.");
+
+    setBusy(true);
+    try {
+      const updated = await apiFetch<DVIRRecord>(`/api/dvir/${dvir.dvir_id}/mechanic-sign`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          mechanic_name: mechanicName.trim(),
+          mechanic_signature: sigRef.current!.toDataURL(),
+          repairs_made: repairsMade,
+          mechanic_notes: mechanicNotes.trim() || null,
+        }),
+      });
+      onSigned(updated);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to submit mechanic signature.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const isSigned = !!dvir.mechanic_signature;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <button
+        onClick={onBack}
+        style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, marginBottom: 14, padding: 0 }}
+      >
+        ← Back to list
+      </button>
+
+      {/* DVIR summary */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
+          {dvir.vehicle_number}
+          {dvir.trailer_number ? ` / Trailer ${dvir.trailer_number}` : ""}
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+          {dvir.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} · {dvir.inspection_date}
+          {dvir.odometer ? ` · Odometer: ${dvir.odometer.toLocaleString()} mi` : ""}
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <span
+            className="chip"
+            style={{
+              background: dvir.condition === "satisfactory" ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+              color: dvir.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
+            }}
+          >
+            {dvir.condition === "satisfactory" ? "Satisfactory — No Defects" : "Defects Noted"}
+          </span>
+        </div>
+
+        {dvir.defects.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Defects:</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {dvir.defects.map((d) => (
+                <span key={d} className="chip" style={{ background: "rgba(255,107,107,0.12)", color: "var(--danger)" }}>
+                  {d}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {dvir.defect_notes && (
+          <div style={{ marginBottom: 8 }}>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 2 }}>Defect Notes:</div>
+            <div style={{ fontSize: 13 }}>{dvir.defect_notes}</div>
+          </div>
+        )}
+
+        <div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver: {dvir.driver_name}</div>
+          <img
+            src={dvir.driver_signature}
+            alt="Driver signature"
+            style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
+          />
+        </div>
+      </div>
+
+      {/* Already signed view */}
+      {isSigned ? (
+        <div className="card">
+          <div className="label" style={{ fontWeight: 700, marginBottom: 8, color: "var(--ok)" }}>
+            ✓ Mechanic Approved
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
+            Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? new Date(dvir.mechanic_signed_at).toLocaleString() : ""}
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+            Repairs made: {dvir.repairs_made ? "Yes" : "No — no repair needed"}
+          </div>
+          {dvir.mechanic_notes && <div style={{ fontSize: 13, marginBottom: 8 }}>{dvir.mechanic_notes}</div>}
+          <img
+            src={dvir.mechanic_signature!}
+            alt="Mechanic signature"
+            style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
+          />
+        </div>
+      ) : !dvir.needs_mechanic_review ? (
+        <div className="card">
+          <div className="label" style={{ fontWeight: 700, marginBottom: 8, color: "var(--ok)" }}>
+            ✓ No Mechanic Review Required
+          </div>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Driver reported no defects — vehicle auto-cleared as satisfactory.
+          </div>
+        </div>
+      ) : (
+        /* Mechanic sign form */
+        <div className="card">
+          <div className="label" style={{ fontWeight: 700, marginBottom: 12 }}>Mechanic Approval</div>
+
+          <form onSubmit={handleSign} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name *</div>
+              <input
+                value={mechanicName}
+                onChange={(e) => setMechanicName(e.target.value)}
+                placeholder="Full name"
+                style={mechInputStyle}
+              />
+            </div>
+
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Repairs *</div>
+              <div style={{ display: "flex", gap: 10 }}>
+                {[
+                  { label: "Repairs Made", value: true },
+                  { label: "No Repair Needed", value: false },
+                ].map(({ label, value }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => setRepairsMade(value)}
+                    style={{
+                      flex: 1,
+                      padding: "10px 0",
+                      borderRadius: 10,
+                      border: repairsMade === value ? "2px solid var(--brand)" : "1px solid var(--border)",
+                      background: repairsMade === value ? "rgba(93,214,194,0.12)" : "var(--card)",
+                      color: repairsMade === value ? "var(--brand)" : "var(--muted)",
+                      cursor: "pointer",
+                      fontWeight: repairsMade === value ? 700 : 400,
+                      fontSize: 13,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Notes</div>
+              <textarea
+                value={mechanicNotes}
+                onChange={(e) => setMechanicNotes(e.target.value)}
+                placeholder="Optional notes on repairs or inspection…"
+                rows={2}
+                style={{ ...mechInputStyle, resize: "vertical" }}
+              />
+            </div>
+
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Mechanic Signature * — sign below</div>
+              <SignaturePad ref={sigRef} height={140} />
+              <button
+                type="button"
+                onClick={() => sigRef.current?.clear()}
+                style={{ marginTop: 4, background: "none", border: "none", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: 0 }}
+              >
+                Clear signature
+              </button>
+            </div>
+
+            {err && (
+              <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+                {err}
+              </div>
+            )}
+
+            <button type="submit" className="btnPrimary" disabled={busy}>
+              {busy ? "Saving…" : "Approve & Sign DVIR"}
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const mechInputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--border)",
+  background: "var(--bg)",
+  color: "var(--text)",
+  fontSize: 14,
+  boxSizing: "border-box",
+};
+
+// ─────────────────────────────────────────
+// Notes tab — Patch Notes authoring
+// ─────────────────────────────────────────
+
+type PatchNoteRecord = {
+  id: number;
+  title: string;
+  body: string;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const NOTES_TAB_INITIAL = 3;
+
+function NotesTab() {
+  const [notes, setNotes] = useState<PatchNoteRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  function load() {
+    setLoading(true);
+    apiFetch<PatchNoteRecord[]>("/api/patch-notes")
+      .then(setNotes)
+      .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(load, []);
+
+  function startEdit(n: PatchNoteRecord) {
+    setEditingId(n.id);
+    setTitle(n.title);
+    setBody(n.body);
+  }
+
+  function clearForm() {
+    setEditingId(null);
+    setTitle("");
+    setBody("");
+  }
+
+  async function save() {
+    if (!title.trim() || !body.trim()) {
+      setErr("Title and body are required.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      if (editingId == null) {
+        await apiFetch<PatchNoteRecord>("/api/patch-notes", {
+          method: "POST",
+          body: JSON.stringify({ title: title.trim(), body: body.trim() }),
+        });
+      } else {
+        await apiFetch<PatchNoteRecord>(`/api/patch-notes/${editingId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title: title.trim(), body: body.trim() }),
+        });
+      }
+      clearForm();
+      load();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!confirm("Delete this patch note?")) return;
+    try {
+      await apiFetch(`/api/patch-notes/${id}`, { method: "DELETE" });
+      if (editingId === id) clearForm();
+      load();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Delete failed");
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="card">
+        <div className="sectionTitle">{editingId == null ? "New Patch Note" : "Edit Patch Note"}</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Shows up on every crew member's Profile tab. Updating a note re-triggers the
+          "new patch notes" indicator on the home screen.
+        </div>
+        <div className="col" style={{ gap: 10 }}>
+          <input
+            placeholder="Title (e.g. v1.4 — Faster Estimator)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <textarea
+            rows={5}
+            placeholder="What changed…"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+          />
+          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btnPrimary" onClick={save} disabled={busy}>
+              {busy ? "Saving…" : editingId == null ? "Publish" : "Save changes"}
+            </button>
+            {editingId != null && (
+              <button onClick={clearForm} type="button">Cancel</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">Published Patch Notes</div>
+        {loading && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
+        {!loading && notes.length === 0 && (
+          <div className="small" style={{ color: "var(--muted)" }}>No patch notes yet.</div>
+        )}
+        <div className="col" style={{ gap: 10 }}>
+          {(expanded ? notes : notes.slice(0, NOTES_TAB_INITIAL)).map((n) => (
+            <div key={n.id} className="card" style={{ padding: 12 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                    Updated {new Date(n.updated_at).toLocaleString()}
+                    {n.created_by_name ? ` · by ${n.created_by_name}` : ""}
+                  </div>
+                  <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
+                </div>
+                <div className="col" style={{ gap: 4 }}>
+                  <button onClick={() => startEdit(n)} style={{ fontSize: 12 }}>Edit</button>
+                  <button
+                    onClick={() => remove(n.id)}
+                    style={{ fontSize: 12, color: "var(--danger)", borderColor: "var(--danger)" }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {notes.length > NOTES_TAB_INITIAL && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              style={{ fontSize: 12, alignSelf: "flex-start" }}
+            >
+              {expanded
+                ? "Show recent only"
+                : `Show ${notes.length - NOTES_TAB_INITIAL} older note${notes.length - NOTES_TAB_INITIAL === 1 ? "" : "s"}`}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <AdminNotesSection />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Admin Notes section — global or per-job messages to crew
+// ─────────────────────────────────────────
+
+type AdminNoteRecord = {
+  id: number;
+  title: string;
+  body: string;
+  job_uuid: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function AdminNotesSection() {
+  const [notes, setNotes] = useState<AdminNoteRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [jobUuid, setJobUuid] = useState("");
+  const [jobDisplay, setJobDisplay] = useState("");  // "Customer — YYYY-MM-DD" once picked
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Job-picker state (date + name → job-search → pick candidate)
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerDate, setPickerDate] = useState("");
+  const [pickerName, setPickerName] = useState("");
+  const [pickerResults, setPickerResults] = useState<JobCandidate[] | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerErr, setPickerErr] = useState<string | null>(null);
+
+  async function runJobSearch() {
+    if (!pickerDate && !pickerName.trim()) {
+      setPickerErr("Enter a date, a customer name, or both.");
+      return;
+    }
+    setPickerLoading(true);
+    setPickerErr(null);
+    setPickerResults(null);
+    try {
+      const params = new URLSearchParams();
+      if (pickerDate) params.set("date", pickerDate);
+      if (pickerName.trim()) params.set("name", pickerName.trim());
+      const rows = await apiFetch<JobCandidate[]>(`/api/admin/job-search?${params.toString()}`);
+      setPickerResults(rows);
+    } catch (e: any) {
+      setPickerErr(e instanceof ApiError ? e.message : "Search failed");
+    } finally {
+      setPickerLoading(false);
+    }
+  }
+
+  function attachJob(c: JobCandidate) {
+    setJobUuid(c.job_uuid);
+    const dateLabel = c.dates.length ? c.dates[c.dates.length - 1] : "";
+    setJobDisplay(`${c.job_name || "(unnamed)"}${dateLabel ? ` — ${dateLabel}` : ""}`);
+    setPickerOpen(false);
+    setPickerResults(null);
+    setPickerDate("");
+    setPickerName("");
+    setPickerErr(null);
+  }
+
+  function detachJob() {
+    setJobUuid("");
+    setJobDisplay("");
+  }
+
+  function load() {
+    setLoading(true);
+    apiFetch<AdminNoteRecord[]>("/api/admin-notes")
+      .then(setNotes)
+      .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(load, []);
+
+  function startEdit(n: AdminNoteRecord) {
+    setEditingId(n.id);
+    setTitle(n.title);
+    setBody(n.body);
+    setJobUuid(n.job_uuid ?? "");
+    // Editing an existing note just shows the raw uuid; picker stays closed
+    // until the admin explicitly re-picks.
+    setJobDisplay(n.job_uuid ? `Job ${n.job_uuid.slice(0, 8)}…` : "");
+  }
+
+  function clearForm() {
+    setEditingId(null);
+    setTitle("");
+    setBody("");
+    setJobUuid("");
+    setJobDisplay("");
+    setPickerOpen(false);
+  }
+
+  async function save() {
+    if (!title.trim() || !body.trim()) {
+      setErr("Title and body are required.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    const payload = { title: title.trim(), body: body.trim(), job_uuid: jobUuid.trim() || null };
+    try {
+      if (editingId == null) {
+        await apiFetch<AdminNoteRecord>("/api/admin-notes", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await apiFetch<AdminNoteRecord>(`/api/admin-notes/${editingId}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+      }
+      clearForm();
+      load();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!confirm("Delete this admin note?")) return;
+    try {
+      await apiFetch(`/api/admin-notes/${id}`, { method: "DELETE" });
+      if (editingId === id) clearForm();
+      load();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Delete failed");
+    }
+  }
+
+  return (
+    <>
+      <div className="card">
+        <div className="sectionTitle">{editingId == null ? "New Admin Note" : "Edit Admin Note"}</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Leave "Attached job" empty for a global note (shown to every crew member).
+          Attach a job to scope the note — it only surfaces when that job is selected.
+        </div>
+        <div className="col" style={{ gap: 10 }}>
+          <input
+            placeholder="Title (e.g. New packing-material pricing)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+
+          {/* Attached-job row — chip + picker */}
+          <div className="col" style={{ gap: 6 }}>
+            <div className="small" style={{ color: "var(--muted)" }}>Attached job</div>
+            {jobUuid ? (
+              <div className="row" style={{ justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                <span
+                  className="chip"
+                  style={{ color: "var(--brand2)", fontSize: 12, maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  title={jobUuid}
+                >
+                  {jobDisplay || `Job ${jobUuid.slice(0, 8)}…`}
+                </span>
+                <div className="row" style={{ gap: 6 }}>
+                  <button type="button" onClick={() => setPickerOpen(true)} style={{ fontSize: 12 }}>Change</button>
+                  <button type="button" onClick={detachJob} style={{ fontSize: 12 }}>Make global</button>
+                </div>
+              </div>
+            ) : (
+              <div className="row" style={{ gap: 8 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Global (no job)</span>
+                <button type="button" onClick={() => setPickerOpen(true)} style={{ fontSize: 12 }}>
+                  Attach to job…
+                </button>
+              </div>
+            )}
+
+            {pickerOpen && (
+              <div
+                className="card"
+                style={{ marginTop: 6, padding: 12, border: "1px solid var(--brand)", background: "rgba(93,214,194,0.05)" }}
+              >
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                  Search by date and/or customer name. Pick one to attach.
+                </div>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <label className="col" style={{ gap: 4, flex: "1 1 140px" }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Job date</span>
+                    <input type="date" value={pickerDate} onChange={(e) => setPickerDate(e.target.value)} />
+                  </label>
+                  <label className="col" style={{ gap: 4, flex: "2 1 160px" }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Customer name</span>
+                    <input
+                      value={pickerName}
+                      onChange={(e) => setPickerName(e.target.value)}
+                      placeholder="e.g. Smith"
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runJobSearch(); } }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btnPrimary"
+                    onClick={runJobSearch}
+                    disabled={pickerLoading}
+                    style={{ alignSelf: "flex-end" }}
+                  >
+                    {pickerLoading ? "Searching…" : "Search"}
+                  </button>
+                  <button type="button" onClick={() => setPickerOpen(false)} style={{ alignSelf: "flex-end" }}>
+                    Close
+                  </button>
+                </div>
+                {pickerErr && <div className="small" style={{ color: "var(--danger)", marginTop: 6 }}>{pickerErr}</div>}
+                {pickerResults != null && (
+                  pickerResults.length === 0 ? (
+                    <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                      No jobs match those filters.
+                    </div>
+                  ) : (
+                    <div className="col" style={{ gap: 6, marginTop: 8 }}>
+                      {pickerResults.map((c) => (
+                        <button
+                          key={c.job_uuid}
+                          type="button"
+                          onClick={() => attachJob(c)}
+                          style={{ textAlign: "left" }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{c.job_name || "(unnamed)"}</div>
+                          <div className="small" style={{ color: "var(--muted)" }}>
+                            {c.dates.length > 0
+                              ? c.dates.length === 1
+                                ? c.dates[0]
+                                : `${c.dates[0]} → ${c.dates[c.dates.length - 1]}`
+                              : "no dates"}
+                            {" · "}{c.event_count} event{c.event_count === 1 ? "" : "s"}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+
+          <textarea
+            rows={5}
+            placeholder="What the crew needs to know…"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+          />
+          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btnPrimary" onClick={save} disabled={busy}>
+              {busy ? "Saving…" : editingId == null ? "Publish" : "Save changes"}
+            </button>
+            {editingId != null && (
+              <button onClick={clearForm} type="button">Cancel</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">Published Admin Notes</div>
+        {loading && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
+        {!loading && notes.length === 0 && (
+          <div className="small" style={{ color: "var(--muted)" }}>No admin notes yet.</div>
+        )}
+        <div className="col" style={{ gap: 10 }}>
+          {notes.map((n) => (
+            <div key={n.id} className="card" style={{ padding: 12 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
+                    <span className="chip" style={{ fontSize: 10, color: n.job_uuid ? "var(--brand2)" : "var(--ok)" }}>
+                      {n.job_uuid ? "Job" : "Global"}
+                    </span>
+                  </div>
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                    {n.job_uuid ? `Job ${n.job_uuid.slice(0, 8)}… · ` : ""}
+                    Updated {new Date(n.updated_at).toLocaleString()}
+                    {n.created_by_name ? ` · by ${n.created_by_name}` : ""}
+                  </div>
+                  <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
+                </div>
+                <div className="col" style={{ gap: 4 }}>
+                  <button onClick={() => startEdit(n)} style={{ fontSize: 12 }}>Edit</button>
+                  <button
+                    onClick={() => remove(n.id)}
+                    style={{ fontSize: 12, color: "var(--danger)", borderColor: "var(--danger)" }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────
+// Job Summary tab — one-page view of every source for a job
+// ─────────────────────────────────────────
+
+type JobSummary = {
+  job_uuid: string;
+  job_name: string;
+  events: Array<{
+    event_id: string;
+    type: string;
+    timestamp: string | null;
+    note: string | null;
+    lat: number | null;
+    lng: number | null;
+    created_by: string | null;
+  }>;
+  dvirs: Array<{
+    dvir_id: string;
+    inspection_type: string;
+    inspection_date: string;
+    vehicle_number: string;
+    trailer_number: string | null;
+    condition: string;
+    defects: string[];
+    defect_notes: string | null;
+    driver_name: string;
+    mechanic_name: string | null;
+    mechanic_signed_at: string | null;
+    created_at: string | null;
+  }>;
+  materials: Array<{
+    id: string;
+    created_at: string | null;
+    notes: string;
+    items: Array<{ name: string; qty: number; unitPrice?: number | null; source?: string }>;
+    total: number;
+  }>;
+  job_report: {
+    submitted_by_name: string | null;
+    personal_vehicles: number;
+    dumpster_pct: number;
+    recycling_pct: number;
+    billing_method: string;
+    review_candidate: boolean;
+    hours_match: boolean;
+    hours_mismatch_reason: string | null;
+    updated_at: string | null;
+  } | null;
+  bill: {
+    saved_by_name: string | null;
+    items: Array<{ label?: string; qty?: number; unit?: string; rate?: number; discount?: number }>;
+    global_discount: number;
+    notes: string;
+    updated_at: string | null;
+  } | null;
+  photos: Array<{ id: string; caption: string; drive_url: string; created_by: string | null; created_at: string | null }>;
+  admin_notes: Array<{ id: number; title: string; body: string; created_by_name: string | null; updated_at: string | null }>;
+};
+
+type JobCandidate = {
+  job_uuid: string;
+  job_name: string;
+  dates: string[];
+  event_count: number;
+  material_count: number;
+};
+
+function JobSummaryTab() {
+  const [date, setDate] = useState("");
+  const [name, setName] = useState("");
+  const [candidates, setCandidates] = useState<JobCandidate[] | null>(null);
+  const [summary, setSummary] = useState<JobSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function search() {
+    if (!date && !name.trim()) {
+      setErr("Enter a date, a job name, or both.");
+      return;
+    }
+    setLoading(true);
+    setErr(null);
+    setSummary(null);
+    setCandidates(null);
+    try {
+      const params = new URLSearchParams();
+      if (date) params.set("date", date);
+      if (name.trim()) params.set("name", name.trim());
+      const rows = await apiFetch<JobCandidate[]>(`/api/admin/job-search?${params.toString()}`);
+      setCandidates(rows);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Search failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadSummary(jobUuid: string) {
+    setLoading(true);
+    setErr(null);
+    setSummary(null);
+    try {
+      const data = await apiFetch<JobSummary>(`/api/admin/job-summary/${encodeURIComponent(jobUuid)}`);
+      setSummary(data);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to load summary");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const materialsTotal = summary?.materials.reduce((s, m) => s + (m.total || 0), 0) ?? 0;
+  const billTotal = summary?.bill
+    ? summary.bill.items.reduce((s, it) => {
+        const qty = it.qty || 0;
+        const rate = it.rate || 0;
+        const disc = it.discount || 0;
+        return s + qty * rate * (1 - disc / 100);
+      }, 0) * (1 - (summary.bill.global_discount || 0) / 100)
+    : 0;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="card">
+        <div className="sectionTitle">Look up job</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Search by date and/or customer name. Results below link through to
+          the full summary.
+        </div>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Job date</span>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+          <label className="col" style={{ gap: 4, flex: "2 1 200px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Customer name (partial)</span>
+            <input
+              type="text"
+              placeholder="e.g. Smith"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") search(); }}
+            />
+          </label>
+          <button
+            className="btnPrimary"
+            onClick={search}
+            disabled={loading}
+            style={{ alignSelf: "flex-end" }}
+          >
+            {loading ? "Searching…" : "Search"}
+          </button>
+        </div>
+        {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+      </div>
+
+      {candidates != null && !summary && (
+        <div className="card">
+          <div className="sectionTitle">
+            Matches ({candidates.length})
+          </div>
+          {candidates.length === 0 ? (
+            <div className="small" style={{ color: "var(--muted)" }}>
+              No jobs match those filters.
+            </div>
+          ) : (
+            <div className="col" style={{ gap: 8 }}>
+              {candidates.map((c) => (
+                <button
+                  key={c.job_uuid}
+                  onClick={() => loadSummary(c.job_uuid)}
+                  style={{ textAlign: "left" }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>
+                    {c.job_name || "(unnamed job)"}
+                  </div>
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                    {c.dates.length > 0
+                      ? c.dates.length === 1
+                        ? c.dates[0]
+                        : `${c.dates[0]} → ${c.dates[c.dates.length - 1]}`
+                      : "no dates"}
+                    {" · "}{c.event_count} event{c.event_count === 1 ? "" : "s"}
+                    {" · "}{c.material_count} material{c.material_count === 1 ? "" : "s"}
+                  </div>
+                  <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace", fontSize: 11, marginTop: 2 }}>
+                    {c.job_uuid}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {summary && (
+        <div className="card">
+          <button onClick={() => { setSummary(null); }} style={{ fontSize: 12 }}>
+            ← Back to matches
+          </button>
+        </div>
+      )}
+
+      {summary && (
+        <>
+          <div className="card">
+            <div className="sectionTitle">{summary.job_name || "Unnamed job"}</div>
+            <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace" }}>{summary.job_uuid}</div>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+              {summary.events.length} event{summary.events.length === 1 ? "" : "s"} ·
+              {" "}{summary.dvirs.length} DVIR{summary.dvirs.length === 1 ? "" : "s"} ·
+              {" "}{summary.materials.length} material submission{summary.materials.length === 1 ? "" : "s"} ·
+              {" "}{summary.photos.length} photo{summary.photos.length === 1 ? "" : "s"} ·
+              {" "}{summary.admin_notes.length} admin note{summary.admin_notes.length === 1 ? "" : "s"}
+            </div>
+          </div>
+
+          {summary.admin_notes.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Admin Notes</div>
+              <div className="col" style={{ gap: 10 }}>
+                {summary.admin_notes.map((n) => (
+                  <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{n.title}</div>
+                    <div className="small" style={{ color: "var(--muted)" }}>
+                      {n.updated_at ? new Date(n.updated_at).toLocaleString() : ""}
+                      {n.created_by_name ? ` · ${n.created_by_name}` : ""}
+                    </div>
+                    <div style={{ fontSize: 13, marginTop: 4, whiteSpace: "pre-wrap" }}>{n.body}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="card">
+            <div className="sectionTitle">Timeline ({summary.events.length})</div>
+            {summary.events.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>No events logged.</div>
+            ) : (
+              <div className="col" style={{ gap: 6 }}>
+                {summary.events.map((e) => (
+                  <div key={e.event_id} className="row" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                    <span className="chip" style={{ fontSize: 11, textTransform: "uppercase" }}>{e.type}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="small" style={{ color: "var(--muted)" }}>
+                        {e.timestamp ? new Date(e.timestamp).toLocaleString() : ""}
+                        {e.created_by ? ` · ${e.created_by}` : ""}
+                      </div>
+                      {e.note && <div style={{ fontSize: 13 }}>{e.note}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">DVIRs ({summary.dvirs.length})</div>
+            {summary.dvirs.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                {summary.dvirs.map((d) => (
+                  <div key={d.dvir_id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="row" style={{ justifyContent: "space-between", gap: 6 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>
+                        {d.vehicle_number}{d.trailer_number ? ` / ${d.trailer_number}` : ""} · {d.inspection_type}
+                      </div>
+                      <span className="chip" style={{ fontSize: 11, color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)" }}>
+                        {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} defect${d.defects.length === 1 ? "" : "s"}`}
+                      </span>
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)" }}>
+                      {d.inspection_date} · driver {d.driver_name}
+                      {d.mechanic_name ? ` · mechanic ${d.mechanic_name}` : ""}
+                    </div>
+                    {d.defects.length > 0 && (
+                      <div className="small" style={{ marginTop: 4 }}>
+                        Defects: {d.defects.join(", ")}
+                      </div>
+                    )}
+                    {d.defect_notes && <div style={{ fontSize: 13, marginTop: 4 }}>{d.defect_notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">
+              Materials ({summary.materials.length})
+              <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+                Total ${materialsTotal.toFixed(2)}
+              </span>
+            </div>
+            {summary.materials.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>None submitted.</div>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                {summary.materials.map((m) => (
+                  <div key={m.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="row" style={{ justifyContent: "space-between" }}>
+                      <div className="small" style={{ color: "var(--muted)" }}>
+                        {m.created_at ? new Date(m.created_at).toLocaleString() : ""}
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>${m.total.toFixed(2)}</div>
+                    </div>
+                    <div className="col" style={{ gap: 2, marginTop: 4 }}>
+                      {m.items.map((it, i) => (
+                        <div key={i} className="small">
+                          {it.qty} × {it.name}
+                          {it.unitPrice != null ? ` @ $${Number(it.unitPrice).toFixed(2)}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                    {m.notes && <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>{m.notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">Job Report</div>
+            {!summary.job_report ? (
+              <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
+            ) : (
+              <div className="col" style={{ gap: 4 }}>
+                <div className="small"><strong>Submitted by:</strong> {summary.job_report.submitted_by_name ?? "—"}</div>
+                <div className="small"><strong>Personal vehicles:</strong> {summary.job_report.personal_vehicles}</div>
+                <div className="small"><strong>M1 dumpster:</strong> {summary.job_report.dumpster_pct}%</div>
+                <div className="small"><strong>M1 recycling:</strong> {summary.job_report.recycling_pct}%</div>
+                <div className="small"><strong>Billing method:</strong> {summary.job_report.billing_method}</div>
+                <div className="small"><strong>Review candidate:</strong> {summary.job_report.review_candidate ? "Yes" : "No"}</div>
+                <div className="small">
+                  <strong>Hours match:</strong> {summary.job_report.hours_match ? "Yes" : "No"}
+                  {!summary.job_report.hours_match && summary.job_report.hours_mismatch_reason
+                    ? ` — ${summary.job_report.hours_mismatch_reason}`
+                    : ""}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">
+              Bill
+              {summary.bill && (
+                <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+                  Total ${billTotal.toFixed(2)}
+                </span>
+              )}
+            </div>
+            {!summary.bill ? (
+              <div className="small" style={{ color: "var(--muted)" }}>No bill saved.</div>
+            ) : (
+              <div className="col" style={{ gap: 4 }}>
+                <div className="small"><strong>Saved by:</strong> {summary.bill.saved_by_name ?? "—"}</div>
+                <div className="small"><strong>Global discount:</strong> {summary.bill.global_discount}%</div>
+                {summary.bill.items.map((it, i) => (
+                  <div key={i} className="small">
+                    {it.qty ?? 1} × {it.label ?? ""} @ ${Number(it.rate ?? 0).toFixed(2)}
+                    {it.discount ? ` (−${it.discount}%)` : ""}
+                  </div>
+                ))}
+                {summary.bill.notes && (
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>{summary.bill.notes}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">Photos ({summary.photos.length})</div>
+            {summary.photos.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>No photos uploaded.</div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+                {summary.photos.map((p) => (
+                  <a
+                    key={p.id}
+                    href={p.drive_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="card"
+                    style={{ padding: 8, textDecoration: "none", color: "var(--text)" }}
+                  >
+                    <div className="small" style={{ fontWeight: 700, wordBreak: "break-word" }}>
+                      {p.caption || "(no caption)"}
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                      {p.created_by ?? ""}
+                      {p.created_at ? ` · ${new Date(p.created_at).toLocaleDateString()}` : ""}
+                    </div>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
