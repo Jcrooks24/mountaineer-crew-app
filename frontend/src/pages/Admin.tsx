@@ -45,7 +45,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "calendar" | "settings" | "dvir" | "estimator" | "notes";
+type Tab = "employees" | "map" | "calendar" | "settings" | "dvir" | "estimator" | "notes" | "summary";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -73,14 +73,18 @@ export default function Admin() {
 
       {/* Tabs */}
       <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "calendar", "settings", "dvir", "estimator", "notes"] as Tab[]).map((t) => (
+        {(["employees", "map", "calendar", "settings", "dvir", "estimator", "notes", "summary"] as Tab[]).map((t) => (
           <button
             key={t}
             className={"tab " + (tab === t ? "active" : "")}
             onClick={() => setTab(t)}
             style={{ textTransform: "capitalize" }}
           >
-            {t === "map" ? "Map (Today)" : t === "dvir" ? "DVIR Review" : t === "notes" ? "Notes" : t}
+            {t === "map" ? "Map (Today)"
+              : t === "dvir" ? "DVIR Review"
+              : t === "notes" ? "Notes"
+              : t === "summary" ? "Job Summary"
+              : t}
           </button>
         ))}
       </div>
@@ -92,6 +96,7 @@ export default function Admin() {
       {tab === "dvir" && <DVIRTab />}
       {tab === "estimator" && <EstimatorTab />}
       {tab === "notes" && <NotesTab />}
+      {tab === "summary" && <JobSummaryTab />}
     </div>
   );
 }
@@ -1855,5 +1860,322 @@ function AdminNotesSection() {
         </div>
       </div>
     </>
+  );
+}
+
+// ─────────────────────────────────────────
+// Job Summary tab — one-page view of every source for a job
+// ─────────────────────────────────────────
+
+type JobSummary = {
+  job_uuid: string;
+  job_name: string;
+  events: Array<{
+    event_id: string;
+    type: string;
+    timestamp: string | null;
+    note: string | null;
+    lat: number | null;
+    lng: number | null;
+    created_by: string | null;
+  }>;
+  dvirs: Array<{
+    dvir_id: string;
+    inspection_type: string;
+    inspection_date: string;
+    vehicle_number: string;
+    trailer_number: string | null;
+    condition: string;
+    defects: string[];
+    defect_notes: string | null;
+    driver_name: string;
+    mechanic_name: string | null;
+    mechanic_signed_at: string | null;
+    created_at: string | null;
+  }>;
+  materials: Array<{
+    id: string;
+    created_at: string | null;
+    notes: string;
+    items: Array<{ name: string; qty: number; unitPrice?: number | null; source?: string }>;
+    total: number;
+  }>;
+  job_report: {
+    submitted_by_name: string | null;
+    personal_vehicles: number;
+    dumpster_pct: number;
+    recycling_pct: number;
+    billing_method: string;
+    review_candidate: boolean;
+    hours_match: boolean;
+    hours_mismatch_reason: string | null;
+    updated_at: string | null;
+  } | null;
+  bill: {
+    saved_by_name: string | null;
+    items: Array<{ label?: string; qty?: number; unit?: string; rate?: number; discount?: number }>;
+    global_discount: number;
+    notes: string;
+    updated_at: string | null;
+  } | null;
+  photos: Array<{ id: string; caption: string; drive_url: string; created_by: string | null; created_at: string | null }>;
+  admin_notes: Array<{ id: number; title: string; body: string; created_by_name: string | null; updated_at: string | null }>;
+};
+
+function JobSummaryTab() {
+  const [query, setQuery] = useState("");
+  const [summary, setSummary] = useState<JobSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function fetchSummary() {
+    const q = query.trim();
+    if (!q) return;
+    setLoading(true);
+    setErr(null);
+    setSummary(null);
+    try {
+      const data = await apiFetch<JobSummary>(`/api/admin/job-summary/${encodeURIComponent(q)}`);
+      setSummary(data);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to load summary");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const materialsTotal = summary?.materials.reduce((s, m) => s + (m.total || 0), 0) ?? 0;
+  const billTotal = summary?.bill
+    ? summary.bill.items.reduce((s, it) => {
+        const qty = it.qty || 0;
+        const rate = it.rate || 0;
+        const disc = it.discount || 0;
+        return s + qty * rate * (1 - disc / 100);
+      }, 0) * (1 - (summary.bill.global_discount || 0) / 100)
+    : 0;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="card">
+        <div className="sectionTitle">Look up job</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Paste a job UUID to pull every event, DVIR, materials submission,
+          job report, bill, photo, and admin note tied to it.
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <input
+            placeholder="job_uuid"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") fetchSummary(); }}
+            style={{ flex: 1 }}
+          />
+          <button className="btnPrimary" onClick={fetchSummary} disabled={loading}>
+            {loading ? "Loading…" : "Load"}
+          </button>
+        </div>
+        {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+      </div>
+
+      {summary && (
+        <>
+          <div className="card">
+            <div className="sectionTitle">{summary.job_name || "Unnamed job"}</div>
+            <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace" }}>{summary.job_uuid}</div>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+              {summary.events.length} event{summary.events.length === 1 ? "" : "s"} ·
+              {" "}{summary.dvirs.length} DVIR{summary.dvirs.length === 1 ? "" : "s"} ·
+              {" "}{summary.materials.length} material submission{summary.materials.length === 1 ? "" : "s"} ·
+              {" "}{summary.photos.length} photo{summary.photos.length === 1 ? "" : "s"} ·
+              {" "}{summary.admin_notes.length} admin note{summary.admin_notes.length === 1 ? "" : "s"}
+            </div>
+          </div>
+
+          {summary.admin_notes.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Admin Notes</div>
+              <div className="col" style={{ gap: 10 }}>
+                {summary.admin_notes.map((n) => (
+                  <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{n.title}</div>
+                    <div className="small" style={{ color: "var(--muted)" }}>
+                      {n.updated_at ? new Date(n.updated_at).toLocaleString() : ""}
+                      {n.created_by_name ? ` · ${n.created_by_name}` : ""}
+                    </div>
+                    <div style={{ fontSize: 13, marginTop: 4, whiteSpace: "pre-wrap" }}>{n.body}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="card">
+            <div className="sectionTitle">Timeline ({summary.events.length})</div>
+            {summary.events.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>No events logged.</div>
+            ) : (
+              <div className="col" style={{ gap: 6 }}>
+                {summary.events.map((e) => (
+                  <div key={e.event_id} className="row" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                    <span className="chip" style={{ fontSize: 11, textTransform: "uppercase" }}>{e.type}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="small" style={{ color: "var(--muted)" }}>
+                        {e.timestamp ? new Date(e.timestamp).toLocaleString() : ""}
+                        {e.created_by ? ` · ${e.created_by}` : ""}
+                      </div>
+                      {e.note && <div style={{ fontSize: 13 }}>{e.note}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">DVIRs ({summary.dvirs.length})</div>
+            {summary.dvirs.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                {summary.dvirs.map((d) => (
+                  <div key={d.dvir_id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="row" style={{ justifyContent: "space-between", gap: 6 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>
+                        {d.vehicle_number}{d.trailer_number ? ` / ${d.trailer_number}` : ""} · {d.inspection_type}
+                      </div>
+                      <span className="chip" style={{ fontSize: 11, color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)" }}>
+                        {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} defect${d.defects.length === 1 ? "" : "s"}`}
+                      </span>
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)" }}>
+                      {d.inspection_date} · driver {d.driver_name}
+                      {d.mechanic_name ? ` · mechanic ${d.mechanic_name}` : ""}
+                    </div>
+                    {d.defects.length > 0 && (
+                      <div className="small" style={{ marginTop: 4 }}>
+                        Defects: {d.defects.join(", ")}
+                      </div>
+                    )}
+                    {d.defect_notes && <div style={{ fontSize: 13, marginTop: 4 }}>{d.defect_notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">
+              Materials ({summary.materials.length})
+              <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+                Total ${materialsTotal.toFixed(2)}
+              </span>
+            </div>
+            {summary.materials.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>None submitted.</div>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                {summary.materials.map((m) => (
+                  <div key={m.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="row" style={{ justifyContent: "space-between" }}>
+                      <div className="small" style={{ color: "var(--muted)" }}>
+                        {m.created_at ? new Date(m.created_at).toLocaleString() : ""}
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>${m.total.toFixed(2)}</div>
+                    </div>
+                    <div className="col" style={{ gap: 2, marginTop: 4 }}>
+                      {m.items.map((it, i) => (
+                        <div key={i} className="small">
+                          {it.qty} × {it.name}
+                          {it.unitPrice != null ? ` @ $${Number(it.unitPrice).toFixed(2)}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                    {m.notes && <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>{m.notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">Job Report</div>
+            {!summary.job_report ? (
+              <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
+            ) : (
+              <div className="col" style={{ gap: 4 }}>
+                <div className="small"><strong>Submitted by:</strong> {summary.job_report.submitted_by_name ?? "—"}</div>
+                <div className="small"><strong>Personal vehicles:</strong> {summary.job_report.personal_vehicles}</div>
+                <div className="small"><strong>M1 dumpster:</strong> {summary.job_report.dumpster_pct}%</div>
+                <div className="small"><strong>M1 recycling:</strong> {summary.job_report.recycling_pct}%</div>
+                <div className="small"><strong>Billing method:</strong> {summary.job_report.billing_method}</div>
+                <div className="small"><strong>Review candidate:</strong> {summary.job_report.review_candidate ? "Yes" : "No"}</div>
+                <div className="small">
+                  <strong>Hours match:</strong> {summary.job_report.hours_match ? "Yes" : "No"}
+                  {!summary.job_report.hours_match && summary.job_report.hours_mismatch_reason
+                    ? ` — ${summary.job_report.hours_mismatch_reason}`
+                    : ""}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">
+              Bill
+              {summary.bill && (
+                <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+                  Total ${billTotal.toFixed(2)}
+                </span>
+              )}
+            </div>
+            {!summary.bill ? (
+              <div className="small" style={{ color: "var(--muted)" }}>No bill saved.</div>
+            ) : (
+              <div className="col" style={{ gap: 4 }}>
+                <div className="small"><strong>Saved by:</strong> {summary.bill.saved_by_name ?? "—"}</div>
+                <div className="small"><strong>Global discount:</strong> {summary.bill.global_discount}%</div>
+                {summary.bill.items.map((it, i) => (
+                  <div key={i} className="small">
+                    {it.qty ?? 1} × {it.label ?? ""} @ ${Number(it.rate ?? 0).toFixed(2)}
+                    {it.discount ? ` (−${it.discount}%)` : ""}
+                  </div>
+                ))}
+                {summary.bill.notes && (
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>{summary.bill.notes}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">Photos ({summary.photos.length})</div>
+            {summary.photos.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>No photos uploaded.</div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+                {summary.photos.map((p) => (
+                  <a
+                    key={p.id}
+                    href={p.drive_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="card"
+                    style={{ padding: 8, textDecoration: "none", color: "var(--text)" }}
+                  >
+                    <div className="small" style={{ fontWeight: 700, wordBreak: "break-word" }}>
+                      {p.caption || "(no caption)"}
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                      {p.created_by ?? ""}
+                      {p.created_at ? ` · ${new Date(p.created_at).toLocaleDateString()}` : ""}
+                    </div>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   );
 }

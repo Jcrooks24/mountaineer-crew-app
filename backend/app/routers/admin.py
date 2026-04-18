@@ -16,7 +16,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
+from app.db.models.admin_note import AdminNote
+from app.db.models.dvir import DVIR
 from app.db.models.event import Event
+from app.db.models.job_bill import JobBill
+from app.db.models.job_report import JobReport
+from app.db.models.materials import MaterialsSubmission
+from app.db.models.photo import Photo
 from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
 from app.db.session import get_db
@@ -214,3 +220,161 @@ async def set_app_theme(
     else:
         db.add(SystemConfig(key=APP_THEME_KEY, value=value))
     db.commit()
+
+
+# ---------------------------
+# Per-job summary (all sources collated by job_uuid)
+# ---------------------------
+
+def _iso(dt: Any) -> Optional[str]:
+    if dt is None:
+        return None
+    if hasattr(dt, "isoformat"):
+        return dt.isoformat()
+    return str(dt)
+
+
+@router.get("/job-summary/{job_uuid}")
+def job_summary(
+    job_uuid: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Aggregate everything the app has collected for one job into a single
+    admin-facing payload. Returns lists even when empty so the UI can render
+    consistently. Resource shapes mirror what each source router returns but
+    trimmed to fields useful for reviewing a job end-to-end.
+    """
+    events = (
+        db.query(Event)
+        .filter(Event.job_uuid == job_uuid)
+        .order_by(Event.timestamp.asc())
+        .all()
+    )
+    dvirs = (
+        db.query(DVIR)
+        .filter(DVIR.job_uuid == job_uuid)
+        .order_by(DVIR.created_at.asc())
+        .all()
+    )
+    materials = (
+        db.query(MaterialsSubmission)
+        .filter(MaterialsSubmission.job_uuid == job_uuid)
+        .order_by(MaterialsSubmission.created_at.asc())
+        .all()
+    )
+    report = (
+        db.query(JobReport)
+        .filter(JobReport.job_uuid == job_uuid)
+        .first()
+    )
+    bill = (
+        db.query(JobBill)
+        .filter(JobBill.job_uuid == job_uuid)
+        .first()
+    )
+    photos = (
+        db.query(Photo)
+        .filter(Photo.job_uuid == job_uuid)
+        .order_by(Photo.created_at.asc())
+        .all()
+    )
+    admin_notes = (
+        db.query(AdminNote)
+        .filter(AdminNote.job_uuid == job_uuid)
+        .order_by(AdminNote.updated_at.desc())
+        .all()
+    )
+
+    # Pick the most-common job_name from events/materials so the header reads cleanly.
+    name_candidates: List[str] = []
+    for e in events:
+        if e.job_name:
+            name_candidates.append(e.job_name)
+    for m in materials:
+        if m.job_name:
+            name_candidates.append(m.job_name)
+    job_name = max(set(name_candidates), key=name_candidates.count) if name_candidates else ""
+
+    return {
+        "job_uuid": job_uuid,
+        "job_name": job_name,
+        "events": [
+            {
+                "event_id": e.event_id,
+                "type": e.type,
+                "timestamp": _iso(e.timestamp),
+                "note": e.note,
+                "lat": e.lat,
+                "lng": e.lng,
+                "created_by": e.created_by,
+            }
+            for e in events
+        ],
+        "dvirs": [
+            {
+                "dvir_id": d.dvir_id,
+                "inspection_type": d.inspection_type,
+                "inspection_date": d.inspection_date,
+                "vehicle_number": d.vehicle_number,
+                "trailer_number": d.trailer_number,
+                "condition": d.condition,
+                "defects": _json.loads(d.defects_json) if d.defects_json else [],
+                "defect_notes": d.defect_notes,
+                "driver_name": d.driver_name,
+                "mechanic_name": d.mechanic_name,
+                "mechanic_signed_at": _iso(d.mechanic_signed_at),
+                "created_at": _iso(d.created_at),
+            }
+            for d in dvirs
+        ],
+        "materials": [
+            {
+                "id": m.submission_id,
+                "created_at": _iso(m.created_at),
+                "notes": m.notes or "",
+                "items": _json.loads(m.items_json or "[]"),
+                "total": float(m.total or 0),
+            }
+            for m in materials
+        ],
+        "job_report": None if not report else {
+            "submitted_by_name": report.submitted_by_name,
+            "personal_vehicles": report.personal_vehicles,
+            "dumpster_pct": report.dumpster_pct,
+            "recycling_pct": report.recycling_pct,
+            "billing_method": report.billing_method,
+            "review_candidate": report.review_candidate,
+            "hours_match": report.hours_match,
+            "hours_mismatch_reason": report.hours_mismatch_reason,
+            "created_at": _iso(report.created_at),
+            "updated_at": _iso(report.updated_at),
+        },
+        "bill": None if not bill else {
+            "saved_by_name": bill.saved_by_name,
+            "items": _json.loads(bill.items_json or "[]"),
+            "global_discount": float(bill.global_discount or 0),
+            "notes": bill.notes or "",
+            "updated_at": _iso(bill.updated_at),
+        },
+        "photos": [
+            {
+                "id": p.id,
+                "caption": p.caption,
+                "drive_url": p.drive_url,
+                "created_by": p.created_by,
+                "created_at": _iso(p.created_at),
+            }
+            for p in photos
+        ],
+        "admin_notes": [
+            {
+                "id": n.id,
+                "title": n.title,
+                "body": n.body,
+                "created_by_name": n.created_by_name,
+                "updated_at": _iso(n.updated_at),
+            }
+            for n in admin_notes
+        ],
+    }
