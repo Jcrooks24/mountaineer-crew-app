@@ -21,6 +21,7 @@ async def upload_photo(
     job_name: str = Form(default=""),
     job_date: str = Form(default=""),
     caption: str = Form(default=""),
+    folder: str = Form(default=""),  # "estimator" routes to the estimator parent folder
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -36,6 +37,7 @@ async def upload_photo(
             job_name=job_name,
             job_date=job_date,
             caption=caption,
+            is_estimator=(folder.strip().lower() == "estimator"),
         )
     except Exception as e:
         traceback.print_exc()
