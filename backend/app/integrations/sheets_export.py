@@ -1,12 +1,39 @@
 import json
 import os
+import threading
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Callable, List, Dict, Any, Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.core.google_cal_oauth import get_sheets_service, _build_authorized_http, _ssl_retry, _get_creds
+
+
+def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+    """Fire-and-forget a sheets export on a background thread with a fresh
+    DB session, so a slow or failing Google call never blocks the API
+    response (Render kills requests past its proxy timeout, which surfaces
+    on the client as "Failed to fetch").
+
+    `export_fn` must accept a Session as its first positional argument,
+    followed by whatever caller args were passed. The fresh session is
+    created inside the worker.
+    """
+    def _worker() -> None:
+        from app.db.session import SessionLocal
+        db = SessionLocal()
+        try:
+            export_fn(db, *args, **kwargs)
+        except Exception as exc:
+            print(f"[sheets] background export failed ({export_fn.__name__}): {exc}")
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"

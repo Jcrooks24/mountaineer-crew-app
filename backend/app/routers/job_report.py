@@ -9,7 +9,7 @@ from app.core.deps import get_current_user, get_db
 from app.db.models.event import Event
 from app.db.models.job_report import JobReport
 from app.db.models.user import User
-from app.integrations.sheets_export import export_job_report_to_sheets
+from app.integrations.sheets_export import export_job_report_to_sheets, run_export_in_background
 from app.schemas.job_report import JobReportResponse, JobReportUpsert
 
 router = APIRouter(prefix="/api/job-report", tags=["job-report"])
@@ -45,24 +45,24 @@ def _job_name_for(db: Session, job_uuid: str) -> str:
 
 
 def _export_report_to_sheets(db: Session, report: JobReport) -> None:
-    try:
-        export_job_report_to_sheets(db, {
-            "job_uuid": report.job_uuid,
-            "job_name": _job_name_for(db, report.job_uuid),
-            "submitted_by_name": report.submitted_by_name,
-            "personal_vehicles": report.personal_vehicles,
-            "dumpster_pct": report.dumpster_pct,
-            "recycling_pct": report.recycling_pct,
-            "billing_method": report.billing_method,
-            "review_candidate": report.review_candidate,
-            "hours_match": report.hours_match,
-            "hours_mismatch_reason": report.hours_mismatch_reason,
-            "created_at": report.created_at,
-            "updated_at": report.updated_at,
-        })
-    except Exception as exc:
-        # Never break the API because of a sheets failure
-        print(f"[sheets] job_report export failed: {exc}")
+    # Capture all the data in the request thread (before the db session
+    # closes), then push the actual sheets call onto a background thread
+    # so the API response is never blocked by Google.
+    payload = {
+        "job_uuid": report.job_uuid,
+        "job_name": _job_name_for(db, report.job_uuid),
+        "submitted_by_name": report.submitted_by_name,
+        "personal_vehicles": report.personal_vehicles,
+        "dumpster_pct": report.dumpster_pct,
+        "recycling_pct": report.recycling_pct,
+        "billing_method": report.billing_method,
+        "review_candidate": report.review_candidate,
+        "hours_match": report.hours_match,
+        "hours_mismatch_reason": report.hours_mismatch_reason,
+        "created_at": report.created_at,
+        "updated_at": report.updated_at,
+    }
+    run_export_in_background(export_job_report_to_sheets, payload)
 
 
 @router.post("", response_model=JobReportResponse)

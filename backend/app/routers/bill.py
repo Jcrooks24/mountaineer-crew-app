@@ -20,7 +20,7 @@ from app.core.deps import get_current_user, get_db
 from app.db.models.event import Event
 from app.db.models.job_bill import JobBill
 from app.db.models.user import User
-from app.integrations.sheets_export import export_bill_to_sheets
+from app.integrations.sheets_export import export_bill_to_sheets, run_export_in_background
 
 router = APIRouter(prefix="/api/bill", tags=["bill"])
 
@@ -133,17 +133,15 @@ def get_bill(
 # ── Upsert bill ───────────────────────────────────────────────────────────────
 
 def _export_bill(db: Session, bill: JobBill) -> None:
-    try:
-        export_bill_to_sheets(db, {
-            "job_uuid": bill.job_uuid,
-            "saved_by_name": bill.saved_by_name,
-            "items": json.loads(bill.items_json or "[]"),
-            "global_discount": bill.global_discount,
-            "notes": bill.notes,
-            "updated_at": bill.updated_at,
-        })
-    except Exception as exc:
-        print(f"[sheets] bill export failed: {exc}")
+    payload = {
+        "job_uuid": bill.job_uuid,
+        "saved_by_name": bill.saved_by_name,
+        "items": json.loads(bill.items_json or "[]"),
+        "global_discount": bill.global_discount,
+        "notes": bill.notes,
+        "updated_at": bill.updated_at,
+    }
+    run_export_in_background(export_bill_to_sheets, payload)
 
 
 @router.post("", response_model=BillResponse)

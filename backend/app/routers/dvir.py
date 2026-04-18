@@ -11,7 +11,7 @@ from app.core.deps import get_current_user, get_db
 from app.db.models.dvir import DVIR
 from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
-from app.integrations.sheets_export import export_dvir_to_sheets
+from app.integrations.sheets_export import export_dvir_to_sheets, run_export_in_background
 from app.schemas.dvir import DVIRCreate, DVIRResponse, MechanicSignRequest
 
 router = APIRouter(prefix="/api/dvir", tags=["dvir"])
@@ -119,10 +119,9 @@ def create_dvir(
     db.commit()
     db.refresh(dvir)
 
-    try:
-        export_dvir_to_sheets(db, _to_response(dvir).model_dump(), phase="driver")
-    except Exception as exc:
-        print(f"[sheets] dvir (driver) export failed: {exc}")
+    run_export_in_background(
+        export_dvir_to_sheets, _to_response(dvir).model_dump(), phase="driver"
+    )
 
     return _to_response(dvir)
 
@@ -179,9 +178,8 @@ def mechanic_sign(
     db.commit()
     db.refresh(dvir)
 
-    try:
-        export_dvir_to_sheets(db, _to_response(dvir).model_dump(), phase="mechanic")
-    except Exception as exc:
-        print(f"[sheets] dvir (mechanic) export failed: {exc}")
+    run_export_in_background(
+        export_dvir_to_sheets, _to_response(dvir).model_dump(), phase="mechanic"
+    )
 
     return _to_response(dvir)

@@ -13,6 +13,7 @@ from app.db.models.user import User
 from app.integrations.sheets_export import (
     export_prior_hours_to_sheets,
     export_rods_to_sheets,
+    run_export_in_background,
 )
 from app.schemas.long_distance import (
     DailyHours,
@@ -72,10 +73,7 @@ def create_prior_hours(
     db.commit()
     db.refresh(row)
 
-    try:
-        export_prior_hours_to_sheets(db, _to_response(row).model_dump())
-    except Exception as exc:
-        print(f"[sheets] prior_hours export failed: {exc}")
+    run_export_in_background(export_prior_hours_to_sheets, _to_response(row).model_dump())
 
     return _to_response(row)
 
@@ -166,10 +164,7 @@ def create_rods(
     db.commit()
     db.refresh(row)
 
-    try:
-        export_rods_to_sheets(db, _rods_to_response(row).model_dump())
-    except Exception as exc:
-        print(f"[sheets] rods export failed: {exc}")
+    run_export_in_background(export_rods_to_sheets, _rods_to_response(row).model_dump())
 
     return _rods_to_response(row)
 

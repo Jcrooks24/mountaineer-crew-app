@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_db, require_admin
 from app.db.models.estimate import Estimate, EstimateItem, FurnitureCatalogItem
 from app.db.models.user import User
-from app.integrations.sheets_export import export_estimate_to_sheets
+from app.integrations.sheets_export import export_estimate_to_sheets, run_export_in_background
 from app.schemas.estimate import (
     CatalogItemIn,
     CatalogItemOut,
@@ -34,40 +34,38 @@ def _touch(e: Estimate) -> None:
 
 
 def _export_estimate(db: Session, e: Estimate) -> None:
-    try:
-        export_estimate_to_sheets(db, {
-            "estimate_uuid": e.estimate_uuid,
-            "created_by_name": e.created_by_name,
-            "customer_name": e.customer_name,
-            "customer_email": e.customer_email,
-            "customer_phone": e.customer_phone,
-            "move_date": e.move_date,
-            "origin_address": e.origin_address,
-            "destination_address": e.destination_address,
-            "origin_access_notes": e.origin_access_notes,
-            "destination_access_notes": e.destination_access_notes,
-            "special_items_notes": e.special_items_notes,
-            "general_notes": e.general_notes,
-            "estimated_weight_lbs": e.estimated_weight_lbs,
-            "estimated_cubic_ft": e.estimated_cubic_ft,
-            "created_at": e.created_at,
-            "updated_at": e.updated_at,
-            "items": [
-                {
-                    "id": it.id,
-                    "name": it.name,
-                    "qty": it.qty,
-                    "weight_lbs": it.weight_lbs,
-                    "cubic_ft": it.cubic_ft,
-                    "room": it.room,
-                    "subcategory": it.subcategory,
-                    "notes": it.notes,
-                }
-                for it in e.items
-            ],
-        })
-    except Exception as exc:
-        print(f"[sheets] estimate export failed: {exc}")
+    payload = {
+        "estimate_uuid": e.estimate_uuid,
+        "created_by_name": e.created_by_name,
+        "customer_name": e.customer_name,
+        "customer_email": e.customer_email,
+        "customer_phone": e.customer_phone,
+        "move_date": e.move_date,
+        "origin_address": e.origin_address,
+        "destination_address": e.destination_address,
+        "origin_access_notes": e.origin_access_notes,
+        "destination_access_notes": e.destination_access_notes,
+        "special_items_notes": e.special_items_notes,
+        "general_notes": e.general_notes,
+        "estimated_weight_lbs": e.estimated_weight_lbs,
+        "estimated_cubic_ft": e.estimated_cubic_ft,
+        "created_at": e.created_at,
+        "updated_at": e.updated_at,
+        "items": [
+            {
+                "id": it.id,
+                "name": it.name,
+                "qty": it.qty,
+                "weight_lbs": it.weight_lbs,
+                "cubic_ft": it.cubic_ft,
+                "room": it.room,
+                "subcategory": it.subcategory,
+                "notes": it.notes,
+            }
+            for it in e.items
+        ],
+    }
+    run_export_in_background(export_estimate_to_sheets, payload)
 
 
 # ── Furniture catalog (admin-editable).
