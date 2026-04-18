@@ -46,6 +46,21 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
 // LocalStorage keys
 const QUEUE_KEY = "crew_event_queue_v1"; // unsynced events only
 const LOG_KEY = "crew_event_log_v1"; // full job activity log (synced + queued)
+
+// Retention — the Google Sheet is the long-term record; the client log is a
+// working buffer for the offline-first UX. Trim anything older than the
+// retention window (and cap length as a hard ceiling) on boot so
+// localStorage doesn't silently blow out its quota after months of use.
+const LOG_RETENTION_DAYS = 14;
+const LOG_MAX_ENTRIES = 2000;
+const QUEUE_MAX_AGE_DAYS = 14; // unsynced ops this old are almost certainly dead
+
+function withinRetention(iso: string | undefined, days: number): boolean {
+  if (!iso) return true; // keep entries with no timestamp (defensive)
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return true;
+  return Date.now() - t < days * 86_400_000;
+}
 const JOB_KEY = "crew_active_job_uuid_v1";
 const JOB_STATUS_KEY = "crew_job_status_v1"; // "active" | "closed"
 const COMMENTS_PREFIX = "crew_job_comments_v1:"; // per job_uuid
@@ -189,6 +204,35 @@ export default function App() {
       .catch(() => {/* non-fatal — no indicator */});
   }, []);
 
+  // Retention prune on boot — drop stale log entries and stuck queue ops
+  // so localStorage stays well clear of its per-origin quota. The Google
+  // Sheet is authoritative long-term; this buffer only needs a couple of
+  // weeks of history.
+  useEffect(() => {
+    try {
+      const rawLog = localStorage.getItem(LOG_KEY);
+      if (rawLog) {
+        const log: EventRecord[] = JSON.parse(rawLog);
+        const trimmed = log
+          .filter((e) => withinRetention(e.timestamp, LOG_RETENTION_DAYS))
+          .slice(0, LOG_MAX_ENTRIES);
+        if (trimmed.length !== log.length) {
+          localStorage.setItem(LOG_KEY, JSON.stringify(trimmed));
+        }
+      }
+      const rawQ = localStorage.getItem(QUEUE_KEY);
+      if (rawQ) {
+        const q: EventRecord[] = JSON.parse(rawQ);
+        const trimmedQ = q.filter((e) => withinRetention(e.timestamp, QUEUE_MAX_AGE_DAYS));
+        if (trimmedQ.length !== q.length) {
+          localStorage.setItem(QUEUE_KEY, JSON.stringify(trimmedQ));
+        }
+      }
+    } catch {
+      /* corrupted JSON — ignore; next write will overwrite */
+    }
+  }, []);
+
   // Job metadata (display + persistence)
   const [jobName, setJobName] = useState<string>("");
   const [jobDate, setJobDate] = useState<string>(() => todayLocalYYYYMMDD());
@@ -240,7 +284,13 @@ export default function App() {
   }
 
   function saveJson<T>(key: string, val: T) {
-    localStorage.setItem(key, JSON.stringify(val));
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch {
+      // Quota exceeded or similar — surface once so the problem isn't silent.
+      // Retention pruning on boot should keep us well clear of this.
+      console.warn(`[storage] failed to write ${key}; log retention may need review`);
+    }
   }
 
   function loadQueue(): EventRecord[] {
@@ -257,8 +307,13 @@ export default function App() {
   }
 
   function saveLog(log: EventRecord[]) {
-    saveJson(LOG_KEY, log);
-    setActivityLog(log);
+    // Defensive cap — saveLog is called from many paths; enforce the ceiling
+    // on every write rather than trusting each caller to prune.
+    const capped = log.length > LOG_MAX_ENTRIES
+      ? log.slice(0, LOG_MAX_ENTRIES)
+      : log;
+    saveJson(LOG_KEY, capped);
+    setActivityLog(capped);
   }
 
   function commentsKeyForJob(uuid: string) {
