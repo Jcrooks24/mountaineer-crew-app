@@ -1683,6 +1683,177 @@ function NotesTab() {
           ))}
         </div>
       </div>
+
+      <AdminNotesSection />
     </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Admin Notes section — global or per-job messages to crew
+// ─────────────────────────────────────────
+
+type AdminNoteRecord = {
+  id: number;
+  title: string;
+  body: string;
+  job_uuid: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function AdminNotesSection() {
+  const [notes, setNotes] = useState<AdminNoteRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [jobUuid, setJobUuid] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  function load() {
+    setLoading(true);
+    apiFetch<AdminNoteRecord[]>("/api/admin-notes")
+      .then(setNotes)
+      .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(load, []);
+
+  function startEdit(n: AdminNoteRecord) {
+    setEditingId(n.id);
+    setTitle(n.title);
+    setBody(n.body);
+    setJobUuid(n.job_uuid ?? "");
+  }
+
+  function clearForm() {
+    setEditingId(null);
+    setTitle("");
+    setBody("");
+    setJobUuid("");
+  }
+
+  async function save() {
+    if (!title.trim() || !body.trim()) {
+      setErr("Title and body are required.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    const payload = { title: title.trim(), body: body.trim(), job_uuid: jobUuid.trim() || null };
+    try {
+      if (editingId == null) {
+        await apiFetch<AdminNoteRecord>("/api/admin-notes", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await apiFetch<AdminNoteRecord>(`/api/admin-notes/${editingId}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+      }
+      clearForm();
+      load();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!confirm("Delete this admin note?")) return;
+    try {
+      await apiFetch(`/api/admin-notes/${id}`, { method: "DELETE" });
+      if (editingId === id) clearForm();
+      load();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Delete failed");
+    }
+  }
+
+  return (
+    <>
+      <div className="card">
+        <div className="sectionTitle">{editingId == null ? "New Admin Note" : "Edit Admin Note"}</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Leave Job UUID blank for a global note (shown to every crew member).
+          Provide a job UUID to scope the note — it only surfaces when that job
+          is selected.
+        </div>
+        <div className="col" style={{ gap: 10 }}>
+          <input
+            placeholder="Title (e.g. New packing-material pricing)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <input
+            placeholder="Job UUID (leave blank for global)"
+            value={jobUuid}
+            onChange={(e) => setJobUuid(e.target.value)}
+          />
+          <textarea
+            rows={5}
+            placeholder="What the crew needs to know…"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+          />
+          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btnPrimary" onClick={save} disabled={busy}>
+              {busy ? "Saving…" : editingId == null ? "Publish" : "Save changes"}
+            </button>
+            {editingId != null && (
+              <button onClick={clearForm} type="button">Cancel</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">Published Admin Notes</div>
+        {loading && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
+        {!loading && notes.length === 0 && (
+          <div className="small" style={{ color: "var(--muted)" }}>No admin notes yet.</div>
+        )}
+        <div className="col" style={{ gap: 10 }}>
+          {notes.map((n) => (
+            <div key={n.id} className="card" style={{ padding: 12 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
+                    <span className="chip" style={{ fontSize: 10, color: n.job_uuid ? "var(--brand2)" : "var(--ok)" }}>
+                      {n.job_uuid ? "Job" : "Global"}
+                    </span>
+                  </div>
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                    {n.job_uuid ? `Job ${n.job_uuid.slice(0, 8)}… · ` : ""}
+                    Updated {new Date(n.updated_at).toLocaleString()}
+                    {n.created_by_name ? ` · by ${n.created_by_name}` : ""}
+                  </div>
+                  <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
+                </div>
+                <div className="col" style={{ gap: 4 }}>
+                  <button onClick={() => startEdit(n)} style={{ fontSize: 12 }}>Edit</button>
+                  <button
+                    onClick={() => remove(n.id)}
+                    style={{ fontSize: 12, color: "var(--danger)", borderColor: "var(--danger)" }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
   );
 }

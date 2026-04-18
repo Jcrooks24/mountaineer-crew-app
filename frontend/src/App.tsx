@@ -9,6 +9,7 @@ import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme, useLogoSrc } from "./theme/ThemeContext";
 import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
+import AdminNotesBanner from "./components/AdminNotesBanner";
 import { getToken } from "./auth/token";
 import {
   renderedForJob as materialsRenderedForJob,
@@ -1102,6 +1103,10 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {/* Admin notes — global, then per-job when a job is selected */}
+      <AdminNotesBanner scope="global" />
+      {jobUuid && <AdminNotesBanner key={jobUuid} scope={jobUuid} />}
 
       {/* Tabs */}
       <div className="tabbar">
