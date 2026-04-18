@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user, get_db
+from app.core.deps import get_current_user, get_db, require_admin
 from app.db.models.dvir import DVIR
 from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
@@ -176,7 +176,7 @@ def mechanic_sign(
     dvir_id: str,
     body: MechanicSignRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     dvir = db.query(DVIR).filter(DVIR.dvir_id == dvir_id).first()
     if not dvir:

@@ -9,7 +9,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_admin
 from app.core.security import hash_password
 from app.db.models.user import User
 from app.db.session import get_db
@@ -19,15 +19,15 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 @router.post("", response_model=UserResponse)
-def create_user(payload: UserCreate, db: Session = Depends(get_db)):
+def create_user(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Admin-only user creation. The self-service signup flow is at
+    /api/auth/signup (pending-approval by default). This endpoint bypasses
+    that approval — hence the admin gate.
     """
-    Creates a new user from JSON body:
-    {
-      "email": "...",
-      "password": "..."
-    }
-    """
-
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
