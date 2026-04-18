@@ -1,11 +1,12 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
-import logo from "../assets/logo.png";
+import { useLogoSrc } from "../theme/ThemeContext";
 
 type PendingResponse = { pending: boolean; message: string };
 
 export default function Signup() {
+  const logo = useLogoSrc();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

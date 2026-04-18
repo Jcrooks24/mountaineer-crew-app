@@ -1,5 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
+import logoLight from "../assets/logo_light.png";
+import logoDark from "../assets/logo_dark.png";
+
 // ─── Preset themes ────────────────────────────────────────────────────────────
 
 export interface ThemeVars {
@@ -211,10 +214,22 @@ export const DEFAULT_HELP_TEXTS: HelpTexts = {
 
 // ─── Settings shape ───────────────────────────────────────────────────────────
 
+// Text-contrast override. "preset" uses whatever the current theme preset
+// ships with; "light" forces light body text + muted (use on dark themes),
+// "dark" forces dark body text + muted (use on light themes or pale customs).
+export type TextMode = "preset" | "light" | "dark";
+
+// Logo variant selector. "light" serves logo_light.png (light-pixel logo,
+// reads on dark backgrounds); "dark" serves logo_dark.png (dark-pixel logo,
+// reads on light backgrounds); "auto" picks based on the theme preset.
+export type LogoMode = "auto" | "light" | "dark";
+
 export interface ThemeSettings {
   themeId: string;
   brandOverride: string | null;
   brand2Override: string | null;
+  textMode: TextMode;
+  logoMode: LogoMode;
   fontValue: string;
   btnRadius: string;
   btnBgFrom: string;
@@ -235,6 +250,8 @@ export const DEFAULT_SETTINGS: ThemeSettings = {
   themeId: "dark-ocean",
   brandOverride: null,
   brand2Override: null,
+  textMode: "preset",
+  logoMode: "auto",
   fontValue: FONT_OPTIONS[0].value,
   btnRadius: RADIUS_OPTIONS[0].value,
   btnBgFrom: "#1b2945",
@@ -276,6 +293,15 @@ function applySettings(settings: ThemeSettings) {
   // Color overrides
   if (settings.brandOverride) root.style.setProperty("--brand", settings.brandOverride);
   if (settings.brand2Override) root.style.setProperty("--brand2", settings.brand2Override);
+
+  // Text contrast override
+  if (settings.textMode === "light") {
+    root.style.setProperty("--text", "#f5f7fa");
+    root.style.setProperty("--muted", "#c6cedb");
+  } else if (settings.textMode === "dark") {
+    root.style.setProperty("--text", "#1a2030");
+    root.style.setProperty("--muted", "#5a6a7e");
+  }
 
   // Font
   root.style.setProperty("--font", settings.fontValue);
@@ -363,4 +389,15 @@ export function useTheme() {
   const ctx = useContext(ThemeContext);
   if (!ctx) throw new Error("useTheme must be used within ThemeProvider");
   return ctx;
+}
+
+// Resolve which logo file to serve for the current theme + logoMode.
+// `logo_light.png` is the light-pixel variant (for dark backgrounds);
+// `logo_dark.png` is the dark-pixel variant (for light backgrounds).
+// In "auto", "light" preset → dark-pixel logo; every other preset → light-pixel.
+export function useLogoSrc(): string {
+  const { settings } = useTheme();
+  if (settings.logoMode === "light") return logoLight;
+  if (settings.logoMode === "dark") return logoDark;
+  return settings.themeId === "light" ? logoDark : logoLight;
 }

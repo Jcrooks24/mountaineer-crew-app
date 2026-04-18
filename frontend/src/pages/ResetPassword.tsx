@@ -1,12 +1,13 @@
 import React, { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
-import logo from "../assets/logo.png";
+import { useLogoSrc } from "../theme/ThemeContext";
 
 export default function ResetPassword() {
   const [searchParams] = useSearchParams();
   const nav = useNavigate();
   const token = searchParams.get("token") ?? "";
+  const logo = useLogoSrc();
 
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import logo from "./assets/logo.png";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
@@ -8,7 +7,7 @@ import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
-import { useTheme } from "./theme/ThemeContext";
+import { useTheme, useLogoSrc } from "./theme/ThemeContext";
 import { getToken } from "./auth/token";
 import {
   renderedForJob as materialsRenderedForJob,
@@ -161,6 +160,7 @@ export default function App() {
   const nav = useNavigate();
   const { user } = useAuth();
   const { settings: themeSettings } = useTheme();
+  const logo = useLogoSrc();
   const ht = themeSettings.helpTexts;
   const [tab, setTab] = useState<Tab>("timeline");
 

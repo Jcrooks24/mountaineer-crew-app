@@ -600,6 +600,74 @@ function SettingsTab() {
         </div>
       </div>
 
+      {/* ── Text contrast + logo variant ── */}
+      <div className="card">
+        <div className="sectionTitle">Text Color</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Override body text for readability on customized themes.
+        </div>
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          {([
+            { id: "preset", label: "Use preset" },
+            { id: "light", label: "Light text" },
+            { id: "dark", label: "Dark text" },
+          ] as const).map((opt) => {
+            const active = settings.textMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => update({ textMode: opt.id })}
+                style={{
+                  border: `2px solid ${active ? "var(--brand)" : "var(--border)"}`,
+                  color: active ? "var(--brand)" : "var(--muted)",
+                  fontWeight: active ? 700 : 600,
+                  padding: "8px 16px",
+                  fontSize: 13,
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="small" style={{ color: "var(--text)", marginTop: 12 }}>
+          Sample body text at this setting — a quick brown fox jumps over the lazy dog.
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">Logo Variant</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          "Auto" picks the light logo for dark themes and the dark logo for the
+          Light preset. Drop replacements at <code>frontend/src/assets/logo_light.png</code>
+          and <code>logo_dark.png</code>.
+        </div>
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          {([
+            { id: "auto", label: "Auto (match theme)" },
+            { id: "light", label: "Light logo" },
+            { id: "dark", label: "Dark logo" },
+          ] as const).map((opt) => {
+            const active = settings.logoMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => update({ logoMode: opt.id })}
+                style={{
+                  border: `2px solid ${active ? "var(--brand)" : "var(--border)"}`,
+                  color: active ? "var(--brand)" : "var(--muted)",
+                  fontWeight: active ? 700 : 600,
+                  padding: "8px 16px",
+                  fontSize: 13,
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* ── Button colors ── */}
       <div className="card">
         <div className="sectionTitle">Button Colors</div>

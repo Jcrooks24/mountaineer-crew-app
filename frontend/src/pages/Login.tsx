@@ -2,13 +2,14 @@ import React, { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import logo from "../assets/logo.png";
+import { useLogoSrc } from "../theme/ThemeContext";
 
 type TokenResponse = { access_token: string; token_type: string };
 
 export default function Login() {
   const nav = useNavigate();
   const { loginWithToken } = useAuth();
+  const logo = useLogoSrc();
   const [searchParams] = useSearchParams();
   const didReset = searchParams.get("reset") === "1";
 

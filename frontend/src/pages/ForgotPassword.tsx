@@ -1,9 +1,10 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
-import logo from "../assets/logo.png";
+import { useLogoSrc } from "../theme/ThemeContext";
 
 export default function ForgotPassword() {
+  const logo = useLogoSrc();
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
