@@ -5,6 +5,14 @@ import {
   FURNITURE_CATALOG,
   type FurnitureItem,
 } from "../data/furnitureCatalog";
+import {
+  cancelByTempId as cancelQueuedAdd,
+  drain as drainEstimatorQueue,
+  enqueue as enqueueEstimatorAdd,
+  pendingFor as pendingEstimatorAddsFor,
+  pruneStale as pruneEstimatorQueue,
+  removeOp as removeEstimatorOp,
+} from "../lib/estimatorQueue";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -301,14 +309,48 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
 
   type ItemPayload = Omit<EstimateItem, "id">;
 
-  // Optimistic add: append a temp item to local state immediately, close the
-  // modal, and POST in the background. On success replace the temp id with
-  // the server id; on failure remove the temp item and surface the error.
-  // Estimators can add items very quickly without waiting on Render.
+  function newOpId(): string {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  // Resolve a successful POST for a temp id — swap the temp row for the
+  // server row in rendered state. Used by both the live submit path and
+  // the on-mount drain of the persistent queue.
+  function resolveTempItem(tempId: number, server: EstimateItem) {
+    setLocal((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => (it.id === tempId ? server : it)),
+    }));
+  }
+
+  function dropTempItem(tempId: number) {
+    setLocal((prev) => ({
+      ...prev,
+      items: prev.items.filter((it) => it.id !== tempId),
+    }));
+  }
+
+  // Optimistic add. Enqueue first so the op survives tab close / navigation
+  // / offline, then fire the POST in the background. On success: clear the
+  // queue op and swap tempId for the server row. On 4xx: drop the op and
+  // the temp row (server permanently rejected). On 5xx / network: leave
+  // the op queued — the drain effect below retries on next mount / reload.
   function submitItemOptimistic(payload: ItemPayload) {
     const tempId = -(Date.now() + Math.floor(Math.random() * 1000));
-    const optimistic: EstimateItem = { id: tempId, ...payload };
+    const opId = newOpId();
 
+    enqueueEstimatorAdd({
+      id: opId,
+      tempId,
+      estimateUuid: local.estimate_uuid,
+      payload,
+      createdAt: new Date().toISOString(),
+    });
+
+    const optimistic: EstimateItem = { id: tempId, ...payload };
     setLocal((prev) => ({ ...prev, items: [...prev.items, optimistic] }));
 
     apiFetch<EstimateItem>(`/api/estimates/${local.estimate_uuid}/items`, {
@@ -316,19 +358,58 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
       body: JSON.stringify(payload),
     })
       .then((server) => {
-        setLocal((prev) => ({
-          ...prev,
-          items: prev.items.map((it) => (it.id === tempId ? server : it)),
-        }));
+        removeEstimatorOp(opId);
+        resolveTempItem(tempId, server);
       })
       .catch((e: any) => {
-        setLocal((prev) => ({
-          ...prev,
-          items: prev.items.filter((it) => it.id !== tempId),
-        }));
-        setErr(e instanceof ApiError ? e.message : "Add failed");
+        const isPermanent =
+          e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408;
+        if (isPermanent) {
+          removeEstimatorOp(opId);
+          dropTempItem(tempId);
+          setErr(e instanceof ApiError ? e.message : "Add failed");
+        }
+        // else: network / 5xx — leave queued, drain will retry
       });
   }
+
+  // Called from ItemRow when the user tries to delete a still-syncing
+  // (negative id) row. Cancelling the queued op prevents the POST from
+  // running; if the POST already fired, this is a best-effort — the
+  // server row may still exist, and the next refreshEstimate will show it.
+  function cancelTempItem(tempId: number) {
+    cancelQueuedAdd(tempId);
+    dropTempItem(tempId);
+  }
+
+  // On mount / estimate change: merge any pending queued adds for this
+  // estimate into the rendered list (so a page reload shows them as
+  // "Syncing…" rows), then drain the queue.
+  useEffect(() => {
+    pruneEstimatorQueue();
+    const pending = pendingEstimatorAddsFor(local.estimate_uuid);
+    if (pending.length > 0) {
+      setLocal((prev) => {
+        const existingIds = new Set(prev.items.map((it) => it.id));
+        const toMerge = pending
+          .filter((p) => !existingIds.has(p.tempId))
+          .map((p) => ({ id: p.tempId, ...p.payload } as EstimateItem));
+        return toMerge.length
+          ? { ...prev, items: [...prev.items, ...toMerge] }
+          : prev;
+      });
+    }
+    drainEstimatorQueue(
+      local.estimate_uuid,
+      (tempId, server) => resolveTempItem(tempId, server),
+      (tempId, reason) => {
+        dropTempItem(tempId);
+        setErr(`An add failed and was dropped: ${reason}`);
+      },
+    );
+    // Run whenever the estimate UUID changes (including drill-down/back).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [local.estimate_uuid]);
 
   function addRoom() {
     const name = prompt("Room name (e.g. Living Room, Kitchen, Garage):")?.trim();
@@ -446,6 +527,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
                 )}
                 onChanged={refreshEstimate}
                 onAddItem={submitItemOptimistic}
+                onCancelTemp={cancelTempItem}
                 onRemovePendingRoom={() =>
                   setPendingRooms((prev) => prev.filter((p) => p !== r))
                 }
@@ -484,6 +566,7 @@ function RoomTile({
   items,
   onChanged,
   onAddItem,
+  onCancelTemp,
   onRemovePendingRoom,
 }: {
   room: string;
@@ -491,6 +574,7 @@ function RoomTile({
   items: EstimateItem[];
   onChanged: () => void;
   onAddItem: (payload: Omit<EstimateItem, "id">) => void;
+  onCancelTemp: (tempId: number) => void;
   onRemovePendingRoom: () => void;
 }) {
   const [addingItem, setAddingItem] = useState(false);
@@ -566,6 +650,7 @@ function RoomTile({
                   item={it}
                   estimateUuid={estimateUuid}
                   onChanged={onChanged}
+                  onCancelTemp={onCancelTemp}
                 />
               ))}
             </div>
@@ -617,10 +702,12 @@ function ItemRow({
   item,
   estimateUuid,
   onChanged,
+  onCancelTemp,
 }: {
   item: EstimateItem;
   estimateUuid: string;
   onChanged: () => void;
+  onCancelTemp: (tempId: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [qty, setQty] = useState(String(item.qty));
@@ -628,6 +715,13 @@ function ItemRow({
   const [cuft, setCuft] = useState(String(item.cubic_ft));
   const [notes, setNotes] = useState(item.notes ?? "");
   const [busy, setBusy] = useState(false);
+
+  // Negative ids are client-side placeholders for a not-yet-confirmed POST.
+  // Edit / remove against them would 404 and either lose the edit silently
+  // or cause the row to resurrect itself when the POST resolves. Render
+  // them as non-interactive "Syncing…" rows with a Cancel affordance that
+  // removes the queued add before it hits the server.
+  const isTemp = item.id < 0;
 
   async function save() {
     setBusy(true);
@@ -643,6 +737,8 @@ function ItemRow({
       });
       setEditing(false);
       onChanged();
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Save failed");
     } finally {
       setBusy(false);
     }
@@ -650,8 +746,42 @@ function ItemRow({
 
   async function remove() {
     if (!confirm(`Remove "${item.name}"?`)) return;
-    await apiFetch(`/api/estimates/${estimateUuid}/items/${item.id}`, { method: "DELETE" });
-    onChanged();
+    try {
+      await apiFetch(`/api/estimates/${estimateUuid}/items/${item.id}`, { method: "DELETE" });
+      onChanged();
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Remove failed");
+    }
+  }
+
+  if (isTemp) {
+    return (
+      <div
+        style={{
+          padding: "8px 0",
+          borderTop: "1px solid var(--border)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 8,
+          opacity: 0.75,
+        }}
+      >
+        <span style={{ fontSize: 13 }}>
+          <strong>×{item.qty}</strong> {item.name}
+          <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>Syncing…</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            if (confirm(`Cancel pending add of "${item.name}"?`)) onCancelTemp(item.id);
+          }}
+          style={{ fontSize: 11, padding: "4px 10px", color: "var(--muted)" }}
+        >
+          Cancel
+        </button>
+      </div>
+    );
   }
 
   if (editing) {
