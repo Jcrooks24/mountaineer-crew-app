@@ -82,24 +82,34 @@ export default function LongDistance() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">TRALA 150 Air-Mile Short-Haul Exemption — 82 FR 47306</div>
+        <div className="sectionTitle">TRALA Rental-Truck Exemption — 82 FR 47306</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
-          Published by FMCSA in the Federal Register (Oct 11, 2017), this exemption applies to
-          qualifying rental-truck drivers operating within 150 air miles of their normal work
-          reporting location. Carry a copy in the cab when relying on it for a trip, and
-          confirm your eligibility with the office before each long-distance move.
+          Published by FMCSA in the Federal Register (Oct 11, 2017), this exemption covers
+          drivers operating a rental truck on our behalf during out-of-state moves. Carry a
+          copy of the exemption in the cab, and confirm eligibility with the office before
+          dispatch.
           <div style={{ marginTop: 10 }}>
-            <strong>Key terms, summarized:</strong>
+            <strong>When it applies to us:</strong>
             <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
-              <li>Driver reports to and returns to the same reporting location within 14 hours.</li>
-              <li>Operates within a 150 air-mile radius of that reporting location.</li>
-              <li>Relieved from duty within 14 hours; not more than 11 hours driving.</li>
-              <li>No requirement to keep a RODS for that day, but time-record must be retained.</li>
+              <li>The vehicle is a rental truck (CDL not required for class) operated for a Mountaineer customer.</li>
+              <li>The trip crosses state lines — this is the out-of-state use case we rely on.</li>
+              <li>Office has confirmed the exemption applies to this specific move before departure.</li>
             </ul>
           </div>
+          <div style={{ marginTop: 10 }}>
+            <strong>When it doesn't cover you — use RODS instead:</strong>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              <li>You're not returning to the reporting location that same day, or</li>
+              <li>The move requires driving beyond what TRALA's HOS relief allows.</li>
+            </ul>
+            In either case, complete the <strong>Prior On-Duty Hours Statement</strong> and keep a
+            <strong> RODS</strong> for each day on the road.
+          </div>
           <div style={{ marginTop: 10, color: "var(--muted)" }}>
-            A full copy of 82 FR 47306 is kept in the <strong>Document Library</strong> — ask an
-            admin to add it if you don't see it.
+            The short-haul / 150 air-mile clauses in 82 FR 47306 are rarely the reason we use
+            this exemption — document your trip the same way regardless. A full copy of the
+            exemption lives in the <strong>Document Library</strong>; ask an admin if you don't
+            see it.
           </div>
         </div>
       </div>
