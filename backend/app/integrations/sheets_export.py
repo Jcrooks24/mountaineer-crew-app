@@ -284,6 +284,83 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     return len(new_rows)
 
 
+def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
+    """Remove every row in the Materials tab belonging to `submission_id` and
+    clear the corresponding dedupe entries so a later re-submission syncs
+    cleanly. Returns the number of sheet rows deleted.
+
+    Sheet writes were previously append-only, which left ghost rows after a
+    crew member removed a material from a job — admins reading the sheet for
+    cost analysis would see items that no longer exist in the app.
+    """
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    tab = os.getenv("SHEETS_MATERIALS_TAB", DEFAULT_MATERIALS_TAB).strip() or DEFAULT_MATERIALS_TAB
+
+    from googleapiclient.discovery import build as _build
+    authorized_http = _build_authorized_http(_get_creds(db))
+    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+
+    # Resolve the numeric sheetId for deleteDimension
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    props = next(
+        (s["properties"] for s in meta.get("sheets", []) if s["properties"]["title"] == tab),
+        None,
+    )
+    if not props:
+        return 0
+    sheet_numeric_id = props["sheetId"]
+
+    # Locate the submission_id column
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!1:1",
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0]
+    if "submission_id" not in headers_row:
+        return 0
+    col_letter = _col_letter(headers_row.index("submission_id"))
+
+    # Pull just that column to find matching row indices
+    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!{col_letter}:{col_letter}",
+    ).execute())
+    col_values = col.get("values") or []
+
+    target_indices: List[int] = []  # 0-based row indices suitable for deleteDimension
+    for i, row in enumerate(col_values):
+        if i == 0:
+            continue  # header row
+        value = row[0] if row else ""
+        if value == submission_id:
+            target_indices.append(i)
+
+    if target_indices:
+        # Delete bottom-up so earlier deletes don't shift later indices.
+        requests = [
+            {"deleteDimension": {"range": {
+                "sheetId": sheet_numeric_id,
+                "dimension": "ROWS",
+                "startIndex": idx,
+                "endIndex": idx + 1,
+            }}}
+            for idx in sorted(target_indices, reverse=True)
+        ]
+        _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": requests},
+        ).execute())
+
+    # Always clear dedupe entries so a re-add with the same ids would re-export.
+    db.execute(
+        text("DELETE FROM sheet_material_exports WHERE export_key LIKE :prefix"),
+        {"prefix": f"{submission_id}:%"},
+    )
+    db.commit()
+
+    return len(target_indices)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Generic helpers for newer forms (job reports, bills, DVIRs, prior-hours,
 # RODS, estimates). Each kind has its own SHEETS_<KIND>_TAB env var so staging

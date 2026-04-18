@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models.materials import MaterialsSubmission
-from app.integrations.sheets_export import export_materials_to_sheets
+from app.integrations.sheets_export import (
+    delete_materials_from_sheets,
+    export_materials_to_sheets,
+    run_export_in_background,
+)
 from app.core.deps import get_current_user
 from app.db.models.user import User
 
@@ -169,4 +173,9 @@ def delete_material(
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to delete material")
+
+    # Mirror the removal to the Google Sheet so admins reading the sheet
+    # for cost analysis don't see ghost rows for deleted materials.
+    run_export_in_background(delete_materials_from_sheets, submission_id)
+
     return {"ok": True, "deleted": True}
