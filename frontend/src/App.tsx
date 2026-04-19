@@ -980,15 +980,14 @@ export default function App() {
 
     setJobComments(loadCommentsForJob(jobUuid));
 
+    // Rehydrate the active job's name on boot, but leave jobDate at today
+    // (the useState initializer). Crews log in to work today's jobs — showing
+    // last session's date in the Timeline filter was confusing.
     const meta = loadJobMeta(jobUuid);
     if (meta) {
       setJobName(meta.jobName || "");
-      setJobDate(meta.jobDate || todayLocalYYYYMMDD());
     } else {
-      const loadedName = loadJobName(jobUuid);
-      setJobName(loadedName);
-      const storedDate = loadJobDate(jobUuid);
-      setJobDate(storedDate || todayLocalYYYYMMDD());
+      setJobName(loadJobName(jobUuid));
     }
 
     // Restore history from backend so mobile devices aren't empty on first load

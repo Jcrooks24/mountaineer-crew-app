@@ -63,6 +63,10 @@ input, select, textarea{
   background: rgba(255,255,255,0.08);
   color: var(--text);
   font-family: inherit;
+  /* iOS Safari auto-zooms on focus when the input's computed font-size is
+     <16px. UA default is ~13px, which was zooming the page on login and
+     leaving it zoomed after navigation. */
+  font-size: 16px;
   outline: none;
 }
 
