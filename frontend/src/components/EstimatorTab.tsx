@@ -918,50 +918,45 @@ function AddItemDialog({
   const { list: catalog, refresh: refreshCatalog } = useCatalog();
 
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<Match | null>(null);
+  const [selected, setSelected] = useState(null);
   const [qty, setQty] = useState(1);
   const [weight, setWeight] = useState("");
   const [cuft, setCuft] = useState("");
   const [notes, setNotes] = useState("");
   const [saveToCatalog, setSaveToCatalog] = useState(false);
   const [sub, setSub] = useState(subcategory);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // Delay focus so iOS does not zoom the viewport when the modal opens.
+  const inputRef = useRef(null);
+  useEffect(() => {
+    const t = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 120);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Hide dropdown once an item is selected.
   const suggestions = useMemo(() => {
+    if (selected) return [];
     const q = query.trim().toLowerCase();
     if (!q) return catalog.slice(0, 8);
     return catalog.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 10);
-  }, [catalog, query]);
+  }, [catalog, query, selected]);
 
   const exactMatch = useMemo(
     () => catalog.find((c) => c.name.toLowerCase() === query.trim().toLowerCase()) || null,
     [catalog, query],
   );
 
-  function chooseMatch(m: Match) {
-    setSelected(m);
-    setQuery(m.name);
-    setWeight(String(m.weight_lbs));
-    setCuft(String(m.cubic_ft));
-  }
-
-  function clearSelection() {
-    setSelected(null);
-    setWeight("");
-    setCuft("");
-  }
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
+  function doAdd(override) {
     setErr(null);
-    const name = (selected?.name ?? query).trim();
-    if (!name) return setErr("Item name required.");
-    const w = Number(weight) || 0;
-    const v = Number(cuft) || 0;
+    const name = (override?.name ?? selected?.name ?? query).trim();
+    if (!name) { setErr("Item name required."); return; }
+    const w = override?.weight_lbs ?? Number(weight) || 0;
+    const v = override?.cubic_ft ?? Number(cuft) || 0;
     const q = Math.max(1, Math.floor(qty || 1));
 
-    // Save to user catalog in the background — never blocks the add.
-    if (saveToCatalog && !selected) {
+    if (saveToCatalog && !selected && !override) {
       apiFetch("/api/estimates/catalog", {
         method: "POST",
         body: JSON.stringify({ name, weight_lbs: w, cubic_ft: v }),
@@ -970,8 +965,6 @@ function AddItemDialog({
         .catch(() => {/* non-fatal */});
     }
 
-    // Hand the optimistic payload to the parent, which closes the modal,
-    // appends it locally, and POSTs the item in the background.
     onAdd({
       name,
       qty: q,
@@ -983,6 +976,24 @@ function AddItemDialog({
     });
   }
 
+  function chooseAndAdd(m) {
+    setSelected(m);
+    setQuery(m.name);
+    setWeight(String(m.weight_lbs));
+    setCuft(String(m.cubic_ft));
+    doAdd({ name: m.name, weight_lbs: m.weight_lbs, cubic_ft: m.cubic_ft });
+  }
+
+  function clearSelection() {
+    setSelected(null);
+    setWeight("");
+    setCuft("");
+  }
+
+  function submit(e) {
+    e.preventDefault();
+    doAdd();
+  }
   return (
     <div
       style={{
@@ -1008,110 +1019,130 @@ function AddItemDialog({
         <form onSubmit={submit} className="col" style={{ gap: 10 }}>
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Item *</span>
-            <input
-              value={query}
-              onChange={(e) => { setQuery(e.target.value); setSelected(null); }}
-              placeholder="Start typing — e.g. Sofa, Dresser, Box…"
-              autoFocus
-            />
+            <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={(e) => { setQuery(e.target.value); setSelected(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } }}
+                placeholder="Start typing — e.g. Sofa, Dresser, Box…"
+                style={{ flex: 1 }}
+              />
+              <div className="col" style={{ gap: 2, flexShrink: 0 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={qty}
+                  onChange={(e) => setQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                  style={{ width: 68 }}
+                />
+              </div>
+            </div>
             {query && !exactMatch && !selected && (
               <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                No exact match — this will be added as a custom item.
+                No exact match — press Enter or tap "Add to inventory" to add as custom.
               </div>
             )}
           </label>
 
           {suggestions.length > 0 && (
-            <div style={{ border: "1px solid var(--border)", borderRadius: "var(--btn-r)", maxHeight: 180, overflowY: "auto" }}>
-              {suggestions.map((m) => {
-                const active = selected?.name === m.name;
-                return (
-                  <button
-                    key={`${m.source}:${m.name}`}
-                    type="button"
-                    onClick={() => chooseMatch(m)}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "8px 10px",
-                      background: active ? "rgba(93,214,194,0.12)" : "transparent",
-                      border: "none",
-                      borderBottom: "1px solid var(--border)",
-                      color: "var(--text)",
-                      fontSize: 13,
-                    }}
-                  >
-                    <span>
-                      {m.name}
-                      {m.source === "user" && (
-                        <span style={{ fontSize: 10, color: "var(--brand)", marginLeft: 6 }}>• custom</span>
-                      )}
-                    </span>
-                    <span className="small" style={{ color: "var(--muted)" }}>
-                      {m.weight_lbs} lbs · {m.cubic_ft} cf
-                    </span>
-                  </button>
-                );
-              })}
+            <div style={{ border: "1px solid var(--border)", borderRadius: "var(--btn-r)", maxHeight: 200, overflowY: "auto" }}>
+              {suggestions.map((m) => (
+                <button
+                  key={`${m.source}:${m.name}`}
+                  type="button"
+                  onClick={() => chooseAndAdd(m)}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "10px 12px",
+                    background: "transparent",
+                    border: "none",
+                    borderBottom: "1px solid var(--border)",
+                    color: "var(--text)",
+                    fontSize: 15,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span>
+                    {m.name}
+                    {m.source === "user" && (
+                      <span style={{ fontSize: 10, color: "var(--brand)", marginLeft: 6 }}>• custom</span>
+                    )}
+                  </span>
+                  <span className="small" style={{ color: "var(--muted)" }}>
+                    {m.weight_lbs} lbs · {m.cubic_ft} cf
+                  </span>
+                </button>
+              ))}
             </div>
           )}
 
           {selected && (
             <div className="small" style={{ color: "var(--brand)" }}>
-              Using catalog item "{selected.name}" ({selected.weight_lbs} lbs · {selected.cubic_ft} cu ft).
-              <button type="button" onClick={clearSelection} style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", background: "none", border: "none", color: "var(--muted)" }}>
-                Use custom instead
+              Added “{selected.name}” ({selected.weight_lbs} lbs · {selected.cubic_ft} cu ft).{" "}
+              <button type="button" onClick={clearSelection} style={{ fontSize: 11, padding: "2px 8px", background: "none", border: "none", color: "var(--muted)", cursor: "pointer" }}>
+                Change item
               </button>
             </div>
           )}
 
-          <div className="row wrap" style={{ gap: 8 }}>
-            <label className="col" style={{ gap: 2, flex: "1 1 90px" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Qty *</span>
-              <input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
-            </label>
-            <label className="col" style={{ gap: 2, flex: "1 1 100px" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Weight (lbs each)</span>
-              <input value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="0" inputMode="decimal" />
-            </label>
-            <label className="col" style={{ gap: 2, flex: "1 1 90px" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Volume (cu ft each)</span>
-              <input value={cuft} onChange={(e) => setCuft(e.target.value)} placeholder="0" inputMode="decimal" />
-            </label>
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 13, textAlign: "left", padding: "4px 0", cursor: "pointer" }}
+          >
+            {showAdvanced ? "▴ Hide options" : "▾ Weight / volume / notes"}
+          </button>
 
-          <label className="col" style={{ gap: 4 }}>
-            <span className="small" style={{ color: "var(--muted)" }}>Subcategory (optional)</span>
-            <input
-              list={knownSubcategories.length ? "subcategory-suggest" : undefined}
-              value={sub}
-              onChange={(e) => setSub(e.target.value)}
-              placeholder="e.g. Going, Not Going, Pack…"
-            />
-            {knownSubcategories.length > 0 && (
-              <datalist id="subcategory-suggest">
-                {knownSubcategories.map((s) => <option key={s} value={s} />)}
-              </datalist>
-            )}
-          </label>
+          {showAdvanced && (
+            <>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <label className="col" style={{ gap: 2, flex: "1 1 100px" }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Weight (lbs each)</span>
+                  <input value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="0" inputMode="decimal" />
+                </label>
+                <label className="col" style={{ gap: 2, flex: "1 1 90px" }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Volume (cu ft each)</span>
+                  <input value={cuft} onChange={(e) => setCuft(e.target.value)} placeholder="0" inputMode="decimal" />
+                </label>
+              </div>
 
-          <label className="col" style={{ gap: 4 }}>
-            <span className="small" style={{ color: "var(--muted)" }}>Notes (optional)</span>
-            <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Fragile, PBO, client disassembles…" />
-          </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Subcategory (optional)</span>
+                <input
+                  list={knownSubcategories.length ? "subcategory-suggest" : undefined}
+                  value={sub}
+                  onChange={(e) => setSub(e.target.value)}
+                  placeholder="e.g. Going, Not Going, Pack…"
+                />
+                {knownSubcategories.length > 0 && (
+                  <datalist id="subcategory-suggest">
+                    {knownSubcategories.map((s) => <option key={s} value={s} />)}
+                  </datalist>
+                )}
+              </label>
 
-          {!selected && query.trim() && !exactMatch && (
-            <label className="row" style={{ gap: 10, alignItems: "center", fontSize: 13 }}>
-              <input
-                type="checkbox"
-                checked={saveToCatalog}
-                onChange={(e) => setSaveToCatalog(e.target.checked)}
-                style={{ accentColor: "var(--brand)", width: 16, height: 16 }}
-              />
-              <span>Also save this item to the app database for future estimates</span>
-            </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Notes (optional)</span>
+                <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Fragile, PBO, client disassembles…" />
+              </label>
+
+              {!selected && query.trim() && !exactMatch && (
+                <label className="row" style={{ gap: 10, alignItems: "center", fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    checked={saveToCatalog}
+                    onChange={(e) => setSaveToCatalog(e.target.checked)}
+                    style={{ accentColor: "var(--brand)", width: 16, height: 16 }}
+                  />
+                  <span>Also save this item to the app database for future estimates</span>
+                </label>
+              )}
+            </>
           )}
 
           {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
