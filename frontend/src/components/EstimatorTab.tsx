@@ -928,13 +928,6 @@ function AddItemDialog({
   const [err, setErr] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Delay focus so iOS does not zoom the viewport when the modal opens.
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    const t = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 120);
-    return () => clearTimeout(t);
-  }, []);
-
   // Hide dropdown once an item is selected.
   const suggestions = useMemo(() => {
     if (selected) return [];
@@ -1021,7 +1014,7 @@ function AddItemDialog({
             <span className="small" style={{ color: "var(--muted)" }}>Item *</span>
             <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
               <input
-                ref={inputRef}
+                autoFocus
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); setSelected(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } }}
