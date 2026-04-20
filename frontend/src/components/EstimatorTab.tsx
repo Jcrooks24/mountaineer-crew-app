@@ -1083,6 +1083,33 @@ function AddItemDialog({
             </div>
           )}
 
+          {knownSubcategories.length > 0 && (
+            <div className="col" style={{ gap: 4 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Subcategory</span>
+              <div className="row wrap" style={{ gap: 6 }}>
+                {knownSubcategories.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setSub((prev) => prev === s ? "" : s)}
+                    style={{
+                      padding: "5px 12px",
+                      borderRadius: 99,
+                      border: "1px solid var(--border)",
+                      background: sub === s ? "var(--brand)" : "rgba(255,255,255,0.06)",
+                      color: sub === s ? "#0b1220" : "var(--text)",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      fontWeight: sub === s ? 700 : 400,
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <button
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}
