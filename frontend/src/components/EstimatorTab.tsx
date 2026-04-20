@@ -918,18 +918,18 @@ function AddItemDialog({
   const { list: catalog, refresh: refreshCatalog } = useCatalog();
 
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected] = useState<Match | null>(null);
   const [qty, setQty] = useState(1);
   const [weight, setWeight] = useState("");
   const [cuft, setCuft] = useState("");
   const [notes, setNotes] = useState("");
   const [saveToCatalog, setSaveToCatalog] = useState(false);
   const [sub, setSub] = useState(subcategory);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Delay focus so iOS does not zoom the viewport when the modal opens.
-  const inputRef = useRef(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const t = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 120);
     return () => clearTimeout(t);
@@ -948,12 +948,12 @@ function AddItemDialog({
     [catalog, query],
   );
 
-  function doAdd(override) {
+  function doAdd(override?: { name: string; weight_lbs: number; cubic_ft: number }) {
     setErr(null);
     const name = (override?.name ?? selected?.name ?? query).trim();
     if (!name) { setErr("Item name required."); return; }
-    const w = override?.weight_lbs ?? Number(weight) || 0;
-    const v = override?.cubic_ft ?? Number(cuft) || 0;
+    const w = override?.weight_lbs ?? (Number(weight) || 0);
+    const v = override?.cubic_ft ?? (Number(cuft) || 0);
     const q = Math.max(1, Math.floor(qty || 1));
 
     if (saveToCatalog && !selected && !override) {
@@ -976,7 +976,7 @@ function AddItemDialog({
     });
   }
 
-  function chooseAndAdd(m) {
+  function chooseAndAdd(m: Match) {
     setSelected(m);
     setQuery(m.name);
     setWeight(String(m.weight_lbs));
@@ -990,7 +990,7 @@ function AddItemDialog({
     setCuft("");
   }
 
-  function submit(e) {
+  function submit(e: React.FormEvent) {
     e.preventDefault();
     doAdd();
   }
