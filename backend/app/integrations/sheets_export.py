@@ -1,6 +1,6 @@
 import json
 import os
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Callable, List, Dict, Any, Optional
 
@@ -9,9 +9,14 @@ from sqlalchemy import text
 
 from app.core.google_cal_oauth import get_sheets_service, _build_authorized_http, _ssl_retry, _get_creds
 
+# Bounded pool — at most 2 export threads run concurrently. Additional tasks
+# queue internally and drain as workers free up. Prevents a sync burst from
+# spawning unlimited threads and blowing Render's 512 MB memory limit.
+_EXPORT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sheets-export")
+
 
 def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
-    """Fire-and-forget a sheets export on a background thread with a fresh
+    """Submit a sheets export to the bounded background pool with a fresh
     DB session, so a slow or failing Google call never blocks the API
     response (Render kills requests past its proxy timeout, which surfaces
     on the client as "Failed to fetch").
@@ -33,7 +38,7 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
             except Exception:
                 pass
 
-    threading.Thread(target=_worker, daemon=True).start()
+    _EXPORT_POOL.submit(_worker)
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
