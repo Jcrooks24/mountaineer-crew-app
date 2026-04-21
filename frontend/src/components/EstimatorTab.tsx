@@ -831,20 +831,29 @@ function ItemRow({
   }
 
   // Flush immediately when a field loses focus so values are saved even
-  // if the user taps away before the debounce fires.
+  // if the user taps away before the debounce fires. Only flush when
+  // "pending" — if already "saving" the in-flight request is handling it
+  // and a second concurrent PATCH would race against it.
   function handleBlur() {
-    if (itemSaveState === "pending" || itemSaveState === "saving") {
+    if (itemSaveState === "pending") {
       if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
       flushItemSave();
     }
   }
 
-  // Flush on unmount if there's a pending save (e.g. user navigates back
-  // while the debounce timer is still counting).
+  // Fire-and-forget flush on unmount so edits aren't silently dropped when
+  // the user navigates away while the debounce timer is still counting.
   useEffect(() => {
     return () => {
-      if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
+      if (itemSaveTimer.current) {
+        clearTimeout(itemSaveTimer.current);
+        apiFetch(`/api/estimates/${estimateUuid}/items/${item.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(buildPatch()),
+        }).catch(() => {});
+      }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function remove() {
