@@ -66,6 +66,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   function logout() {
     clearToken();
+    sessionStorage.removeItem("crew_session_jobDate");
+    sessionStorage.removeItem("crew_session_calId");
     setUser(null);
   }
 

@@ -821,7 +821,6 @@ function ItemRow({
       setTimeout(() => setItemSaveState("idle"), 2000);
     } catch (e: any) {
       setItemSaveState("error");
-      alert(e instanceof ApiError ? e.message : "Save failed — check connection");
     }
   }
 
@@ -855,7 +854,7 @@ function ItemRow({
       await apiFetch(`/api/estimates/${estimateUuid}/items/${item.id}`, { method: "DELETE" });
       onChanged();
     } catch (e: any) {
-      alert(e instanceof ApiError ? e.message : "Remove failed");
+      setItemSaveState("error");
     }
   }
 
