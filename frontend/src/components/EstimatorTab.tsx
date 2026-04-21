@@ -222,10 +222,19 @@ type DetailProps = {
   onChange: (e: Estimate) => void;
 };
 
+type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
+
 function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
   const [local, setLocal] = useState<Estimate>(estimate);
-  const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [err, setErr] = useState<string | null>(null);
+
+  // Always-current ref so the unmount flush reads the latest field values.
+  const localRef = useRef<Estimate>(local);
+  useEffect(() => { localRef.current = local; }, [local]);
+
+  const metaSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMounted = useRef(true);
 
   // Rooms that exist only in the UI (before their first item is added)
   const [pendingRooms, setPendingRooms] = useState<string[]>([]);
@@ -259,34 +268,74 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
 
   function setField<K extends keyof Estimate>(key: K, val: Estimate[K]) {
     setLocal((prev) => ({ ...prev, [key]: val }));
+    scheduleMetaSave();
   }
 
-  async function saveMeta() {
-    setSaving(true);
+  function scheduleMetaSave() {
+    setSaveState("pending");
+    if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current);
+    metaSaveTimer.current = setTimeout(() => flushMetaSave(localRef.current), 800);
+  }
+
+  async function flushMetaSave(l: Estimate) {
+    if (!isMounted.current) return;
+    setSaveState("saving");
     setErr(null);
     try {
-      const updated = await apiFetch<Estimate>(`/api/estimates/${local.estimate_uuid}`, {
+      const updated = await apiFetch<Estimate>(`/api/estimates/${l.estimate_uuid}`, {
         method: "PATCH",
         body: JSON.stringify({
-          customer_name: local.customer_name,
-          customer_email: local.customer_email ?? "",
-          customer_phone: local.customer_phone ?? "",
-          origin_address: local.origin_address ?? "",
-          destination_address: local.destination_address ?? "",
-          move_date: local.move_date ?? "",
-          origin_access_notes: local.origin_access_notes ?? "",
-          destination_access_notes: local.destination_access_notes ?? "",
-          special_items_notes: local.special_items_notes ?? "",
-          general_notes: local.general_notes ?? "",
+          customer_name: l.customer_name,
+          customer_email: l.customer_email ?? "",
+          customer_phone: l.customer_phone ?? "",
+          origin_address: l.origin_address ?? "",
+          destination_address: l.destination_address ?? "",
+          move_date: l.move_date ?? "",
+          origin_access_notes: l.origin_access_notes ?? "",
+          destination_access_notes: l.destination_access_notes ?? "",
+          special_items_notes: l.special_items_notes ?? "",
+          general_notes: l.general_notes ?? "",
         }),
       });
+      if (!isMounted.current) return;
       onChange(updated);
+      setSaveState("saved");
+      setTimeout(() => { if (isMounted.current) setSaveState("idle"); }, 2000);
     } catch (e: any) {
-      setErr(e instanceof ApiError ? e.message : "Save failed");
-    } finally {
-      setSaving(false);
+      if (!isMounted.current) return;
+      setSaveState("error");
+      setErr(e instanceof ApiError ? e.message : "Auto-save failed — check connection");
     }
   }
+
+  // Flush any pending meta save on unmount (navigating back, closing, etc.)
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      if (metaSaveTimer.current) {
+        clearTimeout(metaSaveTimer.current);
+        // Fire-and-forget — component is gone so we can't update state
+        const l = localRef.current;
+        apiFetch(`/api/estimates/${l.estimate_uuid}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            customer_name: l.customer_name,
+            customer_email: l.customer_email ?? "",
+            customer_phone: l.customer_phone ?? "",
+            origin_address: l.origin_address ?? "",
+            destination_address: l.destination_address ?? "",
+            move_date: l.move_date ?? "",
+            origin_access_notes: l.origin_access_notes ?? "",
+            destination_access_notes: l.destination_access_notes ?? "",
+            special_items_notes: l.special_items_notes ?? "",
+            general_notes: l.general_notes ?? "",
+          }),
+        }).catch(() => {});
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function deleteEstimate() {
     if (!confirm(`Delete estimate for ${local.customer_name}? This cannot be undone.`)) return;
@@ -411,6 +460,15 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [local.estimate_uuid]);
 
+  // Called by ItemRow after a successful auto-save PATCH so totals update
+  // immediately without a full server round-trip.
+  function handleItemPatched(updated: EstimateItem) {
+    setLocal((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => it.id === updated.id ? updated : it),
+    }));
+  }
+
   function addRoom() {
     const name = prompt("Room name (e.g. Living Room, Kitchen, Garage):")?.trim();
     if (!name) return;
@@ -488,12 +546,18 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
             />
           </Field>
           {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <button type="button" className="btnPrimary" onClick={saveMeta} disabled={saving}>
-              {saving ? "Saving…" : "Save details"}
-            </button>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <span className="small" style={{
+              color: saveState === "error" ? "var(--danger)" : saveState === "saved" ? "var(--ok)" : "var(--muted)",
+              minHeight: 18,
+            }}>
+              {saveState === "pending" && "Unsaved…"}
+              {saveState === "saving" && "Saving…"}
+              {saveState === "saved" && "✓ Saved"}
+              {saveState === "error" && "Save failed — check connection"}
+            </span>
             <button type="button" onClick={deleteEstimate} style={{ color: "var(--danger)", borderColor: "var(--danger)" }}>
-              Delete
+              Delete estimate
             </button>
           </div>
         </div>
@@ -526,6 +590,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
                   r === "Unassigned" ? !it.room : (it.room ?? "").trim() === r,
                 )}
                 onChanged={refreshEstimate}
+                onItemPatched={handleItemPatched}
                 onAddItem={submitItemOptimistic}
                 onCancelTemp={cancelTempItem}
                 onRemovePendingRoom={() =>
@@ -565,6 +630,7 @@ function RoomTile({
   estimateUuid,
   items,
   onChanged,
+  onItemPatched,
   onAddItem,
   onCancelTemp,
   onRemovePendingRoom,
@@ -573,6 +639,7 @@ function RoomTile({
   estimateUuid: string;
   items: EstimateItem[];
   onChanged: () => void;
+  onItemPatched: (updated: EstimateItem) => void;
   onAddItem: (payload: Omit<EstimateItem, "id">) => void;
   onCancelTemp: (tempId: number) => void;
   onRemovePendingRoom: () => void;
@@ -650,6 +717,7 @@ function RoomTile({
                   item={it}
                   estimateUuid={estimateUuid}
                   onChanged={onChanged}
+                  onItemPatched={onItemPatched}
                   onCancelTemp={onCancelTemp}
                 />
               ))}
@@ -702,11 +770,13 @@ function ItemRow({
   item,
   estimateUuid,
   onChanged,
+  onItemPatched,
   onCancelTemp,
 }: {
   item: EstimateItem;
   estimateUuid: string;
   onChanged: () => void;
+  onItemPatched: (updated: EstimateItem) => void;
   onCancelTemp: (tempId: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -714,44 +784,90 @@ function ItemRow({
   const [weight, setWeight] = useState(String(item.weight_lbs));
   const [cuft, setCuft] = useState(String(item.cubic_ft));
   const [notes, setNotes] = useState(item.notes ?? "");
-  const [busy, setBusy] = useState(false);
+  const [itemSaveState, setItemSaveState] = useState<SaveState>("idle");
+
+  const itemSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Refs so the blur/timer callbacks always read the latest field values.
+  const qtyRef = useRef(qty);
+  const weightRef = useRef(weight);
+  const cuftRef = useRef(cuft);
+  const notesRef = useRef(notes);
+  useEffect(() => { qtyRef.current = qty; }, [qty]);
+  useEffect(() => { weightRef.current = weight; }, [weight]);
+  useEffect(() => { cuftRef.current = cuft; }, [cuft]);
+  useEffect(() => { notesRef.current = notes; }, [notes]);
 
   // Negative ids are client-side placeholders for a not-yet-confirmed POST.
-  // Edit / remove against them would 404 and either lose the edit silently
-  // or cause the row to resurrect itself when the POST resolves. Render
-  // them as non-interactive "Syncing…" rows with a Cancel affordance that
-  // removes the queued add before it hits the server.
   const isTemp = item.id < 0;
 
-  async function save() {
-    setBusy(true);
+  function buildPatch() {
+    return {
+      qty: Math.max(1, Math.floor(Number(qtyRef.current) || 1)),
+      weight_lbs: Math.max(0, Number(weightRef.current) || 0),
+      cubic_ft: Math.max(0, Number(cuftRef.current) || 0),
+      notes: notesRef.current.trim(),
+    };
+  }
+
+  async function flushItemSave() {
+    setItemSaveState("saving");
     try {
-      await apiFetch(`/api/estimates/${estimateUuid}/items/${item.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          qty: Math.max(1, Math.floor(Number(qty) || 1)),
-          weight_lbs: Math.max(0, Number(weight) || 0),
-          cubic_ft: Math.max(0, Number(cuft) || 0),
-          notes: notes.trim(),
-        }),
-      });
-      setEditing(false);
-      onChanged();
+      const updated = await apiFetch<EstimateItem>(
+        `/api/estimates/${estimateUuid}/items/${item.id}`,
+        { method: "PATCH", body: JSON.stringify(buildPatch()) },
+      );
+      onItemPatched(updated);
+      setItemSaveState("saved");
+      setTimeout(() => setItemSaveState("idle"), 2000);
     } catch (e: any) {
-      alert(e instanceof ApiError ? e.message : "Save failed");
-    } finally {
-      setBusy(false);
+      setItemSaveState("error");
+      alert(e instanceof ApiError ? e.message : "Save failed — check connection");
     }
   }
 
+  function scheduleItemSave() {
+    setItemSaveState("pending");
+    if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
+    itemSaveTimer.current = setTimeout(() => flushItemSave(), 600);
+  }
+
+  // Flush immediately when a field loses focus so values are saved even
+  // if the user taps away before the debounce fires.
+  function handleBlur() {
+    if (itemSaveState === "pending" || itemSaveState === "saving") {
+      if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
+      flushItemSave();
+    }
+  }
+
+  // Flush on unmount if there's a pending save (e.g. user navigates back
+  // while the debounce timer is still counting).
+  useEffect(() => {
+    return () => {
+      if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
+    };
+  }, []);
+
   async function remove() {
     if (!confirm(`Remove "${item.name}"?`)) return;
+    if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
     try {
       await apiFetch(`/api/estimates/${estimateUuid}/items/${item.id}`, { method: "DELETE" });
       onChanged();
     } catch (e: any) {
       alert(e instanceof ApiError ? e.message : "Remove failed");
     }
+  }
+
+  function cancelEdit() {
+    // Revert fields to server values and clear any pending save.
+    if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
+    setQty(String(item.qty));
+    setWeight(String(item.weight_lbs));
+    setCuft(String(item.cubic_ft));
+    setNotes(item.notes ?? "");
+    setItemSaveState("idle");
+    setEditing(false);
   }
 
   if (isTemp) {
@@ -791,15 +907,30 @@ function ItemRow({
         <div className="row wrap" style={{ gap: 6 }}>
           <label className="col" style={{ gap: 2, flex: "1 1 70px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
-            <input value={qty} onChange={(e) => setQty(e.target.value)} type="number" min={1} />
+            <input
+              value={qty}
+              onChange={(e) => { setQty(e.target.value); scheduleItemSave(); }}
+              onBlur={handleBlur}
+              type="number" min={1}
+            />
           </label>
           <label className="col" style={{ gap: 2, flex: "1 1 90px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>lbs each</span>
-            <input value={weight} onChange={(e) => setWeight(e.target.value)} type="number" min={0} step={0.5} />
+            <input
+              value={weight}
+              onChange={(e) => { setWeight(e.target.value); scheduleItemSave(); }}
+              onBlur={handleBlur}
+              type="number" min={0} step={0.5}
+            />
           </label>
           <label className="col" style={{ gap: 2, flex: "1 1 70px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>cu ft each</span>
-            <input value={cuft} onChange={(e) => setCuft(e.target.value)} type="number" min={0} step={0.5} />
+            <input
+              value={cuft}
+              onChange={(e) => { setCuft(e.target.value); scheduleItemSave(); }}
+              onBlur={handleBlur}
+              type="number" min={0} step={0.5}
+            />
           </label>
         </div>
         <label className="col" style={{ gap: 2, marginTop: 6 }}>
@@ -807,16 +938,23 @@ function ItemRow({
           <textarea
             rows={2}
             value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            onChange={(e) => { setNotes(e.target.value); scheduleItemSave(); }}
+            onBlur={handleBlur}
             placeholder="e.g. fragile, disassemble, client will pack…"
           />
         </label>
-        <div className="row" style={{ gap: 6, marginTop: 6 }}>
-          <button type="button" className="btnPrimary" onClick={save} disabled={busy} style={{ flex: 1 }}>
-            {busy ? "Saving…" : "Save"}
-          </button>
-          <button type="button" onClick={() => setEditing(false)}>Cancel</button>
-          <button type="button" onClick={remove} style={{ color: "var(--danger)", borderColor: "var(--danger)" }}>Remove</button>
+        <div className="row" style={{ gap: 6, marginTop: 6, alignItems: "center" }}>
+          <span className="small" style={{
+            flex: 1,
+            color: itemSaveState === "error" ? "var(--danger)" : itemSaveState === "saved" ? "var(--ok)" : "var(--muted)",
+          }}>
+            {itemSaveState === "pending" && "Unsaved…"}
+            {itemSaveState === "saving" && "Saving…"}
+            {itemSaveState === "saved" && "✓ Saved"}
+            {itemSaveState === "error" && "Save failed"}
+          </span>
+          <button type="button" onClick={cancelEdit} style={{ fontSize: 12 }}>Done</button>
+          <button type="button" onClick={remove} style={{ color: "var(--danger)", borderColor: "var(--danger)", fontSize: 12 }}>Remove</button>
         </div>
       </div>
     );
