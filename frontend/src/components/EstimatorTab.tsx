@@ -274,7 +274,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
   function scheduleMetaSave() {
     setSaveState("pending");
     if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current);
-    metaSaveTimer.current = setTimeout(() => flushMetaSave(localRef.current), 800);
+    metaSaveTimer.current = setTimeout(() => { metaSaveTimer.current = null; flushMetaSave(localRef.current); }, 800);
   }
 
   async function flushMetaSave(l: Estimate) {
@@ -827,7 +827,7 @@ function ItemRow({
   function scheduleItemSave() {
     setItemSaveState("pending");
     if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
-    itemSaveTimer.current = setTimeout(() => flushItemSave(), 600);
+    itemSaveTimer.current = setTimeout(() => { itemSaveTimer.current = null; flushItemSave(); }, 600);
   }
 
   // Flush immediately when a field loses focus so values are saved even
@@ -836,7 +836,7 @@ function ItemRow({
   // and a second concurrent PATCH would race against it.
   function handleBlur() {
     if (itemSaveState === "pending") {
-      if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
+      if (itemSaveTimer.current) { clearTimeout(itemSaveTimer.current); itemSaveTimer.current = null; }
       flushItemSave();
     }
   }
@@ -858,7 +858,7 @@ function ItemRow({
 
   async function remove() {
     if (!confirm(`Remove "${item.name}"?`)) return;
-    if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
+    if (itemSaveTimer.current) { clearTimeout(itemSaveTimer.current); itemSaveTimer.current = null; }
     try {
       await apiFetch(`/api/estimates/${estimateUuid}/items/${item.id}`, { method: "DELETE" });
       onChanged();
@@ -869,7 +869,7 @@ function ItemRow({
 
   function cancelEdit() {
     // Revert fields to server values and clear any pending save.
-    if (itemSaveTimer.current) clearTimeout(itemSaveTimer.current);
+    if (itemSaveTimer.current) { clearTimeout(itemSaveTimer.current); itemSaveTimer.current = null; }
     setQty(String(item.qty));
     setWeight(String(item.weight_lbs));
     setCuft(String(item.cubic_ft));
