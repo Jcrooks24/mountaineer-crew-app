@@ -279,6 +279,9 @@ export default function App() {
 
   // Calendar "Other" option
   const [calOtherName, setCalOtherName] = useState<string>("");
+  // Manual job entries created this session — shown as dropdown options so
+  // users can re-select them without re-typing.
+  const [manualCalEntries, setManualCalEntries] = useState<{ id: string; summary: string }[]>([]);
 
 
   // -----------------------
@@ -603,30 +606,6 @@ export default function App() {
     }
   }
 
-  async function addNoteToEntry(targetEventId: string) {
-    const text = window.prompt("Add note (optional):", "");
-    if (text == null) return;
-
-    const trimmed = text.trim();
-    const log = loadLog();
-    const entry = log.find((e) => e.event_id === targetEventId);
-    if (!entry) return;
-
-    const updatedLog = log.map((e) => (e.event_id === targetEventId ? { ...e, note: trimmed || null } : e));
-    saveLog(updatedLog);
-
-    const q = loadQueue();
-    const inQueue = q.some((e) => e.event_id === targetEventId);
-    if (inQueue) {
-      const updatedQ = q.map((e) => (e.event_id === targetEventId ? { ...e, note: trimmed || null } : e));
-      saveQueue(updatedQ);
-      await syncQueueNow();
-      return;
-    }
-
-    if (trimmed.length > 0) await recordEvent("NOTE", trimmed);
-  }
-
   // -----------------------
   // Calendar binding
   // -----------------------
@@ -671,6 +650,20 @@ export default function App() {
     }
   }
 
+  // Called on blur of the manual-entry input. Promotes the typed name from
+  // the hidden "__other__" sentinel to a real named dropdown option so the
+  // user can re-select this job without re-typing the description.
+  function confirmManualEntry() {
+    const name = calOtherName.trim();
+    if (!name || !jobUuid) return;
+    const entry = { id: jobUuid, summary: name };
+    setManualCalEntries((prev) => {
+      const idx = prev.findIndex((e) => e.id === jobUuid);
+      return idx >= 0 ? prev.map((e, i) => (i === idx ? entry : e)) : [...prev, entry];
+    });
+    setCalSelectedId(jobUuid); // switch dropdown value to the real UUID
+  }
+
   async function onSelectCalendarEvent(calId: string) {
     setCalSelectedId(calId);
 
@@ -683,6 +676,18 @@ export default function App() {
       setStatus("Manual job — enter description below");
       fetchJobEvents(newUuid);
       fetchServerPhotos(newUuid);
+      return;
+    }
+
+    // Re-selecting a previously confirmed manual entry — restore same UUID + name.
+    const manualEntry = manualCalEntries.find((e) => e.id === calId);
+    if (manualEntry) {
+      setPersistedJobUuid(calId);
+      setPersistedJobStatus("active");
+      setJobName(manualEntry.summary);
+      setStatus("Job selected");
+      fetchJobEvents(calId);
+      fetchServerPhotos(calId);
       return;
     }
 
@@ -1259,6 +1264,11 @@ export default function App() {
                       {ev.summary}
                     </option>
                   ))}
+                  {manualCalEntries.map((entry) => (
+                    <option key={entry.id} value={entry.id} style={optionStyle}>
+                      {entry.summary}
+                    </option>
+                  ))}
                   <option value="__other__" style={optionStyle}>
                     Other (enter manually)
                   </option>
@@ -1273,6 +1283,7 @@ export default function App() {
                         setCalOtherName(e.target.value);
                         setJobName(e.target.value);
                       }}
+                      onBlur={confirmManualEntry}
                       placeholder={ht.jobDescriptionPlaceholder}
                       autoFocus
                     />
@@ -1435,12 +1446,6 @@ export default function App() {
                         "{e.note}"
                       </div>
                     )}
-
-                    <div style={{ marginTop: 6 }}>
-                      <button onClick={() => addNoteToEntry(e.event_id)} style={{ padding: "4px 10px", fontSize: 12, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.25)", color: "var(--text)" }}>
-                        + Note
-                      </button>
-                    </div>
                   </div>
                 ))}
               </div>
