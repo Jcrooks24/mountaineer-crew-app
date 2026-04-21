@@ -280,8 +280,12 @@ export default function App() {
   // Calendar "Other" option
   const [calOtherName, setCalOtherName] = useState<string>("");
   // Manual job entries created this session — shown as dropdown options so
-  // users can re-select them without re-typing.
-  const [manualCalEntries, setManualCalEntries] = useState<{ id: string; summary: string }[]>([]);
+  // users can re-select them without re-typing. Persisted to sessionStorage
+  // so they survive navigation within the same tab.
+  const [manualCalEntries, setManualCalEntries] = useState<{ id: string; summary: string }[]>(() => {
+    try { return JSON.parse(sessionStorage.getItem("crew_session_manualEntries") || "[]"); }
+    catch { return []; }
+  });
 
 
   // -----------------------
@@ -614,7 +618,9 @@ export default function App() {
     setCalWarning("");
     setCalLoading(true);
     setCalEvents([]);
-    setCalSelectedId("");
+    // Do NOT clear calSelectedId here — callers own that decision.
+    // The date-change effect clears it before calling; the first-mount
+    // guard intentionally preserves the sessionStorage-restored value.
     setCalLoaded(false);
 
     try {
@@ -659,7 +665,9 @@ export default function App() {
     const entry = { id: jobUuid, summary: name };
     setManualCalEntries((prev) => {
       const idx = prev.findIndex((e) => e.id === jobUuid);
-      return idx >= 0 ? prev.map((e, i) => (i === idx ? entry : e)) : [...prev, entry];
+      const next = idx >= 0 ? prev.map((e, i) => (i === idx ? entry : e)) : [...prev, entry];
+      sessionStorage.setItem("crew_session_manualEntries", JSON.stringify(next));
+      return next;
     });
     setCalSelectedId(jobUuid); // switch dropdown value to the real UUID
   }
