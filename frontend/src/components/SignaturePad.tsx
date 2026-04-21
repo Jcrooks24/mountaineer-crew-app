@@ -42,11 +42,11 @@ const SignaturePad = forwardRef<SignaturePadHandle, Props>(function SignaturePad
   function getPos(e: MouseEvent | Touch) {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    // ctx.scale(dpr, dpr) is applied at setup so user-space == CSS space.
+    // Returning raw CSS coords here; no extra scaling needed.
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
     };
   }
 
