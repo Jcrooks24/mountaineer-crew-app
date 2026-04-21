@@ -146,7 +146,7 @@ export default function EstimatorTab() {
                   <div style={{ fontWeight: 700, fontSize: 14 }}>{e.customer_name}</div>
                   <div className="small" style={{ color: "var(--muted)" }}>
                     {e.move_date ? `Move: ${e.move_date} · ` : ""}
-                    {Math.round(e.estimated_weight_lbs).toLocaleString()} lbs · {Math.round(e.estimated_cubic_ft)} cu ft · {e.items.length} items
+                    {Math.round(e.estimated_weight_lbs).toLocaleString()} lbs · {Math.round(e.estimated_cubic_ft)} cu ft · {e.items.reduce((s, i) => s + (i.qty || 1), 0)} items
                   </div>
                 </div>
                 <span className="small" style={{ color: "var(--muted)" }}>
@@ -483,7 +483,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
         <div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>{local.customer_name || "Estimate"}</div>
           <div className="small" style={{ color: "var(--muted)" }}>
-            {Math.round(totalWeight).toLocaleString()} lbs · {Math.round(totalCuft)} cu ft · {local.items.length} items
+            {Math.round(totalWeight).toLocaleString()} lbs · {Math.round(totalCuft)} cu ft · {local.items.reduce((s, i) => s + (i.qty || 1), 0)} items
           </div>
         </div>
         <button onClick={onBack}>← Back to estimates</button>
@@ -686,7 +686,7 @@ function RoomTile({
         <div>
           <div style={{ fontWeight: 700, fontSize: 14 }}>{room}</div>
           <div className="small" style={{ color: "var(--muted)" }}>
-            {items.length} items · {Math.round(roomWeight).toLocaleString()} lbs · {Math.round(roomCuft)} cu ft
+            {items.reduce((s, i) => s + (i.qty || 1), 0)} items · {Math.round(roomWeight).toLocaleString()} lbs · {Math.round(roomCuft)} cu ft
           </div>
         </div>
         {items.length === 0 && !isUnassigned && (

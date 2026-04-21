@@ -791,7 +791,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
         "general_notes": estimate.get("general_notes", "") or "",
         "estimated_weight_lbs": round(estimate.get("estimated_weight_lbs", 0) or 0, 2),
         "estimated_cubic_ft": round(estimate.get("estimated_cubic_ft", 0) or 0, 2),
-        "item_count": len(items),
+        "item_count": sum(it.get("qty", 1) or 1 for it in items),
         "created_at": _iso(estimate.get("created_at")),
         "updated_at": updated_at,
     }
