@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
@@ -235,7 +235,12 @@ export default function App() {
 
   // Job metadata (display + persistence)
   const [jobName, setJobName] = useState<string>("");
-  const [jobDate, setJobDate] = useState<string>(() => todayLocalYYYYMMDD());
+  // Persist date within the browser session so navigating away and back
+  // doesn't reset to today. sessionStorage clears on tab/browser close so
+  // it still defaults to today on the first load of a new session.
+  const [jobDate, setJobDate] = useState<string>(() =>
+    sessionStorage.getItem("crew_session_jobDate") || todayLocalYYYYMMDD()
+  );
 
   // Comments (per job_uuid)
   const [jobComments, setJobComments] = useState<string>("");
@@ -245,8 +250,14 @@ export default function App() {
   const [calError, setCalError] = useState<string>("");
   const [calWarning, setCalWarning] = useState<string>("");
   const [calEvents, setCalEvents] = useState<CalEvent[]>([]);
-  const [calSelectedId, setCalSelectedId] = useState<string>("");
+  // Persist the calendar selection within the session so it survives navigation.
+  const [calSelectedId, setCalSelectedId] = useState<string>(() =>
+    sessionStorage.getItem("crew_session_calId") || ""
+  );
   const [calLoaded, setCalLoaded] = useState<boolean>(false);
+  // Prevents the jobDate effect from clearing calSelectedId on first mount
+  // (when we're restoring session state, not reacting to a user date change).
+  const isFirstDateEffect = useRef(true);
 
   // Photos
   const [photos, setPhotos] = useState<StoredPhoto[]>([]);
@@ -1032,8 +1043,19 @@ export default function App() {
     saveJobDate(jobUuid.trim(), jobDate);
   }, [jobUuid, jobDate]);
 
-  // NEW: when date changes, calendar results are stale
+  // Sync date + calendar selection to sessionStorage so they survive navigation.
+  useEffect(() => { sessionStorage.setItem("crew_session_jobDate", jobDate); }, [jobDate]);
+  useEffect(() => { sessionStorage.setItem("crew_session_calId", calSelectedId); }, [calSelectedId]);
+
+  // When date changes, calendar results are stale. On first mount we're
+  // restoring session state — skip the clear so the restored calSelectedId
+  // survives until the events reload and the dropdown can match it.
   useEffect(() => {
+    if (isFirstDateEffect.current) {
+      isFirstDateEffect.current = false;
+      loadCalendarEvents();
+      return;
+    }
     setCalSelectedId("");
     setCalEvents([]);
     setCalError("");
