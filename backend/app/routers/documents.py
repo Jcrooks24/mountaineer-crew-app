@@ -22,7 +22,7 @@ def list_documents(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    rows = db.query(Document).order_by(Document.category.asc(), Document.created_at.desc()).all()
+    rows = db.query(Document).order_by(Document.category.asc(), Document.created_at.desc()).limit(500).all()
     return rows
 
 

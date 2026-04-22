@@ -158,7 +158,7 @@ def events_today(
             "job_uuid": e.job_uuid,
             "job_name": e.job_name or "",
             "type": e.type,
-            "timestamp": e.timestamp.isoformat(),
+            "timestamp": e.timestamp.isoformat() + "Z",
             "lat": e.lat,
             "lng": e.lng,
             "note": e.note,

@@ -57,6 +57,7 @@ def list_directory(
         db.query(User)
         .filter(User.is_active.is_(True))
         .order_by(User.name.asc().nullslast(), User.email.asc())
+        .limit(200)
         .all()
     )
     return users

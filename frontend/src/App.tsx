@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
@@ -235,7 +235,12 @@ export default function App() {
 
   // Job metadata (display + persistence)
   const [jobName, setJobName] = useState<string>("");
-  const [jobDate, setJobDate] = useState<string>(() => todayLocalYYYYMMDD());
+  // Persist date within the browser session so navigating away and back
+  // doesn't reset to today. sessionStorage clears on tab/browser close so
+  // it still defaults to today on the first load of a new session.
+  const [jobDate, setJobDate] = useState<string>(() =>
+    sessionStorage.getItem("crew_session_jobDate") || todayLocalYYYYMMDD()
+  );
 
   // Comments (per job_uuid)
   const [jobComments, setJobComments] = useState<string>("");
@@ -245,8 +250,14 @@ export default function App() {
   const [calError, setCalError] = useState<string>("");
   const [calWarning, setCalWarning] = useState<string>("");
   const [calEvents, setCalEvents] = useState<CalEvent[]>([]);
-  const [calSelectedId, setCalSelectedId] = useState<string>("");
+  // Persist the calendar selection within the session so it survives navigation.
+  const [calSelectedId, setCalSelectedId] = useState<string>(() =>
+    sessionStorage.getItem("crew_session_calId") || ""
+  );
   const [calLoaded, setCalLoaded] = useState<boolean>(false);
+  // Prevents the jobDate effect from clearing calSelectedId on first mount
+  // (when we're restoring session state, not reacting to a user date change).
+  const isFirstDateEffect = useRef(true);
 
   // Photos
   const [photos, setPhotos] = useState<StoredPhoto[]>([]);
@@ -268,6 +279,13 @@ export default function App() {
 
   // Calendar "Other" option
   const [calOtherName, setCalOtherName] = useState<string>("");
+  // Manual job entries created this session — shown as dropdown options so
+  // users can re-select them without re-typing. Persisted to sessionStorage
+  // so they survive navigation within the same tab.
+  const [manualCalEntries, setManualCalEntries] = useState<{ id: string; summary: string }[]>(() => {
+    try { return JSON.parse(sessionStorage.getItem("crew_session_manualEntries") || "[]"); }
+    catch { return []; }
+  });
 
 
   // -----------------------
@@ -592,30 +610,6 @@ export default function App() {
     }
   }
 
-  async function addNoteToEntry(targetEventId: string) {
-    const text = window.prompt("Add note (optional):", "");
-    if (text == null) return;
-
-    const trimmed = text.trim();
-    const log = loadLog();
-    const entry = log.find((e) => e.event_id === targetEventId);
-    if (!entry) return;
-
-    const updatedLog = log.map((e) => (e.event_id === targetEventId ? { ...e, note: trimmed || null } : e));
-    saveLog(updatedLog);
-
-    const q = loadQueue();
-    const inQueue = q.some((e) => e.event_id === targetEventId);
-    if (inQueue) {
-      const updatedQ = q.map((e) => (e.event_id === targetEventId ? { ...e, note: trimmed || null } : e));
-      saveQueue(updatedQ);
-      await syncQueueNow();
-      return;
-    }
-
-    if (trimmed.length > 0) await recordEvent("NOTE", trimmed);
-  }
-
   // -----------------------
   // Calendar binding
   // -----------------------
@@ -624,7 +618,9 @@ export default function App() {
     setCalWarning("");
     setCalLoading(true);
     setCalEvents([]);
-    setCalSelectedId("");
+    // Do NOT clear calSelectedId here — callers own that decision.
+    // The date-change effect clears it before calling; the first-mount
+    // guard intentionally preserves the sessionStorage-restored value.
     setCalLoaded(false);
 
     try {
@@ -660,6 +656,22 @@ export default function App() {
     }
   }
 
+  // Called on blur of the manual-entry input. Promotes the typed name from
+  // the hidden "__other__" sentinel to a real named dropdown option so the
+  // user can re-select this job without re-typing the description.
+  function confirmManualEntry() {
+    const name = calOtherName.trim();
+    if (!name || !jobUuid) return;
+    const entry = { id: jobUuid, summary: name };
+    setManualCalEntries((prev) => {
+      const idx = prev.findIndex((e) => e.id === jobUuid);
+      const next = idx >= 0 ? prev.map((e, i) => (i === idx ? entry : e)) : [...prev, entry];
+      sessionStorage.setItem("crew_session_manualEntries", JSON.stringify(next));
+      return next;
+    });
+    setCalSelectedId(jobUuid); // switch dropdown value to the real UUID
+  }
+
   async function onSelectCalendarEvent(calId: string) {
     setCalSelectedId(calId);
 
@@ -672,6 +684,18 @@ export default function App() {
       setStatus("Manual job — enter description below");
       fetchJobEvents(newUuid);
       fetchServerPhotos(newUuid);
+      return;
+    }
+
+    // Re-selecting a previously confirmed manual entry — restore same UUID + name.
+    const manualEntry = manualCalEntries.find((e) => e.id === calId);
+    if (manualEntry) {
+      setPersistedJobUuid(calId);
+      setPersistedJobStatus("active");
+      setJobName(manualEntry.summary);
+      setStatus("Job selected");
+      fetchJobEvents(calId);
+      fetchServerPhotos(calId);
       return;
     }
 
@@ -980,15 +1004,14 @@ export default function App() {
 
     setJobComments(loadCommentsForJob(jobUuid));
 
+    // Rehydrate the active job's name on boot, but leave jobDate at today
+    // (the useState initializer). Crews log in to work today's jobs — showing
+    // last session's date in the Timeline filter was confusing.
     const meta = loadJobMeta(jobUuid);
     if (meta) {
       setJobName(meta.jobName || "");
-      setJobDate(meta.jobDate || todayLocalYYYYMMDD());
     } else {
-      const loadedName = loadJobName(jobUuid);
-      setJobName(loadedName);
-      const storedDate = loadJobDate(jobUuid);
-      setJobDate(storedDate || todayLocalYYYYMMDD());
+      setJobName(loadJobName(jobUuid));
     }
 
     // Restore history from backend so mobile devices aren't empty on first load
@@ -1033,8 +1056,19 @@ export default function App() {
     saveJobDate(jobUuid.trim(), jobDate);
   }, [jobUuid, jobDate]);
 
-  // NEW: when date changes, calendar results are stale
+  // Sync date + calendar selection to sessionStorage so they survive navigation.
+  useEffect(() => { sessionStorage.setItem("crew_session_jobDate", jobDate); }, [jobDate]);
+  useEffect(() => { sessionStorage.setItem("crew_session_calId", calSelectedId); }, [calSelectedId]);
+
+  // When date changes, calendar results are stale. On first mount we're
+  // restoring session state — skip the clear so the restored calSelectedId
+  // survives until the events reload and the dropdown can match it.
   useEffect(() => {
+    if (isFirstDateEffect.current) {
+      isFirstDateEffect.current = false;
+      loadCalendarEvents();
+      return;
+    }
     setCalSelectedId("");
     setCalEvents([]);
     setCalError("");
@@ -1238,6 +1272,11 @@ export default function App() {
                       {ev.summary}
                     </option>
                   ))}
+                  {manualCalEntries.map((entry) => (
+                    <option key={entry.id} value={entry.id} style={optionStyle}>
+                      {entry.summary}
+                    </option>
+                  ))}
                   <option value="__other__" style={optionStyle}>
                     Other (enter manually)
                   </option>
@@ -1252,6 +1291,7 @@ export default function App() {
                         setCalOtherName(e.target.value);
                         setJobName(e.target.value);
                       }}
+                      onBlur={confirmManualEntry}
                       placeholder={ht.jobDescriptionPlaceholder}
                       autoFocus
                     />
@@ -1414,12 +1454,6 @@ export default function App() {
                         "{e.note}"
                       </div>
                     )}
-
-                    <div style={{ marginTop: 6 }}>
-                      <button onClick={() => addNoteToEntry(e.event_id)} style={{ padding: "4px 10px", fontSize: 12, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.25)", color: "var(--text)" }}>
-                        + Note
-                      </button>
-                    </div>
                   </div>
                 ))}
               </div>

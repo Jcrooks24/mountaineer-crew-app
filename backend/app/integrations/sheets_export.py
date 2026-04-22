@@ -1,6 +1,6 @@
 import json
 import os
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Callable, List, Dict, Any, Optional
 
@@ -9,9 +9,14 @@ from sqlalchemy import text
 
 from app.core.google_cal_oauth import get_sheets_service, _build_authorized_http, _ssl_retry, _get_creds
 
+# Bounded pool — at most 2 export threads run concurrently. Additional tasks
+# queue internally and drain as workers free up. Prevents a sync burst from
+# spawning unlimited threads and blowing Render's 512 MB memory limit.
+_EXPORT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sheets-export")
+
 
 def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
-    """Fire-and-forget a sheets export on a background thread with a fresh
+    """Submit a sheets export to the bounded background pool with a fresh
     DB session, so a slow or failing Google call never blocks the API
     response (Render kills requests past its proxy timeout, which surfaces
     on the client as "Failed to fetch").
@@ -33,7 +38,7 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
             except Exception:
                 pass
 
-    threading.Thread(target=_worker, daemon=True).start()
+    _EXPORT_POOL.submit(_worker)
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
@@ -686,79 +691,167 @@ ESTIMATE_ITEM_HEADERS = [
 ]
 
 
+def _delete_estimate_sheet_rows(
+    svc: Any,
+    spreadsheet_id: str,
+    tabs: List[str],
+    estimate_uuid: str,
+) -> None:
+    """Delete all rows for `estimate_uuid` from each tab. col_name is always
+    'estimate_uuid' in both Estimates and EstimateItems tabs."""
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
+
+    for tab in tabs:
+        if tab not in sheet_ids:
+            continue
+        sheet_numeric_id = sheet_ids[tab]
+
+        hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
+        ).execute())
+        headers_row = (hdr.get("values") or [[]])[0]
+        if "estimate_uuid" not in headers_row:
+            continue
+        col_letter = _col_letter(headers_row.index("estimate_uuid"))
+
+        col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
+        ).execute())
+        col_values = col.get("values") or []
+
+        target_indices = [
+            i for i, row in enumerate(col_values)
+            if i > 0 and (row[0] if row else "") == estimate_uuid
+        ]
+
+        if target_indices:
+            requests = [
+                {"deleteDimension": {"range": {
+                    "sheetId": sheet_numeric_id,
+                    "dimension": "ROWS",
+                    "startIndex": idx,
+                    "endIndex": idx + 1,
+                }}}
+                for idx in sorted(target_indices, reverse=True)
+            ]
+            _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id, body={"requests": requests}
+            ).execute())
+
+
 def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
-    """Writes one row to the Estimates tab (summary) and one row per item to
-    the EstimateItems tab. Dedup key per summary is (estimate_uuid, updated_at)
-    — each save creates a new snapshot so you get an audit trail."""
+    """Writes one summary row to Estimates and one row per item to EstimateItems,
+    always reflecting the current state of the estimate (replace strategy —
+    existing rows for this estimate_uuid are deleted before writing fresh ones).
+    This guarantees exactly 1 summary row and N item rows per estimate regardless
+    of how many times it is saved."""
     summary_tab = os.getenv("SHEETS_ESTIMATES_TAB", "Estimates").strip() or "Estimates"
     items_tab = os.getenv("SHEETS_ESTIMATE_ITEMS_TAB", "EstimateItems").strip() or "EstimateItems"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
 
     estimate_uuid = estimate.get("estimate_uuid", "")
     updated_at = _iso(estimate.get("updated_at"))
-    summary_key = f"{estimate_uuid}:{updated_at}"
+
+    from googleapiclient.discovery import build as _build
+    authorized_http = _build_authorized_http(_get_creds(db))
+    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+
+    # Delete any existing rows for this estimate so we always have exactly one
+    # summary row and one row per current item (no accumulation on each save).
+    _delete_estimate_sheet_rows(svc, spreadsheet_id, [summary_tab, items_tab], estimate_uuid)
+
+    # Clear all dedup entries so the fresh rows are accepted by _generic_already_exported.
+    db.execute(
+        text(
+            "DELETE FROM sheet_generic_exports "
+            "WHERE kind IN ('estimate', 'estimate_item') AND export_key LIKE :prefix"
+        ),
+        {"prefix": f"{estimate_uuid}:%"},
+    )
+    db.commit()
 
     total_written = 0
+    summary_key = f"{estimate_uuid}:{updated_at}"
 
     # Summary row
-    if not _generic_already_exported(db, "estimate", summary_key):
-        items = estimate.get("items") or []
-        summary_row = {
-            "estimate_uuid": estimate_uuid,
-            "created_by": estimate.get("created_by_name", "") or "",
-            "customer_name": estimate.get("customer_name", ""),
-            "customer_email": estimate.get("customer_email", "") or "",
-            "customer_phone": estimate.get("customer_phone", "") or "",
-            "move_date": estimate.get("move_date", "") or "",
-            "origin_address": estimate.get("origin_address", "") or "",
-            "destination_address": estimate.get("destination_address", "") or "",
-            "origin_access_notes": estimate.get("origin_access_notes", "") or "",
-            "destination_access_notes": estimate.get("destination_access_notes", "") or "",
-            "special_items_notes": estimate.get("special_items_notes", "") or "",
-            "general_notes": estimate.get("general_notes", "") or "",
-            "estimated_weight_lbs": round(estimate.get("estimated_weight_lbs", 0) or 0, 2),
-            "estimated_cubic_ft": round(estimate.get("estimated_cubic_ft", 0) or 0, 2),
-            "item_count": len(items),
-            "created_at": _iso(estimate.get("created_at")),
-            "updated_at": updated_at,
-        }
-        written = _append_rows(db, summary_tab, ESTIMATE_HEADERS, [summary_row])
-        if written:
-            _generic_mark_exported(db, "estimate", [summary_key])
-            total_written += written
+    items = estimate.get("items") or []
+    summary_row = {
+        "estimate_uuid": estimate_uuid,
+        "created_by": estimate.get("created_by_name", "") or "",
+        "customer_name": estimate.get("customer_name", ""),
+        "customer_email": estimate.get("customer_email", "") or "",
+        "customer_phone": estimate.get("customer_phone", "") or "",
+        "move_date": estimate.get("move_date", "") or "",
+        "origin_address": estimate.get("origin_address", "") or "",
+        "destination_address": estimate.get("destination_address", "") or "",
+        "origin_access_notes": estimate.get("origin_access_notes", "") or "",
+        "destination_access_notes": estimate.get("destination_access_notes", "") or "",
+        "special_items_notes": estimate.get("special_items_notes", "") or "",
+        "general_notes": estimate.get("general_notes", "") or "",
+        "estimated_weight_lbs": round(estimate.get("estimated_weight_lbs", 0) or 0, 2),
+        "estimated_cubic_ft": round(estimate.get("estimated_cubic_ft", 0) or 0, 2),
+        "item_count": sum(it.get("qty", 1) or 1 for it in items),
+        "created_at": _iso(estimate.get("created_at")),
+        "updated_at": updated_at,
+    }
+    actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, ESTIMATE_HEADERS))
+    rows = [_build_row(summary_row, actual_summary_headers)]
 
-    # Items — one row per item per save, deduped by (estimate_uuid, item_id, updated_at)
-    item_rows: List[Dict[str, Any]] = []
-    item_keys: List[str] = []
-    customer_name = estimate.get("customer_name", "")
-    for it in estimate.get("items") or []:
-        item_id = it.get("id")
-        item_key = f"{estimate_uuid}:{item_id}:{updated_at}"
-        if _generic_already_exported(db, "estimate_item", item_key):
-            continue
-        qty = it.get("qty", 0) or 0
-        w = it.get("weight_lbs", 0) or 0
-        v = it.get("cubic_ft", 0) or 0
-        item_rows.append({
-            "estimate_uuid": estimate_uuid,
-            "customer_name": customer_name,
-            "item_id": item_id,
-            "room": it.get("room", "") or "",
-            "subcategory": it.get("subcategory", "") or "",
-            "item_name": it.get("name", ""),
-            "qty": qty,
-            "weight_lbs_each": w,
-            "cubic_ft_each": v,
-            "total_weight_lbs": round(w * qty, 2),
-            "total_cubic_ft": round(v * qty, 2),
-            "notes": it.get("notes", "") or "",
-            "exported_at": updated_at,
-        })
-        item_keys.append(item_key)
+    def _append_summary():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{summary_tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
 
-    if item_rows:
-        written = _append_rows(db, items_tab, ESTIMATE_ITEM_HEADERS, item_rows)
-        if written:
-            _generic_mark_exported(db, "estimate_item", item_keys)
-            total_written += written
+    _ssl_retry(_append_summary)
+    _generic_mark_exported(db, "estimate", [summary_key])
+    total_written += 1
+
+    # Item rows — one per current item
+    if items:
+        customer_name = estimate.get("customer_name", "")
+        item_rows: List[Dict[str, Any]] = []
+        item_keys: List[str] = []
+        for it in items:
+            item_id = it.get("id")
+            qty = it.get("qty", 0) or 0
+            w = it.get("weight_lbs", 0) or 0
+            v = it.get("cubic_ft", 0) or 0
+            item_rows.append({
+                "estimate_uuid": estimate_uuid,
+                "customer_name": customer_name,
+                "item_id": item_id,
+                "room": it.get("room", "") or "",
+                "subcategory": it.get("subcategory", "") or "",
+                "item_name": it.get("name", ""),
+                "qty": qty,
+                "weight_lbs_each": w,
+                "cubic_ft_each": v,
+                "total_weight_lbs": round(w * qty, 2),
+                "total_cubic_ft": round(v * qty, 2),
+                "notes": it.get("notes", "") or "",
+                "exported_at": updated_at,
+            })
+            item_keys.append(f"{estimate_uuid}:{item_id}:{updated_at}")
+
+        actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, ESTIMATE_ITEM_HEADERS))
+        item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
+
+        def _append_items():
+            svc.spreadsheets().values().append(
+                spreadsheetId=spreadsheet_id,
+                range=f"{items_tab}!A1",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": item_sheet_rows},
+            ).execute()
+
+        _ssl_retry(_append_items)
+        _generic_mark_exported(db, "estimate_item", item_keys)
+        total_written += len(item_rows)
 
     return total_written

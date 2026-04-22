@@ -45,7 +45,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "calendar" | "settings" | "dvir" | "estimator" | "notes" | "summary";
+type Tab = "employees" | "map" | "settings" | "advanced" | "dvir" | "estimator" | "notes" | "summary";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -73,10 +73,10 @@ export default function Admin() {
 
       {/* Tabs */}
       <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "calendar", "settings", "dvir", "estimator", "notes", "summary"] as Tab[]).map((t) => (
+        {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary"] as Tab[]).map((t) => (
           <button
             key={t}
-            className={"tab " + (tab === t ? "active" : "")}
+            className={"tab " + (tab === t || (tab === "advanced" && t === "settings") ? "active" : "")}
             onClick={() => setTab(t)}
             style={{ textTransform: "capitalize" }}
           >
@@ -91,8 +91,8 @@ export default function Admin() {
 
       {tab === "employees" && <EmployeesTab />}
       {tab === "map" && <MapTab />}
-      {tab === "calendar" && <CalendarTab />}
-      {tab === "settings" && <SettingsTab />}
+      {tab === "settings" && <SettingsTab onOpenAdvanced={() => setTab("advanced")} />}
+      {tab === "advanced" && <AdvancedSettingsPage onBack={() => setTab("settings")} />}
       {tab === "dvir" && <DVIRTab />}
       {tab === "estimator" && <EstimatorTab />}
       {tab === "notes" && <NotesTab />}
@@ -525,7 +525,7 @@ function CalendarTab() {
 // ─────────────────────────────────────────
 // Settings tab
 // ─────────────────────────────────────────
-function SettingsTab() {
+function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
   const { settings, update, reset } = useTheme();
   const preset = THEME_PRESETS[settings.themeId] ?? THEME_PRESETS["dark-ocean"];
 
@@ -939,8 +939,19 @@ function SettingsTab() {
       {/* ── DVIR vehicle units ── */}
       <DVIRUnitsCard />
 
-      {/* ── Data management ── */}
-      <DataManagementCard />
+      {/* ── Advanced settings ── */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="sectionTitle">Advanced Settings</div>
+        <div className="small" style={{ color: "var(--muted)" }}>
+          Google Calendar integration, data management, and other advanced options.
+        </div>
+        <button
+          onClick={onOpenAdvanced}
+          style={{ alignSelf: "flex-start", padding: "8px 18px", fontSize: 13, border: "1px solid var(--border)", borderRadius: "var(--btn-r)", color: "var(--text)", background: "rgba(255,255,255,0.04)", cursor: "pointer" }}
+        >
+          Open Advanced Settings →
+        </button>
+      </div>
 
       {/* ── Apply to all users ── */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -961,6 +972,32 @@ function SettingsTab() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Advanced Settings page
+// ─────────────────────────────────────────
+function AdvancedSettingsPage({ onBack }: { onBack: () => void }) {
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+        <button
+          onClick={onBack}
+          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, padding: 0 }}
+        >
+          ← Back to Settings
+        </button>
+        <span style={{ fontWeight: 700, fontSize: 15 }}>Advanced Settings</span>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">Google Calendar</div>
+        <CalendarTab />
+      </div>
+
+      <DataManagementCard />
     </div>
   );
 }
