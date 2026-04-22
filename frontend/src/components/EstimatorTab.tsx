@@ -1065,7 +1065,9 @@ function AddItemDialog({
 
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Match | null>(null);
-  const [qty, setQty] = useState(1);
+  // String-backed so the user can clear and retype. A numeric-clamped state
+  // snaps back to 1 mid-edit and makes the field uneditable on mobile.
+  const [qty, setQty] = useState("1");
   const [weight, setWeight] = useState("");
   const [cuft, setCuft] = useState("");
   const [notes, setNotes] = useState("");
@@ -1093,7 +1095,8 @@ function AddItemDialog({
     if (!name) { setErr("Item name required."); return; }
     const w = override?.weight_lbs ?? (Number(weight) || 0);
     const v = override?.cubic_ft ?? (Number(cuft) || 0);
-    const q = Math.max(1, Math.floor(qty || 1));
+    const parsedQty = Number(qty);
+    const q = Number.isFinite(parsedQty) && parsedQty >= 1 ? Math.floor(parsedQty) : 1;
 
     if (saveToCatalog && !selected && !override) {
       apiFetch("/api/estimates/catalog", {
@@ -1156,11 +1159,40 @@ function AddItemDialog({
         </div>
 
         <form onSubmit={submit} className="col" style={{ gap: 10 }}>
+          {/* Subcategory chips render before the Item input so they stay
+              visible once the mobile keyboard opens (the Item input used to
+              autoFocus, pushing the chips below the keyboard fold). */}
+          {knownSubcategories.length > 0 && (
+            <div className="col" style={{ gap: 4 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Subcategory</span>
+              <div className="row wrap" style={{ gap: 6 }}>
+                {knownSubcategories.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setSub((prev) => prev === s ? "" : s)}
+                    style={{
+                      padding: "5px 12px",
+                      borderRadius: 99,
+                      border: "1px solid var(--border)",
+                      background: sub === s ? "var(--brand)" : "rgba(255,255,255,0.06)",
+                      color: sub === s ? "#0b1220" : "var(--text)",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      fontWeight: sub === s ? 700 : 400,
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Item *</span>
             <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
               <input
-                autoFocus
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); setSelected(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } }}
@@ -1172,8 +1204,13 @@ function AddItemDialog({
                 <input
                   type="number"
                   min={1}
+                  inputMode="numeric"
                   value={qty}
-                  onChange={(e) => setQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                  onChange={(e) => setQty(e.target.value)}
+                  onBlur={() => {
+                    const n = Number(qty);
+                    setQty(String(Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1));
+                  }}
                   style={{ width: 68 }}
                 />
               </div>
@@ -1226,33 +1263,6 @@ function AddItemDialog({
               <button type="button" onClick={clearSelection} style={{ fontSize: 11, padding: "2px 8px", background: "none", border: "none", color: "var(--muted)", cursor: "pointer" }}>
                 Change item
               </button>
-            </div>
-          )}
-
-          {knownSubcategories.length > 0 && (
-            <div className="col" style={{ gap: 4 }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Subcategory</span>
-              <div className="row wrap" style={{ gap: 6 }}>
-                {knownSubcategories.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setSub((prev) => prev === s ? "" : s)}
-                    style={{
-                      padding: "5px 12px",
-                      borderRadius: 99,
-                      border: "1px solid var(--border)",
-                      background: sub === s ? "var(--brand)" : "rgba(255,255,255,0.06)",
-                      color: sub === s ? "#0b1220" : "var(--text)",
-                      fontSize: 13,
-                      cursor: "pointer",
-                      fontWeight: sub === s ? 700 : 400,
-                    }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
             </div>
           )}
 

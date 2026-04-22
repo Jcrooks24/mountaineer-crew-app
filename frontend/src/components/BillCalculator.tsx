@@ -118,7 +118,10 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // Materials (live-shared per job, offline-capable via materialsStore)
   const [materials, setMaterials] = useState<LiveMaterial[]>(() => renderedForJob(jobUuid));
   const [matSelectedName, setMatSelectedName] = useState<string>("");
-  const [matQty, setMatQty] = useState<number>(1);
+  // Kept as string so the user can clear the field and retype; clamped on
+  // blur and on addMaterial. A numeric-clamped state snaps back to 1 mid-edit
+  // and makes the field uneditable.
+  const [matQty, setMatQty] = useState<string>("1");
   const [matCustomName, setMatCustomName] = useState<string>("");
   const [matCustomCost, setMatCustomCost] = useState<string>("");
   const [matErr, setMatErr] = useState<string>("");
@@ -287,7 +290,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
 
   function resetMatControls() {
     setMatSelectedName("");
-    setMatQty(1);
+    setMatQty("1");
     setMatCustomName("");
     setMatCustomCost("");
   }
@@ -296,7 +299,8 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     setMatErr("");
     if (!jobUuid) { setMatErr("No job selected"); return; }
 
-    const qty = Number.isFinite(matQty) ? Math.max(1, Math.floor(matQty)) : 1;
+    const parsedQty = Number(matQty);
+    const qty = Number.isFinite(parsedQty) ? Math.max(1, Math.floor(parsedQty)) : 1;
 
     let itemName: string;
     let unitPrice: number | null;
@@ -498,8 +502,12 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   ))}
                   <option value="__custom__">Custom item…</option>
                 </select>
-                <input type="number" min={1} step={1} value={matQty}
-                  onChange={(e) => setMatQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                <input type="number" min={1} step={1} inputMode="numeric" value={matQty}
+                  onChange={(e) => setMatQty(e.target.value)}
+                  onBlur={() => {
+                    const n = Number(matQty);
+                    setMatQty(String(Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1));
+                  }}
                   style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13, textAlign: "right" }} />
                 <button type="button" onClick={addMaterial}
                   style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--text)" }}>
