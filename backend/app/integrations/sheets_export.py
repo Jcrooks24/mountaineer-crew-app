@@ -1,8 +1,9 @@
 import json
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Callable, List, Dict, Any, Optional
+from typing import Callable, List, Dict, Any, Optional, Set
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -13,6 +14,29 @@ from app.core.google_cal_oauth import get_sheets_service, _build_authorized_http
 # queue internally and drain as workers free up. Prevents a sync burst from
 # spawning unlimited threads and blowing Render's 512 MB memory limit.
 _EXPORT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sheets-export")
+
+# Coalesce estimate exports per estimate_uuid. Autosave fires a PATCH per
+# keystroke; without coalescing, the pool's internal queue grew unbounded and
+# OOMed (each queued task held a captured payload, and each running export
+# built a fresh googleapiclient with a ~1MB discovery doc).
+_estimate_export_in_flight: Set[str] = set()
+_estimate_export_rerun: Set[str] = set()
+_estimate_export_lock = threading.Lock()
+
+# Serialize note-cell updates per event_id so rapid edits on the same event
+# (or client retries) can't stack multiple in-memory googleapiclient instances
+# in the pool queue. One lock bucket per event_id is short-lived and cheap.
+_event_note_locks: Dict[str, threading.Lock] = {}
+_event_note_locks_guard = threading.Lock()
+
+
+def _lock_for_event_note(event_id: str) -> threading.Lock:
+    with _event_note_locks_guard:
+        lock = _event_note_locks.get(event_id)
+        if lock is None:
+            lock = threading.Lock()
+            _event_note_locks[event_id] = lock
+        return lock
 
 
 def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
@@ -287,6 +311,84 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     db.commit()
 
     return len(new_rows)
+
+
+def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str]) -> int:
+    """Rewrite the `note` cell for an already-exported event row. Returns the
+    number of rows updated (0 or 1).
+
+    No-op when the event hasn't been exported to the sheet yet; the note will
+    flow out of `export_events_to_sheets` on first export.
+
+    Serialized per event_id so concurrent retries for the same event don't
+    stack multiple ~1MB googleapiclient instances in memory. The non-blocking
+    lock acquire skips the update entirely when another worker is already
+    handling this event — the queued retry will catch the latest value.
+    """
+    if not event_id:
+        return 0
+
+    lock = _lock_for_event_note(event_id)
+    if not lock.acquire(blocking=False):
+        # Another worker is already syncing this event_id — skip. The client's
+        # patch queue will re-issue the latest value if this call failed to
+        # land, and a concurrent retry here would just burn memory.
+        return 0
+
+    try:
+        spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+        tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
+
+        from googleapiclient.discovery import build as _build
+        authorized_http = _build_authorized_http(_get_creds(db))
+        svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+        try:
+            hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!1:1",
+            ).execute())
+            headers_row = (hdr.get("values") or [[]])[0]
+            if "event_id" not in headers_row or "note" not in headers_row:
+                return 0
+
+            event_col_letter = _col_letter(headers_row.index("event_id"))
+            note_col_letter = _col_letter(headers_row.index("note"))
+
+            col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{event_col_letter}:{event_col_letter}",
+            ).execute())
+            col_values = col.get("values") or []
+
+            target_row: Optional[int] = None
+            for i, row in enumerate(col_values):
+                if i == 0:
+                    continue  # header
+                value = row[0] if row else ""
+                if value == event_id:
+                    target_row = i + 1  # sheet rows are 1-based
+                    break
+
+            # Drop the large column response before the network update so the
+            # bytes are eligible for GC while we wait on Google.
+            del col, col_values
+
+            if target_row is None:
+                return 0
+
+            _ssl_retry(lambda: svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{note_col_letter}{target_row}",
+                valueInputOption="RAW",
+                body={"values": [[note or ""]]},
+            ).execute())
+            return 1
+        finally:
+            # Explicitly release the googleapiclient reference so its
+            # discovery doc (~1MB) isn't retained by the lock's frame.
+            del svc
+    finally:
+        lock.release()
 
 
 def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
@@ -855,3 +957,83 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
         total_written += len(item_rows)
 
     return total_written
+
+
+def _build_estimate_payload(db: Session, estimate_uuid: str) -> Optional[Dict[str, Any]]:
+    from app.db.models.estimate import Estimate  # local import to avoid cycles
+    e = db.query(Estimate).filter(Estimate.estimate_uuid == estimate_uuid).first()
+    if e is None:
+        return None
+    return {
+        "estimate_uuid": e.estimate_uuid,
+        "created_by_name": e.created_by_name,
+        "customer_name": e.customer_name,
+        "customer_email": e.customer_email,
+        "customer_phone": e.customer_phone,
+        "move_date": e.move_date,
+        "origin_address": e.origin_address,
+        "destination_address": e.destination_address,
+        "origin_access_notes": e.origin_access_notes,
+        "destination_access_notes": e.destination_access_notes,
+        "special_items_notes": e.special_items_notes,
+        "general_notes": e.general_notes,
+        "estimated_weight_lbs": e.estimated_weight_lbs,
+        "estimated_cubic_ft": e.estimated_cubic_ft,
+        "created_at": e.created_at,
+        "updated_at": e.updated_at,
+        "items": [
+            {
+                "id": it.id,
+                "name": it.name,
+                "qty": it.qty,
+                "weight_lbs": it.weight_lbs,
+                "cubic_ft": it.cubic_ft,
+                "room": it.room,
+                "subcategory": it.subcategory,
+                "notes": it.notes,
+            }
+            for it in e.items
+        ],
+    }
+
+
+def _estimate_export_worker(estimate_uuid: str) -> None:
+    from app.db.session import SessionLocal
+    # Loop until no rerun flag was set while the previous export was running.
+    # Bounds queue growth: at most one in-flight export + one pending rerun
+    # marker per estimate_uuid, regardless of how many PATCHes stream in.
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_estimate_payload(db, estimate_uuid)
+            if payload is not None:
+                export_estimate_to_sheets(db, payload)
+        except Exception as exc:
+            print(f"[sheets] estimate export failed ({estimate_uuid}): {exc}")
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _estimate_export_lock:
+            if estimate_uuid in _estimate_export_rerun:
+                _estimate_export_rerun.discard(estimate_uuid)
+                continue
+            _estimate_export_in_flight.discard(estimate_uuid)
+            return
+
+
+def schedule_estimate_export(estimate_uuid: str) -> None:
+    """Coalesce repeated export requests for the same estimate into a single
+    in-flight worker with at most one pending rerun. Safe to call on every
+    autosave keystroke — the worker re-reads the DB when it runs so the
+    final export always reflects the latest committed state."""
+    if not estimate_uuid:
+        return
+    with _estimate_export_lock:
+        if estimate_uuid in _estimate_export_in_flight:
+            _estimate_export_rerun.add(estimate_uuid)
+            return
+        _estimate_export_in_flight.add(estimate_uuid)
+    _EXPORT_POOL.submit(_estimate_export_worker, estimate_uuid)

@@ -1,6 +1,6 @@
 import uuid as _uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
@@ -10,7 +10,10 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.db.models.event import Event
 from app.db.models.calendar_job import CalendarJob
-from app.integrations.sheets_export import export_events_to_sheets
+from app.integrations.sheets_export import (
+    export_events_to_sheets,
+    update_event_note_in_sheets,
+)
 from app.core.deps import get_current_user
 from app.db.models.user import User
 
@@ -163,6 +166,47 @@ def get_events_history(
             for e in rows
         ],
     }
+
+
+class EventNotePatch(BaseModel):
+    note: Optional[str] = None
+
+
+@router.patch("/events/{event_id}")
+def patch_event_note(
+    event_id: str,
+    payload: EventNotePatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Attach or replace the free-text note on an already-logged event.
+
+    Keeps the event row intact (timestamp, location, author) and overwrites
+    only the `note` column in Postgres and in the Events sheet tab. If the
+    event hasn't been exported to the sheet yet, the update_event_note_in_sheets
+    call is a no-op — the note will ship out on first export via the normal
+    sync path.
+    """
+    row = db.query(Event).filter(Event.event_id == event_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="event_not_found")
+
+    note = (payload.note or "").strip() or None
+    row.note = note
+    db.commit()
+
+    # Run the sheet update synchronously (not via the background pool) so
+    # memory is bounded by uvicorn's worker count, not by an unbounded pool
+    # queue. `/api/sync` follows the same pattern for its event export. A
+    # sheet failure must never fail the PATCH — Postgres is the source of
+    # truth; the sheet will catch up on the next edit or full re-export.
+    sheet_error = None
+    try:
+        update_event_note_in_sheets(db, event_id, note)
+    except Exception as ex:
+        sheet_error = str(ex)
+
+    return {"ok": True, "event_id": event_id, "note": note or "", "sheet_error": sheet_error}
 
 
 @router.get("/jobs/resolve")
