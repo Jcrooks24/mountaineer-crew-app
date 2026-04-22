@@ -12,7 +12,6 @@ from app.db.models.event import Event
 from app.db.models.calendar_job import CalendarJob
 from app.integrations.sheets_export import (
     export_events_to_sheets,
-    run_export_in_background,
     update_event_note_in_sheets,
 )
 from app.core.deps import get_current_user
@@ -196,11 +195,18 @@ def patch_event_note(
     row.note = note
     db.commit()
 
-    # Update the sheet out-of-band; never block the API response on a slow
-    # Google call.
-    run_export_in_background(update_event_note_in_sheets, event_id, note)
+    # Run the sheet update synchronously (not via the background pool) so
+    # memory is bounded by uvicorn's worker count, not by an unbounded pool
+    # queue. `/api/sync` follows the same pattern for its event export. A
+    # sheet failure must never fail the PATCH — Postgres is the source of
+    # truth; the sheet will catch up on the next edit or full re-export.
+    sheet_error = None
+    try:
+        update_event_note_in_sheets(db, event_id, note)
+    except Exception as ex:
+        sheet_error = str(ex)
 
-    return {"ok": True, "event_id": event_id, "note": note or ""}
+    return {"ok": True, "event_id": event_id, "note": note or "", "sheet_error": sheet_error}
 
 
 @router.get("/jobs/resolve")
