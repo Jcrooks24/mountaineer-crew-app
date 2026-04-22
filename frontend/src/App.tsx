@@ -46,6 +46,10 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
 // LocalStorage keys
 const QUEUE_KEY = "crew_event_queue_v1"; // unsynced events only
 const LOG_KEY = "crew_event_log_v1"; // full job activity log (synced + queued)
+// Queue of per-event note edits the user made after the event already synced.
+// Offline-safe: drains on online + inside syncQueueNow so notes eventually
+// reach Postgres + the Events sheet.
+const NOTE_PATCH_KEY = "crew_event_note_patch_queue_v1";
 
 // Retention — the Google Sheet is the long-term record; the client log is a
 // working buffer for the offline-first UX. Trim anything older than the
@@ -86,6 +90,12 @@ type EventRecord = {
   note?: string | null;
   created_by?: string;
   sync_status: "queued" | "synced";
+};
+
+type NotePatchOp = {
+  event_id: string;
+  note: string | null;
+  enqueued_at: string;
 };
 
 type CalEvent = {
@@ -320,6 +330,14 @@ export default function App() {
     setQueueLen(q.length);
   }
 
+  function loadNotePatchQueue(): NotePatchOp[] {
+    return loadJson<NotePatchOp[]>(NOTE_PATCH_KEY, []);
+  }
+
+  function saveNotePatchQueue(q: NotePatchOp[]) {
+    saveJson(NOTE_PATCH_KEY, q);
+  }
+
   function loadLog(): EventRecord[] {
     return loadJson<EventRecord[]>(LOG_KEY, []);
   }
@@ -501,6 +519,69 @@ export default function App() {
     return `${Math.max(0, hours).toFixed(2)} hrs`;
   }
 
+  async function drainNotePatchQueue() {
+    const q = loadNotePatchQueue();
+    if (q.length === 0) return;
+    if (!navigator.onLine) return;
+
+    const token = getToken();
+    const remaining: NotePatchOp[] = [];
+    for (const op of q) {
+      try {
+        const res = await fetch(`${API}/api/events/${encodeURIComponent(op.event_id)}`, {
+          method: "PATCH",
+          headers: makeAuthHeaders(token, { "Content-Type": "application/json" }),
+          body: JSON.stringify({ note: op.note }),
+        });
+        if (res.ok) continue;
+        // 404 here means the server hasn't ingested this event yet (another
+        // device logged it and hasn't synced). Keep retrying on later drains.
+        remaining.push(op);
+      } catch {
+        remaining.push(op);
+      }
+    }
+    saveNotePatchQueue(remaining);
+  }
+
+  async function updateEventNote(eventId: string, noteText: string) {
+    const note = noteText.trim() || null;
+
+    const log = loadLog();
+    const logIdx = log.findIndex((x) => x.event_id === eventId);
+    // If this device still has the event queued for sync, just rewrite the
+    // note in-place — it will ride the normal sync and the server will insert
+    // it with the correct note on first arrival. No PATCH needed.
+    const queuedLocally = logIdx >= 0 && log[logIdx].sync_status === "queued";
+    if (logIdx >= 0) {
+      const next = log.slice();
+      next[logIdx] = { ...next[logIdx], note };
+      saveLog(next);
+    }
+
+    const q = loadQueue();
+    const qIdx = q.findIndex((x) => x.event_id === eventId);
+    if (qIdx >= 0) {
+      const nq = q.slice();
+      nq[qIdx] = { ...nq[qIdx], note };
+      saveQueue(nq);
+    }
+
+    setServerEvents((prev) => prev.map((e) => e.event_id === eventId ? { ...e, note } : e));
+
+    if (queuedLocally) return;
+
+    const patchQueue = loadNotePatchQueue();
+    const existingIdx = patchQueue.findIndex((p) => p.event_id === eventId);
+    const op: NotePatchOp = { event_id: eventId, note, enqueued_at: new Date().toISOString() };
+    const nextPatchQueue = patchQueue.slice();
+    if (existingIdx >= 0) nextPatchQueue[existingIdx] = op;
+    else nextPatchQueue.push(op);
+    saveNotePatchQueue(nextPatchQueue);
+
+    drainNotePatchQueue();
+  }
+
   async function syncQueueNow() {
     const q = loadQueue();
     if (q.length === 0) {
@@ -570,6 +651,10 @@ export default function App() {
       setStatus(`Sync error (kept queued)`);
       saveQueue(q);
     }
+
+    // Post-sync: any note edits the user made after an event first synced
+    // still need to ship. This also catches patches queued up while offline.
+    drainNotePatchQueue();
   }
 
   async function recordEvent(type: string, note: string | null = null) {
@@ -1022,7 +1107,7 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline — fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); loadMaterialsSummary(jobUuid); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); loadMaterialsSummary(jobUuid); };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
@@ -1449,11 +1534,54 @@ export default function App() {
                       </div>
                     </div>
 
-                    {e.note && (
-                      <div className="small" style={{ marginTop: 5, fontStyle: "italic", color: "var(--muted)" }}>
-                        "{e.note}"
-                      </div>
-                    )}
+                    <div
+                      className="row"
+                      style={{
+                        marginTop: 5,
+                        gap: 8,
+                        alignItems: "flex-start",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      {e.note ? (
+                        <div
+                          className="small"
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            fontStyle: "italic",
+                            color: "var(--muted)",
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          "{e.note}"
+                        </div>
+                      ) : <span style={{ flex: 1 }} />}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const text = window.prompt(
+                            e.note ? "Edit note:" : "Attach a note to this event:",
+                            e.note ?? "",
+                          );
+                          if (text === null) return; // cancelled
+                          updateEventNote(e.event_id, text);
+                        }}
+                        style={{
+                          fontSize: 11,
+                          padding: "3px 8px",
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          color: "var(--muted)",
+                          borderRadius: 6,
+                          flexShrink: 0,
+                          cursor: "pointer",
+                        }}
+                        title={e.note ? "Edit note for this event" : "Add a note to this event"}
+                      >
+                        {e.note ? "✎ note" : "+ note"}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

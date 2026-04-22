@@ -298,6 +298,57 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     return len(new_rows)
 
 
+def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str]) -> int:
+    """Rewrite the `note` cell for an already-exported event row. Returns the
+    number of rows updated (0 or 1).
+
+    No-op when the event hasn't been exported to the sheet yet; the note will
+    flow out of `export_events_to_sheets` on first export.
+    """
+    if not event_id:
+        return 0
+
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
+
+    from googleapiclient.discovery import build as _build
+    authorized_http = _build_authorized_http(_get_creds(db))
+    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!1:1",
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0]
+    if "event_id" not in headers_row or "note" not in headers_row:
+        return 0
+
+    event_col_letter = _col_letter(headers_row.index("event_id"))
+    note_col_letter = _col_letter(headers_row.index("note"))
+
+    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!{event_col_letter}:{event_col_letter}",
+    ).execute())
+    col_values = col.get("values") or []
+
+    for i, row in enumerate(col_values):
+        if i == 0:
+            continue  # header
+        value = row[0] if row else ""
+        if value == event_id:
+            # Sheet row index is 1-based, and row 1 is headers.
+            sheet_row = i + 1
+            _ssl_retry(lambda: svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{note_col_letter}{sheet_row}",
+                valueInputOption="RAW",
+                body={"values": [[note or ""]]},
+            ).execute())
+            return 1
+    return 0
+
+
 def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
     """Remove every row in the Materials tab belonging to `submission_id` and
     clear the corresponding dedupe entries so a later re-submission syncs
