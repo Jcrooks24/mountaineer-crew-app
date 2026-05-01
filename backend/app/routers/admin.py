@@ -8,12 +8,13 @@ Endpoints:
 """
 
 import json as _json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
@@ -137,14 +138,17 @@ def events_today(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    start_of_day = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    # "Today" is the Mountain calendar day — Bozeman is where crew operate.
+    # Using UTC start-of-day silently dropped early-afternoon-MT events from
+    # the map after 6 PM MT (when UTC midnight rolled over).
+    from app.core.time_utils import mountain_day_utc_bounds
+    start_of_day, end_of_day = mountain_day_utc_bounds()
 
     events = (
         db.query(Event)
         .filter(
             Event.timestamp >= start_of_day,
+            Event.timestamp < end_of_day,
             Event.lat.isnot(None),
             Event.lng.isnot(None),
         )
@@ -241,13 +245,18 @@ def job_search(
     matching date/name. Admins rarely remember the UUID, but they do know
     the date and the customer name.
     """
+    from app.core.time_utils import mountain_date_expr, utc_naive_to_mountain_date
+
     needle = (name or "").strip().lower()
     candidates: Dict[str, Dict[str, Any]] = {}
 
-    # Events — date comes from timestamp
+    # Events — date comes from timestamp, evaluated in Mountain. The admin
+    # types a `date` in their head as the calendar day in Bozeman; using
+    # `func.date(Event.timestamp)` against a UTC-naive column would miss
+    # late-evening-MT events that fell on the next UTC day.
     eq = db.query(Event).filter(Event.job_uuid.isnot(None))
     if date:
-        eq = eq.filter(func.date(Event.timestamp) == date)
+        eq = eq.filter(mountain_date_expr(Event.timestamp) == date)
     if needle:
         eq = eq.filter(func.lower(Event.job_name).like(f"%{needle}%"))
     for e in eq.limit(2000).all():
@@ -255,7 +264,7 @@ def job_search(
         if e.job_name:
             c["names"].append(e.job_name)
         if e.timestamp:
-            c["dates"].add(e.timestamp.date().isoformat())
+            c["dates"].add(utc_naive_to_mountain_date(e.timestamp).isoformat())
         c["events"] += 1
 
     # Materials — date comes from job_date (YYYY-MM-DD string)
@@ -295,9 +304,20 @@ def job_search(
 # ---------------------------
 
 def _iso(dt: Any) -> Optional[str]:
+    """Serialize a datetime for the JSON response. Naive datetimes in this
+    app are stored as UTC; emit them with a trailing 'Z' so the browser
+    doesn't reinterpret the bare ISO string in its local timezone — that's
+    what was making Job Summary show events 6h off from the Timeline tab.
+    """
     if dt is None:
         return None
+    if isinstance(dt, datetime):
+        s = dt.isoformat()
+        if dt.tzinfo is None:
+            s += "Z"
+        return s
     if hasattr(dt, "isoformat"):
+        # date / time objects — no timezone applies, return as-is.
         return dt.isoformat()
     return str(dt)
 
@@ -372,6 +392,7 @@ def job_summary(
                 "event_id": e.event_id,
                 "type": e.type,
                 "timestamp": _iso(e.timestamp),
+                "logged_at": _iso(e.logged_at),
                 "note": e.note,
                 "lat": e.lat,
                 "lng": e.lng,
@@ -445,4 +466,195 @@ def job_summary(
             }
             for n in admin_notes
         ],
+    }
+
+
+# ---------------------------
+# Sheet reconciliation — recover events durable in Postgres but missing
+# from the Events sheet because their original sync's sheet append failed.
+# Idempotent: re-running is safe; the existing dedupe table covers it.
+# ---------------------------
+
+class ReconcileEventsRequest(BaseModel):
+    batch_size: Optional[int] = None
+    max_events: Optional[int] = None
+
+
+@router.post("/sheets/reconcile-events")
+def reconcile_events_endpoint(
+    payload: ReconcileEventsRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    from app.integrations.sheets_reconcile import reconcile_events
+
+    batch_size = payload.batch_size if payload.batch_size and payload.batch_size > 0 else 200
+    max_events = payload.max_events if payload.max_events and payload.max_events > 0 else 2000
+    # Hard ceiling so a malformed admin call can't pin a worker.
+    batch_size = min(batch_size, 500)
+    max_events = min(max_events, 10000)
+
+    result = reconcile_events(db, batch_size=batch_size, max_events=max_events)
+    return {"ok": True, **result}
+
+
+# ---------------------------
+# App Health — snapshot of critical functions for the Settings tab. Each
+# check is independently try/excepted so one failing probe doesn't blank
+# the whole report. Frontend renders this as plain text.
+# ---------------------------
+
+
+def _check_db(db: Session) -> Dict[str, str]:
+    try:
+        db.execute(text("SELECT 1")).scalar()
+        return {"name": "Database", "status": "ok", "detail": "reachable"}
+    except Exception as ex:
+        return {"name": "Database", "status": "fail", "detail": f"{ex}"}
+
+
+def _check_google_creds(db: Session) -> Dict[str, str]:
+    try:
+        from app.core.google_cal_oauth import _get_creds
+        creds = _get_creds(db)
+        if not creds:
+            return {"name": "Google credentials", "status": "fail", "detail": "no token configured"}
+        if not creds.refresh_token:
+            return {"name": "Google credentials", "status": "warn", "detail": "no refresh token — re-auth needed soon"}
+        if creds.expired and not creds.refresh_token:
+            return {"name": "Google credentials", "status": "fail", "detail": "token expired and cannot refresh"}
+        expiry = creds.expiry.isoformat() if creds.expiry else "unknown"
+        return {"name": "Google credentials", "status": "ok", "detail": f"valid (expires {expiry})"}
+    except Exception as ex:
+        return {"name": "Google credentials", "status": "fail", "detail": f"{ex}"}
+
+
+def _check_sheets_api(db: Session) -> Dict[str, str]:
+    """Touch the configured spreadsheet to confirm Sheets API + access work
+    end-to-end. Cheapest call is a metadata get with grid data off."""
+    try:
+        from app.core.google_cal_oauth import _build_authorized_http, _get_creds, _ssl_retry
+        from googleapiclient.discovery import build as _build
+        spreadsheet_id = os.getenv(
+            "GOOGLE_SHEETS_SPREADSHEET_ID",
+            "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs",
+        ).strip()
+        authorized_http = _build_authorized_http(_get_creds(db))
+        svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+        meta = _ssl_retry(lambda: svc.spreadsheets().get(
+            spreadsheetId=spreadsheet_id, includeGridData=False
+        ).execute())
+        title = meta.get("properties", {}).get("title", "(unknown)")
+        tab_count = len(meta.get("sheets", []))
+        return {
+            "name": "Google Sheets API",
+            "status": "ok",
+            "detail": f"reachable — sheet '{title}', {tab_count} tabs",
+        }
+    except Exception as ex:
+        return {"name": "Google Sheets API", "status": "fail", "detail": f"{ex}"}
+
+
+def _check_drive_api(db: Session) -> Dict[str, str]:
+    """A trivial about.get on Drive confirms the drive.file scope works."""
+    try:
+        from app.core.google_cal_oauth import _build_authorized_http, _get_creds, _ssl_retry
+        from googleapiclient.discovery import build as _build
+        authorized_http = _build_authorized_http(_get_creds(db))
+        svc = _build("drive", "v3", http=authorized_http, cache_discovery=False)
+        # `about.get` requires a fields mask; "user/emailAddress" is the
+        # cheapest meaningful read and surfaces auth issues immediately.
+        info = _ssl_retry(lambda: svc.about().get(fields="user/emailAddress").execute())
+        email = info.get("user", {}).get("emailAddress", "(unknown)")
+        return {"name": "Google Drive API", "status": "ok", "detail": f"reachable as {email}"}
+    except Exception as ex:
+        return {"name": "Google Drive API", "status": "fail", "detail": f"{ex}"}
+
+
+def _check_event_drift(db: Session) -> Dict[str, str]:
+    try:
+        from app.integrations.sheets_reconcile import count_unexported_events
+        n = count_unexported_events(db)
+        if n == 0:
+            return {"name": "Sheet drift — events", "status": "ok", "detail": "0 missing"}
+        # Below 25 is normal background noise on a busy day if a sync just
+        # failed and a refresh is queued. Above that suggests a real outage.
+        status = "warn" if n < 25 else "fail"
+        return {
+            "name": "Sheet drift — events",
+            "status": status,
+            "detail": f"{n} events missing from sheet — run Refresh",
+        }
+    except Exception as ex:
+        return {"name": "Sheet drift — events", "status": "fail", "detail": f"{ex}"}
+
+
+def _check_event_freshness(db: Session) -> Dict[str, str]:
+    try:
+        latest = db.query(func.max(Event.timestamp)).scalar()
+        if latest is None:
+            return {"name": "Event freshness", "status": "warn", "detail": "no events recorded yet"}
+        # Treat naive timestamps as UTC — that's what /api/sync stores.
+        if latest.tzinfo is None:
+            latest_utc = latest.replace(tzinfo=timezone.utc)
+        else:
+            latest_utc = latest.astimezone(timezone.utc)
+        delta = datetime.now(timezone.utc) - latest_utc
+        hours = delta.total_seconds() / 3600.0
+        human = (
+            f"{int(delta.total_seconds() // 60)} min ago" if hours < 1
+            else f"{hours:.1f} h ago"
+        )
+        if hours > 168:  # > 7 days
+            return {"name": "Event freshness", "status": "fail", "detail": f"latest event {human}"}
+        if hours > 24:
+            return {"name": "Event freshness", "status": "warn", "detail": f"latest event {human}"}
+        return {"name": "Event freshness", "status": "ok", "detail": f"latest event {human}"}
+    except Exception as ex:
+        return {"name": "Event freshness", "status": "fail", "detail": f"{ex}"}
+
+
+def _check_env_vars() -> Dict[str, str]:
+    """Surface env vars we know break the app if missing or stale. Doesn't
+    leak values — only presence."""
+    required = ["DATABASE_URL", "JWT_SECRET", "FRONTEND_URL", "GOOGLE_SHEETS_SPREADSHEET_ID"]
+    missing = [k for k in required if not (os.getenv(k) or "").strip()]
+    if not missing:
+        return {"name": "Env vars", "status": "ok", "detail": "all required vars present"}
+    # GOOGLE_SHEETS_SPREADSHEET_ID falls back to a default in code, so its
+    # absence is a warning rather than a fail.
+    fail_keys = [k for k in missing if k != "GOOGLE_SHEETS_SPREADSHEET_ID"]
+    status = "fail" if fail_keys else "warn"
+    return {"name": "Env vars", "status": status, "detail": f"missing: {', '.join(missing)}"}
+
+
+@router.get("/health")
+def app_health(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Server-side snapshot of app health. The Settings tab pairs this with
+    its own client-side checks (offline state, queue size, etc.) and renders
+    the merged result as plain text in a collapsible window."""
+    checks: List[Dict[str, str]] = [
+        _check_db(db),
+        _check_env_vars(),
+        _check_google_creds(db),
+        _check_sheets_api(db),
+        _check_drive_api(db),
+        _check_event_drift(db),
+        _check_event_freshness(db),
+    ]
+    worst = "ok"
+    for c in checks:
+        if c["status"] == "fail":
+            worst = "fail"
+            break
+        if c["status"] == "warn" and worst != "fail":
+            worst = "warn"
+    return {
+        "ok": True,
+        "overall": worst,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
     }

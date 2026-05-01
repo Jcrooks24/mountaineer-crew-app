@@ -25,8 +25,16 @@ class Event(Base):
     # e.g. ARRIVED / START / FINISH / NOTE
     type = Column(String, index=True, nullable=False)
 
-    # When the event happened (device time)
+    # User-editable event time. Drives chronological sort on the timeline.
+    # Defaults to `logged_at` on insert; crew can correct it via the timeline
+    # UI (e.g. when an event is logged after the fact). Sheet writes use this
+    # value in the `timestamp` column.
     timestamp = Column(DateTime, nullable=False)
+
+    # Immutable record of when the device actually captured the event. Set
+    # from the client's device time at insert and never updated thereafter —
+    # this is the audit trail admins use to spot back-dated entries.
+    logged_at = Column(DateTime, nullable=False)
 
     # Optional geotag captured only at event time
     lat = Column(Float, nullable=True)

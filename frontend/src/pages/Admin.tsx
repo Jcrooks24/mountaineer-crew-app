@@ -16,6 +16,11 @@ import {
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
+import {
+  formatMountainDate,
+  formatMountainDateTime,
+  formatMountainTime,
+} from "../lib/time";
 
 type AdminUser = {
   id: number;
@@ -304,7 +309,7 @@ function MapTab() {
           iconAnchor: [r, r],
           popupAnchor: [0, -r - 4],
         });
-        const time = new Date(e.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const time = formatMountainTime(e.timestamp);
         const jobLabel = e.job_name || e.job_uuid.slice(0, 8);
         return L.marker([e.lat, e.lng], { icon }).bindPopup(
           `<b style="text-transform:capitalize">${e.type}</b><br/>${time}${e.note ? `<br/>${e.note}` : ""}<br/><span style="font-size:11px;color:#888">${jobLabel}</span>`
@@ -476,7 +481,7 @@ function CalendarTab() {
         {status && (
           <div className="col" style={{ gap: 4 }}>
             {status.error && <div className="small" style={{ color: "var(--danger)" }}>{status.error}</div>}
-            {status.expiry && <div className="small">Access token expiry: {new Date(status.expiry).toLocaleString()}</div>}
+            {status.expiry && <div className="small">Access token expiry: {formatMountainDateTime(status.expiry)}</div>}
             {status.has_refresh_token !== undefined && (
               <div className="small">Refresh token: {status.has_refresh_token ? "✓ present" : "✗ missing"}</div>
             )}
@@ -939,6 +944,12 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
       {/* ── DVIR vehicle units ── */}
       <DVIRUnitsCard />
 
+      {/* ── Sheet sync (admin recovery for missed events) ── */}
+      <SheetSyncCard />
+
+      {/* ── App health check ── */}
+      <AppHealthCard />
+
       {/* ── Advanced settings ── */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <div className="sectionTitle">Advanced Settings</div>
@@ -974,6 +985,274 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
       </div>
     </div>
   );
+}
+
+// ─────────────────────────────────────────
+// Sheet sync — admin "Refresh" button. Picks up events that landed in
+// Postgres but never reached the sheet (Sheets API blip on the live sync
+// path swallows the error silently). The endpoint is idempotent.
+// ─────────────────────────────────────────
+function SheetSyncCard() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function refresh() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await apiFetch<{
+        ok: boolean;
+        found: number;
+        exported: number;
+        errors: number;
+        duration_ms: number;
+      }>("/api/admin/sheets/reconcile-events", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const secs = (r.duration_ms / 1000).toFixed(1);
+      const text =
+        r.found === 0
+          ? `Sheet is in sync — nothing to recover (${secs}s)`
+          : `Recovered ${r.exported}/${r.found} event(s)` +
+            (r.errors > 0 ? `, ${r.errors} error(s)` : "") +
+            ` (${secs}s)`;
+      setMsg({ ok: r.errors === 0, text });
+    } catch (e) {
+      const detail = e instanceof ApiError ? e.message : "Request failed";
+      setMsg({ ok: false, text: detail });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="sectionTitle">Sheet Sync</div>
+      <div className="small" style={{ color: "var(--muted)" }}>
+        Re-export any events that are durable in the app database but missing from the Google Sheet.
+        Safe to run any time — duplicates are skipped automatically.
+      </div>
+      {msg && (
+        <div style={{ fontSize: 13, color: msg.ok ? "var(--ok)" : "var(--danger)" }}>
+          {msg.ok ? "✓ " : ""}{msg.text}
+        </div>
+      )}
+      <button
+        onClick={refresh}
+        disabled={busy}
+        className="btnPrimary"
+        style={{ alignSelf: "flex-start", fontSize: 13 }}
+      >
+        {busy ? "Refreshing…" : "Refresh sheet from app data"}
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// App Health — quick read on the moving parts: client outbox state, server
+// reachability, Google API access, sheet drift, event freshness, env vars.
+// Plain-text summary in a collapsible block so an admin can paste it into a
+// support thread.
+//
+// LocalStorage keys must match App.tsx. Keeping them as string literals
+// (rather than imports) so this card stays self-contained — App.tsx is the
+// source of truth, and a future rename there is a one-line search away.
+// ─────────────────────────────────────────
+const HC_QUEUE_KEY = "crew_event_queue_v1";
+const HC_NOTE_PATCH_KEY = "crew_event_note_patch_queue_v1";
+
+type HealthCheck = { name: string; status: "ok" | "warn" | "fail"; detail: string };
+type ServerHealth = {
+  ok: boolean;
+  overall: "ok" | "warn" | "fail";
+  generated_at: string;
+  checks: HealthCheck[];
+};
+
+function AppHealthCard() {
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<string | null>(null);
+
+  async function runCheck() {
+    setBusy(true);
+    try {
+      const clientChecks = collectClientChecks();
+      let serverChecks: HealthCheck[] | null = null;
+      let serverOverall: "ok" | "warn" | "fail" | "unknown" = "unknown";
+      let serverErr: string | null = null;
+      try {
+        const r = await apiFetch<ServerHealth>("/api/admin/health");
+        serverChecks = r.checks;
+        serverOverall = r.overall;
+      } catch (e) {
+        serverErr = e instanceof ApiError ? e.message : "Backend unreachable";
+      }
+      setReport(formatReport(clientChecks, serverChecks, serverOverall, serverErr));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="sectionTitle">App Health</div>
+      <div className="small" style={{ color: "var(--muted)" }}>
+        Snapshot of critical functions — sync state, network, Google API access, data drift. Plain text so you can copy/paste it.
+      </div>
+      <button
+        onClick={runCheck}
+        disabled={busy}
+        className="btnPrimary"
+        style={{ alignSelf: "flex-start", fontSize: 13 }}
+      >
+        {busy ? "Running…" : "Run health check"}
+      </button>
+      {report !== null && (
+        <details open style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--muted)" }}>
+            Result
+          </summary>
+          <pre
+            style={{
+              marginTop: 8,
+              padding: 12,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+              fontSize: 12,
+              lineHeight: 1.5,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--btn-r)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              maxHeight: 480,
+              overflow: "auto",
+            }}
+          >
+            {report}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function collectClientChecks(): HealthCheck[] {
+  const out: HealthCheck[] = [];
+
+  out.push({
+    name: "Online",
+    status: navigator.onLine ? "ok" : "warn",
+    detail: navigator.onLine ? "yes" : "device is offline",
+  });
+
+  // localStorage availability — Safari private mode and some kiosk profiles
+  // throw on write. Catch and report so admins see why a queue might be lost.
+  try {
+    const probe = "__hc_probe__";
+    localStorage.setItem(probe, "1");
+    localStorage.removeItem(probe);
+    out.push({ name: "localStorage", status: "ok", detail: "writable" });
+  } catch (e) {
+    out.push({
+      name: "localStorage",
+      status: "fail",
+      detail: `not writable — offline queue won't persist (${(e as Error).message})`,
+    });
+  }
+
+  out.push(describeQueue("Outbox", HC_QUEUE_KEY, "events queued"));
+  out.push(describeQueue("Note patches", HC_NOTE_PATCH_KEY, "patches pending"));
+
+  return out;
+}
+
+type QueuedItem = { timestamp?: string; enqueued_at?: string };
+
+function describeQueue(name: string, key: string, unit: string): HealthCheck {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(key);
+  } catch {
+    return { name, status: "warn", detail: "could not read localStorage" };
+  }
+  if (!raw) return { name, status: "ok", detail: `0 ${unit}` };
+  let parsed: QueuedItem[] = [];
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (Array.isArray(data)) parsed = data as QueuedItem[];
+  } catch {
+    return { name, status: "warn", detail: "queue payload is not JSON — manual cleanup may be needed" };
+  }
+  if (parsed.length === 0) return { name, status: "ok", detail: `0 ${unit}` };
+
+  // Oldest item — events use "timestamp", note patches use "enqueued_at"
+  const ages = parsed
+    .map((it) => Date.parse(it?.timestamp || it?.enqueued_at || ""))
+    .filter((t: number) => Number.isFinite(t));
+  const oldest = ages.length ? Math.min(...ages) : Date.now();
+  const ageMin = (Date.now() - oldest) / 60000;
+  const ageDesc =
+    ageMin < 1 ? "<1 min" :
+    ageMin < 60 ? `${Math.round(ageMin)} min` :
+    ageMin < 60 * 24 ? `${(ageMin / 60).toFixed(1)} h` :
+    `${(ageMin / 60 / 24).toFixed(1)} d`;
+  // Stale-queue threshold mirrors QUEUE_MAX_AGE_DAYS in App.tsx (14 days).
+  const status: "ok" | "warn" | "fail" =
+    ageMin > 60 * 24 * 7 ? "fail" :
+    ageMin > 60 * 24 ? "warn" :
+    "ok";
+  return { name, status, detail: `${parsed.length} ${unit} — oldest ${ageDesc}` };
+}
+
+function formatReport(
+  clientChecks: HealthCheck[],
+  serverChecks: HealthCheck[] | null,
+  serverOverall: "ok" | "warn" | "fail" | "unknown",
+  serverErr: string | null,
+): string {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Denver",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+    timeZoneName: "short",
+  });
+  const header = `App Health  ·  generated ${fmt.format(new Date())}`;
+  const overall = computeOverall(clientChecks, serverChecks, serverErr);
+
+  const lines: string[] = [];
+  lines.push(header);
+  lines.push(`Overall: ${overall.toUpperCase()}`);
+  lines.push("");
+  lines.push("CLIENT");
+  for (const c of clientChecks) lines.push(`  [${tag(c.status)}] ${c.name}: ${c.detail}`);
+  lines.push("");
+  if (serverErr) {
+    lines.push(`SERVER  ·  unreachable: ${serverErr}`);
+  } else if (serverChecks) {
+    lines.push(`SERVER  ·  overall: ${serverOverall}`);
+    for (const c of serverChecks) lines.push(`  [${tag(c.status)}] ${c.name}: ${c.detail}`);
+  }
+  return lines.join("\n");
+}
+
+function tag(status: "ok" | "warn" | "fail"): string {
+  if (status === "ok") return "OK  ";
+  if (status === "warn") return "WARN";
+  return "FAIL";
+}
+
+function computeOverall(
+  clientChecks: HealthCheck[],
+  serverChecks: HealthCheck[] | null,
+  serverErr: string | null,
+): "ok" | "warn" | "fail" {
+  const all = [...clientChecks, ...(serverChecks ?? [])];
+  if (serverErr) return "fail";
+  if (all.some((c) => c.status === "fail")) return "fail";
+  if (all.some((c) => c.status === "warn")) return "warn";
+  return "ok";
 }
 
 // ─────────────────────────────────────────
@@ -1461,7 +1740,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             ✓ Mechanic Approved
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
-            Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? new Date(dvir.mechanic_signed_at).toLocaleString() : ""}
+            Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? formatMountainDateTime(dvir.mechanic_signed_at) : ""}
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
             Repairs made: {dvir.repairs_made ? "Yes" : "No — no repair needed"}
@@ -1709,7 +1988,7 @@ function NotesTab() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
                   <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                    Updated {new Date(n.updated_at).toLocaleString()}
+                    Updated {formatMountainDateTime(n.updated_at)}
                     {n.created_by_name ? ` · by ${n.created_by_name}` : ""}
                   </div>
                   <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
@@ -2030,7 +2309,7 @@ function AdminNotesSection() {
                   </div>
                   <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                     {n.job_uuid ? `Job ${n.job_uuid.slice(0, 8)}… · ` : ""}
-                    Updated {new Date(n.updated_at).toLocaleString()}
+                    Updated {formatMountainDateTime(n.updated_at)}
                     {n.created_by_name ? ` · by ${n.created_by_name}` : ""}
                   </div>
                   <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
@@ -2064,6 +2343,7 @@ type JobSummary = {
     event_id: string;
     type: string;
     timestamp: string | null;
+    logged_at: string | null;
     note: string | null;
     lat: number | null;
     lng: number | null;
@@ -2278,7 +2558,7 @@ function JobSummaryTab() {
                   <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
                     <div style={{ fontWeight: 700, fontSize: 13 }}>{n.title}</div>
                     <div className="small" style={{ color: "var(--muted)" }}>
-                      {n.updated_at ? new Date(n.updated_at).toLocaleString() : ""}
+                      {n.updated_at ? formatMountainDateTime(n.updated_at) : ""}
                       {n.created_by_name ? ` · ${n.created_by_name}` : ""}
                     </div>
                     <div style={{ fontSize: 13, marginTop: 4, whiteSpace: "pre-wrap" }}>{n.body}</div>
@@ -2294,18 +2574,28 @@ function JobSummaryTab() {
               <div className="small" style={{ color: "var(--muted)" }}>No events logged.</div>
             ) : (
               <div className="col" style={{ gap: 6 }}>
-                {summary.events.map((e) => (
-                  <div key={e.event_id} className="row" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-                    <span className="chip" style={{ fontSize: 11, textTransform: "uppercase" }}>{e.type}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="small" style={{ color: "var(--muted)" }}>
-                        {e.timestamp ? new Date(e.timestamp).toLocaleString() : ""}
-                        {e.created_by ? ` · ${e.created_by}` : ""}
+                {summary.events.map((e) => {
+                  const wasEdited =
+                    !!e.logged_at && !!e.timestamp &&
+                    new Date(e.logged_at).getTime() !== new Date(e.timestamp).getTime();
+                  return (
+                    <div key={e.event_id} className="row" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                      <span className="chip" style={{ fontSize: 11, textTransform: "uppercase" }}>{e.type}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="small" style={{ color: "var(--muted)" }}>
+                          {e.timestamp ? formatMountainDateTime(e.timestamp) : ""}
+                          {e.created_by ? ` · ${e.created_by}` : ""}
+                        </div>
+                        {wasEdited && e.logged_at && (
+                          <div className="small" style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>
+                            edited — logged at {formatMountainDateTime(e.logged_at)}
+                          </div>
+                        )}
+                        {e.note && <div style={{ fontSize: 13 }}>{e.note}</div>}
                       </div>
-                      {e.note && <div style={{ fontSize: 13 }}>{e.note}</div>}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2357,7 +2647,7 @@ function JobSummaryTab() {
                   <div key={m.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
                     <div className="row" style={{ justifyContent: "space-between" }}>
                       <div className="small" style={{ color: "var(--muted)" }}>
-                        {m.created_at ? new Date(m.created_at).toLocaleString() : ""}
+                        {m.created_at ? formatMountainDateTime(m.created_at) : ""}
                       </div>
                       <div style={{ fontWeight: 700, fontSize: 13 }}>${m.total.toFixed(2)}</div>
                     </div>
@@ -2446,7 +2736,7 @@ function JobSummaryTab() {
                     </div>
                     <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
                       {p.created_by ?? ""}
-                      {p.created_at ? ` · ${new Date(p.created_at).toLocaleDateString()}` : ""}
+                      {p.created_at ? ` · ${formatMountainDate(p.created_at)}` : ""}
                     </div>
                   </a>
                 ))}

@@ -3,7 +3,7 @@ import uuid as _uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -13,6 +13,7 @@ from app.db.models.calendar_job import CalendarJob
 from app.integrations.sheets_export import (
     export_events_to_sheets,
     update_event_note_in_sheets,
+    update_event_timestamp_in_sheets,
 )
 from app.core.deps import get_current_user
 from app.db.models.user import User
@@ -67,7 +68,12 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             job_uuid=e.job_uuid,
             job_id=e.job_id,
             type=e.type,
+            # On insert, the editable event time and the immutable
+            # logged_at are the same — the crew member's device time at
+            # capture. They diverge only after the user edits the
+            # timestamp from the timeline.
             timestamp=ts,
+            logged_at=ts,
             lat=e.lat,
             lng=e.lng,
             accuracy_m=e.accuracy_m,
@@ -83,10 +89,13 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             db.commit()
             inserted += 1
 
-            # Collect for sheets export (use original ISO string)
+            # Collect for sheets export (use original ISO string). On first
+            # export, logged_at == timestamp; the sheet's logged_at column
+            # only diverges after a later timestamp edit.
             inserted_events_for_sheet.append({
                 "event_id": e.event_id,
                 "timestamp": e.timestamp,
+                "logged_at": e.timestamp,
                 "job_uuid": e.job_uuid,
                 "job_name": e.job_name or "",
                 "job_date": e.job_date or "",
@@ -155,6 +164,7 @@ def get_events_history(
                 "job_uuid": e.job_uuid,
                 "type": e.type,
                 "timestamp": e.timestamp.isoformat() + "Z",
+                "logged_at": (e.logged_at.isoformat() + "Z") if e.logged_at else None,
                 "lat": e.lat,
                 "lng": e.lng,
                 "accuracy_m": e.accuracy_m,
@@ -168,45 +178,101 @@ def get_events_history(
     }
 
 
-class EventNotePatch(BaseModel):
+class EventPatch(BaseModel):
+    """Patches against a previously-logged event. Both fields are optional;
+    omitted fields are not modified. Sending both in one request is fine.
+    """
     note: Optional[str] = None
+    # ISO-8601 string. Crew can correct an event's displayed time after the
+    # fact. logged_at is never editable.
+    timestamp: Optional[str] = None
+
+
+# Bounds on how far an editable timestamp can drift from logged_at. Future
+# is rejected outright (with a small clock-skew grace); past is capped so
+# year-typo accidents don't sprinkle events under the wrong job. Mirrors
+# the client-side guard.
+_TIMESTAMP_FUTURE_GRACE_S = 5 * 60       # 5 minutes
+_TIMESTAMP_PAST_LIMIT_S = 7 * 24 * 60 * 60  # 7 days
+
+
+def _validate_editable_timestamp(new_ts_iso: str, logged_at: datetime) -> datetime:
+    try:
+        new_ts = datetime.fromisoformat(new_ts_iso.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad_timestamp")
+    # Normalize to naive UTC so the comparison matches how /api/sync stores
+    # datetimes (the `timestamp` column is naive UTC).
+    if new_ts.tzinfo is not None:
+        new_ts = new_ts.astimezone(timezone.utc).replace(tzinfo=None)
+    now = datetime.utcnow()
+    if (new_ts - now).total_seconds() > _TIMESTAMP_FUTURE_GRACE_S:
+        raise HTTPException(status_code=400, detail="timestamp_in_future")
+    earliest = logged_at - timedelta(seconds=_TIMESTAMP_PAST_LIMIT_S)
+    if new_ts < earliest:
+        raise HTTPException(status_code=400, detail="timestamp_too_far_past")
+    return new_ts
 
 
 @router.patch("/events/{event_id}")
-def patch_event_note(
+def patch_event(
     event_id: str,
-    payload: EventNotePatch,
+    payload: EventPatch,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Attach or replace the free-text note on an already-logged event.
+    """Update mutable fields on an already-logged event.
 
-    Keeps the event row intact (timestamp, location, author) and overwrites
-    only the `note` column in Postgres and in the Events sheet tab. If the
-    event hasn't been exported to the sheet yet, the update_event_note_in_sheets
-    call is a no-op — the note will ship out on first export via the normal
-    sync path.
+    Currently `note` and `timestamp`. The row's `logged_at`, location, and
+    author stay intact. Each PATCH commits Postgres first, then writes the
+    same change into the Events sheet. If the event hasn't been exported
+    yet, the sheet call is a no-op — the row will ship via the normal sync
+    path with the latest values.
     """
     row = db.query(Event).filter(Event.event_id == event_id).first()
     if row is None:
         raise HTTPException(status_code=404, detail="event_not_found")
 
-    note = (payload.note or "").strip() or None
-    row.note = note
+    note_changed = False
+    timestamp_changed = False
+    new_note: Optional[str] = None
+    new_ts: Optional[datetime] = None
+
+    if payload.note is not None:
+        new_note = (payload.note or "").strip() or None
+        row.note = new_note
+        note_changed = True
+
+    if payload.timestamp is not None:
+        new_ts = _validate_editable_timestamp(payload.timestamp, row.logged_at)
+        row.timestamp = new_ts
+        timestamp_changed = True
+
+    if not (note_changed or timestamp_changed):
+        return {"ok": True, "event_id": event_id, "noop": True}
+
     db.commit()
 
-    # Run the sheet update synchronously (not via the background pool) so
-    # memory is bounded by uvicorn's worker count, not by an unbounded pool
-    # queue. `/api/sync` follows the same pattern for its event export. A
-    # sheet failure must never fail the PATCH — Postgres is the source of
-    # truth; the sheet will catch up on the next edit or full re-export.
-    sheet_error = None
+    # Run the sheet updates synchronously (not via the background pool) so
+    # memory is bounded by uvicorn's worker count. A sheet failure must never
+    # fail the PATCH — Postgres is the source of truth; the reconciler /
+    # next edit catches up on missed sheet writes.
+    sheet_error: Optional[str] = None
     try:
-        update_event_note_in_sheets(db, event_id, note)
+        if note_changed:
+            update_event_note_in_sheets(db, event_id, new_note)
+        if timestamp_changed and new_ts is not None:
+            update_event_timestamp_in_sheets(db, event_id, new_ts.isoformat())
     except Exception as ex:
         sheet_error = str(ex)
 
-    return {"ok": True, "event_id": event_id, "note": note or "", "sheet_error": sheet_error}
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "note": (new_note or "") if note_changed else None,
+        "timestamp": new_ts.isoformat() if timestamp_changed and new_ts else None,
+        "sheet_error": sheet_error,
+    }
 
 
 @router.get("/jobs/resolve")

@@ -9,6 +9,13 @@ import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
 import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
+import {
+  formatMountain,
+  formatMountainDate,
+  formatMountainDateTime,
+  formatMountainTime,
+  mountainDateYYYYMMDD,
+} from "./lib/time";
 import AdminNotesBanner from "./components/AdminNotesBanner";
 import { getToken } from "./auth/token";
 import {
@@ -83,7 +90,13 @@ type EventRecord = {
   event_id: string;
   job_uuid: string;
   type: string;
+  // User-editable event time. Drives chronological sort on the timeline.
+  // Defaults to logged_at on capture; crew can correct it via the timeline UI.
   timestamp: string;
+  // Immutable original device-capture time. Optional for backward-compat
+  // with cached records written before this field existed (those rows
+  // implicitly have logged_at == timestamp).
+  logged_at?: string;
   lat: number | null;
   lng: number | null;
   accuracy_m: number | null;
@@ -92,9 +105,14 @@ type EventRecord = {
   sync_status: "queued" | "synced";
 };
 
-type NotePatchOp = {
+// Patch ops carry whichever fields the user changed. Either or both of
+// `note` / `timestamp` may be present. Storage key keeps its historical
+// "note_patch" name to preserve already-queued ops on devices upgrading
+// in place — the shape is a strict superset.
+type EventPatchOp = {
   event_id: string;
-  note: string | null;
+  note?: string | null;
+  timestamp?: string;
   enqueued_at: string;
 };
 
@@ -125,12 +143,49 @@ type ServerPhoto = {
   mime_type: string;
 };
 
+// `<input type="time">` round-tripping. The element's value is "HH:mm" in
+// the user's local time. We keep the event's existing date intact and only
+// rewrite hours/minutes — crew typically just need to nudge minutes within
+// a shift; a date change usually means the event is a much bigger mistake
+// and should be re-logged.
+function toTimeValue(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function applyTimeToIso(localTime: string, baseIso: string): string | null {
+  if (!localTime) return null;
+  const m = /^(\d{2}):(\d{2})$/.exec(localTime);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  const d = new Date(baseIso);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(hh, mm, 0, 0);
+  return d.toISOString();
+}
+
+// Mirrors the server-side bounds in /api/events PATCH. Returns null when
+// valid, or a short reason when the user picked an invalid time.
+function validateEditableTimestamp(newIso: string, loggedAtIso: string | undefined): string | null {
+  const newT = Date.parse(newIso);
+  if (!Number.isFinite(newT)) return "Invalid date.";
+  const now = Date.now();
+  if (newT - now > 5 * 60 * 1000) return "Time can't be in the future.";
+  const baseline = loggedAtIso ? Date.parse(loggedAtIso) : now;
+  const earliest = (Number.isFinite(baseline) ? baseline : now) - 7 * 24 * 60 * 60 * 1000;
+  if (newT < earliest) return "Time can't be more than 7 days before the event was logged.";
+  return null;
+}
+
+// "Today" in Mountain time. Crew operate in Bozeman; an admin opening the
+// app on a laptop in another timezone after midnight Mountain should still
+// see Mountain's "today" as the default job date.
 function todayLocalYYYYMMDD() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return mountainDateYYYYMMDD();
 }
 
 function money(n: number) {
@@ -282,6 +337,10 @@ export default function App() {
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
   const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
   const [materialsSummary, setMaterialsSummary] = useState<LiveMaterial[]>([]);
+  // event_id of the timeline row whose timestamp is currently being edited.
+  // null when nothing is open. Only one row can edit at a time.
+  const [editingTimeFor, setEditingTimeFor] = useState<string | null>(null);
+  const [editingTimeError, setEditingTimeError] = useState<string | null>(null);
 
   const canSend = useMemo(() => jobUuid.trim().length > 0, [jobUuid]);
 
@@ -330,11 +389,11 @@ export default function App() {
     setQueueLen(q.length);
   }
 
-  function loadNotePatchQueue(): NotePatchOp[] {
-    return loadJson<NotePatchOp[]>(NOTE_PATCH_KEY, []);
+  function loadNotePatchQueue(): EventPatchOp[] {
+    return loadJson<EventPatchOp[]>(NOTE_PATCH_KEY, []);
   }
 
-  function saveNotePatchQueue(q: NotePatchOp[]) {
+  function saveNotePatchQueue(q: EventPatchOp[]) {
     saveJson(NOTE_PATCH_KEY, q);
   }
 
@@ -525,17 +584,24 @@ export default function App() {
     if (!navigator.onLine) return;
 
     const token = getToken();
-    const remaining: NotePatchOp[] = [];
+    const remaining: EventPatchOp[] = [];
     for (const op of q) {
       try {
+        // Send only the fields the user actually changed. Older queue
+        // items predating editable timestamps just have `note`.
+        const body: Record<string, unknown> = {};
+        if (op.note !== undefined) body.note = op.note;
+        if (op.timestamp !== undefined) body.timestamp = op.timestamp;
         const res = await fetch(`${API}/api/events/${encodeURIComponent(op.event_id)}`, {
           method: "PATCH",
           headers: makeAuthHeaders(token, { "Content-Type": "application/json" }),
-          body: JSON.stringify({ note: op.note }),
+          body: JSON.stringify(body),
         });
         if (res.ok) continue;
-        // 404 here means the server hasn't ingested this event yet (another
-        // device logged it and hasn't synced). Keep retrying on later drains.
+        // 4xx that's specifically about a malformed timestamp is permanent —
+        // dropping the op prevents a wedged queue. 404 means the event hasn't
+        // synced from another device yet; keep retrying on later drains.
+        if (res.status === 400) continue;
         remaining.push(op);
       } catch {
         remaining.push(op);
@@ -573,9 +639,54 @@ export default function App() {
 
     const patchQueue = loadNotePatchQueue();
     const existingIdx = patchQueue.findIndex((p) => p.event_id === eventId);
-    const op: NotePatchOp = { event_id: eventId, note, enqueued_at: new Date().toISOString() };
+    const op: EventPatchOp = { event_id: eventId, note, enqueued_at: new Date().toISOString() };
     const nextPatchQueue = patchQueue.slice();
-    if (existingIdx >= 0) nextPatchQueue[existingIdx] = op;
+    // Preserve a co-pending timestamp edit if one exists for the same event,
+    // so a flush sends both fields in a single PATCH.
+    if (existingIdx >= 0) nextPatchQueue[existingIdx] = { ...patchQueue[existingIdx], ...op };
+    else nextPatchQueue.push(op);
+    saveNotePatchQueue(nextPatchQueue);
+
+    drainNotePatchQueue();
+  }
+
+  async function updateEventTime(eventId: string, newTimestampIso: string) {
+    // Same flow as updateEventNote: rewrite local state first so the timeline
+    // re-renders immediately (mergedLog re-sorts via useMemo), then either
+    // ride the next outbox sync (if still queued locally) or enqueue a
+    // PATCH-time op for the server.
+    const log = loadLog();
+    const logIdx = log.findIndex((x) => x.event_id === eventId);
+    const queuedLocally = logIdx >= 0 && log[logIdx].sync_status === "queued";
+    if (logIdx >= 0) {
+      const next = log.slice();
+      next[logIdx] = { ...next[logIdx], timestamp: newTimestampIso };
+      saveLog(next);
+    }
+
+    const q = loadQueue();
+    const qIdx = q.findIndex((x) => x.event_id === eventId);
+    if (qIdx >= 0) {
+      const nq = q.slice();
+      nq[qIdx] = { ...nq[qIdx], timestamp: newTimestampIso };
+      saveQueue(nq);
+    }
+
+    setServerEvents((prev) =>
+      prev.map((e) => (e.event_id === eventId ? { ...e, timestamp: newTimestampIso } : e)),
+    );
+
+    if (queuedLocally) return;
+
+    const patchQueue = loadNotePatchQueue();
+    const existingIdx = patchQueue.findIndex((p) => p.event_id === eventId);
+    const op: EventPatchOp = {
+      event_id: eventId,
+      timestamp: newTimestampIso,
+      enqueued_at: new Date().toISOString(),
+    };
+    const nextPatchQueue = patchQueue.slice();
+    if (existingIdx >= 0) nextPatchQueue[existingIdx] = { ...patchQueue[existingIdx], ...op };
     else nextPatchQueue.push(op);
     saveNotePatchQueue(nextPatchQueue);
 
@@ -665,11 +776,16 @@ export default function App() {
 
     const loc = await tryGetLocation();
 
+    const nowIso = new Date().toISOString();
     const ev: EventRecord = {
       event_id: crypto.randomUUID(),
       job_uuid: jobUuid.trim(),
       type,
-      timestamp: new Date().toISOString(),
+      // On capture, the editable event time and the immutable logged_at are
+      // the same — both reflect the device clock at the moment of the tap.
+      // They diverge only after the user edits `timestamp` from the timeline.
+      timestamp: nowIso,
+      logged_at: nowIso,
       lat: loc.lat,
       lng: loc.lng,
       accuracy_m: loc.accuracy_m,
@@ -860,6 +976,7 @@ export default function App() {
           job_uuid: e.job_uuid,
           type: e.type,
           timestamp: e.timestamp,
+          logged_at: e.logged_at ?? e.timestamp,
           lat: e.lat ?? null,
           lng: e.lng ?? null,
           accuracy_m: e.accuracy_m ?? null,
@@ -877,7 +994,7 @@ export default function App() {
           saveJobMeta({
             job_uuid: e.job_uuid,
             jobName: raw.job_name,
-            jobDate: e.timestamp.slice(0, 10),
+            jobDate: mountainDateYYYYMMDD(e.timestamp),
             source: "calendar",
             updated_at: new Date().toISOString(),
           });
@@ -1202,12 +1319,23 @@ export default function App() {
   const mergedLog = useMemo(() => {
     const uuid = jobUuid.trim();
     if (!uuid) return [];
-    // All local events for this job (synced + queued, from full localStorage log)
     const localByJob = activityLog.filter((e) => e.job_uuid === uuid);
+    const serverByJob = serverEvents.filter((e) => e.job_uuid === uuid);
+    const serverById = new Map(serverByJob.map((e) => [e.event_id, e]));
     const localIds = new Set(localByJob.map((e) => e.event_id));
-    // Server events from other users not present locally
-    const serverOnly = serverEvents.filter((e) => !localIds.has(e.event_id));
-    return [...localByJob, ...serverOnly].sort(
+
+    // For events already synced to the server, prefer the server's copy —
+    // it carries the latest note and editable timestamp regardless of which
+    // device made the edit. The local cache can be stale (was populated on
+    // an earlier history sync, before another device added a note); without
+    // this preference, the stale local row hides the updated note forever.
+    // Local wins only when an event is still queued locally — the server
+    // doesn't have that one yet.
+    const reconciled = localByJob.map((e) =>
+      e.sync_status === "queued" ? e : (serverById.get(e.event_id) ?? e)
+    );
+    const serverOnly = serverByJob.filter((e) => !localIds.has(e.event_id));
+    return [...reconciled, ...serverOnly].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
   }, [activityLog, serverEvents, jobUuid]);
@@ -1518,21 +1646,133 @@ export default function App() {
                       </div>
                       {/* Time + date — wrap independently so the date can
                           drop to its own line on narrow phones instead of
-                          running off the tile. */}
+                          running off the tile. Tap the time to edit it;
+                          logged_at is preserved separately as the audit
+                          trail. */}
                       <div className="row" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         {e.lat != null && (
                           <span className="small" style={{ whiteSpace: "nowrap" }}>
                             ±{Math.round(e.accuracy_m ?? 0)}m
                           </span>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingTimeError(null);
+                            setEditingTimeFor((prev) => (prev === e.event_id ? null : e.event_id));
+                          }}
+                          title="Tap to edit the event time"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: 0,
+                            color: "var(--muted)",
+                            cursor: "pointer",
+                            fontSize: 13,
+                            whiteSpace: "nowrap",
+                            textDecoration: "underline dotted",
+                            textDecorationColor: "var(--border)",
+                            textUnderlineOffset: 3,
+                          }}
+                        >
+                          {formatMountainTime(e.timestamp)}
+                        </button>
                         <span className="small" style={{ whiteSpace: "nowrap" }}>
-                          {new Date(e.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        </span>
-                        <span className="small" style={{ whiteSpace: "nowrap" }}>
-                          {new Date(e.timestamp).toLocaleDateString()}
+                          {formatMountainDate(e.timestamp)}
                         </span>
                       </div>
                     </div>
+
+                    {editingTimeFor === e.event_id && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          padding: 10,
+                          background: "rgba(255,255,255,0.03)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 8,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 8,
+                        }}
+                      >
+                        <label className="small" style={{ color: "var(--muted)" }}>
+                          Edit event time
+                        </label>
+                        <input
+                          type="time"
+                          defaultValue={toTimeValue(e.timestamp)}
+                          onChange={() => setEditingTimeError(null)}
+                          id={`time-edit-${e.event_id}`}
+                          style={{
+                            padding: "8px 10px",
+                            fontSize: 14,
+                            borderRadius: "var(--btn-r)",
+                            border: "1px solid var(--border)",
+                            background: "rgba(255,255,255,0.05)",
+                            color: "var(--text)",
+                          }}
+                        />
+                        {editingTimeError && (
+                          <div className="small" style={{ color: "var(--danger)" }}>
+                            {editingTimeError}
+                          </div>
+                        )}
+                        <div className="small" style={{ color: "var(--muted)" }}>
+                          Originally logged{" "}
+                          {formatMountain(e.logged_at ?? e.timestamp, {
+                            month: "short", day: "numeric",
+                            hour: "2-digit", minute: "2-digit",
+                          })}.
+                        </div>
+                        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingTimeFor(null);
+                              setEditingTimeError(null);
+                            }}
+                            style={{
+                              fontSize: 12,
+                              padding: "6px 12px",
+                              background: "transparent",
+                              border: "1px solid var(--border)",
+                              color: "var(--muted)",
+                              borderRadius: 6,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const inputEl = document.getElementById(
+                                `time-edit-${e.event_id}`,
+                              ) as HTMLInputElement | null;
+                              const localVal = inputEl?.value ?? "";
+                              const iso = applyTimeToIso(localVal, e.timestamp);
+                              if (!iso) {
+                                setEditingTimeError("Pick a valid time.");
+                                return;
+                              }
+                              const reason = validateEditableTimestamp(iso, e.logged_at);
+                              if (reason) {
+                                setEditingTimeError(reason);
+                                return;
+                              }
+                              updateEventTime(e.event_id, iso);
+                              setEditingTimeFor(null);
+                              setEditingTimeError(null);
+                            }}
+                            className="btnPrimary"
+                            style={{ fontSize: 12, padding: "6px 12px" }}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     <div
                       className="row"
@@ -1706,7 +1946,7 @@ export default function App() {
                         {p.caption && (
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
                         )}
-                        <div className="small" style={{ color: "var(--muted)" }}>{new Date(p.created_at).toLocaleString()}</div>
+                        <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(p.created_at)}</div>
                         <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
                           {driveOk && p.drive_url ? (
                             <a href={p.drive_url} target="_blank" rel="noopener noreferrer"
@@ -1751,7 +1991,7 @@ export default function App() {
                     />
                     <div style={{ padding: 10 }}>
                       {sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>}
-                      <div className="small" style={{ color: "var(--muted)" }}>{new Date(sp.created_at).toLocaleString()}</div>
+                      <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(sp.created_at)}</div>
                       {sp.created_by && (
                         <div className="row" style={{ gap: 6, marginTop: 4 }}>
                           <UserAvatar displayName={sp.created_by} size={18} />

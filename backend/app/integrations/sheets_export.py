@@ -29,6 +29,12 @@ _estimate_export_lock = threading.Lock()
 _event_note_locks: Dict[str, threading.Lock] = {}
 _event_note_locks_guard = threading.Lock()
 
+# Mirror dict for editable-timestamp cell updates. Kept separate from the
+# note locks so a timestamp edit and a note edit on the same event don't
+# block each other — they target different cells in the same sheet row.
+_event_timestamp_locks: Dict[str, threading.Lock] = {}
+_event_timestamp_locks_guard = threading.Lock()
+
 
 def _lock_for_event_note(event_id: str) -> threading.Lock:
     with _event_note_locks_guard:
@@ -36,6 +42,15 @@ def _lock_for_event_note(event_id: str) -> threading.Lock:
         if lock is None:
             lock = threading.Lock()
             _event_note_locks[event_id] = lock
+        return lock
+
+
+def _lock_for_event_timestamp(event_id: str) -> threading.Lock:
+    with _event_timestamp_locks_guard:
+        lock = _event_timestamp_locks.get(event_id)
+        if lock is None:
+            lock = threading.Lock()
+            _event_timestamp_locks[event_id] = lock
         return lock
 
 
@@ -68,7 +83,7 @@ DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
 
 EVENTS_HEADERS = [
-    "event_id", "timestamp", "job_uuid", "job_name", "job_date",
+    "event_id", "timestamp", "logged_at", "job_uuid", "job_name", "job_date",
     "type", "note", "lat", "lng", "accuracy_m", "device_id", "created_by", "synced",
 ]
 MATERIALS_HEADERS = [
@@ -143,6 +158,74 @@ def _build_row(data: Dict[str, Any], headers: List[str]) -> List[Any]:
     return [data.get(h, "") for h in headers]
 
 
+def _write_rows_top(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    rows: List[List[Any]],
+) -> None:
+    """Insert `rows` immediately below the header row so the tab reads
+    newest-first. Two API calls (insertDimension + values.update) instead
+    of one for `.values().append()`, which is the cost of putting most
+    recent activity at the top — what admins actually want when they open
+    the sheet looking for what just happened.
+
+    Late arrivals from the reconciler land at the top regardless of their
+    actual chronology; the Apps Script cleanup re-sorts strictly when
+    order drifts.
+
+    No-op for empty `rows`. Falls back to plain append if the tab can't
+    be found in metadata (defensive — _ensure_tab should have created it).
+    """
+    if not rows:
+        return
+
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    sheet_numeric_id: Optional[int] = None
+    for s in meta.get("sheets", []):
+        if s["properties"]["title"] == tab:
+            sheet_numeric_id = s["properties"]["sheetId"]
+            break
+    if sheet_numeric_id is None:
+        _ssl_retry(lambda: svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute())
+        return
+
+    n = len(rows)
+    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{
+            "insertDimension": {
+                "range": {
+                    "sheetId": sheet_numeric_id,
+                    "dimension": "ROWS",
+                    "startIndex": 1,        # row 2 (0-based) — directly below header
+                    "endIndex": 1 + n,
+                },
+                # Don't pull header formatting (bold, frozen, etc.) onto the
+                # data rows we're about to write.
+                "inheritFromBefore": False,
+            }
+        }]},
+    ).execute())
+
+    width = max((len(r) for r in rows), default=0)
+    if width <= 0:
+        return
+    end_col = _col_letter(width - 1)
+    _ssl_retry(lambda: svc.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!A2:{end_col}{1 + n}",
+        valueInputOption="RAW",
+        body={"values": rows},
+    ).execute())
+
+
 def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     """
     Append inserted events to Google Sheets (Events tab), with dedupe.
@@ -174,9 +257,14 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     # 3) Build rows keyed by column name so order always matches the sheet
     rows: List[List[Any]] = []
     for ev in new_events:
+        # `logged_at` falls back to `timestamp` for older callers that
+        # haven't been updated to pass it explicitly. New rows from
+        # /api/sync and the reconciler always pass it.
+        logged_at = ev.get("logged_at") or ev.get("timestamp", "")
         row_data: Dict[str, Any] = {
             "event_id":   ev["event_id"],
             "timestamp":  ev["timestamp"],
+            "logged_at":  logged_at,
             "job_uuid":   ev["job_uuid"],
             "job_name":   ev.get("job_name") or "",
             "job_date":   ev.get("job_date") or "",
@@ -191,20 +279,11 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
         }
         rows.append(_build_row(row_data, actual_headers))
 
-    # 4) Append rows
-    def _append():
-        authorized_http = _build_authorized_http(_get_creds(db))
-        from googleapiclient.discovery import build
-        svc_fresh = build("sheets", "v4", http=authorized_http, cache_discovery=False)
-        svc_fresh.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
-
-    _ssl_retry(_append)
+    # 4) Insert at top — newest activity above older rows
+    authorized_http = _build_authorized_http(_get_creds(db))
+    from googleapiclient.discovery import build
+    svc_fresh = build("sheets", "v4", http=authorized_http, cache_discovery=False)
+    _write_rows_top(svc_fresh, spreadsheet_id, tab, rows)
 
     # 5) Mark exported (dedupe)
     for ev in new_events:
@@ -286,16 +365,7 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS))
     rows = [_build_row(r, actual_headers) for r in new_rows]
 
-    def _append():
-        svc.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
-
-    _ssl_retry(_append)
+    _write_rows_top(svc, spreadsheet_id, tab, rows)
 
     # 3) Mark exported for deduplication
     for item in items:
@@ -386,6 +456,74 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
         finally:
             # Explicitly release the googleapiclient reference so its
             # discovery doc (~1MB) isn't retained by the lock's frame.
+            del svc
+    finally:
+        lock.release()
+
+
+def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str) -> int:
+    """Rewrite the editable `timestamp` cell for an already-exported event row.
+    Returns the number of rows updated (0 or 1).
+
+    No-op when the event hasn't been exported to the sheet yet; the new value
+    will flow out of `export_events_to_sheets` on first export. Mirrors the
+    note updater: serialized per event_id, non-blocking lock acquire so a
+    concurrent retry skips rather than stacking googleapiclient instances.
+    """
+    if not event_id:
+        return 0
+
+    lock = _lock_for_event_timestamp(event_id)
+    if not lock.acquire(blocking=False):
+        return 0
+
+    try:
+        spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+        tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
+
+        from googleapiclient.discovery import build as _build
+        authorized_http = _build_authorized_http(_get_creds(db))
+        svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+        try:
+            hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!1:1",
+            ).execute())
+            headers_row = (hdr.get("values") or [[]])[0]
+            if "event_id" not in headers_row or "timestamp" not in headers_row:
+                return 0
+
+            event_col_letter = _col_letter(headers_row.index("event_id"))
+            ts_col_letter = _col_letter(headers_row.index("timestamp"))
+
+            col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{event_col_letter}:{event_col_letter}",
+            ).execute())
+            col_values = col.get("values") or []
+
+            target_row: Optional[int] = None
+            for i, row in enumerate(col_values):
+                if i == 0:
+                    continue
+                value = row[0] if row else ""
+                if value == event_id:
+                    target_row = i + 1
+                    break
+
+            del col, col_values
+
+            if target_row is None:
+                return 0
+
+            _ssl_retry(lambda: svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{ts_col_letter}{target_row}",
+                valueInputOption="RAW",
+                body={"values": [[timestamp]]},
+            ).execute())
+            return 1
+        finally:
             del svc
     finally:
         lock.release()
@@ -514,24 +652,22 @@ def _append_rows(
     actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, headers))
     rows = [_build_row(r, actual_headers) for r in rows_data]
 
-    def _append():
-        svc.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
-
-    _ssl_retry(_append)
+    _write_rows_top(svc, spreadsheet_id, tab, rows)
     return len(rows)
 
 
 def _iso(dt: Any) -> str:
+    """Serialize a datetime for a sheet cell. Naive datetimes in this app
+    are stored as UTC; emit them with a trailing 'Z' so any tool reading
+    the sheet (Excel, scripts, BigQuery) parses them as UTC instead of
+    silently treating them as the reader's local timezone."""
     if dt is None:
         return ""
     if isinstance(dt, datetime):
-        return dt.isoformat()
+        s = dt.isoformat()
+        if dt.tzinfo is None:
+            s += "Z"
+        return s
     return str(dt)
 
 
@@ -900,16 +1036,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
     actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, ESTIMATE_HEADERS))
     rows = [_build_row(summary_row, actual_summary_headers)]
 
-    def _append_summary():
-        svc.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{summary_tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
-
-    _ssl_retry(_append_summary)
+    _write_rows_top(svc, spreadsheet_id, summary_tab, rows)
     _generic_mark_exported(db, "estimate", [summary_key])
     total_written += 1
 
@@ -943,16 +1070,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
         actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, ESTIMATE_ITEM_HEADERS))
         item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
 
-        def _append_items():
-            svc.spreadsheets().values().append(
-                spreadsheetId=spreadsheet_id,
-                range=f"{items_tab}!A1",
-                valueInputOption="RAW",
-                insertDataOption="INSERT_ROWS",
-                body={"values": item_sheet_rows},
-            ).execute()
-
-        _ssl_retry(_append_items)
+        _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
         _generic_mark_exported(db, "estimate_item", item_keys)
         total_written += len(item_rows)
 
