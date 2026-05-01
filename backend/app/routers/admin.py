@@ -138,14 +138,17 @@ def events_today(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    start_of_day = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    # "Today" is the Mountain calendar day — Bozeman is where crew operate.
+    # Using UTC start-of-day silently dropped early-afternoon-MT events from
+    # the map after 6 PM MT (when UTC midnight rolled over).
+    from app.core.time_utils import mountain_day_utc_bounds
+    start_of_day, end_of_day = mountain_day_utc_bounds()
 
     events = (
         db.query(Event)
         .filter(
             Event.timestamp >= start_of_day,
+            Event.timestamp < end_of_day,
             Event.lat.isnot(None),
             Event.lng.isnot(None),
         )
@@ -242,13 +245,18 @@ def job_search(
     matching date/name. Admins rarely remember the UUID, but they do know
     the date and the customer name.
     """
+    from app.core.time_utils import mountain_date_expr, utc_naive_to_mountain_date
+
     needle = (name or "").strip().lower()
     candidates: Dict[str, Dict[str, Any]] = {}
 
-    # Events — date comes from timestamp
+    # Events — date comes from timestamp, evaluated in Mountain. The admin
+    # types a `date` in their head as the calendar day in Bozeman; using
+    # `func.date(Event.timestamp)` against a UTC-naive column would miss
+    # late-evening-MT events that fell on the next UTC day.
     eq = db.query(Event).filter(Event.job_uuid.isnot(None))
     if date:
-        eq = eq.filter(func.date(Event.timestamp) == date)
+        eq = eq.filter(mountain_date_expr(Event.timestamp) == date)
     if needle:
         eq = eq.filter(func.lower(Event.job_name).like(f"%{needle}%"))
     for e in eq.limit(2000).all():
@@ -256,7 +264,7 @@ def job_search(
         if e.job_name:
             c["names"].append(e.job_name)
         if e.timestamp:
-            c["dates"].add(e.timestamp.date().isoformat())
+            c["dates"].add(utc_naive_to_mountain_date(e.timestamp).isoformat())
         c["events"] += 1
 
     # Materials — date comes from job_date (YYYY-MM-DD string)

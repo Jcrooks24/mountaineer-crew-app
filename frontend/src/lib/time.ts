@@ -56,3 +56,25 @@ export function formatMountain(
   if (!d) return "";
   return d.toLocaleString([], { timeZone: MOUNTAIN_TZ, ...opts });
 }
+
+/** "YYYY-MM-DD" of the calendar date as it falls in Mountain — the form
+ *  used in localStorage, sheet `job_date`, and `<input type="date">` values.
+ *
+ *  Critical for crew working past 5 PM Mountain: a naive `.toISOString()
+ *  .slice(0, 10)` returns the *UTC* date and would file 11 PM Mountain
+ *  events under tomorrow's calendar date. Always go through this helper
+ *  for any "what day did this happen?" derivation.
+ *
+ *  Defaults to "today" when called with no args. */
+export function mountainDateYYYYMMDD(input: DateInput = new Date()): string {
+  const d = asDate(input);
+  if (!d) return "";
+  // en-CA's default short date format is YYYY-MM-DD, so combined with the
+  // timeZone option this gives us the Mountain calendar date directly.
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: MOUNTAIN_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}

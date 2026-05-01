@@ -14,6 +14,7 @@ import {
   formatMountainDate,
   formatMountainDateTime,
   formatMountainTime,
+  mountainDateYYYYMMDD,
 } from "./lib/time";
 import AdminNotesBanner from "./components/AdminNotesBanner";
 import { getToken } from "./auth/token";
@@ -180,12 +181,11 @@ function validateEditableTimestamp(newIso: string, loggedAtIso: string | undefin
   return null;
 }
 
+// "Today" in Mountain time. Crew operate in Bozeman; an admin opening the
+// app on a laptop in another timezone after midnight Mountain should still
+// see Mountain's "today" as the default job date.
 function todayLocalYYYYMMDD() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return mountainDateYYYYMMDD();
 }
 
 function money(n: number) {
@@ -994,7 +994,7 @@ export default function App() {
           saveJobMeta({
             job_uuid: e.job_uuid,
             jobName: raw.job_name,
-            jobDate: e.timestamp.slice(0, 10),
+            jobDate: mountainDateYYYYMMDD(e.timestamp),
             source: "calendar",
             updated_at: new Date().toISOString(),
           });

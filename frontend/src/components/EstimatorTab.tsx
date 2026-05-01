@@ -13,6 +13,7 @@ import {
   pruneStale as pruneEstimatorQueue,
   removeOp as removeEstimatorOp,
 } from "../lib/estimatorQueue";
+import { mountainDateYYYYMMDD } from "../lib/time";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -1377,7 +1378,7 @@ function EstimatePhotos({
       form.append("photo_id", newUUID());
       form.append("job_uuid", estimateUuid);
       form.append("job_name", `Estimate - ${customerName}`);
-      form.append("job_date", moveDate || new Date().toISOString().slice(0, 10));
+      form.append("job_date", moveDate || mountainDateYYYYMMDD());
       form.append("caption", caption.trim());
       // Routes the upload to the estimator-photos Drive parent folder so
       // estimator captures don't mix into the crew-job photos folder.
