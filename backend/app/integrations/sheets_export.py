@@ -29,6 +29,12 @@ _estimate_export_lock = threading.Lock()
 _event_note_locks: Dict[str, threading.Lock] = {}
 _event_note_locks_guard = threading.Lock()
 
+# Mirror dict for editable-timestamp cell updates. Kept separate from the
+# note locks so a timestamp edit and a note edit on the same event don't
+# block each other — they target different cells in the same sheet row.
+_event_timestamp_locks: Dict[str, threading.Lock] = {}
+_event_timestamp_locks_guard = threading.Lock()
+
 
 def _lock_for_event_note(event_id: str) -> threading.Lock:
     with _event_note_locks_guard:
@@ -36,6 +42,15 @@ def _lock_for_event_note(event_id: str) -> threading.Lock:
         if lock is None:
             lock = threading.Lock()
             _event_note_locks[event_id] = lock
+        return lock
+
+
+def _lock_for_event_timestamp(event_id: str) -> threading.Lock:
+    with _event_timestamp_locks_guard:
+        lock = _event_timestamp_locks.get(event_id)
+        if lock is None:
+            lock = threading.Lock()
+            _event_timestamp_locks[event_id] = lock
         return lock
 
 
@@ -68,7 +83,7 @@ DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
 
 EVENTS_HEADERS = [
-    "event_id", "timestamp", "job_uuid", "job_name", "job_date",
+    "event_id", "timestamp", "logged_at", "job_uuid", "job_name", "job_date",
     "type", "note", "lat", "lng", "accuracy_m", "device_id", "created_by", "synced",
 ]
 MATERIALS_HEADERS = [
@@ -174,9 +189,14 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     # 3) Build rows keyed by column name so order always matches the sheet
     rows: List[List[Any]] = []
     for ev in new_events:
+        # `logged_at` falls back to `timestamp` for older callers that
+        # haven't been updated to pass it explicitly. New rows from
+        # /api/sync and the reconciler always pass it.
+        logged_at = ev.get("logged_at") or ev.get("timestamp", "")
         row_data: Dict[str, Any] = {
             "event_id":   ev["event_id"],
             "timestamp":  ev["timestamp"],
+            "logged_at":  logged_at,
             "job_uuid":   ev["job_uuid"],
             "job_name":   ev.get("job_name") or "",
             "job_date":   ev.get("job_date") or "",
@@ -386,6 +406,74 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
         finally:
             # Explicitly release the googleapiclient reference so its
             # discovery doc (~1MB) isn't retained by the lock's frame.
+            del svc
+    finally:
+        lock.release()
+
+
+def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str) -> int:
+    """Rewrite the editable `timestamp` cell for an already-exported event row.
+    Returns the number of rows updated (0 or 1).
+
+    No-op when the event hasn't been exported to the sheet yet; the new value
+    will flow out of `export_events_to_sheets` on first export. Mirrors the
+    note updater: serialized per event_id, non-blocking lock acquire so a
+    concurrent retry skips rather than stacking googleapiclient instances.
+    """
+    if not event_id:
+        return 0
+
+    lock = _lock_for_event_timestamp(event_id)
+    if not lock.acquire(blocking=False):
+        return 0
+
+    try:
+        spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+        tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
+
+        from googleapiclient.discovery import build as _build
+        authorized_http = _build_authorized_http(_get_creds(db))
+        svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+        try:
+            hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!1:1",
+            ).execute())
+            headers_row = (hdr.get("values") or [[]])[0]
+            if "event_id" not in headers_row or "timestamp" not in headers_row:
+                return 0
+
+            event_col_letter = _col_letter(headers_row.index("event_id"))
+            ts_col_letter = _col_letter(headers_row.index("timestamp"))
+
+            col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{event_col_letter}:{event_col_letter}",
+            ).execute())
+            col_values = col.get("values") or []
+
+            target_row: Optional[int] = None
+            for i, row in enumerate(col_values):
+                if i == 0:
+                    continue
+                value = row[0] if row else ""
+                if value == event_id:
+                    target_row = i + 1
+                    break
+
+            del col, col_values
+
+            if target_row is None:
+                return 0
+
+            _ssl_retry(lambda: svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{ts_col_letter}{target_row}",
+                valueInputOption="RAW",
+                body={"values": [[timestamp]]},
+            ).execute())
+            return 1
+        finally:
             del svc
     finally:
         lock.release()

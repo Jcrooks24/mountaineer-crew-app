@@ -27,7 +27,7 @@ from app.integrations.sheets_export import export_events_to_sheets
 
 
 _UNEXPORTED_QUERY = text(
-    "SELECT id, event_id, job_uuid, job_name, type, timestamp, "
+    "SELECT id, event_id, job_uuid, job_name, type, timestamp, logged_at, "
     "       lat, lng, accuracy_m, note, created_by "
     "FROM events e "
     "WHERE NOT EXISTS ("
@@ -36,6 +36,14 @@ _UNEXPORTED_QUERY = text(
     "ORDER BY e.id ASC "
     "LIMIT :limit"
 )
+
+
+def _iso_or_empty(dt: Any) -> str:
+    if dt is None:
+        return ""
+    if hasattr(dt, "isoformat"):
+        return dt.isoformat()
+    return str(dt)
 
 
 def find_unexported_events(db: Session, limit: int) -> List[Dict[str, Any]]:
@@ -53,14 +61,14 @@ def find_unexported_events(db: Session, limit: int) -> List[Dict[str, Any]]:
 
     out: List[Dict[str, Any]] = []
     for r in rows:
-        ts = r["timestamp"]
         # job_date isn't stored on the event row — the live sync path pulls
         # it from device localStorage. Reconciled rows carry "" so admins can
         # tell them apart in the sheet if they look. The remaining columns
         # are fully populated from the events row.
         out.append({
             "event_id":   r["event_id"],
-            "timestamp":  ts.isoformat() if hasattr(ts, "isoformat") else (str(ts) if ts is not None else ""),
+            "timestamp":  _iso_or_empty(r["timestamp"]),
+            "logged_at":  _iso_or_empty(r["logged_at"]),
             "job_uuid":   r["job_uuid"] or "",
             "job_name":   r["job_name"] or "",
             "job_date":   "",

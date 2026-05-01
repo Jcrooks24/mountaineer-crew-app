@@ -373,6 +373,7 @@ def job_summary(
                 "event_id": e.event_id,
                 "type": e.type,
                 "timestamp": _iso(e.timestamp),
+                "logged_at": _iso(e.logged_at),
                 "note": e.note,
                 "lat": e.lat,
                 "lng": e.lng,

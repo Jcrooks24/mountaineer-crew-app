@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS events (
     job_id     INTEGER REFERENCES jobs (id),
     type       VARCHAR NOT NULL,
     timestamp  TIMESTAMP NOT NULL,
+    logged_at  TIMESTAMP NOT NULL,
     lat        DOUBLE PRECISION,
     lng        DOUBLE PRECISION,
     accuracy_m DOUBLE PRECISION,

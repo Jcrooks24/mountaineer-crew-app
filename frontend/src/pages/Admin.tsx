@@ -2336,6 +2336,7 @@ type JobSummary = {
     event_id: string;
     type: string;
     timestamp: string | null;
+    logged_at: string | null;
     note: string | null;
     lat: number | null;
     lng: number | null;
@@ -2566,18 +2567,28 @@ function JobSummaryTab() {
               <div className="small" style={{ color: "var(--muted)" }}>No events logged.</div>
             ) : (
               <div className="col" style={{ gap: 6 }}>
-                {summary.events.map((e) => (
-                  <div key={e.event_id} className="row" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-                    <span className="chip" style={{ fontSize: 11, textTransform: "uppercase" }}>{e.type}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="small" style={{ color: "var(--muted)" }}>
-                        {e.timestamp ? new Date(e.timestamp).toLocaleString() : ""}
-                        {e.created_by ? ` · ${e.created_by}` : ""}
+                {summary.events.map((e) => {
+                  const wasEdited =
+                    !!e.logged_at && !!e.timestamp &&
+                    new Date(e.logged_at).getTime() !== new Date(e.timestamp).getTime();
+                  return (
+                    <div key={e.event_id} className="row" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                      <span className="chip" style={{ fontSize: 11, textTransform: "uppercase" }}>{e.type}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="small" style={{ color: "var(--muted)" }}>
+                          {e.timestamp ? new Date(e.timestamp).toLocaleString() : ""}
+                          {e.created_by ? ` · ${e.created_by}` : ""}
+                        </div>
+                        {wasEdited && e.logged_at && (
+                          <div className="small" style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>
+                            edited — logged at {new Date(e.logged_at).toLocaleString()}
+                          </div>
+                        )}
+                        {e.note && <div style={{ fontSize: 13 }}>{e.note}</div>}
                       </div>
-                      {e.note && <div style={{ fontSize: 13 }}>{e.note}</div>}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
