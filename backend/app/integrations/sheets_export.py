@@ -657,10 +657,17 @@ def _append_rows(
 
 
 def _iso(dt: Any) -> str:
+    """Serialize a datetime for a sheet cell. Naive datetimes in this app
+    are stored as UTC; emit them with a trailing 'Z' so any tool reading
+    the sheet (Excel, scripts, BigQuery) parses them as UTC instead of
+    silently treating them as the reader's local timezone."""
     if dt is None:
         return ""
     if isinstance(dt, datetime):
-        return dt.isoformat()
+        s = dt.isoformat()
+        if dt.tzinfo is None:
+            s += "Z"
+        return s
     return str(dt)
 
 

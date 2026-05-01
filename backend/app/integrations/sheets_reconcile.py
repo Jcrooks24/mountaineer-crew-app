@@ -39,8 +39,18 @@ _UNEXPORTED_QUERY = text(
 
 
 def _iso_or_empty(dt: Any) -> str:
+    """Serialize a datetime for a sheet cell. Naive datetimes in this app
+    are stored as UTC; mark them with a trailing 'Z' so the reconciled
+    rows in the sheet are unambiguous when read by external tools.
+    Date / time objects without tzinfo support stay as-is."""
     if dt is None:
         return ""
+    from datetime import datetime as _dt
+    if isinstance(dt, _dt):
+        s = dt.isoformat()
+        if dt.tzinfo is None:
+            s += "Z"
+        return s
     if hasattr(dt, "isoformat"):
         return dt.isoformat()
     return str(dt)
