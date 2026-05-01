@@ -1168,6 +1168,8 @@ function collectClientChecks(): HealthCheck[] {
   return out;
 }
 
+type QueuedItem = { timestamp?: string; enqueued_at?: string };
+
 function describeQueue(name: string, key: string, unit: string): HealthCheck {
   let raw: string | null = null;
   try {
@@ -1176,10 +1178,10 @@ function describeQueue(name: string, key: string, unit: string): HealthCheck {
     return { name, status: "warn", detail: "could not read localStorage" };
   }
   if (!raw) return { name, status: "ok", detail: `0 ${unit}` };
-  let parsed: any[] = [];
+  let parsed: QueuedItem[] = [];
   try {
-    parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) parsed = [];
+    const data: unknown = JSON.parse(raw);
+    if (Array.isArray(data)) parsed = data as QueuedItem[];
   } catch {
     return { name, status: "warn", detail: "queue payload is not JSON — manual cleanup may be needed" };
   }
@@ -1187,7 +1189,7 @@ function describeQueue(name: string, key: string, unit: string): HealthCheck {
 
   // Oldest item — events use "timestamp", note patches use "enqueued_at"
   const ages = parsed
-    .map((it: any) => Date.parse(it?.timestamp || it?.enqueued_at || ""))
+    .map((it) => Date.parse(it?.timestamp || it?.enqueued_at || ""))
     .filter((t: number) => Number.isFinite(t));
   const oldest = ages.length ? Math.min(...ages) : Date.now();
   const ageMin = (Date.now() - oldest) / 60000;
