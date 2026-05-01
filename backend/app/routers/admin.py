@@ -304,9 +304,20 @@ def job_search(
 # ---------------------------
 
 def _iso(dt: Any) -> Optional[str]:
+    """Serialize a datetime for the JSON response. Naive datetimes in this
+    app are stored as UTC; emit them with a trailing 'Z' so the browser
+    doesn't reinterpret the bare ISO string in its local timezone — that's
+    what was making Job Summary show events 6h off from the Timeline tab.
+    """
     if dt is None:
         return None
+    if isinstance(dt, datetime):
+        s = dt.isoformat()
+        if dt.tzinfo is None:
+            s += "Z"
+        return s
     if hasattr(dt, "isoformat"):
+        # date / time objects — no timezone applies, return as-is.
         return dt.isoformat()
     return str(dt)
 
