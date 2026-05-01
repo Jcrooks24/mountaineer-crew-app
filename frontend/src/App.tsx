@@ -9,6 +9,12 @@ import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
 import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
+import {
+  formatMountain,
+  formatMountainDate,
+  formatMountainDateTime,
+  formatMountainTime,
+} from "./lib/time";
 import AdminNotesBanner from "./components/AdminNotesBanner";
 import { getToken } from "./auth/token";
 import {
@@ -1658,10 +1664,10 @@ export default function App() {
                             textUnderlineOffset: 3,
                           }}
                         >
-                          {new Date(e.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          {formatMountainTime(e.timestamp)}
                         </button>
                         <span className="small" style={{ whiteSpace: "nowrap" }}>
-                          {new Date(e.timestamp).toLocaleDateString()}
+                          {formatMountainDate(e.timestamp)}
                         </span>
                       </div>
                     </div>
@@ -1703,7 +1709,7 @@ export default function App() {
                         )}
                         <div className="small" style={{ color: "var(--muted)" }}>
                           Originally logged{" "}
-                          {new Date(e.logged_at ?? e.timestamp).toLocaleString([], {
+                          {formatMountain(e.logged_at ?? e.timestamp, {
                             month: "short", day: "numeric",
                             hour: "2-digit", minute: "2-digit",
                           })}.
@@ -1929,7 +1935,7 @@ export default function App() {
                         {p.caption && (
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
                         )}
-                        <div className="small" style={{ color: "var(--muted)" }}>{new Date(p.created_at).toLocaleString()}</div>
+                        <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(p.created_at)}</div>
                         <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
                           {driveOk && p.drive_url ? (
                             <a href={p.drive_url} target="_blank" rel="noopener noreferrer"
@@ -1974,7 +1980,7 @@ export default function App() {
                     />
                     <div style={{ padding: 10 }}>
                       {sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>}
-                      <div className="small" style={{ color: "var(--muted)" }}>{new Date(sp.created_at).toLocaleString()}</div>
+                      <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(sp.created_at)}</div>
                       {sp.created_by && (
                         <div className="row" style={{ gap: 6, marginTop: 4 }}>
                           <UserAvatar displayName={sp.created_by} size={18} />

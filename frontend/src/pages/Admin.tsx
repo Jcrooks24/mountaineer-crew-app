@@ -16,6 +16,11 @@ import {
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
+import {
+  formatMountainDate,
+  formatMountainDateTime,
+  formatMountainTime,
+} from "../lib/time";
 
 type AdminUser = {
   id: number;
@@ -304,7 +309,7 @@ function MapTab() {
           iconAnchor: [r, r],
           popupAnchor: [0, -r - 4],
         });
-        const time = new Date(e.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const time = formatMountainTime(e.timestamp);
         const jobLabel = e.job_name || e.job_uuid.slice(0, 8);
         return L.marker([e.lat, e.lng], { icon }).bindPopup(
           `<b style="text-transform:capitalize">${e.type}</b><br/>${time}${e.note ? `<br/>${e.note}` : ""}<br/><span style="font-size:11px;color:#888">${jobLabel}</span>`
@@ -476,7 +481,7 @@ function CalendarTab() {
         {status && (
           <div className="col" style={{ gap: 4 }}>
             {status.error && <div className="small" style={{ color: "var(--danger)" }}>{status.error}</div>}
-            {status.expiry && <div className="small">Access token expiry: {new Date(status.expiry).toLocaleString()}</div>}
+            {status.expiry && <div className="small">Access token expiry: {formatMountainDateTime(status.expiry)}</div>}
             {status.has_refresh_token !== undefined && (
               <div className="small">Refresh token: {status.has_refresh_token ? "✓ present" : "✗ missing"}</div>
             )}
@@ -1733,7 +1738,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             ✓ Mechanic Approved
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
-            Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? new Date(dvir.mechanic_signed_at).toLocaleString() : ""}
+            Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? formatMountainDateTime(dvir.mechanic_signed_at) : ""}
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
             Repairs made: {dvir.repairs_made ? "Yes" : "No — no repair needed"}
@@ -1981,7 +1986,7 @@ function NotesTab() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
                   <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                    Updated {new Date(n.updated_at).toLocaleString()}
+                    Updated {formatMountainDateTime(n.updated_at)}
                     {n.created_by_name ? ` · by ${n.created_by_name}` : ""}
                   </div>
                   <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
@@ -2302,7 +2307,7 @@ function AdminNotesSection() {
                   </div>
                   <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                     {n.job_uuid ? `Job ${n.job_uuid.slice(0, 8)}… · ` : ""}
-                    Updated {new Date(n.updated_at).toLocaleString()}
+                    Updated {formatMountainDateTime(n.updated_at)}
                     {n.created_by_name ? ` · by ${n.created_by_name}` : ""}
                   </div>
                   <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
@@ -2551,7 +2556,7 @@ function JobSummaryTab() {
                   <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
                     <div style={{ fontWeight: 700, fontSize: 13 }}>{n.title}</div>
                     <div className="small" style={{ color: "var(--muted)" }}>
-                      {n.updated_at ? new Date(n.updated_at).toLocaleString() : ""}
+                      {n.updated_at ? formatMountainDateTime(n.updated_at) : ""}
                       {n.created_by_name ? ` · ${n.created_by_name}` : ""}
                     </div>
                     <div style={{ fontSize: 13, marginTop: 4, whiteSpace: "pre-wrap" }}>{n.body}</div>
@@ -2576,12 +2581,12 @@ function JobSummaryTab() {
                       <span className="chip" style={{ fontSize: 11, textTransform: "uppercase" }}>{e.type}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div className="small" style={{ color: "var(--muted)" }}>
-                          {e.timestamp ? new Date(e.timestamp).toLocaleString() : ""}
+                          {e.timestamp ? formatMountainDateTime(e.timestamp) : ""}
                           {e.created_by ? ` · ${e.created_by}` : ""}
                         </div>
                         {wasEdited && e.logged_at && (
                           <div className="small" style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>
-                            edited — logged at {new Date(e.logged_at).toLocaleString()}
+                            edited — logged at {formatMountainDateTime(e.logged_at)}
                           </div>
                         )}
                         {e.note && <div style={{ fontSize: 13 }}>{e.note}</div>}
@@ -2640,7 +2645,7 @@ function JobSummaryTab() {
                   <div key={m.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
                     <div className="row" style={{ justifyContent: "space-between" }}>
                       <div className="small" style={{ color: "var(--muted)" }}>
-                        {m.created_at ? new Date(m.created_at).toLocaleString() : ""}
+                        {m.created_at ? formatMountainDateTime(m.created_at) : ""}
                       </div>
                       <div style={{ fontWeight: 700, fontSize: 13 }}>${m.total.toFixed(2)}</div>
                     </div>
@@ -2729,7 +2734,7 @@ function JobSummaryTab() {
                     </div>
                     <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
                       {p.created_by ?? ""}
-                      {p.created_at ? ` · ${new Date(p.created_at).toLocaleDateString()}` : ""}
+                      {p.created_at ? ` · ${formatMountainDate(p.created_at)}` : ""}
                     </div>
                   </a>
                 ))}
