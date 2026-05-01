@@ -8,24 +8,27 @@ type Props = {
   onCancel: () => void;    // close without action
 };
 
-const COPY: Record<Trigger, { heading: string; body: string }> = {
+const COPY: Record<Trigger, { heading: string; body: string; multiJob: string }> = {
   "pre-trip": {
     heading: "Pre-trip inspection",
     body: "Has the driver completed a pre-trip DVIR for the vehicle being used on this job?",
+    multiJob: "Already pre-tripped for an earlier job today",
   },
   "post-trip": {
     heading: "Post-trip inspection",
     body: "Has the driver completed a post-trip DVIR for the vehicle used on this job?",
+    multiJob: "Multiple jobs today — final DVIR at end of last job",
   },
   "report": {
     heading: "DVIR required",
     body: "Before submitting this report, confirm that the driver has completed a Driver Vehicle Inspection Report for any truck used on this job.",
+    multiJob: "Multiple jobs today — final DVIR at end of last job",
   },
 };
 
 export default function DVIRReminderModal({ trigger, onProceed, onCancel }: Props) {
   const nav = useNavigate();
-  const { heading, body } = COPY[trigger];
+  const { heading, body, multiJob } = COPY[trigger];
 
   function goToDVIR() {
     onCancel();          // close modal first
@@ -95,6 +98,18 @@ export default function DVIRReminderModal({ trigger, onProceed, onCancel }: Prop
             }}
           >
             Already completed ✓
+          </button>
+
+          <button
+            onClick={onProceed}
+            style={{
+              padding: "10px 14px", borderRadius: "var(--btn-r, 12px)",
+              border: "1px solid var(--border)",
+              background: "transparent", color: "var(--text)",
+              fontSize: 13, cursor: "pointer", lineHeight: 1.3,
+            }}
+          >
+            {multiJob}
           </button>
 
           <button
