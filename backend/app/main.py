@@ -67,22 +67,19 @@ app.add_middleware(
 def on_startup() -> None:
     import os
     import traceback
-    from pathlib import Path
-    from alembic.config import Config
-    from alembic import command
     from app.db.session import SessionLocal
     from app.db.models.user import User
 
-    # Run all pending Alembic migrations on startup.
-    # This replaces create_all and keeps the schema versioned and up to date.
-    try:
-        alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-        command.upgrade(alembic_cfg, "head")
-        print("[startup] Alembic migrations applied.")
-    except Exception:
-        print("[startup] ERROR — Alembic migration failed:")
-        traceback.print_exc()
-        raise
+    # NOTE: Alembic migrations are NOT run here anymore. The alembic + 24-
+    # migration-module import surface, alongside the live FastAPI app, was
+    # putting the web worker over Render's 512 MB cap during boot. Migrations
+    # now run in their own short-lived process via the start command:
+    #
+    #     python backend/scripts/run_migrations.py && uvicorn app.main:app ...
+    #
+    # If schema is stale at boot, the first DB query that needs the missing
+    # column will surface a clear ProgrammingError — far easier to diagnose
+    # than an OOM kill.
 
     # Ensure sheet export dedup tables exist (idempotent, handles deployments
     # where the initial migration ran before these tables were added).

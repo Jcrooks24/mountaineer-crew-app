@@ -17,12 +17,31 @@ Crew-facing app used in the field on mobile. `backend/` is FastAPI + Postgres + 
 - **Jobs are identified by a unique key**, not by job name alone.
 - **Admin views stay simple to interpret.** Crew field UX stays simple and fast. App is primarily mobile.
 
+## Render Start Command (BOTH staging and prod)
+
+Both Render services must use this start command — migrations run in their
+own short-lived process before uvicorn launches, so the web worker doesn't
+carry the alembic + migration-module import surface during boot. Loading
+that surface alongside FastAPI was OOM-killing the 512 MB worker once the
+migration chain grew past ~24 modules.
+
+```
+python backend/scripts/run_migrations.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+The on_startup hook in `app/main.py` no longer runs alembic. If schema is
+stale at boot, the first DB query that needs a missing column surfaces a
+clear ProgrammingError — easier to diagnose than an OOM kill.
+
+For local development: `python backend/scripts/run_migrations.py` once
+after pulling new migrations, then `uvicorn app.main:app --reload`.
+
 ## Staging → main promotion workflow
 
 Only run when explicitly asked to promote.
 
-1. **Merge** `staging` into `main`.
-2. **Run alembic migrations** on the prod backend.
+1. **Merge** `staging` into `main`. Render auto-deploys main on push.
+2. **Verify the start command above is set** on the Render prod service before promoting (only needed once; persists across deploys). Migrations now run as part of the start command, not at app startup.
 3. **Run the user-migration script:** `backend/scripts/migrate_users_staging_to_prod.py`. It copies `email`, `password_hash`, `name`, `role`, `is_active`, `profile_photo` from staging Postgres to prod Postgres with `ON CONFLICT (email) DO NOTHING` (prod wins on conflicts). Crew who only exist on staging would otherwise have to re-register. Dry-run first:
    ```
    STAGING_DATABASE_URL=... PROD_DATABASE_URL=... \
