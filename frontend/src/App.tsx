@@ -1319,12 +1319,23 @@ export default function App() {
   const mergedLog = useMemo(() => {
     const uuid = jobUuid.trim();
     if (!uuid) return [];
-    // All local events for this job (synced + queued, from full localStorage log)
     const localByJob = activityLog.filter((e) => e.job_uuid === uuid);
+    const serverByJob = serverEvents.filter((e) => e.job_uuid === uuid);
+    const serverById = new Map(serverByJob.map((e) => [e.event_id, e]));
     const localIds = new Set(localByJob.map((e) => e.event_id));
-    // Server events from other users not present locally
-    const serverOnly = serverEvents.filter((e) => !localIds.has(e.event_id));
-    return [...localByJob, ...serverOnly].sort(
+
+    // For events already synced to the server, prefer the server's copy —
+    // it carries the latest note and editable timestamp regardless of which
+    // device made the edit. The local cache can be stale (was populated on
+    // an earlier history sync, before another device added a note); without
+    // this preference, the stale local row hides the updated note forever.
+    // Local wins only when an event is still queued locally — the server
+    // doesn't have that one yet.
+    const reconciled = localByJob.map((e) =>
+      e.sync_status === "queued" ? e : (serverById.get(e.event_id) ?? e)
+    );
+    const serverOnly = serverByJob.filter((e) => !localIds.has(e.event_id));
+    return [...reconciled, ...serverOnly].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
   }, [activityLog, serverEvents, jobUuid]);
