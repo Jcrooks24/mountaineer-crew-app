@@ -26,15 +26,21 @@ that surface alongside FastAPI was OOM-killing the 512 MB worker once the
 migration chain grew past ~24 modules.
 
 ```
-python backend/scripts/run_migrations.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+python scripts/run_migrations.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
+
+Render's Root Directory is set to `backend` for both services, so the
+working directory at start time is already `backend/`. Don't prefix the
+script path with `backend/` — that produces a duplicated segment and the
+script can't be found.
 
 The on_startup hook in `app/main.py` no longer runs alembic. If schema is
 stale at boot, the first DB query that needs a missing column surfaces a
 clear ProgrammingError — easier to diagnose than an OOM kill.
 
-For local development: `python backend/scripts/run_migrations.py` once
-after pulling new migrations, then `uvicorn app.main:app --reload`.
+For local development from the repo root:
+`python backend/scripts/run_migrations.py` once after pulling new
+migrations, then `cd backend && uvicorn app.main:app --reload`.
 
 ## Staging → main promotion workflow
 
