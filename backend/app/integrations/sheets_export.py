@@ -158,6 +158,74 @@ def _build_row(data: Dict[str, Any], headers: List[str]) -> List[Any]:
     return [data.get(h, "") for h in headers]
 
 
+def _write_rows_top(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    rows: List[List[Any]],
+) -> None:
+    """Insert `rows` immediately below the header row so the tab reads
+    newest-first. Two API calls (insertDimension + values.update) instead
+    of one for `.values().append()`, which is the cost of putting most
+    recent activity at the top — what admins actually want when they open
+    the sheet looking for what just happened.
+
+    Late arrivals from the reconciler land at the top regardless of their
+    actual chronology; the Apps Script cleanup re-sorts strictly when
+    order drifts.
+
+    No-op for empty `rows`. Falls back to plain append if the tab can't
+    be found in metadata (defensive — _ensure_tab should have created it).
+    """
+    if not rows:
+        return
+
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    sheet_numeric_id: Optional[int] = None
+    for s in meta.get("sheets", []):
+        if s["properties"]["title"] == tab:
+            sheet_numeric_id = s["properties"]["sheetId"]
+            break
+    if sheet_numeric_id is None:
+        _ssl_retry(lambda: svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute())
+        return
+
+    n = len(rows)
+    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{
+            "insertDimension": {
+                "range": {
+                    "sheetId": sheet_numeric_id,
+                    "dimension": "ROWS",
+                    "startIndex": 1,        # row 2 (0-based) — directly below header
+                    "endIndex": 1 + n,
+                },
+                # Don't pull header formatting (bold, frozen, etc.) onto the
+                # data rows we're about to write.
+                "inheritFromBefore": False,
+            }
+        }]},
+    ).execute())
+
+    width = max((len(r) for r in rows), default=0)
+    if width <= 0:
+        return
+    end_col = _col_letter(width - 1)
+    _ssl_retry(lambda: svc.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!A2:{end_col}{1 + n}",
+        valueInputOption="RAW",
+        body={"values": rows},
+    ).execute())
+
+
 def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     """
     Append inserted events to Google Sheets (Events tab), with dedupe.
@@ -211,20 +279,11 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
         }
         rows.append(_build_row(row_data, actual_headers))
 
-    # 4) Append rows
-    def _append():
-        authorized_http = _build_authorized_http(_get_creds(db))
-        from googleapiclient.discovery import build
-        svc_fresh = build("sheets", "v4", http=authorized_http, cache_discovery=False)
-        svc_fresh.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
-
-    _ssl_retry(_append)
+    # 4) Insert at top — newest activity above older rows
+    authorized_http = _build_authorized_http(_get_creds(db))
+    from googleapiclient.discovery import build
+    svc_fresh = build("sheets", "v4", http=authorized_http, cache_discovery=False)
+    _write_rows_top(svc_fresh, spreadsheet_id, tab, rows)
 
     # 5) Mark exported (dedupe)
     for ev in new_events:
@@ -306,16 +365,7 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS))
     rows = [_build_row(r, actual_headers) for r in new_rows]
 
-    def _append():
-        svc.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
-
-    _ssl_retry(_append)
+    _write_rows_top(svc, spreadsheet_id, tab, rows)
 
     # 3) Mark exported for deduplication
     for item in items:
@@ -602,16 +652,7 @@ def _append_rows(
     actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, headers))
     rows = [_build_row(r, actual_headers) for r in rows_data]
 
-    def _append():
-        svc.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
-
-    _ssl_retry(_append)
+    _write_rows_top(svc, spreadsheet_id, tab, rows)
     return len(rows)
 
 
@@ -988,16 +1029,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
     actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, ESTIMATE_HEADERS))
     rows = [_build_row(summary_row, actual_summary_headers)]
 
-    def _append_summary():
-        svc.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{summary_tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
-
-    _ssl_retry(_append_summary)
+    _write_rows_top(svc, spreadsheet_id, summary_tab, rows)
     _generic_mark_exported(db, "estimate", [summary_key])
     total_written += 1
 
@@ -1031,16 +1063,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
         actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, ESTIMATE_ITEM_HEADERS))
         item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
 
-        def _append_items():
-            svc.spreadsheets().values().append(
-                spreadsheetId=spreadsheet_id,
-                range=f"{items_tab}!A1",
-                valueInputOption="RAW",
-                insertDataOption="INSERT_ROWS",
-                body={"values": item_sheet_rows},
-            ).execute()
-
-        _ssl_retry(_append_items)
+        _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
         _generic_mark_exported(db, "estimate_item", item_keys)
         total_written += len(item_rows)
 
