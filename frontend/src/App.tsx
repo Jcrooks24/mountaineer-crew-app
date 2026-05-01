@@ -136,23 +136,29 @@ type ServerPhoto = {
   mime_type: string;
 };
 
-// `<input type="datetime-local">` round-tripping. The element's value is in
-// the user's local time (no timezone) so we serialize/deserialize against
-// the device clock — the same wall clock the crew is reading off their phone
-// when correcting a time.
-function toDatetimeLocalValue(iso: string): string {
+// `<input type="time">` round-tripping. The element's value is "HH:mm" in
+// the user's local time. We keep the event's existing date intact and only
+// rewrite hours/minutes — crew typically just need to nudge minutes within
+// a shift; a date change usually means the event is a much bigger mistake
+// and should be re-logged.
+function toTimeValue(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function fromDatetimeLocalValue(local: string): string | null {
-  if (!local) return null;
-  const t = new Date(local);
-  if (Number.isNaN(t.getTime())) return null;
-  return t.toISOString();
+function applyTimeToIso(localTime: string, baseIso: string): string | null {
+  if (!localTime) return null;
+  const m = /^(\d{2}):(\d{2})$/.exec(localTime);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  const d = new Date(baseIso);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(hh, mm, 0, 0);
+  return d.toISOString();
 }
 
 // Mirrors the server-side bounds in /api/events PATCH. Returns null when
@@ -1677,8 +1683,8 @@ export default function App() {
                           Edit event time
                         </label>
                         <input
-                          type="datetime-local"
-                          defaultValue={toDatetimeLocalValue(e.timestamp)}
+                          type="time"
+                          defaultValue={toTimeValue(e.timestamp)}
                           onChange={() => setEditingTimeError(null)}
                           id={`time-edit-${e.event_id}`}
                           style={{
@@ -1728,9 +1734,9 @@ export default function App() {
                                 `time-edit-${e.event_id}`,
                               ) as HTMLInputElement | null;
                               const localVal = inputEl?.value ?? "";
-                              const iso = fromDatetimeLocalValue(localVal);
+                              const iso = applyTimeToIso(localVal, e.timestamp);
                               if (!iso) {
-                                setEditingTimeError("Pick a valid date and time.");
+                                setEditingTimeError("Pick a valid time.");
                                 return;
                               }
                               const reason = validateEditableTimestamp(iso, e.logged_at);
