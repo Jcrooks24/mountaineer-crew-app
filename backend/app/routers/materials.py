@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, model_validator
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -128,15 +129,21 @@ def get_materials(
     """
     Return materials submissions newest-first. If job_uuid is provided,
     returns only submissions for that job.
+
+    Streams the response and splices `items_json` through as raw JSON
+    instead of parse/reserialize — the per-row dict tree was the peak
+    memory pressure when concurrent fetches stacked on the 512MB worker.
     """
     q = db.query(MaterialsSubmission)
     if job_uuid:
         q = q.filter(MaterialsSubmission.job_uuid == job_uuid)
     rows = q.order_by(MaterialsSubmission.created_at.desc()).limit(limit).all()
-    return {
-        "ok": True,
-        "submissions": [
-            {
+
+    def gen():
+        yield b'{"ok":true,"submissions":['
+        first = True
+        for r in rows:
+            base = {
                 "id": r.submission_id,
                 "created_at": r.created_at.isoformat(),
                 "job_uuid": r.job_uuid,
@@ -144,12 +151,16 @@ def get_materials(
                 "job_name": r.job_name or "",
                 "job_date": r.job_date or "",
                 "notes": r.notes or "",
-                "items": json.loads(r.items_json or "[]"),
-                "total": r.total,
+                "total": float(r.total) if r.total is not None else 0,
             }
-            for r in rows
-        ],
-    }
+            base_str = json.dumps(base)
+            items_str = r.items_json or "[]"
+            chunk = base_str[:-1] + ',"items":' + items_str + "}"
+            yield (b"," if not first else b"") + chunk.encode("utf-8")
+            first = False
+        yield b"]}"
+
+    return StreamingResponse(gen(), media_type="application/json")
 
 
 @router.delete("/{submission_id}")
