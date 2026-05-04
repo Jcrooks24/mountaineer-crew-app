@@ -238,13 +238,15 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     function onVis() {
       if (document.visibilityState === "visible") doSync();
     }
+    // `focus` overlaps with `visibilitychange` on mobile (both fire on tab
+    // return), which doubled the refresh rate. visibilitychange alone is
+    // enough; the in-flight dedupe in fetchAndCache handles overlap from
+    // online + visibilitychange.
     window.addEventListener("online", doSync);
     document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("focus", onVis);
     return () => {
       window.removeEventListener("online", doSync);
       document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("focus", onVis);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);

@@ -327,18 +327,36 @@ export async function syncQueue(): Promise<number> {
   }
 }
 
+// Per-jobUuid in-flight guard. visibilitychange + focus + online + mount can
+// all fire close together on mobile and previously caused a burst of identical
+// `GET /api/materials?...&limit=500` calls that OOM'd the 512MB Render worker
+// (large response bodies × N concurrent in flight). Subsequent callers ride
+// the existing promise instead of opening a second request.
+const inFlightFetch = new Map<string, Promise<boolean>>();
+
 /** Refresh the per-job cache from the server. Returns true on success. */
-export async function fetchAndCache(jobUuid: string): Promise<boolean> {
-  if (!jobUuid || !navigator.onLine) return false;
-  try {
-    const r = await apiFetch<{ ok: boolean; submissions: ServerSubmission[] }>(
-      `/api/materials?job_uuid=${encodeURIComponent(jobUuid)}&limit=500`,
-    );
-    saveCache(jobUuid, flattenSubmissions(r.submissions || []));
-    return true;
-  } catch {
-    return false;
-  }
+export function fetchAndCache(jobUuid: string): Promise<boolean> {
+  if (!jobUuid || !navigator.onLine) return Promise.resolve(false);
+
+  const existing = inFlightFetch.get(jobUuid);
+  if (existing) return existing;
+
+  const p = (async (): Promise<boolean> => {
+    try {
+      const r = await apiFetch<{ ok: boolean; submissions: ServerSubmission[] }>(
+        `/api/materials?job_uuid=${encodeURIComponent(jobUuid)}&limit=500`,
+      );
+      saveCache(jobUuid, flattenSubmissions(r.submissions || []));
+      return true;
+    } catch {
+      return false;
+    } finally {
+      inFlightFetch.delete(jobUuid);
+    }
+  })();
+
+  inFlightFetch.set(jobUuid, p);
+  return p;
 }
 
 /**
