@@ -8,12 +8,51 @@ from typing import Callable, List, Dict, Any, Optional, Set
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.core.google_cal_oauth import get_sheets_service, _build_authorized_http, _ssl_retry, _get_creds
+from app.core.google_cal_oauth import _build_authorized_http, _ssl_retry, _get_creds
 
 # Bounded pool — at most 2 export threads run concurrently. Additional tasks
 # queue internally and drain as workers free up. Prevents a sync burst from
 # spawning unlimited threads and blowing Render's 512 MB memory limit.
 _EXPORT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sheets-export")
+
+# Single cached sheets svc shared across all exports. Each `build("sheets",…)`
+# call pulls a ~1 MB discovery doc and allocates a fresh Resource tree; doing
+# that on every export call (8 separate sites previously) was a major OOM
+# contributor on the 512 MB worker. The Resource is thread-safe — googleapi
+# uses a fresh httplib2 connection per request — so one shared instance is
+# safe across the bounded export pool.
+#
+# AuthorizedHttp refreshes the underlying creds in place on 401, so the
+# cached svc stays valid across token expiry without rebuilding. The cache
+# is cleared from `invalidate_cache()` in google_cal_oauth when an admin
+# pastes a fresh token (the creds object is replaced, not mutated).
+_cached_sheets_svc: Optional[Any] = None
+_sheets_svc_lock = threading.Lock()
+
+
+def _get_sheets_svc(db: Session) -> Any:
+    global _cached_sheets_svc
+    svc = _cached_sheets_svc
+    if svc is not None:
+        return svc
+    with _sheets_svc_lock:
+        if _cached_sheets_svc is not None:
+            return _cached_sheets_svc
+        from googleapiclient.discovery import build as _build
+        creds = _get_creds(db)
+        authorized_http = _build_authorized_http(creds)
+        _cached_sheets_svc = _build(
+            "sheets", "v4", http=authorized_http, cache_discovery=False
+        )
+        return _cached_sheets_svc
+
+
+def invalidate_sheets_svc_cache() -> None:
+    """Drop the cached sheets svc so the next caller rebuilds with fresh
+    creds. Called from `google_cal_oauth.invalidate_cache()` when admin
+    rotates the OAuth token."""
+    global _cached_sheets_svc
+    _cached_sheets_svc = None
 
 # Coalesce estimate exports per estimate_uuid. Autosave fires a PATCH per
 # keystroke; without coalescing, the pool's internal queue grew unbounded and
@@ -251,7 +290,7 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
         return 0
 
     # 2) Get Sheets service and ensure tab + headers exist
-    svc = get_sheets_service(db)
+    svc = _get_sheets_svc(db)
     actual_headers = _ensure_tab(svc, spreadsheet_id, tab, EVENTS_HEADERS)
 
     # 3) Build rows keyed by column name so order always matches the sheet
@@ -280,10 +319,7 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
         rows.append(_build_row(row_data, actual_headers))
 
     # 4) Insert at top — newest activity above older rows
-    authorized_http = _build_authorized_http(_get_creds(db))
-    from googleapiclient.discovery import build
-    svc_fresh = build("sheets", "v4", http=authorized_http, cache_discovery=False)
-    _write_rows_top(svc_fresh, spreadsheet_id, tab, rows)
+    _write_rows_top(svc, spreadsheet_id, tab, rows)
 
     # 5) Mark exported (dedupe)
     for ev in new_events:
@@ -356,11 +392,9 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     if not new_rows:
         return 0
 
-    # 2) Build service ONCE with certifi CA bundle (avoids SSL errors on Render).
-    #    Reuse it for both _ensure_tab and append to avoid double discovery-doc download.
-    from googleapiclient.discovery import build as _build
-    authorized_http = _build_authorized_http(_get_creds(db))
-    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+    # 2) Use the shared cached sheets svc (built once at module level with
+    #    certifi CA bundle) for both _ensure_tab and append.
+    svc = _get_sheets_svc(db)
 
     actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS))
     rows = [_build_row(r, actual_headers) for r in new_rows]
@@ -391,7 +425,7 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
     flow out of `export_events_to_sheets` on first export.
 
     Serialized per event_id so concurrent retries for the same event don't
-    stack multiple ~1MB googleapiclient instances in memory. The non-blocking
+    pile up redundant Sheet API round-trips for the same row. The non-blocking
     lock acquire skips the update entirely when another worker is already
     handling this event — the queued retry will catch the latest value.
     """
@@ -402,61 +436,54 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
     if not lock.acquire(blocking=False):
         # Another worker is already syncing this event_id — skip. The client's
         # patch queue will re-issue the latest value if this call failed to
-        # land, and a concurrent retry here would just burn memory.
+        # land.
         return 0
 
     try:
         spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
         tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
 
-        from googleapiclient.discovery import build as _build
-        authorized_http = _build_authorized_http(_get_creds(db))
-        svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
-        try:
-            hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
-                spreadsheetId=spreadsheet_id,
-                range=f"{tab}!1:1",
-            ).execute())
-            headers_row = (hdr.get("values") or [[]])[0]
-            if "event_id" not in headers_row or "note" not in headers_row:
-                return 0
+        svc = _get_sheets_svc(db)
+        hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!1:1",
+        ).execute())
+        headers_row = (hdr.get("values") or [[]])[0]
+        if "event_id" not in headers_row or "note" not in headers_row:
+            return 0
 
-            event_col_letter = _col_letter(headers_row.index("event_id"))
-            note_col_letter = _col_letter(headers_row.index("note"))
+        event_col_letter = _col_letter(headers_row.index("event_id"))
+        note_col_letter = _col_letter(headers_row.index("note"))
 
-            col = _ssl_retry(lambda: svc.spreadsheets().values().get(
-                spreadsheetId=spreadsheet_id,
-                range=f"{tab}!{event_col_letter}:{event_col_letter}",
-            ).execute())
-            col_values = col.get("values") or []
+        col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!{event_col_letter}:{event_col_letter}",
+        ).execute())
+        col_values = col.get("values") or []
 
-            target_row: Optional[int] = None
-            for i, row in enumerate(col_values):
-                if i == 0:
-                    continue  # header
-                value = row[0] if row else ""
-                if value == event_id:
-                    target_row = i + 1  # sheet rows are 1-based
-                    break
+        target_row: Optional[int] = None
+        for i, row in enumerate(col_values):
+            if i == 0:
+                continue  # header
+            value = row[0] if row else ""
+            if value == event_id:
+                target_row = i + 1  # sheet rows are 1-based
+                break
 
-            # Drop the large column response before the network update so the
-            # bytes are eligible for GC while we wait on Google.
-            del col, col_values
+        # Drop the large column response before the network update so the
+        # bytes are eligible for GC while we wait on Google.
+        del col, col_values
 
-            if target_row is None:
-                return 0
+        if target_row is None:
+            return 0
 
-            _ssl_retry(lambda: svc.spreadsheets().values().update(
-                spreadsheetId=spreadsheet_id,
-                range=f"{tab}!{note_col_letter}{target_row}",
-                valueInputOption="RAW",
-                body={"values": [[note or ""]]},
-            ).execute())
-            return 1
-        finally:
-            # Explicitly release the googleapiclient reference so its
-            # discovery doc (~1MB) isn't retained by the lock's frame.
-            del svc
+        _ssl_retry(lambda: svc.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!{note_col_letter}{target_row}",
+            valueInputOption="RAW",
+            body={"values": [[note or ""]]},
+        ).execute())
+        return 1
     finally:
         lock.release()
 
@@ -468,7 +495,7 @@ def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str)
     No-op when the event hasn't been exported to the sheet yet; the new value
     will flow out of `export_events_to_sheets` on first export. Mirrors the
     note updater: serialized per event_id, non-blocking lock acquire so a
-    concurrent retry skips rather than stacking googleapiclient instances.
+    concurrent retry skips rather than re-running redundant work.
     """
     if not event_id:
         return 0
@@ -481,50 +508,45 @@ def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str)
         spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
         tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
 
-        from googleapiclient.discovery import build as _build
-        authorized_http = _build_authorized_http(_get_creds(db))
-        svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
-        try:
-            hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
-                spreadsheetId=spreadsheet_id,
-                range=f"{tab}!1:1",
-            ).execute())
-            headers_row = (hdr.get("values") or [[]])[0]
-            if "event_id" not in headers_row or "timestamp" not in headers_row:
-                return 0
+        svc = _get_sheets_svc(db)
+        hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!1:1",
+        ).execute())
+        headers_row = (hdr.get("values") or [[]])[0]
+        if "event_id" not in headers_row or "timestamp" not in headers_row:
+            return 0
 
-            event_col_letter = _col_letter(headers_row.index("event_id"))
-            ts_col_letter = _col_letter(headers_row.index("timestamp"))
+        event_col_letter = _col_letter(headers_row.index("event_id"))
+        ts_col_letter = _col_letter(headers_row.index("timestamp"))
 
-            col = _ssl_retry(lambda: svc.spreadsheets().values().get(
-                spreadsheetId=spreadsheet_id,
-                range=f"{tab}!{event_col_letter}:{event_col_letter}",
-            ).execute())
-            col_values = col.get("values") or []
+        col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!{event_col_letter}:{event_col_letter}",
+        ).execute())
+        col_values = col.get("values") or []
 
-            target_row: Optional[int] = None
-            for i, row in enumerate(col_values):
-                if i == 0:
-                    continue
-                value = row[0] if row else ""
-                if value == event_id:
-                    target_row = i + 1
-                    break
+        target_row: Optional[int] = None
+        for i, row in enumerate(col_values):
+            if i == 0:
+                continue
+            value = row[0] if row else ""
+            if value == event_id:
+                target_row = i + 1
+                break
 
-            del col, col_values
+        del col, col_values
 
-            if target_row is None:
-                return 0
+        if target_row is None:
+            return 0
 
-            _ssl_retry(lambda: svc.spreadsheets().values().update(
-                spreadsheetId=spreadsheet_id,
-                range=f"{tab}!{ts_col_letter}{target_row}",
-                valueInputOption="RAW",
-                body={"values": [[timestamp]]},
-            ).execute())
-            return 1
-        finally:
-            del svc
+        _ssl_retry(lambda: svc.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!{ts_col_letter}{target_row}",
+            valueInputOption="RAW",
+            body={"values": [[timestamp]]},
+        ).execute())
+        return 1
     finally:
         lock.release()
 
@@ -541,9 +563,7 @@ def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
     tab = os.getenv("SHEETS_MATERIALS_TAB", DEFAULT_MATERIALS_TAB).strip() or DEFAULT_MATERIALS_TAB
 
-    from googleapiclient.discovery import build as _build
-    authorized_http = _build_authorized_http(_get_creds(db))
-    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+    svc = _get_sheets_svc(db)
 
     # Resolve the numeric sheetId for deleteDimension
     meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
@@ -645,9 +665,7 @@ def _append_rows(
         return 0
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
 
-    from googleapiclient.discovery import build as _build
-    authorized_http = _build_authorized_http(_get_creds(db))
-    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+    svc = _get_sheets_svc(db)
 
     actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, headers))
     rows = [_build_row(r, actual_headers) for r in rows_data]
@@ -991,9 +1009,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
     estimate_uuid = estimate.get("estimate_uuid", "")
     updated_at = _iso(estimate.get("updated_at"))
 
-    from googleapiclient.discovery import build as _build
-    authorized_http = _build_authorized_http(_get_creds(db))
-    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+    svc = _get_sheets_svc(db)
 
     # Delete any existing rows for this estimate so we always have exactly one
     # summary row and one row per current item (no accumulation on each save).

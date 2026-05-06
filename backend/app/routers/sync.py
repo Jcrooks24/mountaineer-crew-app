@@ -1,6 +1,8 @@
+import json
 import uuid as _uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
@@ -12,6 +14,7 @@ from app.db.models.event import Event
 from app.db.models.calendar_job import CalendarJob
 from app.integrations.sheets_export import (
     export_events_to_sheets,
+    run_export_in_background,
     update_event_note_in_sheets,
     update_event_timestamp_in_sheets,
 )
@@ -119,14 +122,13 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
                 "reason": "db_error",
             })
 
-    # Export to Sheets (non-blocking)
-    sheets_exported = 0
-    sheets_error = None
-    try:
-        sheets_exported = export_events_to_sheets(db, inserted_events_for_sheet)
-    except Exception as ex:
-        # Do not break sync for crews
-        sheets_error = str(ex)
+    # Export to Sheets in the bounded background pool — keeps the request
+    # thread from holding the events list + an in-flight googleapiclient call
+    # at the same time. The reconciler is the safety net if a background
+    # export fails. Returning sheets_exported=None preserves the response
+    # shape; clients only ever used it as a debug signal.
+    if inserted_events_for_sheet:
+        run_export_in_background(export_events_to_sheets, inserted_events_for_sheet)
 
     return {
         "ok": True,
@@ -134,8 +136,8 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
         "duplicates": duplicates,
         "errors": errors,
         "failed": failed,
-        "sheets_exported": sheets_exported,     # optional debug signal
-        "sheets_error": sheets_error,           # optional debug signal
+        "sheets_exported": None,                # async — see reconciler
+        "sheets_error": None,
     }
 
 
@@ -149,17 +151,23 @@ def get_events_history(
     """
     Return synced events so any device can rebuild its local activity log.
     If job_uuid is provided, filters to that job only.
-    Sorted newest-first. Used by the frontend on startup to restore history on a new device.
+    Sorted newest-first. Used by the frontend on startup to restore history
+    on a new device.
+
+    Streams the response so a 5000-row pull doesn't materialize the full
+    list of dicts in memory before serialization. Mirrors the materials
+    endpoint's approach.
     """
     q = db.query(Event)
     if job_uuid:
         q = q.filter(Event.job_uuid == job_uuid)
-    rows = q.order_by(Event.timestamp.desc()).limit(limit).all()
+    rows = q.order_by(Event.timestamp.desc()).limit(limit).yield_per(200)
 
-    return {
-        "ok": True,
-        "events": [
-            {
+    def gen():
+        yield b'{"ok":true,"events":['
+        first = True
+        for e in rows:
+            obj = {
                 "event_id": e.event_id,
                 "job_uuid": e.job_uuid,
                 "type": e.type,
@@ -173,9 +181,12 @@ def get_events_history(
                 "created_by": e.created_by or "",
                 "sync_status": "synced",
             }
-            for e in rows
-        ],
-    }
+            chunk = json.dumps(obj).encode("utf-8")
+            yield (b"," if not first else b"") + chunk
+            first = False
+        yield b"]}"
+
+    return StreamingResponse(gen(), media_type="application/json")
 
 
 class EventPatch(BaseModel):
