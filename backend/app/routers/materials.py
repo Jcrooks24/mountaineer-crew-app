@@ -92,10 +92,13 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
         db.rollback()
         inserted = False
 
-    # Export to Google Sheets (non-blocking — don't fail the submission)
-    sheets_exported = 0
-    sheets_error = None
-    try:
+    # Export to Google Sheets in the bounded background pool. Running this
+    # synchronously on the request thread held a googleapiclient + the items
+    # payload in memory while concurrent submissions stacked up — a known
+    # contributor to the 512 MB OOM on Render. The export is idempotent
+    # (dedupes per submission_id+item_id), so a retry on the next submission
+    # or a reconciler run will catch any background failure.
+    if inserted:
         submission_dict = {
             "id": payload.id,
             "created_at": payload.created_at,
@@ -107,15 +110,13 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
             "items": payload.items,
             "total": payload.total,
         }
-        sheets_exported = export_materials_to_sheets(db, submission_dict)
-    except Exception as ex:
-        sheets_error = str(ex)
+        run_export_in_background(export_materials_to_sheets, submission_dict)
 
     return {
         "ok": True,
         "inserted": inserted,
-        "sheets_exported": sheets_exported,
-        "sheets_error": sheets_error,
+        "sheets_exported": None,
+        "sheets_error": None,
     }
 
 

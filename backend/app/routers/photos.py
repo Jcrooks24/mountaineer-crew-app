@@ -75,10 +75,13 @@ def get_photos(
     _: User = Depends(get_current_user),
 ):
     """Return all photos for a job, newest first. Used to sync photos across devices."""
+    # Cap per-job photo pull. Most jobs have <20 photos; 500 is generous and
+    # keeps the response bounded if a job's photo count ever drifts large.
     rows = (
         db.query(Photo)
         .filter(Photo.job_uuid == job_uuid)
         .order_by(Photo.created_at.desc())
+        .limit(500)
         .all()
     )
     return {

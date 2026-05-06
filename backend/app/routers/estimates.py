@@ -49,6 +49,7 @@ def list_catalog(
     return (
         db.query(FurnitureCatalogItem)
         .order_by(FurnitureCatalogItem.category.asc().nullsfirst(), FurnitureCatalogItem.name.asc())
+        .limit(2000)
         .all()
     )
 
@@ -112,6 +113,7 @@ def list_estimates(
     return (
         db.query(Estimate)
         .order_by(Estimate.created_at.desc())
+        .limit(500)
         .all()
     )
 

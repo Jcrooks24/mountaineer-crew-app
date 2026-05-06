@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db, require_admin
@@ -141,6 +141,8 @@ def create_dvir(
 @router.get("", response_model=List[DVIRResponse])
 def list_dvirs(
     pending_only: bool = False,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
@@ -152,7 +154,13 @@ def list_dvirs(
             DVIR.mechanic_signature.is_(None),
             DVIR.condition != "satisfactory",
         )
-    return [_to_response(d) for d in q.order_by(DVIR.created_at.desc()).all()]
+    rows = (
+        q.order_by(DVIR.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [_to_response(d) for d in rows]
 
 
 # ── Get single ────────────────────────────────────────────────────────────────

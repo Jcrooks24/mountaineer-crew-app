@@ -44,7 +44,9 @@ def list_admin_notes(
         q = q.filter(AdminNote.job_uuid.is_(None))
     elif scope:
         q = q.filter(AdminNote.job_uuid == scope)
-    return q.order_by(AdminNote.updated_at.desc()).all()
+    # Cap the response. Notes accumulate over time; an unbounded scan was
+    # fine at small scale but is a memory hazard as the table grows.
+    return q.order_by(AdminNote.updated_at.desc()).limit(500).all()
 
 
 @router.post("", response_model=AdminNoteResponse, status_code=status.HTTP_201_CREATED)

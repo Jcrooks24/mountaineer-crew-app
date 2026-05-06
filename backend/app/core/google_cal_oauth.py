@@ -147,6 +147,16 @@ def invalidate_cache() -> None:
     _cached_creds = None
     _cached_cal_service = None
     _cached_sheets_service = None
+    # Cascade: the certifi-backed sheets svc cached in sheets_export holds
+    # a reference to the previous creds object, so it must be cleared too
+    # or it will keep using the rotated-out token.
+    try:
+        from app.integrations.sheets_export import invalidate_sheets_svc_cache
+        invalidate_sheets_svc_cache()
+    except Exception:
+        # Defensive: never let cache cleanup break the admin token-rotation
+        # endpoint. The next sheet export's first call will rebuild anyway.
+        pass
 
 
 def get_calendar_service(db=None):

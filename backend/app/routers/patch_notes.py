@@ -29,6 +29,7 @@ def list_patch_notes(
     return (
         db.query(PatchNote)
         .order_by(PatchNote.updated_at.desc())
+        .limit(200)
         .all()
     )
 

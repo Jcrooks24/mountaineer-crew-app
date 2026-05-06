@@ -259,7 +259,7 @@ def job_search(
         eq = eq.filter(mountain_date_expr(Event.timestamp) == date)
     if needle:
         eq = eq.filter(func.lower(Event.job_name).like(f"%{needle}%"))
-    for e in eq.limit(2000).all():
+    for e in eq.limit(500).all():
         c = candidates.setdefault(e.job_uuid, {"names": [], "dates": set(), "events": 0, "materials": 0})
         if e.job_name:
             c["names"].append(e.job_name)
@@ -273,7 +273,7 @@ def job_search(
         mq = mq.filter(MaterialsSubmission.job_date == date)
     if needle:
         mq = mq.filter(func.lower(MaterialsSubmission.job_name).like(f"%{needle}%"))
-    for m in mq.limit(2000).all():
+    for m in mq.limit(500).all():
         c = candidates.setdefault(m.job_uuid, {"names": [], "dates": set(), "events": 0, "materials": 0})
         if m.job_name:
             c["names"].append(m.job_name)
@@ -332,23 +332,34 @@ def job_summary(
     admin-facing payload. Returns lists even when empty so the UI can render
     consistently. Resource shapes mirror what each source router returns but
     trimmed to fields useful for reviewing a job end-to-end.
+
+    Per-source lists are capped to keep the response bounded — a single job
+    has never come close to these limits in practice, but an unbounded
+    `.all()` here was a memory cliff if a job's data ever drifted large
+    (e.g., a long-running ongoing job, or a buggy duplicate-event flood).
     """
+    # Cap per-source pulls. The full source data is always available via the
+    # individual routers (or the Google Sheet) if a job somehow exceeds these.
+    JOB_SUMMARY_CAP = 1000
     events = (
         db.query(Event)
         .filter(Event.job_uuid == job_uuid)
         .order_by(Event.timestamp.asc())
+        .limit(JOB_SUMMARY_CAP)
         .all()
     )
     dvirs = (
         db.query(DVIR)
         .filter(DVIR.job_uuid == job_uuid)
         .order_by(DVIR.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
         .all()
     )
     materials = (
         db.query(MaterialsSubmission)
         .filter(MaterialsSubmission.job_uuid == job_uuid)
         .order_by(MaterialsSubmission.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
         .all()
     )
     report = (
@@ -365,12 +376,14 @@ def job_summary(
         db.query(Photo)
         .filter(Photo.job_uuid == job_uuid)
         .order_by(Photo.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
         .all()
     )
     admin_notes = (
         db.query(AdminNote)
         .filter(AdminNote.job_uuid == job_uuid)
         .order_by(AdminNote.updated_at.desc())
+        .limit(JOB_SUMMARY_CAP)
         .all()
     )
 
