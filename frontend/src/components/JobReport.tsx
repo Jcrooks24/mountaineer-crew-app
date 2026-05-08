@@ -35,6 +35,39 @@ type ReportData = {
   hours_mismatch_reason: string;
 };
 
+// In-progress draft persisted to localStorage so partially filled reports
+// survive tab switches (the JobReport component unmounts when the user
+// navigates away from the Report tab) and full page reloads. Cleared on
+// successful submit. Keyed by job_uuid; per-device only — drafts are not
+// synced cross-device.
+const REPORT_DRAFT_PREFIX = "crew_report_draft_v1:";
+type ReportDraft = { data: ReportData; billReviewed: boolean };
+
+function reportDraftKey(uuid: string) {
+  return `${REPORT_DRAFT_PREFIX}${uuid || "none"}`;
+}
+function loadReportDraft(uuid: string): ReportDraft | null {
+  try {
+    const raw = localStorage.getItem(reportDraftKey(uuid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !parsed.data) return null;
+    return parsed as ReportDraft;
+  } catch {
+    return null;
+  }
+}
+function saveReportDraft(uuid: string, draft: ReportDraft) {
+  try {
+    localStorage.setItem(reportDraftKey(uuid), JSON.stringify(draft));
+  } catch {}
+}
+function clearReportDraft(uuid: string) {
+  try {
+    localStorage.removeItem(reportDraftKey(uuid));
+  } catch {}
+}
+
 type Props = {
   jobUuid: string;
   jobName: string;
@@ -69,6 +102,16 @@ export default function JobReport({ jobUuid, jobName }: Props) {
   const [billReviewed, setBillReviewed] = useState(false);
   const pendingSaveRef = useRef<(() => Promise<void>) | null>(null);
   const billRef = useRef<BillHandle>(null);
+
+  // Draft autosave state — see REPORT_DRAFT_PREFIX above for the persistence
+  // contract. Pill mirrors the global notes pattern: "Saving…" → "✓ Draft saved".
+  type DraftStatus = "idle" | "saving" | "saved";
+  const [draftStatus, setDraftStatus] = useState<DraftStatus>("idle");
+  const draftSaveTimeoutRef = useRef<number | null>(null);
+  // Set to true right after we hydrate state from server / localStorage so
+  // the autosave effect skips writing back the just-loaded values (which
+  // would flip the pill to "Saving" on mount for no reason).
+  const skipNextDraftSaveRef = useRef<boolean>(false);
 
   // Load existing report when job_uuid changes
   useEffect(() => {
@@ -108,8 +151,51 @@ export default function JobReport({ jobUuid, jobName }: Props) {
           hours_mismatch_reason: "",
         });
       })
-      .finally(() => setLoaded(true));
+      .finally(() => {
+        // After the server load (or 404 fallback), check for an in-progress
+        // draft. Drafts represent the user's most-recent typing on this
+        // device, so they win over a stale server snapshot from a previous
+        // submit. Cleared on successful Save below.
+        const draft = loadReportDraft(jobUuid);
+        if (draft) {
+          setData(draft.data);
+          setBillReviewed(draft.billReviewed);
+          setDraftStatus("saved");
+        } else {
+          setDraftStatus("idle");
+        }
+        skipNextDraftSaveRef.current = true;
+        setLoaded(true);
+      });
   }, [jobUuid]);
+
+  // Debounced draft autosave. Triggers on every change to `data` or
+  // `billReviewed` once the form is loaded; skipped during the first render
+  // after hydration so we don't write back the just-loaded values.
+  useEffect(() => {
+    if (!loaded || !jobUuid) return;
+    if (skipNextDraftSaveRef.current) {
+      skipNextDraftSaveRef.current = false;
+      return;
+    }
+
+    if (draftSaveTimeoutRef.current !== null) {
+      window.clearTimeout(draftSaveTimeoutRef.current);
+    }
+    setDraftStatus("saving");
+    draftSaveTimeoutRef.current = window.setTimeout(() => {
+      draftSaveTimeoutRef.current = null;
+      saveReportDraft(jobUuid, { data, billReviewed });
+      setDraftStatus("saved");
+    }, 750);
+
+    return () => {
+      if (draftSaveTimeoutRef.current !== null) {
+        window.clearTimeout(draftSaveTimeoutRef.current);
+        draftSaveTimeoutRef.current = null;
+      }
+    };
+  }, [data, billReviewed, jobUuid, loaded]);
 
   function set<K extends keyof ReportData>(key: K, val: ReportData[K]) {
     setData((prev) => ({ ...prev, [key]: val }));
@@ -153,6 +239,10 @@ export default function JobReport({ jobUuid, jobName }: Props) {
       }
 
       setSaved(true);
+      // Submit succeeded — discard the in-progress draft. The server is now
+      // authoritative; further edits start a fresh draft.
+      clearReportDraft(jobUuid);
+      setDraftStatus("idle");
     } catch (e: any) {
       setErr(e?.message ?? "Save failed. Please try again.");
     } finally {
@@ -218,6 +308,28 @@ export default function JobReport({ jobUuid, jobName }: Props) {
       recyclingPct={data.recycling_pct}
     />
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+      {/* Draft autosave indicator. Hidden once the report is submitted
+          (the existing "✓ Report saved" banner below covers that state). */}
+      {!saved && (
+        <div
+          className="small"
+          aria-live="polite"
+          style={{
+            color:
+              draftStatus === "saved"
+                ? "var(--ok)"
+                : draftStatus === "saving"
+                  ? "var(--muted)"
+                  : "var(--muted)",
+            textAlign: "right",
+            minHeight: 16,
+          }}
+        >
+          {draftStatus === "saving" && "Saving draft…"}
+          {draftStatus === "saved" && "✓ Draft saved"}
+        </div>
+      )}
 
       {/* ── Dumpster & Recycling (sit under the Bill Helper because the
              sliders drive bill line items) ── */}
