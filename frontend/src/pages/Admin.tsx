@@ -2909,6 +2909,54 @@ function JobSummaryTab() {
           </div>
 
           <div className="card">
+            <div className="sectionTitle">
+              Employee Hours
+              {summary.job_report && summary.job_report.employee_hours.length > 0 && (
+                <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+                  Total {summary.job_report.employee_hours.reduce((s, e) => s + (e.hours || 0), 0).toFixed(2)}h
+                </span>
+              )}
+            </div>
+            {!summary.job_report || summary.job_report.employee_hours.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>
+                {!summary.job_report
+                  ? "Job report not yet submitted."
+                  : "No employee hours recorded for this job."}
+              </div>
+            ) : (
+              <div className="col" style={{ gap: 6 }}>
+                {summary.job_report.employee_hours.map((emp, i) => {
+                  const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
+                  return (
+                    <div
+                      key={i}
+                      className="row"
+                      style={{
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "6px 0",
+                        borderBottom: "1px solid var(--border)",
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name || "—"}</div>
+                        <div className="small" style={{ color: "var(--muted)" }}>
+                          {span}
+                          {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
+                        </div>
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: 14, flex: "0 0 auto" }}>
+                        {emp.hours.toFixed(2)}h
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
             <div className="sectionTitle">Job Report</div>
             {!summary.job_report ? (
               <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
@@ -2926,30 +2974,6 @@ function JobSummaryTab() {
                     ? ` — ${summary.job_report.hours_mismatch_reason}`
                     : ""}
                 </div>
-                {summary.job_report.employee_hours.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
-                      Employee Hours
-                    </div>
-                    <div className="col" style={{ gap: 2 }}>
-                      {summary.job_report.employee_hours.map((emp, i) => {
-                        const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
-                        return (
-                          <div key={i} className="small">
-                            <strong>{emp.name || "—"}:</strong>
-                            {span ? ` ${span}` : ""}
-                            {emp.break_hours > 0 ? `, break ${emp.break_hours.toFixed(2)}h` : ""}
-                            {" → "}
-                            <strong>{emp.hours.toFixed(2)}h</strong>
-                          </div>
-                        );
-                      })}
-                      <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                        Total {summary.job_report.employee_hours.reduce((s, e) => s + (e.hours || 0), 0).toFixed(2)}h
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>

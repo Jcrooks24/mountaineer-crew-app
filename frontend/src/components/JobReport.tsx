@@ -248,16 +248,48 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     return m;
   }, [sortedEvents]);
 
-  // Editor state — rebuilds itself after every Save. Each Add becomes a single
-  // row in `data.employee_hours`. Breaks are kept as event-id pairs in the
-  // editor so the crew can preview duration live; on Save we collapse them to
-  // a single break_hours total (which is what the storage shape carries).
+  // A "slot" in the editor is either a picked timeline event or a manually
+  // typed HH:MM. Crew picks the manual option when an employee's time
+  // doesn't line up with any logged event (e.g., one person arrived 10
+  // minutes late and there's no per-employee event for that).
+  const MANUAL_SENTINEL = "__manual__";
+  type SlotPick = { selection: string; manualTime: string };
+  const emptySlot: SlotPick = { selection: "", manualTime: "" };
+
+  // First START on the timeline + last FINISH = the natural bookends for a
+  // typical crew day. Prefilling these means the common case (everyone
+  // worked the same span) is one tap: type name → Save.
+  const defaultStart = useMemo<SlotPick>(() => {
+    const ev = sortedEvents.find((e) => e.type === "START");
+    return ev ? { selection: ev.event_id, manualTime: "" } : emptySlot;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedEvents]);
+  const defaultEnd = useMemo<SlotPick>(() => {
+    const finishes = sortedEvents.filter((e) => e.type === "FINISH");
+    const ev = finishes.length > 0 ? finishes[finishes.length - 1] : null;
+    return ev ? { selection: ev.event_id, manualTime: "" } : emptySlot;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedEvents]);
+
   const [editName, setEditName] = useState<string>("");
-  const [editStartId, setEditStartId] = useState<string>("");
-  const [editEndId, setEditEndId] = useState<string>("");
-  type BreakDraft = { startId: string; endId: string };
+  const [editStart, setEditStart] = useState<SlotPick>(emptySlot);
+  const [editEnd, setEditEnd] = useState<SlotPick>(emptySlot);
+  type BreakDraft = { start: SlotPick; end: SlotPick };
   const [editBreaks, setEditBreaks] = useState<BreakDraft[]>([]);
   const [editError, setEditError] = useState<string | null>(null);
+  const editorInitializedRef = useRef<boolean>(false);
+
+  // One-shot: as soon as defaults are knowable (events arrived from App.tsx),
+  // populate start + end. Subsequent edits to either slot — including the
+  // user clearing it — won't be clobbered because the flag stops the effect.
+  useEffect(() => {
+    if (editorInitializedRef.current) return;
+    if (defaultStart.selection || defaultEnd.selection) {
+      if (defaultStart.selection) setEditStart(defaultStart);
+      if (defaultEnd.selection) setEditEnd(defaultEnd);
+      editorInitializedRef.current = true;
+    }
+  }, [defaultStart, defaultEnd]);
 
   // Drop-down label for an event. Truncates the note onto one line — long
   // notes are clipped with "…" so the option width stays bounded; shorter
@@ -279,8 +311,87 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     return `${h}:${m}`;
   }
 
-  function hoursBetween(aIso: string, bIso: string): number {
-    return (new Date(bIso).getTime() - new Date(aIso).getTime()) / 3_600_000;
+  // Resolve a slot to minutes-of-day (0–1439). Returns null if the slot is
+  // empty or the manual time hasn't been typed yet. We work in minutes so
+  // crossed-midnight spans (rare on a moving job, but possible) are easy to
+  // shift by adding 24h to the end.
+  function slotToMinutes(slot: SlotPick): number | null {
+    if (slot.selection === MANUAL_SENTINEL) {
+      const t = slot.manualTime;
+      if (!t) return null;
+      const m = /^(\d{1,2}):(\d{2})$/.exec(t);
+      if (!m) return null;
+      const h = Number(m[1]);
+      const mm = Number(m[2]);
+      if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+      return h * 60 + mm;
+    }
+    if (slot.selection) {
+      const ev = eventById.get(slot.selection);
+      if (!ev) return null;
+      const d = new Date(ev.timestamp);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.getHours() * 60 + d.getMinutes();
+    }
+    return null;
+  }
+
+  function slotToHHMM(slot: SlotPick): string {
+    if (slot.selection === MANUAL_SENTINEL) return slot.manualTime || "";
+    if (slot.selection) {
+      const ev = eventById.get(slot.selection);
+      return ev ? fmtHHMM(ev.timestamp) : "";
+    }
+    return "";
+  }
+
+  // Re-used four times in the editor (start, end, each break's start/end).
+  // Renders a <select> over events plus a "Manual time…" option that
+  // reveals an inline <input type="time">. Picking a real event after
+  // having typed a manual time discards the manual value (selection is
+  // mutually exclusive).
+  function renderSlotPicker(
+    slot: SlotPick,
+    setSlot: (next: SlotPick) => void,
+    placeholder: string,
+  ) {
+    return (
+      <div
+        className="row"
+        style={{ gap: 4, alignItems: "center", flex: "1 1 200px", minWidth: 0 }}
+      >
+        <select
+          value={slot.selection}
+          onChange={(e) => {
+            const v = e.target.value;
+            setSlot(
+              v === MANUAL_SENTINEL
+                ? { selection: MANUAL_SENTINEL, manualTime: slot.manualTime }
+                : { selection: v, manualTime: "" },
+            );
+          }}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          <option value="">{placeholder}</option>
+          <option value={MANUAL_SENTINEL}>Manual time…</option>
+          {sortedEvents.map((ev) => (
+            <option key={ev.event_id} value={ev.event_id}>
+              {eventOptionLabel(ev)}
+            </option>
+          ))}
+        </select>
+        {slot.selection === MANUAL_SENTINEL && (
+          <input
+            type="time"
+            value={slot.manualTime}
+            onChange={(e) =>
+              setSlot({ selection: MANUAL_SENTINEL, manualTime: e.target.value })
+            }
+            style={{ width: 110, flex: "0 0 auto" }}
+          />
+        )}
+      </div>
+    );
   }
 
   // Live preview of the currently-being-edited employee. Returns either a
@@ -292,37 +403,42 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     | { kind: "error"; message: string };
 
   const editorPreview = useMemo<EditorPreview>(() => {
-    const startEv = eventById.get(editStartId);
-    const endEv = eventById.get(editEndId);
-    if (!startEv || !endEv) return { kind: "incomplete" };
-    const spanHours = hoursBetween(startEv.timestamp, endEv.timestamp);
-    if (spanHours <= 0) {
-      return { kind: "error", message: "End event is at or before start event." };
-    }
-    let breakHours = 0;
+    const startMin = slotToMinutes(editStart);
+    const endMin = slotToMinutes(editEnd);
+    if (startMin === null || endMin === null) return { kind: "incomplete" };
+    let span = endMin - startMin;
+    if (span <= 0) span += 24 * 60; // crossed midnight
+    if (span <= 0) return { kind: "error", message: "End time is at or before start time." };
+
+    let breakMin = 0;
     for (const b of editBreaks) {
-      const bs = eventById.get(b.startId);
-      const be = eventById.get(b.endId);
-      if (!bs || !be) continue;
-      const span = hoursBetween(bs.timestamp, be.timestamp);
-      if (span > 0) breakHours += span;
+      const bs = slotToMinutes(b.start);
+      const be = slotToMinutes(b.end);
+      if (bs === null || be === null) continue;
+      let bSpan = be - bs;
+      if (bSpan <= 0) bSpan += 24 * 60;
+      if (bSpan > 0) breakMin += bSpan;
     }
-    if (breakHours >= spanHours) {
+    if (breakMin >= span) {
       return { kind: "error", message: "Clocked-out periods exceed the worked span." };
     }
     return {
       kind: "ok",
-      spanHours,
-      breakHours,
-      hours: Math.max(0, spanHours - breakHours),
+      spanHours: span / 60,
+      breakHours: breakMin / 60,
+      hours: Math.max(0, (span - breakMin) / 60),
     };
-  }, [editStartId, editEndId, editBreaks, eventById]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editStart, editEnd, editBreaks, eventById]);
 
   function addBreakDraft() {
-    setEditBreaks((prev) => [...prev, { startId: "", endId: "" }]);
+    setEditBreaks((prev) => [...prev, { start: emptySlot, end: emptySlot }]);
   }
-  function updateBreakDraft(i: number, patch: Partial<BreakDraft>) {
-    setEditBreaks((prev) => prev.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
+  function updateBreakStart(i: number, slot: SlotPick) {
+    setEditBreaks((prev) => prev.map((b, idx) => (idx === i ? { ...b, start: slot } : b)));
+  }
+  function updateBreakEnd(i: number, slot: SlotPick) {
+    setEditBreaks((prev) => prev.map((b, idx) => (idx === i ? { ...b, end: slot } : b)));
   }
   function removeBreakDraft(i: number) {
     setEditBreaks((prev) => prev.filter((_, idx) => idx !== i));
@@ -330,8 +446,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
 
   function resetEditor() {
     setEditName("");
-    setEditStartId("");
-    setEditEndId("");
+    setEditStart(defaultStart);
+    setEditEnd(defaultEnd);
     setEditBreaks([]);
     setEditError(null);
   }
@@ -342,24 +458,18 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       setEditError("Enter an employee name.");
       return;
     }
-    if (!editStartId || !editEndId) {
-      setEditError("Pick both start and end events.");
-      return;
-    }
     if (editorPreview.kind === "error") {
       setEditError(editorPreview.message);
       return;
     }
     if (editorPreview.kind !== "ok") {
-      setEditError("Cannot compute hours — check the events.");
+      setEditError("Pick start and end times for this employee.");
       return;
     }
-    const startEv = eventById.get(editStartId)!;
-    const endEv = eventById.get(editEndId)!;
     const entry: EmployeeHoursEntry = {
       name,
-      start: fmtHHMM(startEv.timestamp),
-      end: fmtHHMM(endEv.timestamp),
+      start: slotToHHMM(editStart),
+      end: slotToHHMM(editEnd),
       break_hours: Number(editorPreview.breakHours.toFixed(2)),
       hours: Number(editorPreview.hours.toFixed(2)),
     };
@@ -741,31 +851,9 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               />
 
               <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>
-                <select
-                  value={editStartId}
-                  onChange={(e) => { setEditStartId(e.target.value); setEditError(null); }}
-                  style={{ flex: "1 1 160px", minWidth: 0 }}
-                >
-                  <option value="">Start event…</option>
-                  {sortedEvents.map((ev) => (
-                    <option key={ev.event_id} value={ev.event_id}>
-                      {eventOptionLabel(ev)}
-                    </option>
-                  ))}
-                </select>
+                {renderSlotPicker(editStart, (s) => { setEditStart(s); setEditError(null); }, "Start event…")}
                 <span className="small">→</span>
-                <select
-                  value={editEndId}
-                  onChange={(e) => { setEditEndId(e.target.value); setEditError(null); }}
-                  style={{ flex: "1 1 160px", minWidth: 0 }}
-                >
-                  <option value="">End event…</option>
-                  {sortedEvents.map((ev) => (
-                    <option key={ev.event_id} value={ev.event_id}>
-                      {eventOptionLabel(ev)}
-                    </option>
-                  ))}
-                </select>
+                {renderSlotPicker(editEnd, (s) => { setEditEnd(s); setEditError(null); }, "End event…")}
               </div>
 
               <div className="col" style={{ gap: 6 }}>
@@ -775,31 +863,9 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                 </div>
                 {editBreaks.map((b, i) => (
                   <div key={i} className="row wrap" style={{ gap: 6, alignItems: "center" }}>
-                    <select
-                      value={b.startId}
-                      onChange={(e) => updateBreakDraft(i, { startId: e.target.value })}
-                      style={{ flex: "1 1 160px", minWidth: 0 }}
-                    >
-                      <option value="">Out at…</option>
-                      {sortedEvents.map((ev) => (
-                        <option key={ev.event_id} value={ev.event_id}>
-                          {eventOptionLabel(ev)}
-                        </option>
-                      ))}
-                    </select>
+                    {renderSlotPicker(b.start, (s) => updateBreakStart(i, s), "Out at…")}
                     <span className="small">→</span>
-                    <select
-                      value={b.endId}
-                      onChange={(e) => updateBreakDraft(i, { endId: e.target.value })}
-                      style={{ flex: "1 1 160px", minWidth: 0 }}
-                    >
-                      <option value="">Back at…</option>
-                      {sortedEvents.map((ev) => (
-                        <option key={ev.event_id} value={ev.event_id}>
-                          {eventOptionLabel(ev)}
-                        </option>
-                      ))}
-                    </select>
+                    {renderSlotPicker(b.end, (s) => updateBreakEnd(i, s), "Back at…")}
                     <button
                       type="button"
                       onClick={() => removeBreakDraft(i)}
@@ -831,7 +897,14 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               )}
 
               <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
-                {(editName || editStartId || editEndId || editBreaks.length > 0) && (
+                {/* Show Cancel only when the editor has user-supplied content
+                    that isn't already the default — i.e., something to revert. */}
+                {(editName ||
+                  editStart.selection !== defaultStart.selection ||
+                  editEnd.selection !== defaultEnd.selection ||
+                  editStart.manualTime ||
+                  editEnd.manualTime ||
+                  editBreaks.length > 0) && (
                   <button type="button" onClick={resetEditor}>Cancel</button>
                 )}
                 <button type="button" onClick={saveEmployee} className="btnPrimary">
