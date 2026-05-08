@@ -292,7 +292,10 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   const [editEnd, setEditEnd] = useState<SlotPick>(emptySlot);
   type BreakDraft = { start: SlotPick; end: SlotPick };
   const [editBreaks, setEditBreaks] = useState<BreakDraft[]>([]);
-  const [editNonBillable, setEditNonBillable] = useState<boolean>(false);
+  // null when adding; index of the saved row when editing it. Flips Save to
+  // "replace at index" semantics and surfaces a banner so the crew sees they
+  // aren't appending a duplicate.
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const editorInitializedRef = useRef<boolean>(false);
 
@@ -466,7 +469,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     setEditStart(defaultStart);
     setEditEnd(defaultEnd);
     setEditBreaks([]);
-    setEditNonBillable(false);
+    setEditingIndex(null);
     setEditError(null);
   }
 
@@ -484,20 +487,47 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       setEditError("Pick start and end times for this employee.");
       return;
     }
-    const entry: EmployeeHoursEntry = {
+    const baseEntry: EmployeeHoursEntry = {
       name,
       start: slotToHHMM(editStart),
       end: slotToHHMM(editEnd),
       break_hours: Number(editorPreview.breakHours.toFixed(2)),
       hours: Number(editorPreview.hours.toFixed(2)),
-      non_billable: editNonBillable,
     };
-    setData((prev) => ({
-      ...prev,
-      employee_hours: [...prev.employee_hours, entry],
-    }));
+    setData((prev) => {
+      if (editingIndex !== null && editingIndex < prev.employee_hours.length) {
+        // Preserve the existing non_billable flag — that toggle lives on the
+        // saved tile, not in the editor, and shouldn't reset on edit.
+        const next = prev.employee_hours.slice();
+        next[editingIndex] = {
+          ...baseEntry,
+          non_billable: prev.employee_hours[editingIndex].non_billable,
+        };
+        return { ...prev, employee_hours: next };
+      }
+      return { ...prev, employee_hours: [...prev.employee_hours, baseEntry] };
+    });
     setSaved(false);
     resetEditor();
+  }
+
+  // Pre-fill the editor with a saved row's contents so the crew can correct a
+  // mistake without removing + re-adding. Start/end load as MANUAL_SENTINEL
+  // with the stored HH:MM — we don't store the source event ids, so manual
+  // mode is the only way to surface the original time exactly. Breaks load
+  // as a single manual-time pair when there was any break time recorded.
+  function editEmployee(i: number) {
+    const emp = data.employee_hours[i];
+    if (!emp) return;
+    setEditName(emp.name);
+    setEditStart({ selection: MANUAL_SENTINEL, manualTime: emp.start || "" });
+    setEditEnd({ selection: MANUAL_SENTINEL, manualTime: emp.end || "" });
+    setEditBreaks([]); // Drop break detail; crew re-adds breaks if they want different math.
+    setEditingIndex(i);
+    setEditError(null);
+    // Editor is already visible; nudge focus toward it so the crew notices
+    // the swap (especially with longer saved tables).
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function toggleEmployeeNonBillable(i: number) {
@@ -516,18 +546,23 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       employee_hours: prev.employee_hours.filter((_, idx) => idx !== i),
     }));
     setSaved(false);
+    // If we were editing the row being removed, drop the editor state too.
+    if (editingIndex === i) resetEditor();
   }
 
-  // Computed off the saved-rows list — rounded billable per row, plus the
-  // total man-hours line shown under the table. Non-billable rows
-  // contribute 0 to the total.
-  const totalBillableHours = useMemo(
+  // Sum actuals first, round once at the end — per the company rule. Each
+  // row's display stays unrounded so users can see the raw math.
+  const totalActualHours = useMemo(
     () =>
       data.employee_hours.reduce(
-        (sum, e) => sum + (e.non_billable ? 0 : roundBillableQuarter(e.hours)),
+        (sum, e) => sum + (e.non_billable ? 0 : (e.hours || 0)),
         0,
       ),
     [data.employee_hours],
+  );
+  const totalBillableHours = useMemo(
+    () => roundBillableQuarter(totalActualHours),
+    [totalActualHours],
   );
 
   async function doSave() {
@@ -884,6 +919,20 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                 gap: 10,
               }}
             >
+              {editingIndex !== null && (
+                <div
+                  className="small"
+                  style={{
+                    color: "var(--brand2)",
+                    background: "rgba(106,167,255,0.08)",
+                    border: "1px solid rgba(106,167,255,0.3)",
+                    borderRadius: 6,
+                    padding: "6px 10px",
+                  }}
+                >
+                  Editing entry #{editingIndex + 1}. Save replaces the row; Cancel keeps the original.
+                </div>
+              )}
               <input
                 type="text"
                 placeholder="Employee name"
@@ -930,41 +979,25 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               {editorPreview.kind === "ok" && (
                 <div className="small" style={{ color: "var(--muted)" }}>
                   Worked:{" "}
-                  {editNonBillable ? (
-                    <strong style={{ color: "var(--text)" }}>non-billable</strong>
-                  ) : (
-                    <strong style={{ color: "var(--text)" }}>
-                      {roundBillableQuarter(editorPreview.hours).toFixed(2)} hrs
-                    </strong>
-                  )}{" "}
+                  <strong style={{ color: "var(--text)" }}>
+                    {editorPreview.hours.toFixed(2)} hrs
+                  </strong>{" "}
                   <span style={{ color: "var(--muted)" }}>
-                    (actual {editorPreview.hours.toFixed(2)}, span {editorPreview.spanHours.toFixed(2)}
+                    (span {editorPreview.spanHours.toFixed(2)}
                     {editorPreview.breakHours > 0 ? ` − break ${editorPreview.breakHours.toFixed(2)}` : ""})
                   </span>
                 </div>
               )}
-
-              <label
-                className="row"
-                style={{ gap: 8, alignItems: "center", cursor: "pointer" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={editNonBillable}
-                  onChange={(e) => setEditNonBillable(e.target.checked)}
-                  style={{ accentColor: "var(--brand)", width: 16, height: 16 }}
-                />
-                <span className="small">Non-billable (excluded from total man-hours)</span>
-              </label>
 
               {editError && (
                 <div className="small" style={{ color: "var(--danger)" }}>{editError}</div>
               )}
 
               <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
-                {/* Show Cancel only when the editor has user-supplied content
-                    that isn't already the default — i.e., something to revert. */}
-                {(editName ||
+                {/* Cancel always available when editing (need to back out);
+                    otherwise only when the form has user-supplied content. */}
+                {(editingIndex !== null ||
+                  editName ||
                   editStart.selection !== defaultStart.selection ||
                   editEnd.selection !== defaultEnd.selection ||
                   editStart.manualTime ||
@@ -973,7 +1006,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                   <button type="button" onClick={resetEditor}>Cancel</button>
                 )}
                 <button type="button" onClick={saveEmployee} className="btnPrimary">
-                  Save employee
+                  {editingIndex !== null ? "Save changes" : "Save employee"}
                 </button>
               </div>
             </div>
@@ -994,8 +1027,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               Saved ({data.employee_hours.length})
             </div>
             {data.employee_hours.map((emp, i) => {
-              const rounded = roundBillableQuarter(emp.hours);
-              const showsActual = !emp.non_billable && Math.abs(rounded - emp.hours) > 0.001;
+              const isEditing = editingIndex === i;
               return (
                 <div
                   key={i}
@@ -1007,6 +1039,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                     padding: "8px 0",
                     borderBottom: "1px solid var(--border)",
                     opacity: emp.non_billable ? 0.7 : 1,
+                    background: isEditing ? "rgba(106,167,255,0.06)" : undefined,
                   }}
                 >
                   <div style={{ minWidth: 0, flex: "1 1 auto" }}>
@@ -1039,27 +1072,33 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                           <span style={{ color: "var(--muted)" }}> (actual {emp.hours.toFixed(2)}h)</span>
                         </>
                       ) : (
-                        <>
-                          <strong style={{ color: "var(--text)" }}>{rounded.toFixed(2)}h</strong>
-                          {showsActual && (
-                            <span style={{ color: "var(--muted)" }}>
-                              {" "}(actual {emp.hours.toFixed(2)}h)
-                            </span>
-                          )}
-                        </>
+                        <strong style={{ color: "var(--text)" }}>{emp.hours.toFixed(2)}h</strong>
                       )}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => removeEmployee(i)}
-                    style={{ color: "var(--danger)", flex: "0 0 auto" }}
-                  >
-                    Remove
-                  </button>
+                  <div className="row" style={{ gap: 6, flex: "0 0 auto" }}>
+                    <button
+                      type="button"
+                      onClick={() => editEmployee(i)}
+                      disabled={isEditing}
+                    >
+                      {isEditing ? "Editing…" : "Edit"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeEmployee(i)}
+                      style={{ color: "var(--danger)" }}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
               );
             })}
+            {/* Total man-hours: round only at the very end, after summing
+                actuals across billable entries. The rounded value is what
+                the office assistant invoices off; the actual sum is shown
+                in parens whenever it differs from the rounded value. */}
             <div
               className="row"
               style={{
@@ -1071,7 +1110,17 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               }}
             >
               <span>Total man-hours</span>
-              <span>{totalBillableHours.toFixed(2)}h</span>
+              <span>
+                {totalBillableHours.toFixed(2)}h
+                {Math.abs(totalBillableHours - totalActualHours) > 0.001 && (
+                  <span
+                    className="small"
+                    style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}
+                  >
+                    (actual {totalActualHours.toFixed(2)}h)
+                  </span>
+                )}
+              </span>
             </div>
           </div>
         )}
