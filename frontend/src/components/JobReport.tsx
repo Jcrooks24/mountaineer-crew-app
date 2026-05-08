@@ -724,16 +724,85 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         </div>
       )}
 
-      {/* ── Employee Hours ──
-          Crew picks events from the timeline for each crew member's start
-          and end, plus any clocked-out periods. Save adds a row to the
-          table below; the whole block ships to the backend on report
-          submission and lands in the JobReports sheet's employee_hours
-          column.
+      {/* Bill Helper line items (slot from BillCalculator). Opens
+          auto-populated from events + M1 sliders, so crew see the bill
+          "ready" the moment they reach the Report tab. */}
+      {billSlots.billHelper}
 
-          Storage carries resolved HH:MM strings, not event_ids — keeps
-          the Sheet column human-readable and decouples it from later
-          edits to the source events. */}
+      {/* ── Dumpster & Recycling (sit under the Bill Helper because the
+             sliders drive bill line items) ── */}
+      <div className="card">
+        <div className="sectionTitle">M1 Dumpster Use *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Was the M1 dumpster (trash) used on this job?
+        </div>
+        <YesNo
+          value={data.has_dumpster_use}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_dumpster_use: v,
+              dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_dumpster_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider
+              label="Dumpster fill estimate"
+              value={data.dumpster_pct}
+              onChange={(v) => set("dumpster_pct", v)}
+              color="var(--danger)"
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">M1 Recycling Use *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Was the M1 recycling bin used on this job?
+        </div>
+        <YesNo
+          value={data.has_recycling_use}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_recycling_use: v,
+              recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_recycling_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider
+              label="Recycling bin fill estimate"
+              value={data.recycling_pct}
+              onChange={(v) => set("recycling_pct", v)}
+              color="var(--ok)"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Bill totals + notes slots from BillCalculator. Placed after the M1
+          sliders so their line items have already populated by the time the
+          crew sees the running total and the bill notes textarea. */}
+      {billSlots.totals}
+      {billSlots.notes}
+
+      {/* ── Employee Hours ──
+          Sits after the bill flow because employee hours are a parallel
+          record (sheet column for admin/payroll) — they don't feed the
+          bill calculation. Crew opens the tab to the auto-populated
+          bill above; this section captures the per-employee breakdown
+          on its own. */}
       <div className="card">
         <div className="sectionTitle">Employee Hours</div>
 
@@ -967,79 +1036,6 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           </div>
         )}
       </div>
-
-      {/* Bill Helper line items (slot from BillCalculator). Sits between
-          Employee Hours and the M1 sliders — line items first, sliders
-          second so they can drive new bill rows, totals/notes follow. */}
-      {billSlots.billHelper}
-
-      {/* ── Dumpster & Recycling (sit under the Bill Helper because the
-             sliders drive bill line items) ── */}
-      <div className="card">
-        <div className="sectionTitle">M1 Dumpster Use *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Was the M1 dumpster (trash) used on this job?
-        </div>
-        <YesNo
-          value={data.has_dumpster_use}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_dumpster_use: v,
-              dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_dumpster_use && (
-          <div style={{ marginTop: 14 }}>
-            <PctSlider
-              label="Dumpster fill estimate"
-              value={data.dumpster_pct}
-              onChange={(v) => set("dumpster_pct", v)}
-              color="var(--danger)"
-            />
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">M1 Recycling Use *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Was the M1 recycling bin used on this job?
-        </div>
-        <YesNo
-          value={data.has_recycling_use}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_recycling_use: v,
-              recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_recycling_use && (
-          <div style={{ marginTop: 14 }}>
-            <PctSlider
-              label="Recycling bin fill estimate"
-              value={data.recycling_pct}
-              onChange={(v) => set("recycling_pct", v)}
-              color="var(--ok)"
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Bill totals + notes slots from BillCalculator. Placed after the M1
-          sliders so their line items have already populated by the time the
-          crew sees the running total and the bill notes textarea. */}
-      {billSlots.totals}
-      {billSlots.notes}
 
       {/* ── Bill auto-populate review ──
           Placed here so the crew sees the M1 sliders drive new bill
