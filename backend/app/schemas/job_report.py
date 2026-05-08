@@ -17,12 +17,19 @@ BILLING_METHODS = {
 
 
 class EmployeeHoursEntry(BaseModel):
-    """Single row in the per-job employee-hours table on the Report tab."""
+    """Single row in the per-job employee-hours table on the Report tab.
+
+    `hours` is the *actual* worked time in base-10 hours. The company's
+    billing rule rounds to the nearest quarter (≥5 min → up, else down)
+    at display + sheet-export time, so the unrounded value stays
+    available downstream.
+    """
     name: str
     start: str = ""           # "HH:MM" 24-hour or empty if user logged duration only
     end: str = ""             # "HH:MM" 24-hour or empty
     break_hours: float = 0.0  # base-10 hours subtracted from worked time
-    hours: float = 0.0        # final worked hours, base-10
+    hours: float = 0.0        # actual worked hours, base-10
+    non_billable: bool = False  # excluded from total man-hours when true
 
 
 class JobReportUpsert(BaseModel):

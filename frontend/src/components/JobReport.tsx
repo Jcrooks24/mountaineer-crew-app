@@ -6,15 +6,31 @@ import { formatMountainTime } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 
-// Mirrors backend EmployeeHoursEntry. Times are local "HH:MM" 24-hour or "" if
-// the crew member only logged a duration without start/end.
+// Mirrors backend EmployeeHoursEntry. `hours` is the actual worked time;
+// the company billable total rounds quarter-by-quarter (≥5 min → up, else
+// down) at display + sheet-export time. `non_billable` rows still show in
+// the table but contribute 0 to total man-hours.
 export type EmployeeHoursEntry = {
   name: string;
   start: string;
   end: string;
   break_hours: number;
   hours: number;
+  non_billable?: boolean;
 };
+
+// Company billing rule: round to the next quarter-hour if the worked time
+// is ≥5 minutes into the current quarter; otherwise round down to that
+// quarter. Mirrored on the backend (_round_billable_quarter in
+// sheets_export.py) so the spreadsheet and the UI agree.
+export function roundBillableQuarter(hours: number): number {
+  if (hours <= 0) return 0;
+  const totalMin = Math.round(hours * 60);
+  const quarters = Math.floor(totalMin / 15);
+  const remainder = totalMin - quarters * 15;
+  const roundedMin = remainder >= 5 ? (quarters + 1) * 15 : quarters * 15;
+  return roundedMin / 60;
+}
 
 // Compact subset of EventRecord — enough to populate the Employee Hours
 // dropdowns without leaking the rest of App.tsx's offline state into
@@ -276,6 +292,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   const [editEnd, setEditEnd] = useState<SlotPick>(emptySlot);
   type BreakDraft = { start: SlotPick; end: SlotPick };
   const [editBreaks, setEditBreaks] = useState<BreakDraft[]>([]);
+  const [editNonBillable, setEditNonBillable] = useState<boolean>(false);
   const [editError, setEditError] = useState<string | null>(null);
   const editorInitializedRef = useRef<boolean>(false);
 
@@ -449,6 +466,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     setEditStart(defaultStart);
     setEditEnd(defaultEnd);
     setEditBreaks([]);
+    setEditNonBillable(false);
     setEditError(null);
   }
 
@@ -472,6 +490,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       end: slotToHHMM(editEnd),
       break_hours: Number(editorPreview.breakHours.toFixed(2)),
       hours: Number(editorPreview.hours.toFixed(2)),
+      non_billable: editNonBillable,
     };
     setData((prev) => ({
       ...prev,
@@ -481,6 +500,16 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     resetEditor();
   }
 
+  function toggleEmployeeNonBillable(i: number) {
+    setData((prev) => ({
+      ...prev,
+      employee_hours: prev.employee_hours.map((e, idx) =>
+        idx === i ? { ...e, non_billable: !e.non_billable } : e,
+      ),
+    }));
+    setSaved(false);
+  }
+
   function removeEmployee(i: number) {
     setData((prev) => ({
       ...prev,
@@ -488,6 +517,18 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     }));
     setSaved(false);
   }
+
+  // Computed off the saved-rows list — rounded billable per row, plus the
+  // total man-hours line shown under the table. Non-billable rows
+  // contribute 0 to the total.
+  const totalBillableHours = useMemo(
+    () =>
+      data.employee_hours.reduce(
+        (sum, e) => sum + (e.non_billable ? 0 : roundBillableQuarter(e.hours)),
+        0,
+      ),
+    [data.employee_hours],
+  );
 
   async function doSave() {
     // Validate bill review checkbox
@@ -519,6 +560,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               end: e.end,
               break_hours: Number(e.break_hours) || 0,
               hours: Number(e.hours) || 0,
+              non_billable: !!e.non_billable,
             })),
         }),
       });
@@ -887,11 +929,34 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
 
               {editorPreview.kind === "ok" && (
                 <div className="small" style={{ color: "var(--muted)" }}>
-                  Worked: <strong style={{ color: "var(--text)" }}>{editorPreview.hours.toFixed(2)} hrs</strong>
-                  {" "}({editorPreview.spanHours.toFixed(2)} span
-                  {editorPreview.breakHours > 0 ? ` − ${editorPreview.breakHours.toFixed(2)} break` : ""})
+                  Worked:{" "}
+                  {editNonBillable ? (
+                    <strong style={{ color: "var(--text)" }}>non-billable</strong>
+                  ) : (
+                    <strong style={{ color: "var(--text)" }}>
+                      {roundBillableQuarter(editorPreview.hours).toFixed(2)} hrs
+                    </strong>
+                  )}{" "}
+                  <span style={{ color: "var(--muted)" }}>
+                    (actual {editorPreview.hours.toFixed(2)}, span {editorPreview.spanHours.toFixed(2)}
+                    {editorPreview.breakHours > 0 ? ` − break ${editorPreview.breakHours.toFixed(2)}` : ""})
+                  </span>
                 </div>
               )}
+
+              <label
+                className="row"
+                style={{ gap: 8, alignItems: "center", cursor: "pointer" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={editNonBillable}
+                  onChange={(e) => setEditNonBillable(e.target.checked)}
+                  style={{ accentColor: "var(--brand)", width: 16, height: 16 }}
+                />
+                <span className="small">Non-billable (excluded from total man-hours)</span>
+              </label>
+
               {editError && (
                 <div className="small" style={{ color: "var(--danger)" }}>{editError}</div>
               )}
@@ -928,36 +993,86 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
             >
               Saved ({data.employee_hours.length})
             </div>
-            {data.employee_hours.map((emp, i) => (
-              <div
-                key={i}
-                className="row"
-                style={{
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "8px 0",
-                  borderBottom: "1px solid var(--border)",
-                }}
-              >
-                <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
-                  <div className="small" style={{ color: "var(--muted)" }}>
-                    {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
-                    {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
-                    {" · "}
-                    <strong style={{ color: "var(--text)" }}>{emp.hours.toFixed(2)}h</strong>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeEmployee(i)}
-                  style={{ color: "var(--danger)", flex: "0 0 auto" }}
+            {data.employee_hours.map((emp, i) => {
+              const rounded = roundBillableQuarter(emp.hours);
+              const showsActual = !emp.non_billable && Math.abs(rounded - emp.hours) > 0.001;
+              return (
+                <div
+                  key={i}
+                  className="row"
+                  style={{
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "8px 0",
+                    borderBottom: "1px solid var(--border)",
+                    opacity: emp.non_billable ? 0.7 : 1,
+                  }}
                 >
-                  Remove
-                </button>
-              </div>
-            ))}
+                  <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+                    <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
+                      <label
+                        className="row"
+                        style={{ gap: 4, alignItems: "center", cursor: "pointer" }}
+                        title="Toggle whether this entry counts toward total man-hours"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!!emp.non_billable}
+                          onChange={() => toggleEmployeeNonBillable(i)}
+                          style={{ accentColor: "var(--brand)", width: 14, height: 14 }}
+                        />
+                        <span className="small" style={{ color: "var(--muted)" }}>
+                          Non-billable
+                        </span>
+                      </label>
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                      {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
+                      {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
+                    </div>
+                    <div className="small" style={{ marginTop: 2 }}>
+                      {emp.non_billable ? (
+                        <>
+                          <strong style={{ color: "var(--muted)" }}>non-billable</strong>
+                          <span style={{ color: "var(--muted)" }}> (actual {emp.hours.toFixed(2)}h)</span>
+                        </>
+                      ) : (
+                        <>
+                          <strong style={{ color: "var(--text)" }}>{rounded.toFixed(2)}h</strong>
+                          {showsActual && (
+                            <span style={{ color: "var(--muted)" }}>
+                              {" "}(actual {emp.hours.toFixed(2)}h)
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeEmployee(i)}
+                    style={{ color: "var(--danger)", flex: "0 0 auto" }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
+            <div
+              className="row"
+              style={{
+                justifyContent: "space-between",
+                alignItems: "center",
+                paddingTop: 10,
+                marginTop: 4,
+                fontWeight: 700,
+              }}
+            >
+              <span>Total man-hours</span>
+              <span>{totalBillableHours.toFixed(2)}h</span>
+            </div>
           </div>
         )}
       </div>

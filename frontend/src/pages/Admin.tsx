@@ -16,6 +16,7 @@ import {
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
+import { roundBillableQuarter } from "../components/JobReport";
 import {
   formatMountainDate,
   formatMountainDateTime,
@@ -2386,6 +2387,7 @@ type JobSummary = {
       end: string;
       break_hours: number;
       hours: number;
+      non_billable?: boolean;
     }>;
     updated_at: string | null;
   } | null;
@@ -2565,10 +2567,15 @@ function JobSummaryTab() {
       for (const emp of hours) {
         const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
         const breakStr = emp.break_hours > 0 ? `, break ${emp.break_hours.toFixed(2)}h` : "";
-        lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → ${emp.hours.toFixed(2)}h`);
-        total += emp.hours || 0;
+        const rounded = roundBillableQuarter(emp.hours || 0);
+        if (emp.non_billable) {
+          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → non-billable (actual ${(emp.hours || 0).toFixed(2)}h)`);
+        } else {
+          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → ${rounded.toFixed(2)}h (actual ${(emp.hours || 0).toFixed(2)}h)`);
+          total += rounded;
+        }
       }
-      lines.push(`  Total: ${total.toFixed(2)}h`);
+      lines.push(`  Total man-hours: ${total.toFixed(2)}h`);
     }
 
     return lines.join("\n").replace(/\n+$/, "");
@@ -2913,7 +2920,9 @@ function JobSummaryTab() {
               Employee Hours
               {summary.job_report && summary.job_report.employee_hours.length > 0 && (
                 <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
-                  Total {summary.job_report.employee_hours.reduce((s, e) => s + (e.hours || 0), 0).toFixed(2)}h
+                  Total {summary.job_report.employee_hours
+                    .reduce((s, e) => s + (e.non_billable ? 0 : roundBillableQuarter(e.hours || 0)), 0)
+                    .toFixed(2)}h
                 </span>
               )}
             </div>
@@ -2924,35 +2933,86 @@ function JobSummaryTab() {
                   : "No employee hours recorded for this job."}
               </div>
             ) : (
-              <div className="col" style={{ gap: 6 }}>
-                {summary.job_report.employee_hours.map((emp, i) => {
-                  const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
-                  return (
-                    <div
-                      key={i}
-                      className="row"
-                      style={{
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: 8,
-                        padding: "6px 0",
-                        borderBottom: "1px solid var(--border)",
-                      }}
-                    >
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name || "—"}</div>
-                        <div className="small" style={{ color: "var(--muted)" }}>
-                          {span}
-                          {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
+              <>
+                <div className="col" style={{ gap: 0 }}>
+                  {summary.job_report.employee_hours.map((emp, i) => {
+                    const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
+                    const rounded = roundBillableQuarter(emp.hours || 0);
+                    const showsActual = !emp.non_billable && Math.abs(rounded - (emp.hours || 0)) > 0.001;
+                    return (
+                      <div
+                        key={i}
+                        className="row"
+                        style={{
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "8px 0",
+                          borderBottom: "1px solid var(--border)",
+                          opacity: emp.non_billable ? 0.7 : 1,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name || "—"}</div>
+                            {emp.non_billable && (
+                              <span
+                                className="chip"
+                                style={{
+                                  fontSize: 10,
+                                  padding: "2px 8px",
+                                  color: "var(--muted)",
+                                }}
+                              >
+                                Non-billable
+                              </span>
+                            )}
+                          </div>
+                          <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                            {span}
+                            {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
+                          </div>
+                        </div>
+                        <div style={{ flex: "0 0 auto", textAlign: "right" }}>
+                          {emp.non_billable ? (
+                            <>
+                              <div className="small" style={{ color: "var(--muted)" }}>—</div>
+                              <div className="small" style={{ color: "var(--muted)" }}>
+                                actual {(emp.hours || 0).toFixed(2)}h
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div style={{ fontWeight: 700, fontSize: 14 }}>{rounded.toFixed(2)}h</div>
+                              {showsActual && (
+                                <div className="small" style={{ color: "var(--muted)" }}>
+                                  actual {(emp.hours || 0).toFixed(2)}h
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
                       </div>
-                      <div style={{ fontWeight: 700, fontSize: 14, flex: "0 0 auto" }}>
-                        {emp.hours.toFixed(2)}h
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+                <div
+                  className="row"
+                  style={{
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    paddingTop: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  <span>Total man-hours</span>
+                  <span>
+                    {summary.job_report.employee_hours
+                      .reduce((s, e) => s + (e.non_billable ? 0 : roundBillableQuarter(e.hours || 0)), 0)
+                      .toFixed(2)}h
+                  </span>
+                </div>
+              </>
             )}
           </div>
 
