@@ -707,6 +707,22 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         </div>
       )}
 
+      {/* Report header — surfaced at the top so crew confirm at a glance
+          which job they're reporting on before filling anything out. */}
+      {jobName && (
+        <div
+          style={{
+            fontSize: 18,
+            fontWeight: 700,
+            color: "var(--text)",
+            paddingBottom: 4,
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          {jobName}
+        </div>
+      )}
+
       {/* ── Employee Hours ──
           Crew picks events from the timeline for each crew member's start
           and end, plus any clocked-out periods. Save adds a row to the
@@ -1074,12 +1090,6 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       </div>
 
       {/* ── The rest of the tiles (any order at the bottom of the tab). */}
-
-      {jobName && (
-        <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
-          Report for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>
-        </div>
-      )}
 
       {/* ── Personal vehicles ── */}
       <div className="card">
