@@ -2407,6 +2407,7 @@ function JobSummaryTab() {
   const [summary, setSummary] = useState<JobSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [invoiceCopied, setInvoiceCopied] = useState(false);
 
   async function search() {
     if (!date && !name.trim()) {
@@ -2445,6 +2446,71 @@ function JobSummaryTab() {
   }
 
   const materialsTotal = summary?.materials.reduce((s, m) => s + (m.total || 0), 0) ?? 0;
+
+  // Plain-text invoice block — admin office assistant pastes this into invoice
+  // software, so the layout favors easy copy-paste over visual polish.
+  // Excludes the JOB_NOTES sentinel rows used for the global-notes textarea
+  // (they aren't crew activity, just a transport for the Notes field).
+  const invoiceText = useMemo(() => {
+    if (!summary) return "";
+    const lines: string[] = [];
+    const header = summary.job_name || "Unnamed job";
+    lines.push(header);
+
+    const dates = Array.from(
+      new Set(
+        summary.events
+          .map((e) => e.timestamp)
+          .filter((t): t is string => !!t)
+          .map((t) => formatMountainDate(t)),
+      ),
+    );
+    if (dates.length === 1) lines.push(dates[0]);
+    else if (dates.length > 1) lines.push(`${dates[0]} → ${dates[dates.length - 1]}`);
+    lines.push("");
+
+    const events = summary.events
+      .filter((e) => e.type !== "JOB_NOTES" && !!e.timestamp)
+      .sort((a, b) => new Date(a.timestamp!).getTime() - new Date(b.timestamp!).getTime());
+    if (events.length > 0) {
+      lines.push("TIMESTAMPS:");
+      for (const e of events) {
+        lines.push(`  ${e.type.padEnd(10, " ")} ${formatMountainTime(e.timestamp!)}`);
+      }
+      lines.push("");
+    }
+
+    // Aggregate material qtys across submissions so the office assistant
+    // doesn't have to add by hand.
+    const materialTotals = new Map<string, number>();
+    for (const m of summary.materials) {
+      for (const it of m.items) {
+        materialTotals.set(it.name, (materialTotals.get(it.name) ?? 0) + (it.qty || 0));
+      }
+    }
+    if (materialTotals.size > 0) {
+      lines.push("MATERIALS:");
+      const sorted = [...materialTotals.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [n, qty] of sorted) {
+        lines.push(`  ${qty} × ${n}`);
+      }
+    }
+
+    return lines.join("\n");
+  }, [summary]);
+
+  async function copyInvoice() {
+    try {
+      await navigator.clipboard.writeText(invoiceText);
+      setInvoiceCopied(true);
+      window.setTimeout(() => setInvoiceCopied(false), 1800);
+    } catch {
+      // Clipboard API blocked (HTTP, permissions) — fall back to selecting the
+      // textarea so the user can Cmd/Ctrl-C manually.
+      const ta = document.getElementById("invoice-copy-text") as HTMLTextAreaElement | null;
+      ta?.select();
+    }
+  }
   const billTotal = summary?.bill
     ? summary.bill.items.reduce((s, it) => {
         const qty = it.qty || 0;
@@ -2548,6 +2614,31 @@ function JobSummaryTab() {
               {" "}{summary.photos.length} photo{summary.photos.length === 1 ? "" : "s"} ·
               {" "}{summary.admin_notes.length} admin note{summary.admin_notes.length === 1 ? "" : "s"}
             </div>
+          </div>
+
+          <div className="card">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="sectionTitle">Invoice copy-paste</div>
+              <button onClick={copyInvoice} disabled={!invoiceText} style={{ fontSize: 12 }}>
+                {invoiceCopied ? "✓ Copied" : "Copy"}
+              </button>
+            </div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+              Plain-text timestamps + materials counts, ready to paste into invoice software.
+            </div>
+            <textarea
+              id="invoice-copy-text"
+              readOnly
+              value={invoiceText}
+              rows={Math.min(20, Math.max(6, invoiceText.split("\n").length))}
+              style={{
+                width: "100%",
+                fontFamily: "monospace",
+                fontSize: 12,
+                whiteSpace: "pre",
+                resize: "vertical",
+              }}
+            />
           </div>
 
           {summary.admin_notes.length > 0 && (
