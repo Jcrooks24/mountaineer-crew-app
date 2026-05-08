@@ -48,7 +48,46 @@ export type BillHandle = {
   /** Returns current bill data, or null if not loaded. The "reviewed"
    * confirmation lives on the Report (after the M1 sliders) — not here. */
   getData: () => { items: LineItem[]; globalDiscount: number; notes: string } | null;
+  /** Discard the in-progress localStorage draft for the active job. Called
+   * by JobReport after a successful submit so the next load reads the
+   * server's authoritative copy instead of the stale draft. */
+  clearDraft: () => void;
 };
+
+// In-progress bill draft persisted to localStorage so notes / discounts /
+// manual line-item edits survive tab switches, reloads, and offline use.
+// Per-job_uuid keying mirrors the report-tab draft (REPORT_DRAFT_PREFIX in
+// JobReport.tsx). Cleared on successful submit via clearDraft().
+const BILL_DRAFT_PREFIX = "crew_bill_draft_v1:";
+
+function billDraftKey(uuid: string) {
+  return `${BILL_DRAFT_PREFIX}${uuid || "none"}`;
+}
+function loadBillDraft(uuid: string): Bill | null {
+  try {
+    const raw = localStorage.getItem(billDraftKey(uuid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.items)) return null;
+    return {
+      items: parsed.items,
+      globalDiscount: Number(parsed.globalDiscount) || 0,
+      notes: typeof parsed.notes === "string" ? parsed.notes : "",
+    };
+  } catch {
+    return null;
+  }
+}
+function saveBillDraft(uuid: string, bill: Bill) {
+  try {
+    localStorage.setItem(billDraftKey(uuid), JSON.stringify(bill));
+  } catch {}
+}
+function clearBillDraftStorage(uuid: string) {
+  try {
+    localStorage.removeItem(billDraftKey(uuid));
+  } catch {}
+}
 
 // ── Company charges ───────────────────────────────────────────────────────────
 
@@ -147,8 +186,22 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const [matErr, setMatErr] = useState<string>("");
   const [showAddMaterial, setShowAddMaterial] = useState(false);
 
+  // Debounce timer for the bill draft autosave. Pending writes are
+  // cancelled by clearDraft() so a save can't sneak through after submit.
+  const billSaveTimeoutRef = useRef<number | null>(null);
+  function cancelPendingBillSave() {
+    if (billSaveTimeoutRef.current !== null) {
+      window.clearTimeout(billSaveTimeoutRef.current);
+      billSaveTimeoutRef.current = null;
+    }
+  }
+
   useImperativeHandle(ref, () => ({
     getData: () => loaded ? { ...bill } : null,
+    clearDraft: () => {
+      cancelPendingBillSave();
+      if (jobUuid) clearBillDraftStorage(jobUuid);
+    },
   }));
 
   // ── Load: saved bill first, then seed ────────────────────────────────────────
@@ -156,17 +209,29 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     if (!jobUuid) { setLoaded(false); return; }
     setLoaded(false);
 
+    // Load order: server bill (or seed on 404), then the localStorage draft
+    // wins if one exists. Drafts represent the user's most-recent typing on
+    // this device — clobbering them with stale server data on every refresh
+    // was what made bill notes feel like they didn't autosave.
     apiFetch<{ items: LineItem[]; global_discount: number; notes: string }>(
       `/api/bill?job_uuid=${encodeURIComponent(jobUuid)}`
     )
       .then((r) => {
-        setBill({ items: r.items, globalDiscount: r.global_discount, notes: r.notes ?? "" });
+        const draft = loadBillDraft(jobUuid);
+        setBill(
+          draft ?? { items: r.items, globalDiscount: r.global_discount, notes: r.notes ?? "" },
+        );
         setLoaded(true);
       })
       .catch(() => {
         // No saved bill — seed from events + M1 estimates (materials live separately now)
         apiFetch<SeedData>(`/api/bill/seed?job_uuid=${encodeURIComponent(jobUuid)}`)
           .then((seed) => {
+            const draft = loadBillDraft(jobUuid);
+            if (draft) {
+              setBill(draft);
+              return;
+            }
             const items: LineItem[] = [];
             for (const h of seed.hours_lines) {
               items.push({ id: uuid(), label: h.label, qty: h.hours, rate: 0, unit: "hr", discount: 0, source: "hours" });
@@ -175,11 +240,29 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             // see the dumpsterPct/recyclingPct sync effect below.
             setBill({ items, globalDiscount: 0, notes: "" });
           })
-          .catch(() => {})
+          .catch(() => {
+            const draft = loadBillDraft(jobUuid);
+            if (draft) setBill(draft);
+          })
           .finally(() => setLoaded(true));
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);
+
+  // ── Debounced bill draft autosave ────────────────────────────────────────
+  // Captures every change to items / globalDiscount / notes once the bill is
+  // loaded so a tab switch or refresh doesn't lose the work. Cleared on
+  // successful submit by JobReport calling our clearDraft handle.
+  useEffect(() => {
+    if (!loaded || !jobUuid) return;
+    cancelPendingBillSave();
+    billSaveTimeoutRef.current = window.setTimeout(() => {
+      billSaveTimeoutRef.current = null;
+      saveBillDraft(jobUuid, bill);
+    }, 750);
+    return cancelPendingBillSave;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bill, jobUuid, loaded]);
 
   // ── Keep M1 line items (dumpster/recycling) in sync with the Report sliders.
   // Runs after initial load, whenever either slider changes.

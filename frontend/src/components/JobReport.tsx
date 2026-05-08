@@ -614,9 +614,10 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       }
 
       setSaved(true);
-      // Submit succeeded — discard the in-progress draft. The server is now
-      // authoritative; further edits start a fresh draft.
+      // Submit succeeded — discard the in-progress drafts (report + bill).
+      // The server is now authoritative; further edits start fresh drafts.
       clearReportDraft(jobUuid);
+      billRef.current?.clearDraft?.();
       setDraftStatus("idle");
     } catch (e: any) {
       setErr(e?.message ?? "Save failed. Please try again.");
