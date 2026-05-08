@@ -695,8 +695,47 @@ JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
-    "created_at", "updated_at",
+    "employee_hours", "created_at", "updated_at",
 ]
+
+
+def _format_employee_hours(entries: Optional[list]) -> str:
+    """Pretty-print the per-employee hours list into a single multi-line cell.
+
+    Office assistant reads this off the JobReports worksheet to invoice; the
+    plain-text format below matches the layout used in the Admin Job Summary
+    invoice copy-paste block so the same string can be transcribed either way.
+    """
+    if not entries:
+        return ""
+    lines: list[str] = []
+    total = 0.0
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        name = (e.get("name") or "").strip() or "—"
+        start = (e.get("start") or "").strip()
+        end = (e.get("end") or "").strip()
+        try:
+            br = float(e.get("break_hours") or 0)
+        except (TypeError, ValueError):
+            br = 0.0
+        try:
+            hrs = float(e.get("hours") or 0)
+        except (TypeError, ValueError):
+            hrs = 0.0
+        total += hrs
+        span = f"{start}–{end}" if start and end else (start or end or "")
+        pieces = [name + ":"]
+        if span:
+            pieces.append(span + (",") if br > 0 else span)
+        if br > 0:
+            pieces.append(f"break {br:.2f}h")
+        pieces.append(f"→ {hrs:.2f}h")
+        lines.append(" ".join(pieces))
+    if lines:
+        lines.append(f"Total: {total:.2f}h")
+    return "\n".join(lines)
 
 
 def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
@@ -715,6 +754,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "review_candidate": "Yes" if report.get("review_candidate") else "No",
         "hours_match": "Yes" if report.get("hours_match") else "No",
         "hours_mismatch_reason": report.get("hours_mismatch_reason", "") or "",
+        "employee_hours": _format_employee_hours(report.get("employee_hours")),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
     }

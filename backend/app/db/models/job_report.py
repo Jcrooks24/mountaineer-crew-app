@@ -41,6 +41,12 @@ class JobReport(Base):
     hours_match = Column(Boolean, nullable=False)
     hours_mismatch_reason = Column(Text, nullable=True)
 
+    # JSON-encoded list of per-employee entries:
+    #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float }]
+    # Crew enters these on the Report tab using the time-math helper. Stored
+    # as Text to match the existing JobBill / MaterialsSubmission pattern.
+    employee_hours_json = Column(Text, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)

@@ -1,9 +1,28 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
+import { formatMountainTime } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
+
+// Mirrors backend EmployeeHoursEntry. Times are local "HH:MM" 24-hour or "" if
+// the crew member only logged a duration without start/end.
+export type EmployeeHoursEntry = {
+  name: string;
+  start: string;
+  end: string;
+  break_hours: number;
+  hours: number;
+};
+
+// Compact subset of EventRecord — enough to populate the time-math dropdowns
+// without leaking the rest of App.tsx's offline state into JobReport.
+type ReportEvent = {
+  event_id: string;
+  type: string;
+  timestamp: string;
+};
 
 type BillingMethod =
   | "crew_cash"
@@ -33,6 +52,7 @@ type ReportData = {
   review_candidate: boolean | null;
   hours_match: boolean | null;
   hours_mismatch_reason: string;
+  employee_hours: EmployeeHoursEntry[];
 };
 
 // In-progress draft persisted to localStorage so partially filled reports
@@ -71,9 +91,10 @@ function clearReportDraft(uuid: string) {
 type Props = {
   jobUuid: string;
   jobName: string;
+  events?: ReportEvent[];
 };
 
-export default function JobReport({ jobUuid, jobName }: Props) {
+export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   const { user } = useAuth();
   const { settings: themeSettings } = useTheme();
   const ht = themeSettings.helpTexts;
@@ -89,6 +110,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     review_candidate: null,
     hours_match: null,
     hours_mismatch_reason: "",
+    employee_hours: [],
   });
 
   const [loaded, setLoaded] = useState(false);
@@ -119,7 +141,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     setLoaded(false);
     setSaved(false);
     setBillReviewed(false);
-    apiFetch<ReportData & { id: number }>(`/api/job-report?job_uuid=${encodeURIComponent(jobUuid)}`)
+    apiFetch<ReportData & { id: number; employee_hours: EmployeeHoursEntry[] | null }>(`/api/job-report?job_uuid=${encodeURIComponent(jobUuid)}`)
       .then((r) => {
         setData({
           // Existing reports — infer answers from saved values
@@ -133,6 +155,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
           review_candidate: r.review_candidate,
           hours_match: r.hours_match,
           hours_mismatch_reason: r.hours_mismatch_reason ?? "",
+          employee_hours: r.employee_hours ?? [],
         });
         setSaved(true);
       })
@@ -149,6 +172,7 @@ export default function JobReport({ jobUuid, jobName }: Props) {
           review_candidate: null,
           hours_match: null,
           hours_mismatch_reason: "",
+          employee_hours: [],
         });
       })
       .finally(() => {
@@ -202,6 +226,88 @@ export default function JobReport({ jobUuid, jobName }: Props) {
     setSaved(false);
   }
 
+  // ── Employee Hours helpers ─────────────────────────────────────────────────
+  // Sort timeline events ascending so the time-math dropdowns read like a day.
+  // App.tsx supplies them newest-first.
+  const sortedEvents = useMemo(
+    () =>
+      events
+        .slice()
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+    [events],
+  );
+
+  const [timeMathA, setTimeMathA] = useState<string>("");
+  const [timeMathB, setTimeMathB] = useState<string>("");
+  const timeMathHours = useMemo(() => {
+    if (!timeMathA || !timeMathB) return null;
+    const a = sortedEvents.find((e) => e.event_id === timeMathA);
+    const b = sortedEvents.find((e) => e.event_id === timeMathB);
+    if (!a || !b) return null;
+    const ms = Math.abs(new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return ms / 3_600_000;
+  }, [timeMathA, timeMathB, sortedEvents]);
+
+  function parseHHMM(s: string): number | null {
+    if (!s) return null;
+    const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+    if (!m) return null;
+    const h = Number(m[1]);
+    const mm = Number(m[2]);
+    if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+    return h * 60 + mm;
+  }
+
+  function computeWorkedHours(start: string, end: string, breakHours: number): number {
+    const s = parseHHMM(start);
+    const e = parseHHMM(end);
+    if (s === null || e === null) return 0;
+    let durMin = e - s;
+    if (durMin < 0) durMin += 24 * 60; // shift crossed midnight
+    return Math.max(0, durMin / 60 - (Number.isFinite(breakHours) ? breakHours : 0));
+  }
+
+  function addEmployee() {
+    setData((prev) => ({
+      ...prev,
+      employee_hours: [
+        ...prev.employee_hours,
+        { name: "", start: "", end: "", break_hours: 0, hours: 0 },
+      ],
+    }));
+    setSaved(false);
+  }
+
+  function updateEmployee(i: number, patch: Partial<EmployeeHoursEntry>) {
+    setData((prev) => {
+      const next = prev.employee_hours.slice();
+      const merged: EmployeeHoursEntry = { ...next[i], ...patch };
+      // Auto-fill hours from start/end/break whenever those are touched and
+      // both times are present. Crew can still type a duration directly when
+      // start/end aren't known (skip the time fields, fill Hours Worked).
+      const touchedTimeOrBreak =
+        patch.start !== undefined ||
+        patch.end !== undefined ||
+        patch.break_hours !== undefined;
+      if (touchedTimeOrBreak && merged.start && merged.end) {
+        merged.hours = Number(
+          computeWorkedHours(merged.start, merged.end, Number(merged.break_hours) || 0).toFixed(2),
+        );
+      }
+      next[i] = merged;
+      return { ...prev, employee_hours: next };
+    });
+    setSaved(false);
+  }
+
+  function removeEmployee(i: number) {
+    setData((prev) => ({
+      ...prev,
+      employee_hours: prev.employee_hours.filter((_, idx) => idx !== i),
+    }));
+    setSaved(false);
+  }
+
   async function doSave() {
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
@@ -222,6 +328,17 @@ export default function JobReport({ jobUuid, jobName }: Props) {
           review_candidate: data.review_candidate,
           hours_match: data.hours_match,
           hours_mismatch_reason: data.hours_mismatch_reason.trim() || null,
+          // Strip empty rows so the sheet column doesn't get noise from
+          // accidentally-added employees the crew didn't fill in.
+          employee_hours: data.employee_hours
+            .filter((e) => e.name.trim() || e.hours > 0 || e.start || e.end)
+            .map((e) => ({
+              name: e.name.trim(),
+              start: e.start,
+              end: e.end,
+              break_hours: Number(e.break_hours) || 0,
+              hours: Number(e.hours) || 0,
+            })),
         }),
       });
 
@@ -505,6 +622,147 @@ export default function JobReport({ jobUuid, jobName }: Props) {
           yesLabel="Yes — reach out"
           noLabel="No"
         />
+      </div>
+
+      {/* ── Employee Hours ──
+          Crew enters per-employee start/end/break/duration here. Time-math
+          helper below picks two timeline events and shows the duration in
+          base-10 hours; crew transcribes that into the rows. The whole
+          block flows into a single Employee Hours column on the JobReports
+          worksheet via the backend. */}
+      <div className="card">
+        <div className="sectionTitle">Employee Hours</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Record hours worked per crew member. Filling Start + End auto-fills Hours
+          Worked (minus any break). Otherwise type Hours Worked directly.
+        </div>
+
+        {sortedEvents.length >= 2 && (
+          <div
+            style={{
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: 10,
+              marginBottom: 12,
+            }}
+          >
+            <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>
+              Time math
+            </div>
+            <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>
+              <select
+                value={timeMathA}
+                onChange={(e) => setTimeMathA(e.target.value)}
+                style={{ flex: "1 1 140px", minWidth: 0 }}
+              >
+                <option value="">From event…</option>
+                {sortedEvents.map((ev) => (
+                  <option key={ev.event_id} value={ev.event_id}>
+                    {ev.type} — {formatMountainTime(ev.timestamp)}
+                  </option>
+                ))}
+              </select>
+              <span className="small">→</span>
+              <select
+                value={timeMathB}
+                onChange={(e) => setTimeMathB(e.target.value)}
+                style={{ flex: "1 1 140px", minWidth: 0 }}
+              >
+                <option value="">To event…</option>
+                {sortedEvents.map((ev) => (
+                  <option key={ev.event_id} value={ev.event_id}>
+                    {ev.type} — {formatMountainTime(ev.timestamp)}
+                  </option>
+                ))}
+              </select>
+              {timeMathHours !== null && (
+                <span style={{ fontWeight: 700, fontSize: 14 }}>
+                  = {timeMathHours.toFixed(2)} hrs
+                </span>
+              )}
+            </div>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+              Use this to compute either worked time or break time, then type the result below.
+            </div>
+          </div>
+        )}
+
+        {data.employee_hours.length === 0 ? (
+          <div className="small" style={{ color: "var(--muted)" }}>No employees added yet.</div>
+        ) : (
+          <div className="col" style={{ gap: 12 }}>
+            {data.employee_hours.map((emp, i) => (
+              <div
+                key={i}
+                style={{
+                  borderTop: i > 0 ? "1px solid var(--border)" : "none",
+                  paddingTop: i > 0 ? 12 : 0,
+                }}
+              >
+                <input
+                  type="text"
+                  placeholder="Employee name"
+                  value={emp.name}
+                  onChange={(e) => updateEmployee(i, { name: e.target.value })}
+                  style={{ width: "100%", marginBottom: 8 }}
+                />
+                <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
+                  <label className="col" style={{ gap: 2, flex: "1 1 90px", minWidth: 90 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Start</span>
+                    <input
+                      type="time"
+                      value={emp.start}
+                      onChange={(e) => updateEmployee(i, { start: e.target.value })}
+                    />
+                  </label>
+                  <label className="col" style={{ gap: 2, flex: "1 1 90px", minWidth: 90 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>End</span>
+                    <input
+                      type="time"
+                      value={emp.end}
+                      onChange={(e) => updateEmployee(i, { end: e.target.value })}
+                    />
+                  </label>
+                  <label className="col" style={{ gap: 2, flex: "1 1 80px", minWidth: 80 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Break (hrs)</span>
+                    <input
+                      type="number"
+                      step="0.25"
+                      min="0"
+                      value={emp.break_hours}
+                      onChange={(e) =>
+                        updateEmployee(i, { break_hours: Number(e.target.value) || 0 })
+                      }
+                    />
+                  </label>
+                  <label className="col" style={{ gap: 2, flex: "1 1 90px", minWidth: 90 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Worked (hrs)</span>
+                    <input
+                      type="number"
+                      step="0.25"
+                      min="0"
+                      value={emp.hours}
+                      onChange={(e) => updateEmployee(i, { hours: Number(e.target.value) || 0 })}
+                      style={{ fontWeight: 700 }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => removeEmployee(i)}
+                    style={{ color: "var(--danger)", flex: "0 0 auto" }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button type="button" onClick={addEmployee} style={{ marginTop: 12 }}>
+          + Add employee
+        </button>
       </div>
 
       {/* ── Hours reconciliation ── */}

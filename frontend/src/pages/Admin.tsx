@@ -2379,6 +2379,13 @@ type JobSummary = {
     review_candidate: boolean;
     hours_match: boolean;
     hours_mismatch_reason: string | null;
+    employee_hours: Array<{
+      name: string;
+      start: string;
+      end: string;
+      break_hours: number;
+      hours: number;
+    }>;
     updated_at: string | null;
   } | null;
   bill: {
@@ -2494,9 +2501,23 @@ function JobSummaryTab() {
       for (const [n, qty] of sorted) {
         lines.push(`  ${qty} × ${n}`);
       }
+      lines.push("");
     }
 
-    return lines.join("\n");
+    const hours = summary.job_report?.employee_hours ?? [];
+    if (hours.length > 0) {
+      lines.push("EMPLOYEE HOURS:");
+      let total = 0;
+      for (const emp of hours) {
+        const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
+        const breakStr = emp.break_hours > 0 ? `, break ${emp.break_hours.toFixed(2)}h` : "";
+        lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → ${emp.hours.toFixed(2)}h`);
+        total += emp.hours || 0;
+      }
+      lines.push(`  Total: ${total.toFixed(2)}h`);
+    }
+
+    return lines.join("\n").replace(/\n+$/, "");
   }, [summary]);
 
   async function copyInvoice() {
@@ -2775,6 +2796,30 @@ function JobSummaryTab() {
                     ? ` — ${summary.job_report.hours_mismatch_reason}`
                     : ""}
                 </div>
+                {summary.job_report.employee_hours.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
+                      Employee Hours
+                    </div>
+                    <div className="col" style={{ gap: 2 }}>
+                      {summary.job_report.employee_hours.map((emp, i) => {
+                        const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
+                        return (
+                          <div key={i} className="small">
+                            <strong>{emp.name || "—"}:</strong>
+                            {span ? ` ${span}` : ""}
+                            {emp.break_hours > 0 ? `, break ${emp.break_hours.toFixed(2)}h` : ""}
+                            {" → "}
+                            <strong>{emp.hours.toFixed(2)}h</strong>
+                          </div>
+                        );
+                      })}
+                      <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                        Total {summary.job_report.employee_hours.reduce((s, e) => s + (e.hours || 0), 0).toFixed(2)}h
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

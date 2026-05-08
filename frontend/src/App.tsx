@@ -2213,7 +2213,7 @@ export default function App() {
 
       {/* Report */}
       {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} />
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} />
       )}
 
       {/* DVIR reminder modal — shown before START or FINISH */}

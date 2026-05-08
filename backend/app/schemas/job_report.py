@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -16,6 +16,15 @@ BILLING_METHODS = {
 }
 
 
+class EmployeeHoursEntry(BaseModel):
+    """Single row in the per-job employee-hours table on the Report tab."""
+    name: str
+    start: str = ""           # "HH:MM" 24-hour or empty if user logged duration only
+    end: str = ""             # "HH:MM" 24-hour or empty
+    break_hours: float = 0.0  # base-10 hours subtracted from worked time
+    hours: float = 0.0        # final worked hours, base-10
+
+
 class JobReportUpsert(BaseModel):
     job_uuid: str
     personal_vehicles: int = 0
@@ -25,6 +34,7 @@ class JobReportUpsert(BaseModel):
     review_candidate: bool
     hours_match: bool
     hours_mismatch_reason: Optional[str] = None
+    employee_hours: Optional[List[EmployeeHoursEntry]] = None
 
     @field_validator("personal_vehicles")
     @classmethod
@@ -60,6 +70,7 @@ class JobReportResponse(BaseModel):
     review_candidate: bool
     hours_match: bool
     hours_mismatch_reason: Optional[str]
+    employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime
 

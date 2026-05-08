@@ -449,6 +449,7 @@ def job_summary(
             "review_candidate": report.review_candidate,
             "hours_match": report.hours_match,
             "hours_mismatch_reason": report.hours_mismatch_reason,
+            "employee_hours": _json.loads(report.employee_hours_json or "[]") or [],
             "created_at": _iso(report.created_at),
             "updated_at": _iso(report.updated_at),
         },
