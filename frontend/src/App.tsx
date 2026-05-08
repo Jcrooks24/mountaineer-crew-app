@@ -1380,6 +1380,19 @@ export default function App() {
     };
   }, [jobUuid, jobComments]);
 
+  // When connectivity returns, kick both sync queues and reconcile the Notes
+  // pill. The window 'online' event listener at mount also drains the queues,
+  // but doesn't fire on every transition (some browsers miss it after sleep
+  // or VPN flaps). Driving the drain off React's isOnline state catches those
+  // gaps. Cheap: both functions early-return when their queue is empty.
+  useEffect(() => {
+    if (!isOnline) return;
+    void syncQueueNow();
+    void drainNotePatchQueue();
+    if (notesStatus === "offline") setNotesStatus("saved");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline]);
+
   // When the server-events fetch returns a JOB_NOTES row for the active job,
   // mirror it into local state so a fresh device/install sees notes typed
   // on another device. Only hydrate when the user hasn't typed anything
