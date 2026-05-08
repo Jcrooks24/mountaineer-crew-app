@@ -124,11 +124,35 @@ DEFAULT_MATERIALS_TAB = "Materials"
 EVENTS_HEADERS = [
     "event_id", "timestamp", "logged_at", "job_uuid", "job_name", "job_date",
     "type", "note", "lat", "lng", "accuracy_m", "device_id", "created_by", "synced",
+    "entered_by", "entered_on",
 ]
 MATERIALS_HEADERS = [
     "submission_id", "created_at", "job_uuid", "job_name", "job_date", "job_label",
     "notes", "item_name", "qty", "unit_price", "line_total", "submission_total",
+    "entered_by", "entered_on",
 ]
+
+
+def _entry_status_for(db: Session, job_uuid: str) -> tuple[str, str]:
+    """Look up the admin's data-entry checkpoint for a job. Returns
+    (entered_by, entered_on) or ("", "") if no checkpoint has been recorded
+    yet. Imports inline so this module stays import-cycle-safe even though
+    AdminEntryStatus is a sibling SQLAlchemy model.
+    """
+    if not job_uuid:
+        return ("", "")
+    try:
+        from app.db.models.admin_entry_status import AdminEntryStatus
+    except ImportError:
+        return ("", "")
+    row = (
+        db.query(AdminEntryStatus)
+        .filter(AdminEntryStatus.job_uuid == job_uuid)
+        .first()
+    )
+    if not row:
+        return ("", "")
+    return (row.entered_by or "", row.entered_on or "")
 
 
 def _col_letter(n: int) -> str:
@@ -294,12 +318,20 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     actual_headers = _ensure_tab(svc, spreadsheet_id, tab, EVENTS_HEADERS)
 
     # 3) Build rows keyed by column name so order always matches the sheet
+    # Cache entry-status lookups so a batch with many events for the same
+    # job hits the DB once per job, not once per event.
+    entry_cache: Dict[str, tuple[str, str]] = {}
+
     rows: List[List[Any]] = []
     for ev in new_events:
         # `logged_at` falls back to `timestamp` for older callers that
         # haven't been updated to pass it explicitly. New rows from
         # /api/sync and the reconciler always pass it.
         logged_at = ev.get("logged_at") or ev.get("timestamp", "")
+        ju = ev.get("job_uuid", "") or ""
+        if ju not in entry_cache:
+            entry_cache[ju] = _entry_status_for(db, ju)
+        entered_by, entered_on = entry_cache[ju]
         row_data: Dict[str, Any] = {
             "event_id":   ev["event_id"],
             "timestamp":  ev["timestamp"],
@@ -315,6 +347,8 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
             "device_id":  ev.get("device_id") or "",
             "created_by": ev.get("created_by") or "",
             "synced":     "synced",
+            "entered_by": entered_by,
+            "entered_on": entered_on,
         }
         rows.append(_build_row(row_data, actual_headers))
 
@@ -356,6 +390,7 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     created_at = submission.get("created_at", "")
     notes = submission.get("notes", "")
     total = submission.get("total", 0)
+    entered_by, entered_on = _entry_status_for(db, job_uuid)
 
     # 1) Build rows, skipping already-exported items
     new_rows: List[Dict[str, Any]] = []
@@ -385,6 +420,8 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
             "item_name":        item.get("name", ""),
             "qty":              qty,
             "unit_price":       unit_price if unit_price is not None else "",
+            "entered_by":       entered_by,
+            "entered_on":       entered_on,
             "line_total":       line_total,
             "submission_total": total,
         })
@@ -696,6 +733,7 @@ JOB_REPORT_HEADERS = [
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
     "employee_hours", "created_at", "updated_at",
+    "entered_by", "entered_on",
 ]
 
 
@@ -743,6 +781,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
     key = f'{report.get("job_uuid","")}:{_iso(report.get("updated_at"))}'
     if _generic_already_exported(db, "job_report", key):
         return 0
+    entered_by, entered_on = _entry_status_for(db, report.get("job_uuid", "") or "")
     row = {
         "job_uuid": report.get("job_uuid", ""),
         "job_name": report.get("job_name", ""),
@@ -757,6 +796,8 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "employee_hours": _format_employee_hours(report.get("employee_hours")),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
+        "entered_by": entered_by,
+        "entered_on": entered_on,
     }
     written = _append_rows(db, tab, JOB_REPORT_HEADERS, [row])
     if written:
@@ -770,6 +811,7 @@ BILL_HEADERS = [
     "job_uuid", "saved_by", "item_label", "item_qty", "item_unit", "item_rate",
     "item_discount_pct", "item_amount", "item_source",
     "global_discount_pct", "bill_notes", "updated_at",
+    "entered_by", "entered_on",
 ]
 
 
@@ -778,6 +820,7 @@ def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
     job_uuid = bill.get("job_uuid", "")
     updated_at = _iso(bill.get("updated_at"))
     items = bill.get("items") or []
+    entered_by, entered_on = _entry_status_for(db, job_uuid)
 
     rows: List[Dict[str, Any]] = []
     keys: List[str] = []
@@ -803,6 +846,8 @@ def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
             "global_discount_pct": bill.get("global_discount", 0) or 0,
             "bill_notes": bill.get("notes", "") or "",
             "updated_at": updated_at,
+            "entered_by": entered_by,
+            "entered_on": entered_on,
         })
         keys.append(key)
 
@@ -1211,3 +1256,108 @@ def schedule_estimate_export(estimate_uuid: str) -> None:
             return
         _estimate_export_in_flight.add(estimate_uuid)
     _EXPORT_POOL.submit(_estimate_export_worker, estimate_uuid)
+
+
+# ── Admin entry-status sweep ─────────────────────────────────────────────────
+# When admin saves their initials + date on the Job Summary view, every row
+# already exported for that job needs its trailing entered_by / entered_on
+# cells populated. Future writes pick up the values via _entry_status_for; the
+# sweep only fixes the historical rows.
+
+def _sweep_sheet_entry_status(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    job_uuid: str,
+    entered_by: str,
+    entered_on: str,
+) -> int:
+    """Find every row on `tab` whose `job_uuid` cell matches and write
+    (entered_by, entered_on) into its trailing entry-status columns.
+    Returns rows updated. No-op if the sheet doesn't have the entry-status
+    columns yet (next regular export will append them via _ensure_tab)."""
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!1:1",
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0] if hdr else []
+    if "job_uuid" not in headers_row or "entered_by" not in headers_row or "entered_on" not in headers_row:
+        return 0
+
+    job_uuid_idx = headers_row.index("job_uuid")
+    entered_by_idx = headers_row.index("entered_by")
+    entered_on_idx = headers_row.index("entered_on")
+
+    job_uuid_letter = _col_letter(job_uuid_idx)
+    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!{job_uuid_letter}:{job_uuid_letter}",
+    ).execute())
+    col_values = col.get("values") or []
+
+    target_rows: List[int] = []
+    for i, row in enumerate(col_values):
+        if i == 0:
+            continue  # header
+        v = row[0] if row else ""
+        if v == job_uuid:
+            target_rows.append(i + 1)  # sheet rows are 1-based
+
+    if not target_rows:
+        return 0
+
+    entered_by_letter = _col_letter(entered_by_idx)
+    entered_on_letter = _col_letter(entered_on_idx)
+
+    data: List[Dict[str, Any]] = []
+    if entered_by_idx + 1 == entered_on_idx:
+        # Adjacent columns — single contiguous range per row, half the API calls.
+        for r in target_rows:
+            data.append({
+                "range": f"{tab}!{entered_by_letter}{r}:{entered_on_letter}{r}",
+                "values": [[entered_by, entered_on]],
+            })
+    else:
+        for r in target_rows:
+            data.append({"range": f"{tab}!{entered_by_letter}{r}", "values": [[entered_by]]})
+            data.append({"range": f"{tab}!{entered_on_letter}{r}", "values": [[entered_on]]})
+
+    _ssl_retry(lambda: svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"valueInputOption": "RAW", "data": data},
+    ).execute())
+    return len(target_rows)
+
+
+def update_entry_status_in_sheets(
+    db: Session,
+    job_uuid: str,
+    entered_by: str,
+    entered_on: str,
+) -> Dict[str, int]:
+    """Write the admin's data-entry checkpoint into every job-related
+    worksheet for this job. Returns {tab: rows_updated} for diagnostics.
+    Failures on individual tabs are swallowed and logged so a single
+    transient Sheets hiccup can't take the whole sweep down."""
+    if not job_uuid:
+        return {}
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    svc = _get_sheets_svc(db)
+
+    targets = [
+        os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events",
+        os.getenv("SHEETS_MATERIALS_TAB", DEFAULT_MATERIALS_TAB).strip() or DEFAULT_MATERIALS_TAB,
+        os.getenv("SHEETS_JOB_REPORTS_TAB", "JobReports").strip() or "JobReports",
+        os.getenv("SHEETS_BILLS_TAB", "Bills").strip() or "Bills",
+    ]
+
+    counts: Dict[str, int] = {}
+    for tab in targets:
+        try:
+            counts[tab] = _sweep_sheet_entry_status(
+                svc, spreadsheet_id, tab, job_uuid, entered_by, entered_on
+            )
+        except Exception as exc:
+            counts[tab] = 0
+            print(f"[entry-status sweep] {tab} failed for {job_uuid}: {exc}")
+    return counts

@@ -18,6 +18,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
+from app.db.models.admin_entry_status import AdminEntryStatus
 from app.db.models.admin_note import AdminNote
 from app.db.models.dvir import DVIR
 from app.db.models.event import Event
@@ -28,6 +29,7 @@ from app.db.models.photo import Photo
 from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
 from app.db.session import get_db
+from app.integrations.sheets_export import update_entry_status_in_sheets
 
 DVIR_UNITS_KEY = "dvir_units"
 DEFAULT_DVIR_UNITS = ["26INT", "24FR8", "16FORD"]
@@ -281,6 +283,18 @@ def job_search(
             c["dates"].add(m.job_date)
         c["materials"] += 1
 
+    # One bulk lookup for the data-entry checkpoint chip — beats N queries
+    # if the search ever returns a long candidate list.
+    candidate_uuids = list(candidates.keys())
+    entered_uuids: set[str] = set()
+    if candidate_uuids:
+        rows = (
+            db.query(AdminEntryStatus.job_uuid)
+            .filter(AdminEntryStatus.job_uuid.in_(candidate_uuids))
+            .all()
+        )
+        entered_uuids = {r[0] for r in rows}
+
     results: List[Dict[str, Any]] = []
     for job_uuid, c in candidates.items():
         names = c["names"]
@@ -292,6 +306,7 @@ def job_search(
             "dates": dates_sorted,
             "event_count": c["events"],
             "material_count": c["materials"],
+            "entered": job_uuid in entered_uuids,
         })
 
     # Newest first by latest known date
@@ -370,6 +385,11 @@ def job_summary(
     bill = (
         db.query(JobBill)
         .filter(JobBill.job_uuid == job_uuid)
+        .first()
+    )
+    entry_status = (
+        db.query(AdminEntryStatus)
+        .filter(AdminEntryStatus.job_uuid == job_uuid)
         .first()
     )
     photos = (
@@ -480,6 +500,106 @@ def job_summary(
             }
             for n in admin_notes
         ],
+        "entry_status": None if not entry_status else {
+            "entered_by": entry_status.entered_by,
+            "entered_on": entry_status.entered_on,
+            "updated_by_name": entry_status.updated_by_name,
+            "updated_at": _iso(entry_status.updated_at),
+        },
+    }
+
+
+# ---------------------------
+# Admin data-entry status — initials + date the admin records once they've
+# transcribed a job's data into the books. Surfaced on the Job Summary card,
+# in job-search results, and as new entered_by / entered_on columns on every
+# job-related worksheet (Events, Materials, JobReports, Bills).
+# ---------------------------
+
+class EntryStatusUpsert(BaseModel):
+    entered_by: str
+    entered_on: str  # YYYY-MM-DD
+
+
+@router.get("/job-entry-status/{job_uuid}")
+def get_entry_status(
+    job_uuid: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    row = db.query(AdminEntryStatus).filter(AdminEntryStatus.job_uuid == job_uuid).first()
+    if not row:
+        return {"job_uuid": job_uuid, "entry_status": None}
+    return {
+        "job_uuid": job_uuid,
+        "entry_status": {
+            "entered_by": row.entered_by,
+            "entered_on": row.entered_on,
+            "updated_by_name": row.updated_by_name,
+            "updated_at": _iso(row.updated_at),
+        },
+    }
+
+
+@router.put("/job-entry-status/{job_uuid}")
+def upsert_entry_status(
+    job_uuid: str,
+    payload: EntryStatusUpsert,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    initials = (payload.entered_by or "").strip()
+    if not initials:
+        raise HTTPException(status_code=400, detail="entered_by is required")
+    entered_on = (payload.entered_on or "").strip()
+    if not entered_on:
+        raise HTTPException(status_code=400, detail="entered_on is required")
+
+    now = datetime.now(timezone.utc)
+    existing = db.query(AdminEntryStatus).filter(AdminEntryStatus.job_uuid == job_uuid).first()
+    if existing:
+        existing.entered_by = initials
+        existing.entered_on = entered_on
+        existing.updated_by_id = current_user.id
+        existing.updated_by_name = current_user.name or current_user.email
+        existing.updated_at = now
+        db.commit()
+        db.refresh(existing)
+        row = existing
+    else:
+        row = AdminEntryStatus(
+            job_uuid=job_uuid,
+            entered_by=initials,
+            entered_on=entered_on,
+            updated_by_id=current_user.id,
+            updated_by_name=current_user.name or current_user.email,
+            updated_at=now,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+    # Sweep historical sheet rows so admin sees the initials propagate
+    # immediately. New writes (post this point) also pick the values up via
+    # _entry_status_for in the exporter functions.
+    sweep_counts: Dict[str, int] = {}
+    try:
+        sweep_counts = update_entry_status_in_sheets(db, job_uuid, initials, entered_on)
+    except Exception as exc:
+        # Log and continue — the DB row is the source of truth; the next
+        # export of any kind for this job will repopulate. Admin can also
+        # PUT again to retry.
+        print(f"[entry-status] sweep failed for {job_uuid}: {exc}")
+
+    return {
+        "job_uuid": job_uuid,
+        "entry_status": {
+            "entered_by": row.entered_by,
+            "entered_on": row.entered_on,
+            "updated_by_name": row.updated_by_name,
+            "updated_at": _iso(row.updated_at),
+        },
+        "sheet_sweep": sweep_counts,
     }
 
 
