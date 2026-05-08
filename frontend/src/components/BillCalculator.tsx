@@ -1,4 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { apiFetch } from "../api/client";
 import { MATERIAL_CATALOG } from "../data/catalog";
 import { useTheme } from "../theme/ThemeContext";
@@ -97,15 +105,27 @@ function materialExt(m: LiveMaterial): number {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+// When `children` is supplied, the parent positions the three slots itself —
+// lets JobReport interleave M1 cards between Bill Helper and Discounts/Total
+// without exporting BillCalculator's internal state. Default render keeps the
+// original stacked layout for any caller that still uses BillCalculator as a
+// drop-in.
+export type BillSlots = {
+  billHelper: ReactNode;
+  totals: ReactNode;
+  notes: ReactNode;
+};
+
 type Props = {
   jobUuid: string;
   jobName: string;
   dumpsterPct?: number;   // 0–100 from M1 estimate
   recyclingPct?: number;  // 0–100 from M1 estimate
+  children?: (slots: BillSlots) => ReactNode;
 };
 
 const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
-  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0 },
+  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, children },
   ref,
 ) {
   const { settings: themeSettings } = useTheme();
@@ -369,24 +389,32 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // ── Empty / loading states ────────────────────────────────────────────────────
 
   if (!jobUuid) {
-    return (
+    const placeholder = (
       <div className="card" style={{ color: "var(--muted)", textAlign: "center", padding: "28px 16px" }}>
         Select a job to build a bill.
       </div>
     );
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null })}</>;
+    return placeholder;
   }
 
   if (!loaded) {
-    return <div className="card" style={{ color: "var(--muted)", fontSize: 13, padding: 14 }}>Loading bill…</div>;
+    const placeholder = (
+      <div className="card" style={{ color: "var(--muted)", fontSize: 13, padding: 14 }}>Loading bill…</div>
+    );
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null })}</>;
+    return placeholder;
   }
 
   const { subtotal, discountAmt, total } = calcTotals(bill.items, bill.globalDiscount);
   const grandTotal = total + materialsTotal;
 
   // ── Render ────────────────────────────────────────────────────────────────────
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-
+  // Build the three sections as slot nodes so a render-prop caller can
+  // interleave them with its own cards. When no `children` is provided we
+  // fall back to the original stacked layout.
+  const billHelperSlot = (
+    <>
       <div className="sectionTitle" style={{ marginBottom: 0 }}>Bill Helper</div>
       {jobName && (
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
@@ -568,45 +596,58 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           )}
         </div>
       </div>
+    </>
+  );
 
-      {/* ── Totals ── */}
-      <div className="card">
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <label style={{ fontSize: 13, color: "var(--muted)" }}>Global discount (%)</label>
-            <input type="number" min={0} max={100} step={1} value={bill.globalDiscount}
-              onChange={(e) => setBill((prev) => ({ ...prev, globalDiscount: Math.min(100, Math.max(0, Number(e.target.value) || 0)) }))}
-              style={{ ...numInputStyle, width: 80 }} />
+  const totalsSlot = (
+    <div className="card">
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <label style={{ fontSize: 13, color: "var(--muted)" }}>Global discount (%)</label>
+          <input type="number" min={0} max={100} step={1} value={bill.globalDiscount}
+            onChange={(e) => setBill((prev) => ({ ...prev, globalDiscount: Math.min(100, Math.max(0, Number(e.target.value) || 0)) }))}
+            style={{ ...numInputStyle, width: 80 }} />
+        </div>
+        <div style={{ height: 1, background: "var(--border)" }} />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
+          <span>Line-items subtotal</span><span>{fmt(subtotal)}</span>
+        </div>
+        {discountAmt > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--danger)" }}>
+            <span>Discount ({bill.globalDiscount}%)</span><span>−{fmt(discountAmt)}</span>
           </div>
-          <div style={{ height: 1, background: "var(--border)" }} />
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
-            <span>Line-items subtotal</span><span>{fmt(subtotal)}</span>
-          </div>
-          {discountAmt > 0 && (
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--danger)" }}>
-              <span>Discount ({bill.globalDiscount}%)</span><span>−{fmt(discountAmt)}</span>
-            </div>
-          )}
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
-            <span>Materials</span><span>{fmt(materialsTotal)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 18 }}>
-            <span>Total</span>
-            <span style={{ color: "var(--brand)" }}>{fmt(grandTotal)}</span>
-          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
+          <span>Materials</span><span>{fmt(materialsTotal)}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 18 }}>
+          <span>Total</span>
+          <span style={{ color: "var(--brand)" }}>{fmt(grandTotal)}</span>
         </div>
       </div>
+    </div>
+  );
 
-      {/* ── Notes ── */}
-      <div className="card">
-        <div className="sectionTitle">Bill Notes</div>
-        <textarea value={bill.notes}
-          onChange={(e) => setBill((prev) => ({ ...prev, notes: e.target.value }))}
-          placeholder={ht.billNotesPlaceholder}
-          rows={3}
-          style={{ width: "100%", marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, resize: "vertical", boxSizing: "border-box" }} />
-      </div>
+  const notesSlot = (
+    <div className="card">
+      <div className="sectionTitle">Bill Notes</div>
+      <textarea value={bill.notes}
+        onChange={(e) => setBill((prev) => ({ ...prev, notes: e.target.value }))}
+        placeholder={ht.billNotesPlaceholder}
+        rows={3}
+        style={{ width: "100%", marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, resize: "vertical", boxSizing: "border-box" }} />
+    </div>
+  );
 
+  if (children) {
+    return <>{children({ billHelper: billHelperSlot, totals: totalsSlot, notes: notesSlot })}</>;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {billHelperSlot}
+      {totalsSlot}
+      {notesSlot}
     </div>
   );
 });

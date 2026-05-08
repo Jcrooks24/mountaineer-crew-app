@@ -2714,94 +2714,6 @@ function JobSummaryTab() {
             </div>
           </div>
 
-          <div className="card">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Invoice copy-paste</div>
-              <button onClick={copyInvoice} disabled={!invoiceText} style={{ fontSize: 12 }}>
-                {invoiceCopied ? "✓ Copied" : "Copy"}
-              </button>
-            </div>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-              Plain-text timestamps + materials counts, ready to paste into invoice software.
-            </div>
-            <textarea
-              id="invoice-copy-text"
-              readOnly
-              value={invoiceText}
-              rows={Math.min(20, Math.max(6, invoiceText.split("\n").length))}
-              style={{
-                width: "100%",
-                fontFamily: "monospace",
-                fontSize: 12,
-                whiteSpace: "pre",
-                resize: "vertical",
-              }}
-            />
-          </div>
-
-          <div className="card">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Data entry</div>
-              <span
-                className="chip"
-                style={{
-                  fontSize: 10,
-                  padding: "2px 8px",
-                  color: summary.entry_status ? "var(--ok)" : "var(--brand2)",
-                  borderColor: summary.entry_status ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
-                }}
-              >
-                {summary.entry_status ? "✓ Entered" : "Pending entry"}
-              </span>
-            </div>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-              Record your initials and the date once you've entered this job's data into the books.
-              Saving also writes the values into every job-related sheet for this job.
-            </div>
-            <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
-              <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
-                <input
-                  type="text"
-                  value={entryInitials}
-                  onChange={(e) => { setEntryInitials(e.target.value); setEntrySaved(false); }}
-                  placeholder="e.g. JC"
-                  maxLength={16}
-                />
-              </label>
-              <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Entered on</span>
-                <input
-                  type="date"
-                  value={entryDate}
-                  onChange={(e) => { setEntryDate(e.target.value); setEntrySaved(false); }}
-                />
-              </label>
-              <button
-                onClick={saveEntryStatus}
-                disabled={entrySaving}
-                className="btnPrimary"
-                style={{ flex: "0 0 auto" }}
-              >
-                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Mark entered")}
-              </button>
-            </div>
-            {entryError && (
-              <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{entryError}</div>
-            )}
-            {entrySaved && !entryError && (
-              <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>
-                ✓ Saved and propagated to sheets
-              </div>
-            )}
-            {summary.entry_status && (
-              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-                Last updated by {summary.entry_status.updated_by_name || "—"}
-                {summary.entry_status.updated_at ? ` on ${formatMountainDateTime(summary.entry_status.updated_at)}` : ""}
-              </div>
-            )}
-          </div>
-
           {summary.admin_notes.length > 0 && (
             <div className="card">
               <div className="sectionTitle">Admin Notes</div>
@@ -2848,38 +2760,6 @@ function JobSummaryTab() {
                     </div>
                   );
                 })}
-              </div>
-            )}
-          </div>
-
-          <div className="card">
-            <div className="sectionTitle">DVIRs ({summary.dvirs.length})</div>
-            {summary.dvirs.length === 0 ? (
-              <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
-            ) : (
-              <div className="col" style={{ gap: 10 }}>
-                {summary.dvirs.map((d) => (
-                  <div key={d.dvir_id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                    <div className="row" style={{ justifyContent: "space-between", gap: 6 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>
-                        {d.vehicle_number}{d.trailer_number ? ` / ${d.trailer_number}` : ""} · {d.inspection_type}
-                      </div>
-                      <span className="chip" style={{ fontSize: 11, color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)" }}>
-                        {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} defect${d.defects.length === 1 ? "" : "s"}`}
-                      </span>
-                    </div>
-                    <div className="small" style={{ color: "var(--muted)" }}>
-                      {d.inspection_date} · driver {d.driver_name}
-                      {d.mechanic_name ? ` · mechanic ${d.mechanic_name}` : ""}
-                    </div>
-                    {d.defects.length > 0 && (
-                      <div className="small" style={{ marginTop: 4 }}>
-                        Defects: {d.defects.join(", ")}
-                      </div>
-                    )}
-                    {d.defect_notes && <div style={{ fontSize: 13, marginTop: 4 }}>{d.defect_notes}</div>}
-                  </div>
-                ))}
               </div>
             )}
           </div>
@@ -3026,6 +2906,126 @@ function JobSummaryTab() {
                 </>
               );
             })()}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">DVIRs ({summary.dvirs.length})</div>
+            {summary.dvirs.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                {summary.dvirs.map((d) => (
+                  <div key={d.dvir_id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="row" style={{ justifyContent: "space-between", gap: 6 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>
+                        {d.vehicle_number}{d.trailer_number ? ` / ${d.trailer_number}` : ""} · {d.inspection_type}
+                      </div>
+                      <span className="chip" style={{ fontSize: 11, color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)" }}>
+                        {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} defect${d.defects.length === 1 ? "" : "s"}`}
+                      </span>
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)" }}>
+                      {d.inspection_date} · driver {d.driver_name}
+                      {d.mechanic_name ? ` · mechanic ${d.mechanic_name}` : ""}
+                    </div>
+                    {d.defects.length > 0 && (
+                      <div className="small" style={{ marginTop: 4 }}>
+                        Defects: {d.defects.join(", ")}
+                      </div>
+                    )}
+                    {d.defect_notes && <div style={{ fontSize: 13, marginTop: 4 }}>{d.defect_notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="sectionTitle">Invoice copy-paste</div>
+              <button onClick={copyInvoice} disabled={!invoiceText} style={{ fontSize: 12 }}>
+                {invoiceCopied ? "✓ Copied" : "Copy"}
+              </button>
+            </div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+              Plain-text timestamps + materials counts, ready to paste into invoice software.
+            </div>
+            <textarea
+              id="invoice-copy-text"
+              readOnly
+              value={invoiceText}
+              rows={Math.min(20, Math.max(6, invoiceText.split("\n").length))}
+              style={{
+                width: "100%",
+                fontFamily: "monospace",
+                fontSize: 12,
+                whiteSpace: "pre",
+                resize: "vertical",
+              }}
+            />
+          </div>
+
+          <div className="card">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="sectionTitle">Data entry</div>
+              <span
+                className="chip"
+                style={{
+                  fontSize: 10,
+                  padding: "2px 8px",
+                  color: summary.entry_status ? "var(--ok)" : "var(--brand2)",
+                  borderColor: summary.entry_status ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                }}
+              >
+                {summary.entry_status ? "✓ Entered" : "Pending entry"}
+              </span>
+            </div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+              Record your initials and the date once you've entered this job's data into the books.
+              Saving also writes the values into every job-related sheet for this job.
+            </div>
+            <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
+              <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
+                <input
+                  type="text"
+                  value={entryInitials}
+                  onChange={(e) => { setEntryInitials(e.target.value); setEntrySaved(false); }}
+                  placeholder="e.g. JC"
+                  maxLength={16}
+                />
+              </label>
+              <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Entered on</span>
+                <input
+                  type="date"
+                  value={entryDate}
+                  onChange={(e) => { setEntryDate(e.target.value); setEntrySaved(false); }}
+                />
+              </label>
+              <button
+                onClick={saveEntryStatus}
+                disabled={entrySaving}
+                className="btnPrimary"
+                style={{ flex: "0 0 auto" }}
+              >
+                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Mark entered")}
+              </button>
+            </div>
+            {entryError && (
+              <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{entryError}</div>
+            )}
+            {entrySaved && !entryError && (
+              <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>
+                ✓ Saved and propagated to sheets
+              </div>
+            )}
+            {summary.entry_status && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                Last updated by {summary.entry_status.updated_by_name || "—"}
+                {summary.entry_status.updated_at ? ` on ${formatMountainDateTime(summary.entry_status.updated_at)}` : ""}
+              </div>
+            )}
           </div>
 
           <div className="card">

@@ -681,7 +681,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       jobName={jobName}
       dumpsterPct={data.dumpster_pct}
       recyclingPct={data.recycling_pct}
-    />
+    >
+      {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
       {/* Draft autosave indicator. Hidden once the report is submitted
@@ -705,182 +706,6 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           {draftStatus === "saved" && "✓ Draft saved"}
         </div>
       )}
-
-      {/* ── Dumpster & Recycling (sit under the Bill Helper because the
-             sliders drive bill line items) ── */}
-      <div className="card">
-        <div className="sectionTitle">M1 Dumpster Use *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Was the M1 dumpster (trash) used on this job?
-        </div>
-        <YesNo
-          value={data.has_dumpster_use}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_dumpster_use: v,
-              dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_dumpster_use && (
-          <div style={{ marginTop: 14 }}>
-            <PctSlider
-              label="Dumpster fill estimate"
-              value={data.dumpster_pct}
-              onChange={(v) => set("dumpster_pct", v)}
-              color="var(--danger)"
-            />
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">M1 Recycling Use *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Was the M1 recycling bin used on this job?
-        </div>
-        <YesNo
-          value={data.has_recycling_use}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_recycling_use: v,
-              recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_recycling_use && (
-          <div style={{ marginTop: 14 }}>
-            <PctSlider
-              label="Recycling bin fill estimate"
-              value={data.recycling_pct}
-              onChange={(v) => set("recycling_pct", v)}
-              color="var(--ok)"
-            />
-          </div>
-        )}
-      </div>
-
-      {/* ── Bill auto-populate review ──
-          Placed here so the crew sees the M1 sliders drive new bill
-          line items before confirming them. */}
-      <div className="card">
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={billReviewed}
-            onChange={(e) => { setBillReviewed(e.target.checked); setSaved(false); }}
-            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
-          />
-          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
-            I have reviewed and confirmed the correctness of the auto-populated line items
-            in the Bill Helper above (including any dumpster / recycling charges from the
-            sliders).
-          </span>
-        </label>
-      </div>
-
-      {jobName && (
-        <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
-          Report for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>
-        </div>
-      )}
-
-      {/* ── Personal vehicles ── */}
-      <div className="card">
-        <div className="sectionTitle">Personal Vehicles at Job Site *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Were any crew personal vehicles at the job site?
-        </div>
-        <YesNo
-          value={data.has_personal_vehicles}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_personal_vehicles: v,
-              personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_personal_vehicles && (
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))}
-              style={stepBtnStyle}
-              aria-label="Decrease"
-            >
-              −
-            </button>
-            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>
-              {data.personal_vehicles}
-            </span>
-            <button
-              type="button"
-              onClick={() => set("personal_vehicles", data.personal_vehicles + 1)}
-              style={stepBtnStyle}
-              aria-label="Increase"
-            >
-              +
-            </button>
-            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
-          </div>
-        )}
-      </div>
-
-      {/* ── Billing ── */}
-      <div className="card">
-        <div className="sectionTitle">Billing Method *</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-          {BILLING_OPTIONS.map(({ value, label }) => {
-            const active = data.billing_method === value;
-            return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => set("billing_method", value)}
-                style={{
-                  padding: "11px 14px",
-                  borderRadius: 10,
-                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.1)" : "transparent",
-                  color: active ? "var(--brand)" : "var(--text)",
-                  fontWeight: active ? 700 : 400,
-                  fontSize: 13,
-                  textAlign: "left",
-                  cursor: "pointer",
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Review candidate ── */}
-      <div className="card">
-        <div className="sectionTitle">Review Candidate *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Is this client a good candidate for the office to seek a review from?
-        </div>
-        <YesNo
-          value={data.review_candidate}
-          onChange={(v) => set("review_candidate", v)}
-          yesLabel="Yes — reach out"
-          noLabel="No"
-        />
-      </div>
 
       {/* ── Employee Hours ──
           Crew picks events from the timeline for each crew member's start
@@ -1126,6 +951,195 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         )}
       </div>
 
+      {/* Bill Helper line items (slot from BillCalculator). Sits between
+          Employee Hours and the M1 sliders — line items first, sliders
+          second so they can drive new bill rows, totals/notes follow. */}
+      {billSlots.billHelper}
+
+      {/* ── Dumpster & Recycling (sit under the Bill Helper because the
+             sliders drive bill line items) ── */}
+      <div className="card">
+        <div className="sectionTitle">M1 Dumpster Use *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Was the M1 dumpster (trash) used on this job?
+        </div>
+        <YesNo
+          value={data.has_dumpster_use}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_dumpster_use: v,
+              dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_dumpster_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider
+              label="Dumpster fill estimate"
+              value={data.dumpster_pct}
+              onChange={(v) => set("dumpster_pct", v)}
+              color="var(--danger)"
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">M1 Recycling Use *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Was the M1 recycling bin used on this job?
+        </div>
+        <YesNo
+          value={data.has_recycling_use}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_recycling_use: v,
+              recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_recycling_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider
+              label="Recycling bin fill estimate"
+              value={data.recycling_pct}
+              onChange={(v) => set("recycling_pct", v)}
+              color="var(--ok)"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Bill totals + notes slots from BillCalculator. Placed after the M1
+          sliders so their line items have already populated by the time the
+          crew sees the running total and the bill notes textarea. */}
+      {billSlots.totals}
+      {billSlots.notes}
+
+      {/* ── Bill auto-populate review ──
+          Placed here so the crew sees the M1 sliders drive new bill
+          line items before confirming them. */}
+      <div className="card">
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={billReviewed}
+            onChange={(e) => { setBillReviewed(e.target.checked); setSaved(false); }}
+            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+          />
+          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
+            I have reviewed and confirmed the correctness of the auto-populated line items
+            in the Bill Helper above (including any dumpster / recycling charges from the
+            sliders).
+          </span>
+        </label>
+      </div>
+
+      {/* ── Billing method ── */}
+      <div className="card">
+        <div className="sectionTitle">Billing Method *</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+          {BILLING_OPTIONS.map(({ value, label }) => {
+            const active = data.billing_method === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => set("billing_method", value)}
+                style={{
+                  padding: "11px 14px",
+                  borderRadius: 10,
+                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: active ? "rgba(93,214,194,0.1)" : "transparent",
+                  color: active ? "var(--brand)" : "var(--text)",
+                  fontWeight: active ? 700 : 400,
+                  fontSize: 13,
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── The rest of the tiles (any order at the bottom of the tab). */}
+
+      {jobName && (
+        <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
+          Report for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>
+        </div>
+      )}
+
+      {/* ── Personal vehicles ── */}
+      <div className="card">
+        <div className="sectionTitle">Personal Vehicles at Job Site *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Were any crew personal vehicles at the job site?
+        </div>
+        <YesNo
+          value={data.has_personal_vehicles}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_personal_vehicles: v,
+              personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0,
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_personal_vehicles && (
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
+            <button
+              type="button"
+              onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))}
+              style={stepBtnStyle}
+              aria-label="Decrease"
+            >
+              −
+            </button>
+            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>
+              {data.personal_vehicles}
+            </span>
+            <button
+              type="button"
+              onClick={() => set("personal_vehicles", data.personal_vehicles + 1)}
+              style={stepBtnStyle}
+              aria-label="Increase"
+            >
+              +
+            </button>
+            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Review candidate ── */}
+      <div className="card">
+        <div className="sectionTitle">Review Candidate *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Is this client a good candidate for the office to seek a review from?
+        </div>
+        <YesNo
+          value={data.review_candidate}
+          onChange={(v) => set("review_candidate", v)}
+          yesLabel="Yes — reach out"
+          noLabel="No"
+        />
+      </div>
+
       {/* ── Hours reconciliation ── */}
       <div className="card">
         <div className="sectionTitle">Hours Reconciliation *</div>
@@ -1175,6 +1189,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         {busy ? "Saving…" : saved ? "Update Report" : "Save Report"}
       </button>
     </form>
+      )}
+    </BillCalculator>
     </>
   );
 }
