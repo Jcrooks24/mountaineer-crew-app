@@ -16,12 +16,16 @@ export type EmployeeHoursEntry = {
   hours: number;
 };
 
-// Compact subset of EventRecord — enough to populate the time-math dropdowns
-// without leaking the rest of App.tsx's offline state into JobReport.
+// Compact subset of EventRecord — enough to populate the Employee Hours
+// dropdowns without leaking the rest of App.tsx's offline state into
+// JobReport. `note` surfaces in the dropdown labels (truncated to one line)
+// so crew can disambiguate which "ARRIVED" they're picking when a job has
+// several of the same event type.
 type ReportEvent = {
   event_id: string;
   type: string;
   timestamp: string;
+  note?: string | null;
 };
 
 type BillingMethod =
@@ -227,8 +231,9 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   }
 
   // ── Employee Hours helpers ─────────────────────────────────────────────────
-  // Sort timeline events ascending so the time-math dropdowns read like a day.
-  // App.tsx supplies them newest-first.
+  // Sort timeline events ascending so the dropdowns read like a day. App.tsx
+  // supplies events newest-first. JOB_NOTES sentinels are already filtered
+  // out upstream.
   const sortedEvents = useMemo(
     () =>
       events
@@ -237,67 +242,133 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     [events],
   );
 
-  const [timeMathA, setTimeMathA] = useState<string>("");
-  const [timeMathB, setTimeMathB] = useState<string>("");
-  const timeMathHours = useMemo(() => {
-    if (!timeMathA || !timeMathB) return null;
-    const a = sortedEvents.find((e) => e.event_id === timeMathA);
-    const b = sortedEvents.find((e) => e.event_id === timeMathB);
-    if (!a || !b) return null;
-    const ms = Math.abs(new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return ms / 3_600_000;
-  }, [timeMathA, timeMathB, sortedEvents]);
+  const eventById = useMemo(() => {
+    const m = new Map<string, ReportEvent>();
+    for (const e of sortedEvents) m.set(e.event_id, e);
+    return m;
+  }, [sortedEvents]);
 
-  function parseHHMM(s: string): number | null {
-    if (!s) return null;
-    const m = /^(\d{1,2}):(\d{2})$/.exec(s);
-    if (!m) return null;
-    const h = Number(m[1]);
-    const mm = Number(m[2]);
-    if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
-    return h * 60 + mm;
+  // Editor state — rebuilds itself after every Save. Each Add becomes a single
+  // row in `data.employee_hours`. Breaks are kept as event-id pairs in the
+  // editor so the crew can preview duration live; on Save we collapse them to
+  // a single break_hours total (which is what the storage shape carries).
+  const [editName, setEditName] = useState<string>("");
+  const [editStartId, setEditStartId] = useState<string>("");
+  const [editEndId, setEditEndId] = useState<string>("");
+  type BreakDraft = { startId: string; endId: string };
+  const [editBreaks, setEditBreaks] = useState<BreakDraft[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Drop-down label for an event. Truncates the note onto one line — long
+  // notes are clipped with "…" so the option width stays bounded; shorter
+  // notes show in full. Newlines are collapsed so multi-line notes don't
+  // wrap inside the <option>.
+  function eventOptionLabel(ev: ReportEvent): string {
+    const time = formatMountainTime(ev.timestamp);
+    const rawNote = (ev.note || "").replace(/\s+/g, " ").trim();
+    const NOTE_MAX = 40;
+    const note = rawNote.length > NOTE_MAX ? rawNote.slice(0, NOTE_MAX - 1) + "…" : rawNote;
+    return note ? `${ev.type} — ${time} — ${note}` : `${ev.type} — ${time}`;
   }
 
-  function computeWorkedHours(start: string, end: string, breakHours: number): number {
-    const s = parseHHMM(start);
-    const e = parseHHMM(end);
-    if (s === null || e === null) return 0;
-    let durMin = e - s;
-    if (durMin < 0) durMin += 24 * 60; // shift crossed midnight
-    return Math.max(0, durMin / 60 - (Number.isFinite(breakHours) ? breakHours : 0));
+  function fmtHHMM(iso: string): string {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
   }
 
-  function addEmployee() {
+  function hoursBetween(aIso: string, bIso: string): number {
+    return (new Date(bIso).getTime() - new Date(aIso).getTime()) / 3_600_000;
+  }
+
+  // Live preview of the currently-being-edited employee. Returns either a
+  // computed { spanHours, breakHours, hours } or an error message. Drives
+  // the inline summary line and Save-button enablement.
+  type EditorPreview =
+    | { kind: "ok"; spanHours: number; breakHours: number; hours: number }
+    | { kind: "incomplete" }
+    | { kind: "error"; message: string };
+
+  const editorPreview = useMemo<EditorPreview>(() => {
+    const startEv = eventById.get(editStartId);
+    const endEv = eventById.get(editEndId);
+    if (!startEv || !endEv) return { kind: "incomplete" };
+    const spanHours = hoursBetween(startEv.timestamp, endEv.timestamp);
+    if (spanHours <= 0) {
+      return { kind: "error", message: "End event is at or before start event." };
+    }
+    let breakHours = 0;
+    for (const b of editBreaks) {
+      const bs = eventById.get(b.startId);
+      const be = eventById.get(b.endId);
+      if (!bs || !be) continue;
+      const span = hoursBetween(bs.timestamp, be.timestamp);
+      if (span > 0) breakHours += span;
+    }
+    if (breakHours >= spanHours) {
+      return { kind: "error", message: "Clocked-out periods exceed the worked span." };
+    }
+    return {
+      kind: "ok",
+      spanHours,
+      breakHours,
+      hours: Math.max(0, spanHours - breakHours),
+    };
+  }, [editStartId, editEndId, editBreaks, eventById]);
+
+  function addBreakDraft() {
+    setEditBreaks((prev) => [...prev, { startId: "", endId: "" }]);
+  }
+  function updateBreakDraft(i: number, patch: Partial<BreakDraft>) {
+    setEditBreaks((prev) => prev.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
+  }
+  function removeBreakDraft(i: number) {
+    setEditBreaks((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  function resetEditor() {
+    setEditName("");
+    setEditStartId("");
+    setEditEndId("");
+    setEditBreaks([]);
+    setEditError(null);
+  }
+
+  function saveEmployee() {
+    const name = editName.trim();
+    if (!name) {
+      setEditError("Enter an employee name.");
+      return;
+    }
+    if (!editStartId || !editEndId) {
+      setEditError("Pick both start and end events.");
+      return;
+    }
+    if (editorPreview.kind === "error") {
+      setEditError(editorPreview.message);
+      return;
+    }
+    if (editorPreview.kind !== "ok") {
+      setEditError("Cannot compute hours — check the events.");
+      return;
+    }
+    const startEv = eventById.get(editStartId)!;
+    const endEv = eventById.get(editEndId)!;
+    const entry: EmployeeHoursEntry = {
+      name,
+      start: fmtHHMM(startEv.timestamp),
+      end: fmtHHMM(endEv.timestamp),
+      break_hours: Number(editorPreview.breakHours.toFixed(2)),
+      hours: Number(editorPreview.hours.toFixed(2)),
+    };
     setData((prev) => ({
       ...prev,
-      employee_hours: [
-        ...prev.employee_hours,
-        { name: "", start: "", end: "", break_hours: 0, hours: 0 },
-      ],
+      employee_hours: [...prev.employee_hours, entry],
     }));
     setSaved(false);
-  }
-
-  function updateEmployee(i: number, patch: Partial<EmployeeHoursEntry>) {
-    setData((prev) => {
-      const next = prev.employee_hours.slice();
-      const merged: EmployeeHoursEntry = { ...next[i], ...patch };
-      // Auto-fill hours from start/end/break whenever those are touched and
-      // both times are present. Crew can still type a duration directly when
-      // start/end aren't known (skip the time fields, fill Hours Worked).
-      const touchedTimeOrBreak =
-        patch.start !== undefined ||
-        patch.end !== undefined ||
-        patch.break_hours !== undefined;
-      if (touchedTimeOrBreak && merged.start && merged.end) {
-        merged.hours = Number(
-          computeWorkedHours(merged.start, merged.end, Number(merged.break_hours) || 0).toFixed(2),
-        );
-      }
-      next[i] = merged;
-      return { ...prev, employee_hours: next };
-    });
-    setSaved(false);
+    resetEditor();
   }
 
   function removeEmployee(i: number) {
@@ -625,144 +696,197 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       </div>
 
       {/* ── Employee Hours ──
-          Crew enters per-employee start/end/break/duration here. Time-math
-          helper below picks two timeline events and shows the duration in
-          base-10 hours; crew transcribes that into the rows. The whole
-          block flows into a single Employee Hours column on the JobReports
-          worksheet via the backend. */}
+          Crew picks events from the timeline for each crew member's start
+          and end, plus any clocked-out periods. Save adds a row to the
+          table below; the whole block ships to the backend on report
+          submission and lands in the JobReports sheet's employee_hours
+          column.
+
+          Storage carries resolved HH:MM strings, not event_ids — keeps
+          the Sheet column human-readable and decouples it from later
+          edits to the source events. */}
       <div className="card">
         <div className="sectionTitle">Employee Hours</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Record hours worked per crew member. Filling Start + End auto-fills Hours
-          Worked (minus any break). Otherwise type Hours Worked directly.
-        </div>
 
-        {sortedEvents.length >= 2 && (
-          <div
-            style={{
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              borderRadius: 8,
-              padding: 10,
-              marginBottom: 12,
-            }}
-          >
-            <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>
-              Time math
-            </div>
-            <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>
-              <select
-                value={timeMathA}
-                onChange={(e) => setTimeMathA(e.target.value)}
-                style={{ flex: "1 1 140px", minWidth: 0 }}
-              >
-                <option value="">From event…</option>
-                {sortedEvents.map((ev) => (
-                  <option key={ev.event_id} value={ev.event_id}>
-                    {ev.type} — {formatMountainTime(ev.timestamp)}
-                  </option>
-                ))}
-              </select>
-              <span className="small">→</span>
-              <select
-                value={timeMathB}
-                onChange={(e) => setTimeMathB(e.target.value)}
-                style={{ flex: "1 1 140px", minWidth: 0 }}
-              >
-                <option value="">To event…</option>
-                {sortedEvents.map((ev) => (
-                  <option key={ev.event_id} value={ev.event_id}>
-                    {ev.type} — {formatMountainTime(ev.timestamp)}
-                  </option>
-                ))}
-              </select>
-              {timeMathHours !== null && (
-                <span style={{ fontWeight: 700, fontSize: 14 }}>
-                  = {timeMathHours.toFixed(2)} hrs
-                </span>
-              )}
-            </div>
-            <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
-              Use this to compute either worked time or break time, then type the result below.
-            </div>
+        {sortedEvents.length < 2 ? (
+          <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+            Need at least two timeline events for this job before you can
+            log employee hours.
           </div>
+        ) : (
+          <>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+              Type a name, pick the start and end events, add any clocked-out
+              periods, then Save. Repeat for each crew member.
+            </div>
+
+            <div
+              style={{
+                background: "var(--bg)",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                padding: 12,
+                marginBottom: 12,
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+              }}
+            >
+              <input
+                type="text"
+                placeholder="Employee name"
+                value={editName}
+                onChange={(e) => { setEditName(e.target.value); setEditError(null); }}
+                style={{ width: "100%" }}
+              />
+
+              <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>
+                <select
+                  value={editStartId}
+                  onChange={(e) => { setEditStartId(e.target.value); setEditError(null); }}
+                  style={{ flex: "1 1 160px", minWidth: 0 }}
+                >
+                  <option value="">Start event…</option>
+                  {sortedEvents.map((ev) => (
+                    <option key={ev.event_id} value={ev.event_id}>
+                      {eventOptionLabel(ev)}
+                    </option>
+                  ))}
+                </select>
+                <span className="small">→</span>
+                <select
+                  value={editEndId}
+                  onChange={(e) => { setEditEndId(e.target.value); setEditError(null); }}
+                  style={{ flex: "1 1 160px", minWidth: 0 }}
+                >
+                  <option value="">End event…</option>
+                  {sortedEvents.map((ev) => (
+                    <option key={ev.event_id} value={ev.event_id}>
+                      {eventOptionLabel(ev)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="col" style={{ gap: 6 }}>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  Clocked-out periods (lunch, errands, anything that should be
+                  subtracted from hours worked):
+                </div>
+                {editBreaks.map((b, i) => (
+                  <div key={i} className="row wrap" style={{ gap: 6, alignItems: "center" }}>
+                    <select
+                      value={b.startId}
+                      onChange={(e) => updateBreakDraft(i, { startId: e.target.value })}
+                      style={{ flex: "1 1 160px", minWidth: 0 }}
+                    >
+                      <option value="">Out at…</option>
+                      {sortedEvents.map((ev) => (
+                        <option key={ev.event_id} value={ev.event_id}>
+                          {eventOptionLabel(ev)}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="small">→</span>
+                    <select
+                      value={b.endId}
+                      onChange={(e) => updateBreakDraft(i, { endId: e.target.value })}
+                      style={{ flex: "1 1 160px", minWidth: 0 }}
+                    >
+                      <option value="">Back at…</option>
+                      {sortedEvents.map((ev) => (
+                        <option key={ev.event_id} value={ev.event_id}>
+                          {eventOptionLabel(ev)}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => removeBreakDraft(i)}
+                      style={{ color: "var(--danger)", flex: "0 0 auto" }}
+                      title="Remove this clocked-out period"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={addBreakDraft}
+                  style={{ alignSelf: "flex-start", fontSize: 12 }}
+                >
+                  + Add clocked-out period
+                </button>
+              </div>
+
+              {editorPreview.kind === "ok" && (
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  Worked: <strong style={{ color: "var(--text)" }}>{editorPreview.hours.toFixed(2)} hrs</strong>
+                  {" "}({editorPreview.spanHours.toFixed(2)} span
+                  {editorPreview.breakHours > 0 ? ` − ${editorPreview.breakHours.toFixed(2)} break` : ""})
+                </div>
+              )}
+              {editError && (
+                <div className="small" style={{ color: "var(--danger)" }}>{editError}</div>
+              )}
+
+              <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+                {(editName || editStartId || editEndId || editBreaks.length > 0) && (
+                  <button type="button" onClick={resetEditor}>Cancel</button>
+                )}
+                <button type="button" onClick={saveEmployee} className="btnPrimary">
+                  Save employee
+                </button>
+              </div>
+            </div>
+          </>
         )}
 
-        {data.employee_hours.length === 0 ? (
-          <div className="small" style={{ color: "var(--muted)" }}>No employees added yet.</div>
-        ) : (
-          <div className="col" style={{ gap: 12 }}>
+        {data.employee_hours.length > 0 && (
+          <div className="col" style={{ gap: 0 }}>
+            <div
+              className="small"
+              style={{
+                color: "var(--muted)",
+                fontWeight: 700,
+                paddingBottom: 6,
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
+              Saved ({data.employee_hours.length})
+            </div>
             {data.employee_hours.map((emp, i) => (
               <div
                 key={i}
+                className="row"
                 style={{
-                  borderTop: i > 0 ? "1px solid var(--border)" : "none",
-                  paddingTop: i > 0 ? 12 : 0,
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 0",
+                  borderBottom: "1px solid var(--border)",
                 }}
               >
-                <input
-                  type="text"
-                  placeholder="Employee name"
-                  value={emp.name}
-                  onChange={(e) => updateEmployee(i, { name: e.target.value })}
-                  style={{ width: "100%", marginBottom: 8 }}
-                />
-                <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
-                  <label className="col" style={{ gap: 2, flex: "1 1 90px", minWidth: 90 }}>
-                    <span className="small" style={{ color: "var(--muted)" }}>Start</span>
-                    <input
-                      type="time"
-                      value={emp.start}
-                      onChange={(e) => updateEmployee(i, { start: e.target.value })}
-                    />
-                  </label>
-                  <label className="col" style={{ gap: 2, flex: "1 1 90px", minWidth: 90 }}>
-                    <span className="small" style={{ color: "var(--muted)" }}>End</span>
-                    <input
-                      type="time"
-                      value={emp.end}
-                      onChange={(e) => updateEmployee(i, { end: e.target.value })}
-                    />
-                  </label>
-                  <label className="col" style={{ gap: 2, flex: "1 1 80px", minWidth: 80 }}>
-                    <span className="small" style={{ color: "var(--muted)" }}>Break (hrs)</span>
-                    <input
-                      type="number"
-                      step="0.25"
-                      min="0"
-                      value={emp.break_hours}
-                      onChange={(e) =>
-                        updateEmployee(i, { break_hours: Number(e.target.value) || 0 })
-                      }
-                    />
-                  </label>
-                  <label className="col" style={{ gap: 2, flex: "1 1 90px", minWidth: 90 }}>
-                    <span className="small" style={{ color: "var(--muted)" }}>Worked (hrs)</span>
-                    <input
-                      type="number"
-                      step="0.25"
-                      min="0"
-                      value={emp.hours}
-                      onChange={(e) => updateEmployee(i, { hours: Number(e.target.value) || 0 })}
-                      style={{ fontWeight: 700 }}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => removeEmployee(i)}
-                    style={{ color: "var(--danger)", flex: "0 0 auto" }}
-                  >
-                    Remove
-                  </button>
+                <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
+                  <div className="small" style={{ color: "var(--muted)" }}>
+                    {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
+                    {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
+                    {" · "}
+                    <strong style={{ color: "var(--text)" }}>{emp.hours.toFixed(2)}h</strong>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => removeEmployee(i)}
+                  style={{ color: "var(--danger)", flex: "0 0 auto" }}
+                >
+                  Remove
+                </button>
               </div>
             ))}
           </div>
         )}
-
-        <button type="button" onClick={addEmployee} style={{ marginTop: 12 }}>
-          + Add employee
-        </button>
       </div>
 
       {/* ── Hours reconciliation ── */}
