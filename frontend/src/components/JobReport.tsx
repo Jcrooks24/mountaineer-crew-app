@@ -997,19 +997,21 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                     <div className="small" style={{ marginTop: 2 }}>
                       {emp.non_billable ? (
                         <>
-                          <strong style={{ color: "var(--muted)" }}>non-billable</strong>
-                          <span style={{ color: "var(--muted)" }}> (actual {emp.hours.toFixed(2)}h)</span>
+                          <strong style={{ color: "var(--muted)" }}>
+                            non-billable {roundBillableQuarter(emp.hours).toFixed(2)}h
+                          </strong>
+                          <span style={{ color: "var(--muted)" }}>
+                            {" "}(actual {emp.hours.toFixed(2)}h)
+                          </span>
                         </>
                       ) : (
                         <>
                           <strong style={{ color: "var(--text)" }}>
                             {roundBillableQuarter(emp.hours).toFixed(2)}h
                           </strong>
-                          {Math.abs(roundBillableQuarter(emp.hours) - emp.hours) > 0.001 && (
-                            <span style={{ color: "var(--muted)" }}>
-                              {" "}(actual {emp.hours.toFixed(2)}h)
-                            </span>
-                          )}
+                          <span style={{ color: "var(--muted)" }}>
+                            {" "}(actual {emp.hours.toFixed(2)}h)
+                          </span>
                         </>
                       )}
                     </div>
@@ -1050,14 +1052,12 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               <span>Total man-hours</span>
               <span>
                 {totalBillableHours.toFixed(2)}h
-                {Math.abs(totalBillableHours - totalActualHours) > 0.001 && (
-                  <span
-                    className="small"
-                    style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}
-                  >
-                    (actual {totalActualHours.toFixed(2)}h)
-                  </span>
-                )}
+                <span
+                  className="small"
+                  style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}
+                >
+                  (actual {totalActualHours.toFixed(2)}h)
+                </span>
               </span>
             </div>
           </div>

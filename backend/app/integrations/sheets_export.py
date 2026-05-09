@@ -800,10 +800,11 @@ def _format_employee_hours(entries: Optional[list]) -> str:
     plain-text format below matches the layout used in the Admin Job Summary
     invoice copy-paste block so the same string can be transcribed either way.
 
-    Per-row figures stay as the *actual* worked hours — the company's
-    quarter-hour rounding is applied once at the end, to the summed total,
-    not to individual entries. Non-billable rows show as such and are
-    excluded from the total.
+    Each row shows the company's quarter-hour rounded value with the actual
+    worked hours in parens — both billable and non-billable, always shown
+    even when no rounding was needed. The total still rounds the *summed
+    actuals* once at the end so the totals line is what gets invoiced;
+    non-billable rows are excluded from the total sum.
     """
     if not entries:
         return ""
@@ -826,25 +827,24 @@ def _format_employee_hours(entries: Optional[list]) -> str:
         non_billable = bool(e.get("non_billable") or False)
         if not non_billable:
             total_actual += hrs
+        rounded = _round_billable_quarter(hrs)
         span = f"{start}–{end}" if start and end else (start or end or "")
         pieces = [name + ":"]
         if span:
             pieces.append(span + ("," if br > 0 else ""))
         if br > 0:
             pieces.append(f"break {br:.2f}h")
+        tail = f"{rounded:.2f}h (actual {hrs:.2f}h)"
         if non_billable:
-            pieces.append(f"→ non-billable (actual {hrs:.2f}h)")
+            pieces.append(f"→ non-billable {tail}")
         else:
-            pieces.append(f"→ {hrs:.2f}h")
+            pieces.append(f"→ {tail}")
         lines.append(" ".join(pieces))
     if lines:
         total_billable = _round_billable_quarter(total_actual)
-        if abs(total_billable - total_actual) > 0.001:
-            lines.append(
-                f"Total man-hours: {total_billable:.2f}h (actual {total_actual:.2f}h)"
-            )
-        else:
-            lines.append(f"Total man-hours: {total_billable:.2f}h")
+        lines.append(
+            f"Total man-hours: {total_billable:.2f}h (actual {total_actual:.2f}h)"
+        )
     return "\n".join(lines)
 
 

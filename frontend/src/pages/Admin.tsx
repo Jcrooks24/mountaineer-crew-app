@@ -2568,27 +2568,25 @@ function JobSummaryTab() {
         const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
         const breakStr = emp.break_hours > 0 ? `, break ${emp.break_hours.toFixed(2)}h` : "";
         const actual = emp.hours || 0;
+        const rounded = roundBillableQuarter(actual);
+        // Always show both rounded and actual on every row, billable or
+        // not, so the office assistant has the full picture even when no
+        // rounding occurred. Total still rounds the *summed actuals*
+        // once at the end — invoice off the totals line, not by adding
+        // rows. Non-billable rows display the same way but are excluded
+        // from the total sum.
+        const tail = `${rounded.toFixed(2)}h (actual ${actual.toFixed(2)}h)`;
         if (emp.non_billable) {
-          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → non-billable (actual ${actual.toFixed(2)}h)`);
+          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → non-billable ${tail}`);
         } else {
-          // Per-row display rounds to the company quarter-hour rule with
-          // the actual in parens — same convention the Report tab and
-          // Employee Hours tile use. The total below still rounds the
-          // *summed actuals* once (round-at-end) so the office assistant
-          // always invoices off the totals line, not by adding rows.
-          const rounded = roundBillableQuarter(actual);
-          const tail = Math.abs(rounded - actual) > 0.001
-            ? `${rounded.toFixed(2)}h (actual ${actual.toFixed(2)}h)`
-            : `${rounded.toFixed(2)}h`;
           lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → ${tail}`);
           totalActual += actual;
         }
       }
       const totalBillable = roundBillableQuarter(totalActual);
-      const totalLine = Math.abs(totalBillable - totalActual) > 0.001
-        ? `  Total man-hours: ${totalBillable.toFixed(2)}h (actual ${totalActual.toFixed(2)}h)`
-        : `  Total man-hours: ${totalBillable.toFixed(2)}h`;
-      lines.push(totalLine);
+      lines.push(
+        `  Total man-hours: ${totalBillable.toFixed(2)}h (actual ${totalActual.toFixed(2)}h)`
+      );
     }
 
     return lines.join("\n").replace(/\n+$/, "");
@@ -2877,11 +2875,20 @@ function JobSummaryTab() {
                               <div style={{ flex: "0 0 auto", textAlign: "right" }}>
                                 {emp.non_billable ? (
                                   <div className="small" style={{ color: "var(--muted)" }}>
-                                    actual {(emp.hours || 0).toFixed(2)}h
+                                    {roundBillableQuarter(emp.hours || 0).toFixed(2)}h
+                                    {" "}(actual {(emp.hours || 0).toFixed(2)}h)
                                   </div>
                                 ) : (
-                                  <div style={{ fontWeight: 700, fontSize: 14 }}>
-                                    {(emp.hours || 0).toFixed(2)}h
+                                  <div>
+                                    <span style={{ fontWeight: 700, fontSize: 14 }}>
+                                      {roundBillableQuarter(emp.hours || 0).toFixed(2)}h
+                                    </span>
+                                    <span
+                                      className="small"
+                                      style={{ color: "var(--muted)", marginLeft: 6 }}
+                                    >
+                                      (actual {(emp.hours || 0).toFixed(2)}h)
+                                    </span>
                                   </div>
                                 )}
                               </div>
@@ -2901,14 +2908,12 @@ function JobSummaryTab() {
                         <span>Total man-hours</span>
                         <span>
                           {totalBillable.toFixed(2)}h
-                          {Math.abs(totalBillable - totalActual) > 0.001 && (
-                            <span
-                              className="small"
-                              style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}
-                            >
-                              (actual {totalActual.toFixed(2)}h)
-                            </span>
-                          )}
+                          <span
+                            className="small"
+                            style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}
+                          >
+                            (actual {totalActual.toFixed(2)}h)
+                          </span>
                         </span>
                       </div>
                     </>
