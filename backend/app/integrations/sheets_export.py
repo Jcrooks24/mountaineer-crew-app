@@ -849,13 +849,24 @@ def _format_employee_hours(entries: Optional[list]) -> str:
 
 
 def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
+    """Replace-style export: exactly one row per job_uuid in the JobReports
+    tab. Any prior row for this job is deleted before the fresh row is
+    appended so re-saves overwrite in place instead of stacking new rows.
+
+    Previously used the generic_exports dedupe keyed on job_uuid+updated_at,
+    which let every save through as a new row. The dedupe table entries for
+    the 'job_report' kind are now inert; we don't bother cleaning them up
+    since they take no part in the new flow.
+    """
     tab = os.getenv("SHEETS_JOB_REPORTS_TAB", "JobReports").strip() or "JobReports"
-    key = f'{report.get("job_uuid","")}:{_iso(report.get("updated_at"))}'
-    if _generic_already_exported(db, "job_report", key):
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    job_uuid = report.get("job_uuid", "") or ""
+    if not job_uuid:
         return 0
-    entered_by, entered_on = _entry_status_for(db, report.get("job_uuid", "") or "")
+
+    entered_by, entered_on = _entry_status_for(db, job_uuid)
     row = {
-        "job_uuid": report.get("job_uuid", ""),
+        "job_uuid": job_uuid,
         "job_name": report.get("job_name", ""),
         "submitted_by": report.get("submitted_by_name", "") or "",
         "personal_vehicles": report.get("personal_vehicles", ""),
@@ -872,10 +883,30 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "entered_by": entered_by,
         "entered_on": entered_on,
     }
-    written = _append_rows(db, tab, JOB_REPORT_HEADERS, [row])
-    if written:
-        _generic_mark_exported(db, "job_report", [key])
-    return written
+
+    # Build the svc once and reuse for delete + ensure_tab + append so we
+    # share one TLS connection per call.
+    svc = _get_sheets_svc(db)
+
+    # Ensure the tab + headers exist before deleting (a fresh staging
+    # spreadsheet may not have the JobReports tab yet) so the lookup in
+    # _delete_sheet_rows_by_value finds the job_uuid column.
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, JOB_REPORT_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "job_uuid", job_uuid)
+
+    rows = [_build_row(row, actual_headers)]
+
+    def _append():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    _ssl_retry(_append)
+    return 1
 
 
 # ── Bills ────────────────────────────────────────────────────────────────────
@@ -1105,6 +1136,61 @@ ESTIMATE_ITEM_HEADERS = [
 ]
 
 
+def _delete_sheet_rows_by_value(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    col_name: str,
+    target_value: str,
+) -> int:
+    """Delete every row in `tab` where the `col_name` cell equals
+    `target_value`. Used by replace-style exports (estimates, job reports)
+    to guarantee exactly one row per logical entity regardless of how
+    many times it's saved.
+
+    Returns the number of rows deleted. No-op if the tab doesn't exist
+    yet, the column isn't present, or no rows match."""
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
+    if tab not in sheet_ids:
+        return 0
+    sheet_numeric_id = sheet_ids[tab]
+
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0]
+    if col_name not in headers_row:
+        return 0
+    col_letter = _col_letter(headers_row.index(col_name))
+
+    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
+    ).execute())
+    col_values = col.get("values") or []
+
+    target_indices = [
+        i for i, row in enumerate(col_values)
+        if i > 0 and (row[0] if row else "") == target_value
+    ]
+    if not target_indices:
+        return 0
+
+    requests = [
+        {"deleteDimension": {"range": {
+            "sheetId": sheet_numeric_id,
+            "dimension": "ROWS",
+            "startIndex": idx,
+            "endIndex": idx + 1,
+        }}}
+        for idx in sorted(target_indices, reverse=True)
+    ]
+    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id, body={"requests": requests}
+    ).execute())
+    return len(target_indices)
+
+
 def _delete_estimate_sheet_rows(
     svc: Any,
     spreadsheet_id: str,
@@ -1113,45 +1199,10 @@ def _delete_estimate_sheet_rows(
 ) -> None:
     """Delete all rows for `estimate_uuid` from each tab. col_name is always
     'estimate_uuid' in both Estimates and EstimateItems tabs."""
-    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
-    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
-
     for tab in tabs:
-        if tab not in sheet_ids:
-            continue
-        sheet_numeric_id = sheet_ids[tab]
-
-        hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
-        ).execute())
-        headers_row = (hdr.get("values") or [[]])[0]
-        if "estimate_uuid" not in headers_row:
-            continue
-        col_letter = _col_letter(headers_row.index("estimate_uuid"))
-
-        col = _ssl_retry(lambda: svc.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
-        ).execute())
-        col_values = col.get("values") or []
-
-        target_indices = [
-            i for i, row in enumerate(col_values)
-            if i > 0 and (row[0] if row else "") == estimate_uuid
-        ]
-
-        if target_indices:
-            requests = [
-                {"deleteDimension": {"range": {
-                    "sheetId": sheet_numeric_id,
-                    "dimension": "ROWS",
-                    "startIndex": idx,
-                    "endIndex": idx + 1,
-                }}}
-                for idx in sorted(target_indices, reverse=True)
-            ]
-            _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
-                spreadsheetId=spreadsheet_id, body={"requests": requests}
-            ).execute())
+        _delete_sheet_rows_by_value(
+            svc, spreadsheet_id, tab, "estimate_uuid", estimate_uuid,
+        )
 
 
 def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:

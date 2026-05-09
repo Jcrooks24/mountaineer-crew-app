@@ -2567,11 +2567,21 @@ function JobSummaryTab() {
       for (const emp of hours) {
         const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
         const breakStr = emp.break_hours > 0 ? `, break ${emp.break_hours.toFixed(2)}h` : "";
+        const actual = emp.hours || 0;
         if (emp.non_billable) {
-          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → non-billable (actual ${(emp.hours || 0).toFixed(2)}h)`);
+          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → non-billable (actual ${actual.toFixed(2)}h)`);
         } else {
-          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → ${(emp.hours || 0).toFixed(2)}h`);
-          totalActual += emp.hours || 0;
+          // Per-row display rounds to the company quarter-hour rule with
+          // the actual in parens — same convention the Report tab and
+          // Employee Hours tile use. The total below still rounds the
+          // *summed actuals* once (round-at-end) so the office assistant
+          // always invoices off the totals line, not by adding rows.
+          const rounded = roundBillableQuarter(actual);
+          const tail = Math.abs(rounded - actual) > 0.001
+            ? `${rounded.toFixed(2)}h (actual ${actual.toFixed(2)}h)`
+            : `${rounded.toFixed(2)}h`;
+          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → ${tail}`);
+          totalActual += actual;
         }
       }
       const totalBillable = roundBillableQuarter(totalActual);
