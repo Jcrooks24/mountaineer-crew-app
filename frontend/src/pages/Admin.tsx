@@ -2966,69 +2966,6 @@ function JobSummaryTab() {
           </div>
 
           <div className="card">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Data entry</div>
-              <span
-                className="chip"
-                style={{
-                  fontSize: 10,
-                  padding: "2px 8px",
-                  color: summary.entry_status ? "var(--ok)" : "var(--brand2)",
-                  borderColor: summary.entry_status ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
-                }}
-              >
-                {summary.entry_status ? "✓ Entered" : "Pending entry"}
-              </span>
-            </div>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-              Record your initials and the date once you've entered this job's data into the books.
-              Saving also writes the values into every job-related sheet for this job.
-            </div>
-            <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
-              <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
-                <input
-                  type="text"
-                  value={entryInitials}
-                  onChange={(e) => { setEntryInitials(e.target.value); setEntrySaved(false); }}
-                  placeholder="e.g. JC"
-                  maxLength={16}
-                />
-              </label>
-              <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Entered on</span>
-                <input
-                  type="date"
-                  value={entryDate}
-                  onChange={(e) => { setEntryDate(e.target.value); setEntrySaved(false); }}
-                />
-              </label>
-              <button
-                onClick={saveEntryStatus}
-                disabled={entrySaving}
-                className="btnPrimary"
-                style={{ flex: "0 0 auto" }}
-              >
-                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Mark entered")}
-              </button>
-            </div>
-            {entryError && (
-              <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{entryError}</div>
-            )}
-            {entrySaved && !entryError && (
-              <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>
-                ✓ Saved and propagated to sheets
-              </div>
-            )}
-            {summary.entry_status && (
-              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-                Last updated by {summary.entry_status.updated_by_name || "—"}
-                {summary.entry_status.updated_at ? ` on ${formatMountainDateTime(summary.entry_status.updated_at)}` : ""}
-              </div>
-            )}
-          </div>
-
-          <div className="card">
             <div className="sectionTitle">Job Report</div>
             {!summary.job_report ? (
               <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
@@ -3107,6 +3044,69 @@ function JobSummaryTab() {
                     </div>
                   </a>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="sectionTitle">Data entry</div>
+              <span
+                className="chip"
+                style={{
+                  fontSize: 10,
+                  padding: "2px 8px",
+                  color: summary.entry_status ? "var(--ok)" : "var(--brand2)",
+                  borderColor: summary.entry_status ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                }}
+              >
+                {summary.entry_status ? "✓ Entered" : "Pending entry"}
+              </span>
+            </div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+              Record your initials and the date once you've entered this job's data into the books.
+              Saving also writes the values into every job-related sheet for this job.
+            </div>
+            <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
+              <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
+                <input
+                  type="text"
+                  value={entryInitials}
+                  onChange={(e) => { setEntryInitials(e.target.value); setEntrySaved(false); }}
+                  placeholder="e.g. JC"
+                  maxLength={16}
+                />
+              </label>
+              <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Entered on</span>
+                <input
+                  type="date"
+                  value={entryDate}
+                  onChange={(e) => { setEntryDate(e.target.value); setEntrySaved(false); }}
+                />
+              </label>
+              <button
+                onClick={saveEntryStatus}
+                disabled={entrySaving}
+                className="btnPrimary"
+                style={{ flex: "0 0 auto" }}
+              >
+                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Mark entered")}
+              </button>
+            </div>
+            {entryError && (
+              <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{entryError}</div>
+            )}
+            {entrySaved && !entryError && (
+              <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>
+                ✓ Saved and propagated to sheets
+              </div>
+            )}
+            {summary.entry_status && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                Last updated by {summary.entry_status.updated_by_name || "—"}
+                {summary.entry_status.updated_at ? ` on ${formatMountainDateTime(summary.entry_status.updated_at)}` : ""}
               </div>
             )}
           </div>

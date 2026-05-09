@@ -756,9 +756,23 @@ JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
-    "employee_hours", "created_at", "updated_at",
+    "employee_hours", "has_non_billable_hours",
+    "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
+
+
+def _has_non_billable(entries: Optional[list]) -> str:
+    """Yes/No flag for whether any employee row in the report is marked
+    non-billable. Surfaced as its own JobReports column so admins can
+    spot non-billable time at a glance instead of scanning the multi-line
+    employee_hours cell."""
+    if not entries:
+        return "No"
+    for e in entries:
+        if isinstance(e, dict) and e.get("non_billable"):
+            return "Yes"
+    return "No"
 
 
 def _round_billable_quarter(hours: float) -> float:
@@ -852,6 +866,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "hours_match": "Yes" if report.get("hours_match") else "No",
         "hours_mismatch_reason": report.get("hours_mismatch_reason", "") or "",
         "employee_hours": _format_employee_hours(report.get("employee_hours")),
+        "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,
