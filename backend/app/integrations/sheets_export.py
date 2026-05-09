@@ -15,44 +15,53 @@ from app.core.google_cal_oauth import _build_authorized_http, _ssl_retry, _get_c
 # spawning unlimited threads and blowing Render's 512 MB memory limit.
 _EXPORT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sheets-export")
 
-# Single cached sheets svc shared across all exports. Each `build("sheets",…)`
-# call pulls a ~1 MB discovery doc and allocates a fresh Resource tree; doing
-# that on every export call (8 separate sites previously) was a major OOM
-# contributor on the 512 MB worker. The Resource is thread-safe — googleapi
-# uses a fresh httplib2 connection per request — so one shared instance is
-# safe across the bounded export pool.
+# Per-thread sheets svc. Each `build("sheets",…)` call pulls a ~1 MB
+# discovery doc and allocates a fresh Resource tree; doing that on every
+# export call was a major OOM contributor on the 512 MB Render worker.
 #
-# AuthorizedHttp refreshes the underlying creds in place on 401, so the
-# cached svc stays valid across token expiry without rebuilding. The cache
-# is cleared from `invalidate_cache()` in google_cal_oauth when an admin
-# pastes a fresh token (the creds object is replaced, not mutated).
-_cached_sheets_svc: Optional[Any] = None
-_sheets_svc_lock = threading.Lock()
+# A *single* process-wide cached svc is unsafe though: the Resource wraps one
+# httplib2.Http with a pooled TLS socket, and httplib2 is not thread-safe.
+# Multiple threads writing to the same SSL connection caused intermittent
+# `[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]` errors and OpenSSL heap
+# corruption that crashed the worker (`malloc(): unsorted double linked list
+# corrupted`).
+#
+# Thread-local caching gives both: at most `pool_workers + 1` svcs in memory
+# (currently 3) instead of N-per-call, and each thread owns its own httplib2
+# socket — no cross-thread SSL races.
+#
+# AuthorizedHttp refreshes the underlying creds in place on 401, so a cached
+# svc stays valid across token expiry without rebuilding. Admin-driven token
+# rotation calls `invalidate_sheets_svc_cache()` which bumps a version; each
+# thread lazily rebuilds on its next call when its cached version is stale.
+_sheets_svc_threadlocal = threading.local()
+_sheets_svc_version: int = 0
+_sheets_svc_version_lock = threading.Lock()
 
 
 def _get_sheets_svc(db: Session) -> Any:
-    global _cached_sheets_svc
-    svc = _cached_sheets_svc
-    if svc is not None:
-        return svc
-    with _sheets_svc_lock:
-        if _cached_sheets_svc is not None:
-            return _cached_sheets_svc
-        from googleapiclient.discovery import build as _build
-        creds = _get_creds(db)
-        authorized_http = _build_authorized_http(creds)
-        _cached_sheets_svc = _build(
-            "sheets", "v4", http=authorized_http, cache_discovery=False
-        )
-        return _cached_sheets_svc
+    cached = getattr(_sheets_svc_threadlocal, "svc", None)
+    cached_version = getattr(_sheets_svc_threadlocal, "version", -1)
+    if cached is not None and cached_version == _sheets_svc_version:
+        return cached
+
+    from googleapiclient.discovery import build as _build
+    creds = _get_creds(db)
+    authorized_http = _build_authorized_http(creds)
+    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+    _sheets_svc_threadlocal.svc = svc
+    _sheets_svc_threadlocal.version = _sheets_svc_version
+    return svc
 
 
 def invalidate_sheets_svc_cache() -> None:
-    """Drop the cached sheets svc so the next caller rebuilds with fresh
-    creds. Called from `google_cal_oauth.invalidate_cache()` when admin
-    rotates the OAuth token."""
-    global _cached_sheets_svc
-    _cached_sheets_svc = None
+    """Force every thread to rebuild its cached sheets svc on next use.
+    Called from `google_cal_oauth.invalidate_cache()` when admin rotates the
+    OAuth token. Bumping a version counter is safe across threads; we can't
+    reach into another thread's threading.local from here."""
+    global _sheets_svc_version
+    with _sheets_svc_version_lock:
+        _sheets_svc_version += 1
 
 # Coalesce estimate exports per estimate_uuid. Autosave fires a PATCH per
 # keystroke; without coalescing, the pool's internal queue grew unbounded and

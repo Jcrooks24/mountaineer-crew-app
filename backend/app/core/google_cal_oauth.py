@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time as _time
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -27,8 +28,7 @@ LOCAL_TZ = ZoneInfo("America/Denver")
 DB_TOKEN_KEY = "google_oauth_token"
 
 _cached_creds = None
-_cached_cal_service = None
-_cached_sheets_service = None
+_creds_lock = threading.Lock()
 
 _SSL_ERRORS = ("DECRYPTION_FAILED", "BAD_RECORD_MAC", "SSL", "ssl", "EOF occurred")
 
@@ -84,72 +84,76 @@ def _get_creds(db=None):
     from google.auth.transport.requests import Request
     global _cached_creds
 
-    if _cached_creds and _cached_creds.valid:
-        return _cached_creds
+    # Lock the entire resolve+refresh path. Without this, two threads can
+    # both observe an expired cached cred and call creds.refresh() in
+    # parallel, mutating the same Credentials object's token/expiry fields
+    # concurrently.
+    with _creds_lock:
+        if _cached_creds and _cached_creds.valid:
+            return _cached_creds
 
-    token_json: Optional[str] = None
-    source = "unknown"
+        token_json: Optional[str] = None
+        source = "unknown"
 
-    if db:
-        token_json = _load_token_from_db(db)
+        if db:
+            token_json = _load_token_from_db(db)
+            if token_json:
+                source = "db"
+
+        if not token_json:
+            token_json = os.getenv("GOOGLE_OAUTH_TOKEN_JSON", "").strip() or None
+            if token_json:
+                source = "env"
+
         if token_json:
-            source = "db"
+            try:
+                creds = _creds_from_json(token_json)
+            except Exception as e:
+                raise RuntimeError(f"Token JSON is invalid ({source}): {e}") from e
 
-    if not token_json:
-        token_json = os.getenv("GOOGLE_OAUTH_TOKEN_JSON", "").strip() or None
-        if token_json:
-            source = "env"
+            if not creds.valid:
+                if creds.expired and creds.refresh_token:
+                    _ssl_retry(lambda: creds.refresh(Request()))
+                    if db:
+                        _save_token_to_db(creds, db)
+                else:
+                    raise RuntimeError(
+                        "Google OAuth token is invalid and cannot be refreshed. "
+                        "Paste a fresh token via Admin > Calendar."
+                    )
 
-    if token_json:
-        try:
-            creds = _creds_from_json(token_json)
-        except Exception as e:
-            raise RuntimeError(f"Token JSON is invalid ({source}): {e}") from e
+            _cached_creds = creds
+            return creds
 
-        if not creds.valid:
-            if creds.expired and creds.refresh_token:
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        if TOKEN_PATH.exists():
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        else:
+            creds = None
+
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
                 _ssl_retry(lambda: creds.refresh(Request()))
-                if db:
-                    _save_token_to_db(creds, db)
             else:
-                raise RuntimeError(
-                    "Google OAuth token is invalid and cannot be refreshed. "
-                    "Paste a fresh token via Admin > Calendar."
-                )
+                if not CREDS_PATH.exists():
+                    raise RuntimeError(f"Missing credentials.json at: {CREDS_PATH}")
+                flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
+                creds = flow.run_local_server(port=0)
+            TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
 
         _cached_creds = creds
         return creds
 
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
-
-    if TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-    else:
-        creds = None
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            _ssl_retry(lambda: creds.refresh(Request()))
-        else:
-            if not CREDS_PATH.exists():
-                raise RuntimeError(f"Missing credentials.json at: {CREDS_PATH}")
-            flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
-            creds = flow.run_local_server(port=0)
-        TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
-
-    _cached_creds = creds
-    return creds
-
 
 def invalidate_cache() -> None:
-    global _cached_creds, _cached_cal_service, _cached_sheets_service
-    _cached_creds = None
-    _cached_cal_service = None
-    _cached_sheets_service = None
-    # Cascade: the certifi-backed sheets svc cached in sheets_export holds
-    # a reference to the previous creds object, so it must be cleared too
-    # or it will keep using the rotated-out token.
+    global _cached_creds
+    with _creds_lock:
+        _cached_creds = None
+    # Cascade: every thread's cached sheets svc holds a reference to the
+    # previous creds object, so they must be invalidated too or workers
+    # will keep using the rotated-out token until the worker thread exits.
     try:
         from app.integrations.sheets_export import invalidate_sheets_svc_cache
         invalidate_sheets_svc_cache()
@@ -160,23 +164,20 @@ def invalidate_cache() -> None:
 
 
 def get_calendar_service(db=None):
+    # Build fresh per call. Sharing a googleapiclient service across threads
+    # routes concurrent requests through one pooled httplib2 TLS socket,
+    # which is not thread-safe in OpenSSL.
     from googleapiclient.discovery import build
-    global _cached_cal_service
-    if _cached_cal_service is not None:
-        return _cached_cal_service
     creds = _get_creds(db)
-    _cached_cal_service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    return _cached_cal_service
+    authorized_http = _build_authorized_http(creds)
+    return build("calendar", "v3", http=authorized_http, cache_discovery=False)
 
 
 def get_sheets_service(db=None):
     from googleapiclient.discovery import build
-    global _cached_sheets_service
-    if _cached_sheets_service is not None:
-        return _cached_sheets_service
     creds = _get_creds(db)
-    _cached_sheets_service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    return _cached_sheets_service
+    authorized_http = _build_authorized_http(creds)
+    return build("sheets", "v4", http=authorized_http, cache_discovery=False)
 
 
 def get_cal_status(db=None) -> dict:
