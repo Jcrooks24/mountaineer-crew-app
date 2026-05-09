@@ -737,6 +737,21 @@ def _iso(dt: Any) -> str:
 
 # ── Job Reports ──────────────────────────────────────────────────────────────
 
+_REVIEW_CANDIDATE_LABELS = {"yes": "Yes", "no": "No", "na": "N/A"}
+
+
+def _review_candidate_label(value: Any) -> str:
+    """Map the stored review_candidate string to the human-readable sheet
+    cell. Falls back to the raw value if the column ever contains something
+    unexpected (e.g. a row written before the boolean→string migration on
+    a misconfigured environment) so the data isn't silently dropped."""
+    if isinstance(value, str):
+        return _REVIEW_CANDIDATE_LABELS.get(value, value)
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return ""
+
+
 JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
@@ -833,7 +848,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "dumpster_pct": report.get("dumpster_pct", ""),
         "recycling_pct": report.get("recycling_pct", ""),
         "billing_method": report.get("billing_method", ""),
-        "review_candidate": "Yes" if report.get("review_candidate") else "No",
+        "review_candidate": _review_candidate_label(report.get("review_candidate")),
         "hours_match": "Yes" if report.get("hours_match") else "No",
         "hours_mismatch_reason": report.get("hours_mismatch_reason", "") or "",
         "employee_hours": _format_employee_hours(report.get("employee_hours")),

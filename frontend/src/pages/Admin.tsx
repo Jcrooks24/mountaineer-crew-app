@@ -2378,7 +2378,7 @@ type JobSummary = {
     dumpster_pct: number;
     recycling_pct: number;
     billing_method: string;
-    review_candidate: boolean;
+    review_candidate: "yes" | "no" | "na";
     hours_match: boolean;
     hours_mismatch_reason: string | null;
     employee_hours: Array<{
@@ -3039,7 +3039,12 @@ function JobSummaryTab() {
                 <div className="small"><strong>M1 dumpster:</strong> {summary.job_report.dumpster_pct}%</div>
                 <div className="small"><strong>M1 recycling:</strong> {summary.job_report.recycling_pct}%</div>
                 <div className="small"><strong>Billing method:</strong> {summary.job_report.billing_method}</div>
-                <div className="small"><strong>Review candidate:</strong> {summary.job_report.review_candidate ? "Yes" : "No"}</div>
+                <div className="small"><strong>Review candidate:</strong> {
+                  summary.job_report.review_candidate === "yes" ? "Yes" :
+                  summary.job_report.review_candidate === "no"  ? "No"  :
+                  summary.job_report.review_candidate === "na"  ? "N/A" :
+                  "—"
+                }</div>
                 <div className="small">
                   <strong>Hours match:</strong> {summary.job_report.hours_match ? "Yes" : "No"}
                   {!summary.job_report.hours_match && summary.job_report.hours_mismatch_reason

@@ -61,6 +61,11 @@ const BILLING_OPTIONS: { value: BillingMethod; label: string }[] = [
   { value: "end_of_job",          label: "Bill at end of job (multi-day)" },
 ];
 
+// "yes" | "no" | "na" mirrors the backend ReviewCandidate Literal. `null`
+// means the crew hasn't picked a button yet (form-validation gate, never
+// submitted).
+type ReviewCandidate = "yes" | "no" | "na";
+
 type ReportData = {
   has_personal_vehicles: boolean | null;
   personal_vehicles: number;
@@ -69,11 +74,21 @@ type ReportData = {
   has_recycling_use: boolean | null;
   recycling_pct: number;
   billing_method: string;
-  review_candidate: boolean | null;
+  review_candidate: ReviewCandidate | null;
   hours_match: boolean | null;
   hours_mismatch_reason: string;
   employee_hours: EmployeeHoursEntry[];
 };
+
+// Pre-3-state-migration drafts/responses stored review_candidate as a
+// boolean. Coerce on load so a saved draft from before this deploy still
+// hydrates cleanly instead of breaking the picker.
+function coerceReviewCandidate(v: unknown): ReviewCandidate | null {
+  if (v === "yes" || v === "no" || v === "na") return v;
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return null;
+}
 
 // In-progress draft persisted to localStorage so partially filled reports
 // survive tab switches (the JobReport component unmounts when the user
@@ -172,7 +187,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           has_recycling_use: r.recycling_pct > 0,
           recycling_pct: r.recycling_pct,
           billing_method: r.billing_method,
-          review_candidate: r.review_candidate,
+          review_candidate: coerceReviewCandidate(r.review_candidate),
           hours_match: r.hours_match,
           hours_mismatch_reason: r.hours_mismatch_reason ?? "",
           employee_hours: r.employee_hours ?? [],
@@ -202,7 +217,10 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         // submit. Cleared on successful Save below.
         const draft = loadReportDraft(jobUuid);
         if (draft) {
-          setData(draft.data);
+          setData({
+            ...draft.data,
+            review_candidate: coerceReviewCandidate(draft.data.review_candidate),
+          });
           setBillReviewed(draft.billReviewed);
           setDraftStatus("saved");
         } else {
@@ -983,7 +1001,16 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                           <span style={{ color: "var(--muted)" }}> (actual {emp.hours.toFixed(2)}h)</span>
                         </>
                       ) : (
-                        <strong style={{ color: "var(--text)" }}>{emp.hours.toFixed(2)}h</strong>
+                        <>
+                          <strong style={{ color: "var(--text)" }}>
+                            {roundBillableQuarter(emp.hours).toFixed(2)}h
+                          </strong>
+                          {Math.abs(roundBillableQuarter(emp.hours) - emp.hours) > 0.001 && (
+                            <span style={{ color: "var(--muted)" }}>
+                              {" "}(actual {emp.hours.toFixed(2)}h)
+                            </span>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -1139,11 +1166,14 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
-        <YesNo
+        <ThreeWay
           value={data.review_candidate}
           onChange={(v) => set("review_candidate", v)}
-          yesLabel="Yes — reach out"
-          noLabel="No"
+          options={[
+            { value: "yes", label: "Yes — reach out", tone: "ok" },
+            { value: "no",  label: "No",              tone: "danger" },
+            { value: "na",  label: "N/A",             tone: "muted" },
+          ]}
         />
       </div>
 
@@ -1235,6 +1265,52 @@ function PctSlider({
         <span style={{ fontSize: 10, color: "var(--muted)" }}>Half</span>
         <span style={{ fontSize: 10, color: "var(--muted)" }}>Full</span>
       </div>
+    </div>
+  );
+}
+
+function ThreeWay<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T | null;
+  onChange: (v: T) => void;
+  options: { value: T; label: string; tone: "ok" | "danger" | "muted" }[];
+}) {
+  return (
+    <div style={{ display: "flex", gap: 10 }}>
+      {options.map(({ value: v, label, tone }) => {
+        const active = value === v;
+        const accent =
+          tone === "ok" ? "var(--brand)" :
+          tone === "danger" ? "var(--danger)" :
+          "var(--muted)";
+        const accentBg =
+          tone === "ok" ? "rgba(93,214,194,0.1)" :
+          tone === "danger" ? "rgba(255,107,107,0.08)" :
+          "rgba(148,163,184,0.12)";
+        return (
+          <button
+            key={String(v)}
+            type="button"
+            onClick={() => onChange(v)}
+            style={{
+              flex: 1,
+              padding: "10px 0",
+              borderRadius: 10,
+              border: active ? `2px solid ${accent}` : "1px solid var(--border)",
+              background: active ? accentBg : "transparent",
+              color: active ? accent : "var(--muted)",
+              fontWeight: active ? 700 : 400,
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }

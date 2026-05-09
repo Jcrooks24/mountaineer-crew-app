@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -14,6 +14,8 @@ BILLING_METHODS = {
     "office_arrange_check",
     "end_of_job",
 }
+
+ReviewCandidate = Literal["yes", "no", "na"]
 
 
 class EmployeeHoursEntry(BaseModel):
@@ -38,7 +40,7 @@ class JobReportUpsert(BaseModel):
     dumpster_pct: int = 0
     recycling_pct: int = 0
     billing_method: str
-    review_candidate: bool
+    review_candidate: ReviewCandidate
     hours_match: bool
     hours_mismatch_reason: Optional[str] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
@@ -74,7 +76,7 @@ class JobReportResponse(BaseModel):
     dumpster_pct: int
     recycling_pct: int
     billing_method: str
-    review_candidate: bool
+    review_candidate: ReviewCandidate
     hours_match: bool
     hours_mismatch_reason: Optional[str]
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
