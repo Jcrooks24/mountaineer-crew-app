@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.limits import BodySizeLimitMiddleware, MAX_REQUEST_BODY_BYTES
 from app.db.session import Base, engine  # noqa: F401
 import app.db.models.system_config  # noqa: F401 — ensure table is registered
 import app.db.models.materials  # noqa: F401 — ensures table is registered with Base
@@ -39,6 +40,12 @@ from app.routers.admin_notes import router as admin_notes_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
+
+# Hard ceiling on request body size — rejects oversized uploads with 413
+# before the body reaches a router. Defense in depth: even if a future
+# endpoint accidentally buffers the whole body (`await request.body()`,
+# `await file.read()`), the worker can't OOM from a single request.
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
 
 # CORS: allow browser/PWA frontends to call this API
 # Why:

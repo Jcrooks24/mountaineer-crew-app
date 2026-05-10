@@ -1,7 +1,6 @@
 import os
 import re
-from io import BytesIO
-from typing import Optional
+from typing import BinaryIO, Optional
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -9,6 +8,18 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.core.google_cal_oauth import _get_creds, _build_authorized_http
+
+# 8 MB resumable chunks — keeps peak RSS bounded per upload regardless
+# of total file size. googleapiclient's default is 100 MB, which on a
+# 512 MB / even 2 GB Render worker still OOMs on bigger documents.
+DRIVE_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+
+
+def _execute_resumable(request):
+    response = None
+    while response is None:
+        _, response = request.next_chunk()
+    return response
 
 PARENT_FOLDER_KEY = "drive_parent_folder_id"
 DEFAULT_PARENT_FOLDER_NAME = "Mountaineer Crew Photos"
@@ -93,7 +104,7 @@ def _get_parent_folder_id(svc, db: Optional[Session]) -> str:
 
 def upload_photo_to_drive(
     db: Session,
-    file_data: bytes,
+    file_obj: BinaryIO,
     filename: str,
     mime_type: str,
     job_name: str,
@@ -145,8 +156,14 @@ def upload_photo_to_drive(
 
     print(f"[drive] uploading as '{drive_filename}' into folder '{folder_label}'")
 
-    media = MediaIoBaseUpload(BytesIO(file_data), mimetype=mime_type, resumable=False)
-    result = svc.files().create(
+    file_obj.seek(0)
+    media = MediaIoBaseUpload(
+        file_obj,
+        mimetype=mime_type,
+        resumable=True,
+        chunksize=DRIVE_UPLOAD_CHUNK_SIZE,
+    )
+    request = svc.files().create(
         body={
             "name": drive_filename,
             "parents": [job_folder_id],
@@ -154,7 +171,8 @@ def upload_photo_to_drive(
         },
         media_body=media,
         fields="id, webViewLink",
-    ).execute()
+    )
+    result = _execute_resumable(request)
 
     file_id = result["id"]
 
@@ -208,7 +226,7 @@ def _get_documents_folder_id(svc, db: Optional[Session]) -> str:
 
 def upload_file_to_drive(
     db: Session,
-    file_data: bytes,
+    file_obj: BinaryIO,
     filename: str,
     mime_type: str,
     category: str = "general",
@@ -223,15 +241,22 @@ def upload_file_to_drive(
 
     safe_filename = _safe(filename)[:160] or "document"
 
-    media = MediaIoBaseUpload(BytesIO(file_data), mimetype=mime_type, resumable=False)
-    result = svc.files().create(
+    file_obj.seek(0)
+    media = MediaIoBaseUpload(
+        file_obj,
+        mimetype=mime_type,
+        resumable=True,
+        chunksize=DRIVE_UPLOAD_CHUNK_SIZE,
+    )
+    request = svc.files().create(
         body={
             "name": safe_filename,
             "parents": [category_folder],
         },
         media_body=media,
         fields="id, webViewLink",
-    ).execute()
+    )
+    result = _execute_resumable(request)
 
     file_id = result["id"]
 

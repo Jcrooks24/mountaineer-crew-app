@@ -73,7 +73,8 @@ _estimate_export_lock = threading.Lock()
 
 # Serialize note-cell updates per event_id so rapid edits on the same event
 # (or client retries) can't stack multiple in-memory googleapiclient instances
-# in the pool queue. One lock bucket per event_id is short-lived and cheap.
+# in the pool queue. Bounded so the dict can't grow forever as new event_ids
+# arrive — without a cap this is a slow leak that eventually OOMs the worker.
 _event_note_locks: Dict[str, threading.Lock] = {}
 _event_note_locks_guard = threading.Lock()
 
@@ -83,23 +84,45 @@ _event_note_locks_guard = threading.Lock()
 _event_timestamp_locks: Dict[str, threading.Lock] = {}
 _event_timestamp_locks_guard = threading.Lock()
 
+# Cap chosen so the two dicts together stay well under 1 MB even at full
+# capacity. Pruning is FIFO via insertion-ordered dict iteration.
+_MAX_EVENT_LOCKS = 4096
+
+
+def _bounded_lock(
+    locks: Dict[str, threading.Lock], event_id: str
+) -> threading.Lock:
+    lock = locks.get(event_id)
+    if lock is None:
+        # Prune the oldest unheld lock(s) until we're back under the cap.
+        # We only evict locks we can acquire non-blocking, so a lock in
+        # active use is never yanked out from under its holder.
+        while len(locks) >= _MAX_EVENT_LOCKS:
+            evicted = False
+            for k in list(locks.keys()):
+                candidate = locks[k]
+                if candidate.acquire(blocking=False):
+                    candidate.release()
+                    del locks[k]
+                    evicted = True
+                    break
+            if not evicted:
+                # Every lock is currently held — bail out and let the dict
+                # exceed the cap temporarily rather than block forever.
+                break
+        lock = threading.Lock()
+        locks[event_id] = lock
+    return lock
+
 
 def _lock_for_event_note(event_id: str) -> threading.Lock:
     with _event_note_locks_guard:
-        lock = _event_note_locks.get(event_id)
-        if lock is None:
-            lock = threading.Lock()
-            _event_note_locks[event_id] = lock
-        return lock
+        return _bounded_lock(_event_note_locks, event_id)
 
 
 def _lock_for_event_timestamp(event_id: str) -> threading.Lock:
     with _event_timestamp_locks_guard:
-        lock = _event_timestamp_locks.get(event_id)
-        if lock is None:
-            lock = threading.Lock()
-            _event_timestamp_locks[event_id] = lock
-        return lock
+        return _bounded_lock(_event_timestamp_locks, event_id)
 
 
 def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
