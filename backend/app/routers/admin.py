@@ -146,6 +146,10 @@ def events_today(
     from app.core.time_utils import mountain_day_utc_bounds
     start_of_day, end_of_day = mountain_day_utc_bounds()
 
+    # Cap the day's geotagged events so a runaway location-ping device
+    # can't materialize tens of thousands of ORM objects in this worker.
+    # 2000 is well past any realistic crew day — if we ever brush the cap
+    # we'll see it in the admin map and can paginate properly.
     events = (
         db.query(Event)
         .filter(
@@ -155,6 +159,7 @@ def events_today(
             Event.lng.isnot(None),
         )
         .order_by(Event.timestamp.desc())
+        .limit(2000)
         .all()
     )
 

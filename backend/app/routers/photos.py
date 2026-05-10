@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/photos", tags=["photos"])
 
 
 @router.post("/upload")
-async def upload_photo(
+def upload_photo(
     file: UploadFile = File(...),
     photo_id: str = Form(...),
     job_uuid: str = Form(...),
@@ -25,13 +25,12 @@ async def upload_photo(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    data = await file.read()
     mime_type = file.content_type or "image/jpeg"
 
     try:
         result = upload_photo_to_drive(
             db=db,
-            file_data=data,
+            file_obj=file.file,
             filename=photo_id,
             mime_type=mime_type,
             job_name=job_name,

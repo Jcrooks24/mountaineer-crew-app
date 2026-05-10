@@ -19,20 +19,34 @@ Crew-facing app used in the field on mobile. `backend/` is FastAPI + Postgres + 
 
 ## Render Start Command (BOTH staging and prod)
 
-Both Render services must use this start command — migrations run in their
-own short-lived process before uvicorn launches, so the web worker doesn't
-carry the alembic + migration-module import surface during boot. Loading
-that surface alongside FastAPI was OOM-killing the 512 MB worker once the
-migration chain grew past ~24 modules.
+Both Render services must use this start command. Migrations run in their
+own short-lived process before uvicorn launches (so the web worker doesn't
+carry the alembic + migration-module import surface during boot — that
+was OOM-killing the 512 MB worker once the migration chain grew past ~24
+modules). The `--limit-max-requests` and `--limit-concurrency` flags are
+**load-bearing** — they recycle the worker periodically (caps any slow
+leak — unbounded module-level state, library caches, etc.) and bound
+the number of in-flight requests (so concurrent uploads can't stack into
+RAM).
 
 ```
-python scripts/run_migrations.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+python scripts/run_migrations.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT --limit-max-requests 1000 --limit-concurrency 50 --timeout-keep-alive 5
 ```
+
+If you change either flag, document the reason here. Removing them
+reintroduces the recurring OOM class we spent multiple deploys chasing.
 
 Render's Root Directory is set to `backend` for both services, so the
 working directory at start time is already `backend/`. Don't prefix the
 script path with `backend/` — that produces a duplicated segment and the
 script can't be found.
+
+The app also installs `BodySizeLimitMiddleware` (`app/core/limits.py`)
+which rejects any request whose body exceeds 100 MB with `413 Payload
+Too Large`. Bump `MAX_REQUEST_BODY_BYTES` only if a new endpoint genuinely
+needs a higher cap — and add a per-route override there rather than
+raising the global limit, so one heavy endpoint doesn't widen the OOM
+surface for everything else.
 
 The on_startup hook in `app/main.py` no longer runs alembic. If schema is
 stale at boot, the first DB query that needs a missing column surfaces a
@@ -40,7 +54,9 @@ clear ProgrammingError — easier to diagnose than an OOM kill.
 
 For local development from the repo root:
 `python backend/scripts/run_migrations.py` once after pulling new
-migrations, then `cd backend && uvicorn app.main:app --reload`.
+migrations, then `cd backend && uvicorn app.main:app --reload`. The
+`--limit-*` flags aren't needed locally — they're a production hygiene
+measure, not a correctness requirement.
 
 ## Staging → main promotion workflow
 

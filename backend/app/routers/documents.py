@@ -27,21 +27,20 @@ def list_documents(
 
 
 @router.post("/upload", response_model=DocumentResponse)
-async def upload_document(
+def upload_document(
     file: UploadFile = File(...),
     title: str = Form(...),
     category: str = Form(default="general"),
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    data = await file.read()
     mime_type = file.content_type or "application/octet-stream"
     filename = file.filename or "document"
 
     try:
         result = upload_file_to_drive(
             db=db,
-            file_data=data,
+            file_obj=file.file,
             filename=filename,
             mime_type=mime_type,
             category=category,
