@@ -610,6 +610,13 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     setDraftStatus("saved");
     billRef.current?.flushDraft?.();
 
+    // Clear the stale "✓ Report saved" banner from the previous load/save
+    // before we start. Otherwise a failed update shows the success banner
+    // and the error banner together, which reads as nonsense — the user
+    // can't tell if anything actually saved.
+    setSaved(false);
+    setErr(null);
+
     setBusy(true);
     try {
       await apiFetch("/api/job-report", {
@@ -658,7 +665,16 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       billRef.current?.clearDraft?.();
       setDraftStatus("idle");
     } catch (e: any) {
-      setErr(e?.message ?? "Save failed. Please try again.");
+      // "Failed to fetch" is the browser's generic for any network failure
+      // including a Render cold start that exceeded the fetch timeout. The
+      // POST may have actually committed server-side — turn the message
+      // into something actionable so the crew knows to verify on refresh
+      // instead of re-typing everything.
+      const raw = e?.message ?? "Save failed. Please try again.";
+      const friendlier = /failed to fetch|network/i.test(raw)
+        ? `${raw} — your data is preserved locally; refresh the page to see if the save went through, then retry if not.`
+        : raw;
+      setErr(friendlier);
     } finally {
       setBusy(false);
     }
