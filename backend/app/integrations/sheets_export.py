@@ -916,6 +916,11 @@ BILL_HEADERS = [
     "item_discount_pct", "item_amount", "item_source",
     "global_discount_pct", "bill_notes", "updated_at",
     "entered_by", "entered_on",
+    # Populated only for rows generated from a materials submission (one row
+    # per submission via export_materials_to_bills_sheet). Empty for rows
+    # the crew added in the bill calculator. Used as the delete key when a
+    # materials submission is updated or removed.
+    "submission_id",
 ]
 
 
@@ -952,6 +957,7 @@ def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
             "updated_at": updated_at,
             "entered_by": entered_by,
             "entered_on": entered_on,
+            "submission_id": "",
         })
         keys.append(key)
 
@@ -959,6 +965,86 @@ def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
     if written:
         _generic_mark_exported(db, "bill", keys)
     return written
+
+
+def export_materials_to_bills_sheet(db: Session, submission: Dict[str, Any]) -> int:
+    """Mirror a materials submission into the Bills sheet as a single
+    "Materials" line item carrying the submission total. The itemized
+    breakdown still goes to the Materials sheet via export_materials_to_sheets;
+    this gives the office assistant a unified view of everything billable
+    for a job in one place.
+
+    Replace-style: any prior Bills row for this submission_id is deleted
+    first, so re-saves overwrite in place. Per-submission `submission_id`
+    column is the delete key.
+    """
+    submission_id = str(submission.get("id", "") or "")
+    job_uuid = submission.get("job_uuid", "") or ""
+    if not submission_id or not job_uuid:
+        return 0
+
+    tab = os.getenv("SHEETS_BILLS_TAB", "Bills").strip() or "Bills"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    notes = (submission.get("notes") or "").strip()
+    total = submission.get("total", 0) or 0
+    try:
+        total = round(float(total), 2)
+    except (TypeError, ValueError):
+        total = 0
+    created_at = submission.get("created_at", "") or ""
+
+    entered_by, entered_on = _entry_status_for(db, job_uuid)
+
+    label = "Materials" if not notes else f"Materials — {notes}"
+    row = {
+        "job_uuid": job_uuid,
+        "saved_by": "",
+        "item_label": label,
+        "item_qty": 1,
+        "item_unit": "",
+        "item_rate": total,
+        "item_discount_pct": 0,
+        "item_amount": total,
+        "item_source": "materials",
+        "global_discount_pct": 0,
+        "bill_notes": notes,
+        "updated_at": created_at,
+        "entered_by": entered_by,
+        "entered_on": entered_on,
+        "submission_id": submission_id,
+    }
+
+    svc = _get_sheets_svc(db)
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, BILL_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", submission_id)
+
+    rows = [_build_row(row, actual_headers)]
+
+    def _append():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    _ssl_retry(_append)
+    return 1
+
+
+def delete_materials_from_bills_sheet(db: Session, submission_id: str) -> int:
+    """Drop the materials line for `submission_id` from the Bills sheet.
+    Symmetrical with delete_materials_from_sheets (which clears the
+    Materials sheet) so a deleted materials submission disappears from
+    both places at once."""
+    if not submission_id:
+        return 0
+    tab = os.getenv("SHEETS_BILLS_TAB", "Bills").strip() or "Bills"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    svc = _get_sheets_svc(db)
+    return _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", submission_id)
 
 
 # ── DVIRs ────────────────────────────────────────────────────────────────────

@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models.materials import MaterialsSubmission
 from app.integrations.sheets_export import (
+    delete_materials_from_bills_sheet,
     delete_materials_from_sheets,
+    export_materials_to_bills_sheet,
     export_materials_to_sheets,
     run_export_in_background,
 )
@@ -110,7 +112,11 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
             "items": payload.items,
             "total": payload.total,
         }
+        # Materials worksheet: itemized one row per line item.
         run_export_in_background(export_materials_to_sheets, submission_dict)
+        # Bills worksheet: one summary row per submission so the office
+        # assistant sees materials totals alongside crew-entered bill items.
+        run_export_in_background(export_materials_to_bills_sheet, submission_dict)
 
     return {
         "ok": True,
@@ -188,6 +194,8 @@ def delete_material(
 
     # Mirror the removal to the Google Sheet so admins reading the sheet
     # for cost analysis don't see ghost rows for deleted materials.
+    # Both surfaces: itemized rows in Materials and the summary row in Bills.
     run_export_in_background(delete_materials_from_sheets, submission_id)
+    run_export_in_background(delete_materials_from_bills_sheet, submission_id)
 
     return {"ok": True, "deleted": True}
