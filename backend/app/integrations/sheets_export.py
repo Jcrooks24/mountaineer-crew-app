@@ -967,40 +967,62 @@ def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
     return written
 
 
-def export_materials_to_bills_sheet(db: Session, submission: Dict[str, Any]) -> int:
-    """Mirror a materials submission into the Bills sheet as a single
-    "Materials" line item carrying the submission total. The itemized
-    breakdown still goes to the Materials sheet via export_materials_to_sheets;
-    this gives the office assistant a unified view of everything billable
-    for a job in one place.
+def _job_materials_marker(job_uuid: str) -> str:
+    """The submission_id column value for the aggregated materials line in
+    the Bills sheet. Stable per job, so a re-sum overwrites in place.
+    Distinct from any real submission_id (which is a UUID, no colons),
+    so this can't collide with a row written for an individual submission."""
+    return f"materials:{job_uuid}"
 
-    Replace-style: any prior Bills row for this submission_id is deleted
-    first, so re-saves overwrite in place. Per-submission `submission_id`
-    column is the delete key.
+
+def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
+    """Recalculate the Bills sheet's single "Materials" line for a job:
+    sum every materials submission's total for `job_uuid`, delete any prior
+    Materials line for this job, and write one fresh row carrying the new
+    total. Returns 1 if a row was written, 0 if the job has no materials
+    (in which case any prior row is still removed).
+
+    Called on every materials POST and DELETE so the Bills view always
+    reflects the current sum — invoiced as a single line, not a stack of
+    per-add rows.
     """
-    submission_id = str(submission.get("id", "") or "")
-    job_uuid = submission.get("job_uuid", "") or ""
-    if not submission_id or not job_uuid:
+    if not job_uuid:
         return 0
+
+    from app.db.models.materials import MaterialsSubmission  # local import — avoid module-load cycle
+
+    rows = (
+        db.query(MaterialsSubmission.total)
+        .filter(MaterialsSubmission.job_uuid == job_uuid)
+        .all()
+    )
+    total = 0.0
+    for (t,) in rows:
+        try:
+            total += float(t or 0)
+        except (TypeError, ValueError):
+            pass
+    total = round(total, 2)
 
     tab = os.getenv("SHEETS_BILLS_TAB", "Bills").strip() or "Bills"
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    marker = _job_materials_marker(job_uuid)
 
-    notes = (submission.get("notes") or "").strip()
-    total = submission.get("total", 0) or 0
-    try:
-        total = round(float(total), 2)
-    except (TypeError, ValueError):
-        total = 0
-    created_at = submission.get("created_at", "") or ""
+    svc = _get_sheets_svc(db)
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, BILL_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", marker)
+
+    if total <= 0:
+        # No materials left for this job — leave the Bills sheet without a
+        # zero-value "Materials" row. Itemized history still lives in the
+        # Materials sheet for audit.
+        return 0
 
     entered_by, entered_on = _entry_status_for(db, job_uuid)
-
-    label = "Materials" if not notes else f"Materials — {notes}"
     row = {
         "job_uuid": job_uuid,
         "saved_by": "",
-        "item_label": label,
+        "item_label": "Materials",
         "item_qty": 1,
         "item_unit": "",
         "item_rate": total,
@@ -1008,18 +1030,13 @@ def export_materials_to_bills_sheet(db: Session, submission: Dict[str, Any]) -> 
         "item_amount": total,
         "item_source": "materials",
         "global_discount_pct": 0,
-        "bill_notes": notes,
-        "updated_at": created_at,
+        "bill_notes": "",
+        "updated_at": _iso(datetime.utcnow()),
         "entered_by": entered_by,
         "entered_on": entered_on,
-        "submission_id": submission_id,
+        "submission_id": marker,
     }
-
-    svc = _get_sheets_svc(db)
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, BILL_HEADERS))
-    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", submission_id)
-
-    rows = [_build_row(row, actual_headers)]
+    sheet_rows = [_build_row(row, actual_headers)]
 
     def _append():
         svc.spreadsheets().values().append(
@@ -1027,24 +1044,11 @@ def export_materials_to_bills_sheet(db: Session, submission: Dict[str, Any]) -> 
             range=f"{tab}!A1",
             valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
-            body={"values": rows},
+            body={"values": sheet_rows},
         ).execute()
 
     _ssl_retry(_append)
     return 1
-
-
-def delete_materials_from_bills_sheet(db: Session, submission_id: str) -> int:
-    """Drop the materials line for `submission_id` from the Bills sheet.
-    Symmetrical with delete_materials_from_sheets (which clears the
-    Materials sheet) so a deleted materials submission disappears from
-    both places at once."""
-    if not submission_id:
-        return 0
-    tab = os.getenv("SHEETS_BILLS_TAB", "Bills").strip() or "Bills"
-    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
-    svc = _get_sheets_svc(db)
-    return _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", submission_id)
 
 
 # ── DVIRs ────────────────────────────────────────────────────────────────────

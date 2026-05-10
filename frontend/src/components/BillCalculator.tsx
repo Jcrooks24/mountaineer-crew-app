@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { apiFetch } from "../api/client";
+import { apiFetch, ApiError } from "../api/client";
 import { MATERIAL_CATALOG } from "../data/catalog";
 import { useTheme } from "../theme/ThemeContext";
 import {
@@ -52,6 +52,12 @@ export type BillHandle = {
    * by JobReport after a successful submit so the next load reads the
    * server's authoritative copy instead of the stale draft. */
   clearDraft: () => void;
+  /** Cancel the autosave debounce and write the current bill values to
+   * localStorage *now*. JobReport calls this right before POSTing so a
+   * fast click after typing can't submit with a stale draft on disk
+   * (the load-effect fallback would otherwise restore the wrong state
+   * if the POST fails and the user navigates away). */
+  flushDraft: () => void;
 };
 
 // In-progress bill draft persisted to localStorage so notes / discounts /
@@ -202,6 +208,10 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       cancelPendingBillSave();
       if (jobUuid) clearBillDraftStorage(jobUuid);
     },
+    flushDraft: () => {
+      cancelPendingBillSave();
+      if (jobUuid && loaded) saveBillDraft(jobUuid, bill);
+    },
   }));
 
   // ── Load: saved bill first, then seed ────────────────────────────────────────
@@ -223,8 +233,20 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         );
         setLoaded(true);
       })
-      .catch(() => {
-        // No saved bill — seed from events + M1 estimates (materials live separately now)
+      .catch((e) => {
+        // Real 404 = no saved bill yet, seed from events + M1 estimates.
+        // Network errors / 5xx must NOT fall through to the seed path —
+        // the seed call would also fail, leaving us with no bill data
+        // even though the user may have a perfectly good draft. Restore
+        // the draft directly and bail.
+        if (!(e instanceof ApiError) || e.status !== 404) {
+          const draft = loadBillDraft(jobUuid);
+          if (draft) setBill(draft);
+          setLoaded(true);
+          return;
+        }
+
+        // 404 path — try to seed from events.
         apiFetch<SeedData>(`/api/bill/seed?job_uuid=${encodeURIComponent(jobUuid)}`)
           .then((seed) => {
             const draft = loadBillDraft(jobUuid);

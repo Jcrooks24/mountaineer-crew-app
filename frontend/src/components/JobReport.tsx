@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch } from "../api/client";
+import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime } from "../lib/time";
@@ -194,21 +194,27 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         });
         setSaved(true);
       })
-      .catch(() => {
-        // 404 = no report yet, start fresh
-        setData({
-          has_personal_vehicles: null,
-          personal_vehicles: 0,
-          has_dumpster_use: null,
-          dumpster_pct: 0,
-          has_recycling_use: null,
-          recycling_pct: 0,
-          billing_method: "",
-          review_candidate: null,
-          hours_match: null,
-          hours_mismatch_reason: "",
-          employee_hours: [],
-        });
+      .catch((e) => {
+        // ONLY reset to empty defaults on a real 404 (no report exists yet).
+        // Network errors / 5xx must preserve whatever's in memory — wiping
+        // on a transient "Failed to fetch" was the cause of crew losing
+        // a partly-edited report after a backend hiccup. The .finally()
+        // below still tries to recover from the localStorage draft.
+        if (e instanceof ApiError && e.status === 404) {
+          setData({
+            has_personal_vehicles: null,
+            personal_vehicles: 0,
+            has_dumpster_use: null,
+            dumpster_pct: 0,
+            has_recycling_use: null,
+            recycling_pct: 0,
+            billing_method: "",
+            review_candidate: null,
+            hours_match: null,
+            hours_mismatch_reason: "",
+            employee_hours: [],
+          });
+        }
       })
       .finally(() => {
         // After the server load (or 404 fallback), check for an in-progress
@@ -589,6 +595,20 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     if (billData !== null && billData !== undefined && !billReviewed) {
       return setErr("Please confirm you have reviewed the auto-populated bill items before saving.");
     }
+
+    // Force-flush both drafts BEFORE the POST attempt. The autosave
+    // debounce (750ms) means a fast click after typing could submit with
+    // a stale draft on disk; if the POST then fails and the user navigates
+    // away, the load effect's draft fallback would restore the wrong state.
+    // Cancel any pending debounce and write the current values now so the
+    // localStorage copy always matches what we're trying to send.
+    if (draftSaveTimeoutRef.current !== null) {
+      window.clearTimeout(draftSaveTimeoutRef.current);
+      draftSaveTimeoutRef.current = null;
+    }
+    if (jobUuid) saveReportDraft(jobUuid, { data, billReviewed });
+    setDraftStatus("saved");
+    billRef.current?.flushDraft?.();
 
     setBusy(true);
     try {

@@ -11,10 +11,9 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models.materials import MaterialsSubmission
 from app.integrations.sheets_export import (
-    delete_materials_from_bills_sheet,
     delete_materials_from_sheets,
-    export_materials_to_bills_sheet,
     export_materials_to_sheets,
+    rebuild_job_materials_total_in_bills,
     run_export_in_background,
 )
 from app.core.deps import get_current_user
@@ -118,9 +117,10 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
     }
     # Materials worksheet: itemized one row per line item.
     run_export_in_background(export_materials_to_sheets, submission_dict)
-    # Bills worksheet: one summary row per submission so the office
-    # assistant sees materials totals alongside crew-entered bill items.
-    run_export_in_background(export_materials_to_bills_sheet, submission_dict)
+    # Bills worksheet: ONE aggregate row per job representing the running
+    # materials total, refreshed on every add. Re-summed from the DB so the
+    # value is always correct regardless of what order POSTs/DELETES land in.
+    run_export_in_background(rebuild_job_materials_total_in_bills, payload.job_uuid)
     print(
         f"[materials] queued sheet export submission_id={payload.id} "
         f"job_uuid={payload.job_uuid} inserted={inserted} items={len(payload.items)}"
@@ -191,6 +191,10 @@ def delete_material(
         .filter(MaterialsSubmission.submission_id == submission_id)
         .first()
     )
+    # Capture job_uuid before the delete commits — needed to recompute the
+    # Bills aggregate row even if no DB row remains here (offline retry path).
+    job_uuid = row.job_uuid if row is not None else ""
+
     deleted = False
     if row is not None:
         db.delete(row)
@@ -201,16 +205,17 @@ def delete_material(
             db.rollback()
             raise HTTPException(status_code=500, detail="Failed to delete material")
 
-    # Mirror the removal to the Google Sheets even when row is None — the
-    # row may have been deleted by an earlier request whose response never
-    # reached the device (offline retry pattern), but the sheet rows could
-    # still be present from the original export. Both delete helpers are
-    # no-op when the sheet has no matching rows, so this is safe.
+    # Mirror the removal to the Materials sheet (drops the row(s) for this
+    # submission), then refresh the Bills aggregate so its "Materials" total
+    # reflects the new sum. delete_materials_from_sheets is a no-op when the
+    # sheet has no matching rows; rebuild_job_materials_total_in_bills is a
+    # no-op when no job_uuid is known.
     run_export_in_background(delete_materials_from_sheets, submission_id)
-    run_export_in_background(delete_materials_from_bills_sheet, submission_id)
+    if job_uuid:
+        run_export_in_background(rebuild_job_materials_total_in_bills, job_uuid)
     print(
         f"[materials] queued sheet delete submission_id={submission_id} "
-        f"db_row_deleted={deleted}"
+        f"job_uuid={job_uuid} db_row_deleted={deleted}"
     )
 
     return {"ok": True, "deleted": deleted}
