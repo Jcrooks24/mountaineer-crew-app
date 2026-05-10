@@ -13,6 +13,7 @@ from app.db.models.materials import MaterialsSubmission
 from app.integrations.sheets_export import (
     delete_materials_from_sheets,
     export_materials_to_sheets,
+    rebuild_job_materials_total_in_bills,
     run_export_in_background,
 )
 from app.core.deps import get_current_user
@@ -86,31 +87,44 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
         db.commit()
         inserted = True
     except IntegrityError:
+        # Duplicate submission_id — the row is already in the DB from an
+        # earlier successful POST. Common on the offline retry path: the
+        # first POST committed but the response never made it back to the
+        # device, so the queue retries with the same id.
         db.rollback()
         inserted = False
     except SQLAlchemyError:
         db.rollback()
         inserted = False
 
-    # Export to Google Sheets in the bounded background pool. Running this
-    # synchronously on the request thread held a googleapiclient + the items
-    # payload in memory while concurrent submissions stacked up — a known
-    # contributor to the 512 MB OOM on Render. The export is idempotent
-    # (dedupes per submission_id+item_id), so a retry on the next submission
-    # or a reconciler run will catch any background failure.
-    if inserted:
-        submission_dict = {
-            "id": payload.id,
-            "created_at": payload.created_at,
-            "job_uuid": payload.job_uuid,
-            "jobName": job_name,
-            "jobLabel": job_label,
-            "jobDate": job_date,
-            "notes": payload.notes or "",
-            "items": payload.items,
-            "total": payload.total,
-        }
-        run_export_in_background(export_materials_to_sheets, submission_dict)
+    # Always queue the sheet exports, even when inserted=False. The exports
+    # are idempotent (Materials sheet dedupes per submission_id:item_id;
+    # Bills sheet replaces by submission_id), so a re-run can't double-write.
+    # Crucially, this gives previously-failed exports another shot — the
+    # original code skipped re-export on inserted=False, which permanently
+    # stranded any submission whose first export attempt died (e.g. during
+    # the SSL race that crashed the worker mid-export).
+    submission_dict = {
+        "id": payload.id,
+        "created_at": payload.created_at,
+        "job_uuid": payload.job_uuid,
+        "jobName": job_name,
+        "jobLabel": job_label,
+        "jobDate": job_date,
+        "notes": payload.notes or "",
+        "items": payload.items,
+        "total": payload.total,
+    }
+    # Materials worksheet: itemized one row per line item.
+    run_export_in_background(export_materials_to_sheets, submission_dict)
+    # Bills worksheet: ONE aggregate row per job representing the running
+    # materials total, refreshed on every add. Re-summed from the DB so the
+    # value is always correct regardless of what order POSTs/DELETES land in.
+    run_export_in_background(rebuild_job_materials_total_in_bills, payload.job_uuid)
+    print(
+        f"[materials] queued sheet export submission_id={payload.id} "
+        f"job_uuid={payload.job_uuid} inserted={inserted} items={len(payload.items)}"
+    )
 
     return {
         "ok": True,
@@ -177,17 +191,31 @@ def delete_material(
         .filter(MaterialsSubmission.submission_id == submission_id)
         .first()
     )
-    if row is None:
-        return {"ok": True, "deleted": False}
-    db.delete(row)
-    try:
-        db.commit()
-    except SQLAlchemyError:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete material")
+    # Capture job_uuid before the delete commits — needed to recompute the
+    # Bills aggregate row even if no DB row remains here (offline retry path).
+    job_uuid = row.job_uuid if row is not None else ""
 
-    # Mirror the removal to the Google Sheet so admins reading the sheet
-    # for cost analysis don't see ghost rows for deleted materials.
+    deleted = False
+    if row is not None:
+        db.delete(row)
+        try:
+            db.commit()
+            deleted = True
+        except SQLAlchemyError:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Failed to delete material")
+
+    # Mirror the removal to the Materials sheet (drops the row(s) for this
+    # submission), then refresh the Bills aggregate so its "Materials" total
+    # reflects the new sum. delete_materials_from_sheets is a no-op when the
+    # sheet has no matching rows; rebuild_job_materials_total_in_bills is a
+    # no-op when no job_uuid is known.
     run_export_in_background(delete_materials_from_sheets, submission_id)
+    if job_uuid:
+        run_export_in_background(rebuild_job_materials_total_in_bills, job_uuid)
+    print(
+        f"[materials] queued sheet delete submission_id={submission_id} "
+        f"job_uuid={job_uuid} db_row_deleted={deleted}"
+    )
 
-    return {"ok": True, "deleted": True}
+    return {"ok": True, "deleted": deleted}

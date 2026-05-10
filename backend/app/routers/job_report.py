@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -10,9 +12,21 @@ from app.db.models.event import Event
 from app.db.models.job_report import JobReport
 from app.db.models.user import User
 from app.integrations.sheets_export import export_job_report_to_sheets, run_export_in_background
-from app.schemas.job_report import JobReportResponse, JobReportUpsert
+from app.schemas.job_report import EmployeeHoursEntry, JobReportResponse, JobReportUpsert
 
 router = APIRouter(prefix="/api/job-report", tags=["job-report"])
+
+
+def _decode_employee_hours(raw: Optional[str]) -> Optional[list[EmployeeHoursEntry]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        return [EmployeeHoursEntry(**row) for row in data if isinstance(row, dict)]
+    except (json.JSONDecodeError, ValueError):
+        return None
 
 
 def _to_response(r: JobReport) -> JobReportResponse:
@@ -28,6 +42,7 @@ def _to_response(r: JobReport) -> JobReportResponse:
         review_candidate=r.review_candidate,
         hours_match=r.hours_match,
         hours_mismatch_reason=r.hours_mismatch_reason,
+        employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
         updated_at=r.updated_at,
     )
@@ -48,6 +63,7 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
     # Capture all the data in the request thread (before the db session
     # closes), then push the actual sheets call onto a background thread
     # so the API response is never blocked by Google.
+    employees = _decode_employee_hours(report.employee_hours_json)
     payload = {
         "job_uuid": report.job_uuid,
         "job_name": _job_name_for(db, report.job_uuid),
@@ -59,6 +75,7 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "review_candidate": report.review_candidate,
         "hours_match": report.hours_match,
         "hours_mismatch_reason": report.hours_mismatch_reason,
+        "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
         "updated_at": report.updated_at,
     }
@@ -74,6 +91,12 @@ def upsert_job_report(
     now = datetime.now(timezone.utc)
     existing = db.query(JobReport).filter(JobReport.job_uuid == body.job_uuid).first()
 
+    employee_hours_json = (
+        json.dumps([e.model_dump() for e in body.employee_hours])
+        if body.employee_hours
+        else None
+    )
+
     if existing:
         existing.submitted_by_id = current_user.id
         existing.submitted_by_name = current_user.name or current_user.email
@@ -84,6 +107,7 @@ def upsert_job_report(
         existing.review_candidate = body.review_candidate
         existing.hours_match = body.hours_match
         existing.hours_mismatch_reason = body.hours_mismatch_reason
+        existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
         db.commit()
         db.refresh(existing)
@@ -101,6 +125,7 @@ def upsert_job_report(
         review_candidate=body.review_candidate,
         hours_match=body.hours_match,
         hours_mismatch_reason=body.hours_mismatch_reason,
+        employee_hours_json=employee_hours_json,
         created_at=now,
         updated_at=now,
     )

@@ -15,44 +15,53 @@ from app.core.google_cal_oauth import _build_authorized_http, _ssl_retry, _get_c
 # spawning unlimited threads and blowing Render's 512 MB memory limit.
 _EXPORT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sheets-export")
 
-# Single cached sheets svc shared across all exports. Each `build("sheets",…)`
-# call pulls a ~1 MB discovery doc and allocates a fresh Resource tree; doing
-# that on every export call (8 separate sites previously) was a major OOM
-# contributor on the 512 MB worker. The Resource is thread-safe — googleapi
-# uses a fresh httplib2 connection per request — so one shared instance is
-# safe across the bounded export pool.
+# Per-thread sheets svc. Each `build("sheets",…)` call pulls a ~1 MB
+# discovery doc and allocates a fresh Resource tree; doing that on every
+# export call was a major OOM contributor on the 512 MB Render worker.
 #
-# AuthorizedHttp refreshes the underlying creds in place on 401, so the
-# cached svc stays valid across token expiry without rebuilding. The cache
-# is cleared from `invalidate_cache()` in google_cal_oauth when an admin
-# pastes a fresh token (the creds object is replaced, not mutated).
-_cached_sheets_svc: Optional[Any] = None
-_sheets_svc_lock = threading.Lock()
+# A *single* process-wide cached svc is unsafe though: the Resource wraps one
+# httplib2.Http with a pooled TLS socket, and httplib2 is not thread-safe.
+# Multiple threads writing to the same SSL connection caused intermittent
+# `[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]` errors and OpenSSL heap
+# corruption that crashed the worker (`malloc(): unsorted double linked list
+# corrupted`).
+#
+# Thread-local caching gives both: at most `pool_workers + 1` svcs in memory
+# (currently 3) instead of N-per-call, and each thread owns its own httplib2
+# socket — no cross-thread SSL races.
+#
+# AuthorizedHttp refreshes the underlying creds in place on 401, so a cached
+# svc stays valid across token expiry without rebuilding. Admin-driven token
+# rotation calls `invalidate_sheets_svc_cache()` which bumps a version; each
+# thread lazily rebuilds on its next call when its cached version is stale.
+_sheets_svc_threadlocal = threading.local()
+_sheets_svc_version: int = 0
+_sheets_svc_version_lock = threading.Lock()
 
 
 def _get_sheets_svc(db: Session) -> Any:
-    global _cached_sheets_svc
-    svc = _cached_sheets_svc
-    if svc is not None:
-        return svc
-    with _sheets_svc_lock:
-        if _cached_sheets_svc is not None:
-            return _cached_sheets_svc
-        from googleapiclient.discovery import build as _build
-        creds = _get_creds(db)
-        authorized_http = _build_authorized_http(creds)
-        _cached_sheets_svc = _build(
-            "sheets", "v4", http=authorized_http, cache_discovery=False
-        )
-        return _cached_sheets_svc
+    cached = getattr(_sheets_svc_threadlocal, "svc", None)
+    cached_version = getattr(_sheets_svc_threadlocal, "version", -1)
+    if cached is not None and cached_version == _sheets_svc_version:
+        return cached
+
+    from googleapiclient.discovery import build as _build
+    creds = _get_creds(db)
+    authorized_http = _build_authorized_http(creds)
+    svc = _build("sheets", "v4", http=authorized_http, cache_discovery=False)
+    _sheets_svc_threadlocal.svc = svc
+    _sheets_svc_threadlocal.version = _sheets_svc_version
+    return svc
 
 
 def invalidate_sheets_svc_cache() -> None:
-    """Drop the cached sheets svc so the next caller rebuilds with fresh
-    creds. Called from `google_cal_oauth.invalidate_cache()` when admin
-    rotates the OAuth token."""
-    global _cached_sheets_svc
-    _cached_sheets_svc = None
+    """Force every thread to rebuild its cached sheets svc on next use.
+    Called from `google_cal_oauth.invalidate_cache()` when admin rotates the
+    OAuth token. Bumping a version counter is safe across threads; we can't
+    reach into another thread's threading.local from here."""
+    global _sheets_svc_version
+    with _sheets_svc_version_lock:
+        _sheets_svc_version += 1
 
 # Coalesce estimate exports per estimate_uuid. Autosave fires a PATCH per
 # keystroke; without coalescing, the pool's internal queue grew unbounded and
@@ -124,11 +133,35 @@ DEFAULT_MATERIALS_TAB = "Materials"
 EVENTS_HEADERS = [
     "event_id", "timestamp", "logged_at", "job_uuid", "job_name", "job_date",
     "type", "note", "lat", "lng", "accuracy_m", "device_id", "created_by", "synced",
+    "entered_by", "entered_on",
 ]
 MATERIALS_HEADERS = [
     "submission_id", "created_at", "job_uuid", "job_name", "job_date", "job_label",
     "notes", "item_name", "qty", "unit_price", "line_total", "submission_total",
+    "entered_by", "entered_on",
 ]
+
+
+def _entry_status_for(db: Session, job_uuid: str) -> tuple[str, str]:
+    """Look up the admin's data-entry checkpoint for a job. Returns
+    (entered_by, entered_on) or ("", "") if no checkpoint has been recorded
+    yet. Imports inline so this module stays import-cycle-safe even though
+    AdminEntryStatus is a sibling SQLAlchemy model.
+    """
+    if not job_uuid:
+        return ("", "")
+    try:
+        from app.db.models.admin_entry_status import AdminEntryStatus
+    except ImportError:
+        return ("", "")
+    row = (
+        db.query(AdminEntryStatus)
+        .filter(AdminEntryStatus.job_uuid == job_uuid)
+        .first()
+    )
+    if not row:
+        return ("", "")
+    return (row.entered_by or "", row.entered_on or "")
 
 
 def _col_letter(n: int) -> str:
@@ -294,12 +327,20 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     actual_headers = _ensure_tab(svc, spreadsheet_id, tab, EVENTS_HEADERS)
 
     # 3) Build rows keyed by column name so order always matches the sheet
+    # Cache entry-status lookups so a batch with many events for the same
+    # job hits the DB once per job, not once per event.
+    entry_cache: Dict[str, tuple[str, str]] = {}
+
     rows: List[List[Any]] = []
     for ev in new_events:
         # `logged_at` falls back to `timestamp` for older callers that
         # haven't been updated to pass it explicitly. New rows from
         # /api/sync and the reconciler always pass it.
         logged_at = ev.get("logged_at") or ev.get("timestamp", "")
+        ju = ev.get("job_uuid", "") or ""
+        if ju not in entry_cache:
+            entry_cache[ju] = _entry_status_for(db, ju)
+        entered_by, entered_on = entry_cache[ju]
         row_data: Dict[str, Any] = {
             "event_id":   ev["event_id"],
             "timestamp":  ev["timestamp"],
@@ -315,6 +356,8 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
             "device_id":  ev.get("device_id") or "",
             "created_by": ev.get("created_by") or "",
             "synced":     "synced",
+            "entered_by": entered_by,
+            "entered_on": entered_on,
         }
         rows.append(_build_row(row_data, actual_headers))
 
@@ -356,6 +399,7 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     created_at = submission.get("created_at", "")
     notes = submission.get("notes", "")
     total = submission.get("total", 0)
+    entered_by, entered_on = _entry_status_for(db, job_uuid)
 
     # 1) Build rows, skipping already-exported items
     new_rows: List[Dict[str, Any]] = []
@@ -385,6 +429,8 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
             "item_name":        item.get("name", ""),
             "qty":              qty,
             "unit_price":       unit_price if unit_price is not None else "",
+            "entered_by":       entered_by,
+            "entered_on":       entered_on,
             "line_total":       line_total,
             "submission_total": total,
         })
@@ -691,37 +737,176 @@ def _iso(dt: Any) -> str:
 
 # ── Job Reports ──────────────────────────────────────────────────────────────
 
+_REVIEW_CANDIDATE_LABELS = {"yes": "Yes", "no": "No", "na": "N/A"}
+
+
+def _review_candidate_label(value: Any) -> str:
+    """Map the stored review_candidate string to the human-readable sheet
+    cell. Falls back to the raw value if the column ever contains something
+    unexpected (e.g. a row written before the boolean→string migration on
+    a misconfigured environment) so the data isn't silently dropped."""
+    if isinstance(value, str):
+        return _REVIEW_CANDIDATE_LABELS.get(value, value)
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return ""
+
+
 JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
+    "employee_hours", "has_non_billable_hours",
     "created_at", "updated_at",
+    "entered_by", "entered_on",
 ]
 
 
+def _has_non_billable(entries: Optional[list]) -> str:
+    """Yes/No flag for whether any employee row in the report is marked
+    non-billable. Surfaced as its own JobReports column so admins can
+    spot non-billable time at a glance instead of scanning the multi-line
+    employee_hours cell."""
+    if not entries:
+        return "No"
+    for e in entries:
+        if isinstance(e, dict) and e.get("non_billable"):
+            return "Yes"
+    return "No"
+
+
+def _round_billable_quarter(hours: float) -> float:
+    """Company rounding: ≥5 min into the current quarter rounds UP, else DOWN.
+
+    Examples:
+      8.07 (8:04) → 8.00
+      8.08 (8:05) → 8.25
+      8.31 (8:19) → 8.25
+      8.34 (8:20) → 8.50
+    """
+    if hours <= 0:
+        return 0.0
+    total_min = int(round(hours * 60))
+    quarters = total_min // 15
+    remainder = total_min - quarters * 15
+    rounded_min = (quarters + 1) * 15 if remainder >= 5 else quarters * 15
+    return rounded_min / 60.0
+
+
+def _format_employee_hours(entries: Optional[list]) -> str:
+    """Pretty-print the per-employee hours list into a single multi-line cell.
+
+    Office assistant reads this off the JobReports worksheet to invoice; the
+    plain-text format below matches the layout used in the Admin Job Summary
+    invoice copy-paste block so the same string can be transcribed either way.
+
+    Each row shows the company's quarter-hour rounded value with the actual
+    worked hours in parens — both billable and non-billable, always shown
+    even when no rounding was needed. The total still rounds the *summed
+    actuals* once at the end so the totals line is what gets invoiced;
+    non-billable rows are excluded from the total sum.
+    """
+    if not entries:
+        return ""
+    lines: list[str] = []
+    total_actual = 0.0
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        name = (e.get("name") or "").strip() or "—"
+        start = (e.get("start") or "").strip()
+        end = (e.get("end") or "").strip()
+        try:
+            br = float(e.get("break_hours") or 0)
+        except (TypeError, ValueError):
+            br = 0.0
+        try:
+            hrs = float(e.get("hours") or 0)
+        except (TypeError, ValueError):
+            hrs = 0.0
+        non_billable = bool(e.get("non_billable") or False)
+        if not non_billable:
+            total_actual += hrs
+        rounded = _round_billable_quarter(hrs)
+        span = f"{start}–{end}" if start and end else (start or end or "")
+        pieces = [name + ":"]
+        if span:
+            pieces.append(span + ("," if br > 0 else ""))
+        if br > 0:
+            pieces.append(f"break {br:.2f}h")
+        tail = f"{rounded:.2f}h (actual {hrs:.2f}h)"
+        if non_billable:
+            pieces.append(f"→ non-billable {tail}")
+        else:
+            pieces.append(f"→ {tail}")
+        lines.append(" ".join(pieces))
+    if lines:
+        total_billable = _round_billable_quarter(total_actual)
+        lines.append(
+            f"Total man-hours: {total_billable:.2f}h (actual {total_actual:.2f}h)"
+        )
+    return "\n".join(lines)
+
+
 def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
+    """Replace-style export: exactly one row per job_uuid in the JobReports
+    tab. Any prior row for this job is deleted before the fresh row is
+    appended so re-saves overwrite in place instead of stacking new rows.
+
+    Previously used the generic_exports dedupe keyed on job_uuid+updated_at,
+    which let every save through as a new row. The dedupe table entries for
+    the 'job_report' kind are now inert; we don't bother cleaning them up
+    since they take no part in the new flow.
+    """
     tab = os.getenv("SHEETS_JOB_REPORTS_TAB", "JobReports").strip() or "JobReports"
-    key = f'{report.get("job_uuid","")}:{_iso(report.get("updated_at"))}'
-    if _generic_already_exported(db, "job_report", key):
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    job_uuid = report.get("job_uuid", "") or ""
+    if not job_uuid:
         return 0
+
+    entered_by, entered_on = _entry_status_for(db, job_uuid)
     row = {
-        "job_uuid": report.get("job_uuid", ""),
+        "job_uuid": job_uuid,
         "job_name": report.get("job_name", ""),
         "submitted_by": report.get("submitted_by_name", "") or "",
         "personal_vehicles": report.get("personal_vehicles", ""),
         "dumpster_pct": report.get("dumpster_pct", ""),
         "recycling_pct": report.get("recycling_pct", ""),
         "billing_method": report.get("billing_method", ""),
-        "review_candidate": "Yes" if report.get("review_candidate") else "No",
+        "review_candidate": _review_candidate_label(report.get("review_candidate")),
         "hours_match": "Yes" if report.get("hours_match") else "No",
         "hours_mismatch_reason": report.get("hours_mismatch_reason", "") or "",
+        "employee_hours": _format_employee_hours(report.get("employee_hours")),
+        "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
+        "entered_by": entered_by,
+        "entered_on": entered_on,
     }
-    written = _append_rows(db, tab, JOB_REPORT_HEADERS, [row])
-    if written:
-        _generic_mark_exported(db, "job_report", [key])
-    return written
+
+    # Build the svc once and reuse for delete + ensure_tab + append so we
+    # share one TLS connection per call.
+    svc = _get_sheets_svc(db)
+
+    # Ensure the tab + headers exist before deleting (a fresh staging
+    # spreadsheet may not have the JobReports tab yet) so the lookup in
+    # _delete_sheet_rows_by_value finds the job_uuid column.
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, JOB_REPORT_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "job_uuid", job_uuid)
+
+    rows = [_build_row(row, actual_headers)]
+
+    def _append():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    _ssl_retry(_append)
+    return 1
 
 
 # ── Bills ────────────────────────────────────────────────────────────────────
@@ -730,6 +915,12 @@ BILL_HEADERS = [
     "job_uuid", "saved_by", "item_label", "item_qty", "item_unit", "item_rate",
     "item_discount_pct", "item_amount", "item_source",
     "global_discount_pct", "bill_notes", "updated_at",
+    "entered_by", "entered_on",
+    # Populated only for rows generated from a materials submission (one row
+    # per submission via export_materials_to_bills_sheet). Empty for rows
+    # the crew added in the bill calculator. Used as the delete key when a
+    # materials submission is updated or removed.
+    "submission_id",
 ]
 
 
@@ -738,6 +929,7 @@ def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
     job_uuid = bill.get("job_uuid", "")
     updated_at = _iso(bill.get("updated_at"))
     items = bill.get("items") or []
+    entered_by, entered_on = _entry_status_for(db, job_uuid)
 
     rows: List[Dict[str, Any]] = []
     keys: List[str] = []
@@ -763,6 +955,9 @@ def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
             "global_discount_pct": bill.get("global_discount", 0) or 0,
             "bill_notes": bill.get("notes", "") or "",
             "updated_at": updated_at,
+            "entered_by": entered_by,
+            "entered_on": entered_on,
+            "submission_id": "",
         })
         keys.append(key)
 
@@ -770,6 +965,90 @@ def export_bill_to_sheets(db: Session, bill: Dict[str, Any]) -> int:
     if written:
         _generic_mark_exported(db, "bill", keys)
     return written
+
+
+def _job_materials_marker(job_uuid: str) -> str:
+    """The submission_id column value for the aggregated materials line in
+    the Bills sheet. Stable per job, so a re-sum overwrites in place.
+    Distinct from any real submission_id (which is a UUID, no colons),
+    so this can't collide with a row written for an individual submission."""
+    return f"materials:{job_uuid}"
+
+
+def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
+    """Recalculate the Bills sheet's single "Materials" line for a job:
+    sum every materials submission's total for `job_uuid`, delete any prior
+    Materials line for this job, and write one fresh row carrying the new
+    total. Returns 1 if a row was written, 0 if the job has no materials
+    (in which case any prior row is still removed).
+
+    Called on every materials POST and DELETE so the Bills view always
+    reflects the current sum — invoiced as a single line, not a stack of
+    per-add rows.
+    """
+    if not job_uuid:
+        return 0
+
+    from app.db.models.materials import MaterialsSubmission  # local import — avoid module-load cycle
+
+    rows = (
+        db.query(MaterialsSubmission.total)
+        .filter(MaterialsSubmission.job_uuid == job_uuid)
+        .all()
+    )
+    total = 0.0
+    for (t,) in rows:
+        try:
+            total += float(t or 0)
+        except (TypeError, ValueError):
+            pass
+    total = round(total, 2)
+
+    tab = os.getenv("SHEETS_BILLS_TAB", "Bills").strip() or "Bills"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    marker = _job_materials_marker(job_uuid)
+
+    svc = _get_sheets_svc(db)
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, BILL_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", marker)
+
+    if total <= 0:
+        # No materials left for this job — leave the Bills sheet without a
+        # zero-value "Materials" row. Itemized history still lives in the
+        # Materials sheet for audit.
+        return 0
+
+    entered_by, entered_on = _entry_status_for(db, job_uuid)
+    row = {
+        "job_uuid": job_uuid,
+        "saved_by": "",
+        "item_label": "Materials",
+        "item_qty": 1,
+        "item_unit": "",
+        "item_rate": total,
+        "item_discount_pct": 0,
+        "item_amount": total,
+        "item_source": "materials",
+        "global_discount_pct": 0,
+        "bill_notes": "",
+        "updated_at": _iso(datetime.utcnow()),
+        "entered_by": entered_by,
+        "entered_on": entered_on,
+        "submission_id": marker,
+    }
+    sheet_rows = [_build_row(row, actual_headers)]
+
+    def _append():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": sheet_rows},
+        ).execute()
+
+    _ssl_retry(_append)
+    return 1
 
 
 # ── DVIRs ────────────────────────────────────────────────────────────────────
@@ -947,6 +1226,61 @@ ESTIMATE_ITEM_HEADERS = [
 ]
 
 
+def _delete_sheet_rows_by_value(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    col_name: str,
+    target_value: str,
+) -> int:
+    """Delete every row in `tab` where the `col_name` cell equals
+    `target_value`. Used by replace-style exports (estimates, job reports)
+    to guarantee exactly one row per logical entity regardless of how
+    many times it's saved.
+
+    Returns the number of rows deleted. No-op if the tab doesn't exist
+    yet, the column isn't present, or no rows match."""
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
+    if tab not in sheet_ids:
+        return 0
+    sheet_numeric_id = sheet_ids[tab]
+
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0]
+    if col_name not in headers_row:
+        return 0
+    col_letter = _col_letter(headers_row.index(col_name))
+
+    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
+    ).execute())
+    col_values = col.get("values") or []
+
+    target_indices = [
+        i for i, row in enumerate(col_values)
+        if i > 0 and (row[0] if row else "") == target_value
+    ]
+    if not target_indices:
+        return 0
+
+    requests = [
+        {"deleteDimension": {"range": {
+            "sheetId": sheet_numeric_id,
+            "dimension": "ROWS",
+            "startIndex": idx,
+            "endIndex": idx + 1,
+        }}}
+        for idx in sorted(target_indices, reverse=True)
+    ]
+    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id, body={"requests": requests}
+    ).execute())
+    return len(target_indices)
+
+
 def _delete_estimate_sheet_rows(
     svc: Any,
     spreadsheet_id: str,
@@ -955,45 +1289,10 @@ def _delete_estimate_sheet_rows(
 ) -> None:
     """Delete all rows for `estimate_uuid` from each tab. col_name is always
     'estimate_uuid' in both Estimates and EstimateItems tabs."""
-    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
-    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
-
     for tab in tabs:
-        if tab not in sheet_ids:
-            continue
-        sheet_numeric_id = sheet_ids[tab]
-
-        hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
-        ).execute())
-        headers_row = (hdr.get("values") or [[]])[0]
-        if "estimate_uuid" not in headers_row:
-            continue
-        col_letter = _col_letter(headers_row.index("estimate_uuid"))
-
-        col = _ssl_retry(lambda: svc.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
-        ).execute())
-        col_values = col.get("values") or []
-
-        target_indices = [
-            i for i, row in enumerate(col_values)
-            if i > 0 and (row[0] if row else "") == estimate_uuid
-        ]
-
-        if target_indices:
-            requests = [
-                {"deleteDimension": {"range": {
-                    "sheetId": sheet_numeric_id,
-                    "dimension": "ROWS",
-                    "startIndex": idx,
-                    "endIndex": idx + 1,
-                }}}
-                for idx in sorted(target_indices, reverse=True)
-            ]
-            _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
-                spreadsheetId=spreadsheet_id, body={"requests": requests}
-            ).execute())
+        _delete_sheet_rows_by_value(
+            svc, spreadsheet_id, tab, "estimate_uuid", estimate_uuid,
+        )
 
 
 def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
@@ -1171,3 +1470,108 @@ def schedule_estimate_export(estimate_uuid: str) -> None:
             return
         _estimate_export_in_flight.add(estimate_uuid)
     _EXPORT_POOL.submit(_estimate_export_worker, estimate_uuid)
+
+
+# ── Admin entry-status sweep ─────────────────────────────────────────────────
+# When admin saves their initials + date on the Job Summary view, every row
+# already exported for that job needs its trailing entered_by / entered_on
+# cells populated. Future writes pick up the values via _entry_status_for; the
+# sweep only fixes the historical rows.
+
+def _sweep_sheet_entry_status(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    job_uuid: str,
+    entered_by: str,
+    entered_on: str,
+) -> int:
+    """Find every row on `tab` whose `job_uuid` cell matches and write
+    (entered_by, entered_on) into its trailing entry-status columns.
+    Returns rows updated. No-op if the sheet doesn't have the entry-status
+    columns yet (next regular export will append them via _ensure_tab)."""
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!1:1",
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0] if hdr else []
+    if "job_uuid" not in headers_row or "entered_by" not in headers_row or "entered_on" not in headers_row:
+        return 0
+
+    job_uuid_idx = headers_row.index("job_uuid")
+    entered_by_idx = headers_row.index("entered_by")
+    entered_on_idx = headers_row.index("entered_on")
+
+    job_uuid_letter = _col_letter(job_uuid_idx)
+    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{tab}!{job_uuid_letter}:{job_uuid_letter}",
+    ).execute())
+    col_values = col.get("values") or []
+
+    target_rows: List[int] = []
+    for i, row in enumerate(col_values):
+        if i == 0:
+            continue  # header
+        v = row[0] if row else ""
+        if v == job_uuid:
+            target_rows.append(i + 1)  # sheet rows are 1-based
+
+    if not target_rows:
+        return 0
+
+    entered_by_letter = _col_letter(entered_by_idx)
+    entered_on_letter = _col_letter(entered_on_idx)
+
+    data: List[Dict[str, Any]] = []
+    if entered_by_idx + 1 == entered_on_idx:
+        # Adjacent columns — single contiguous range per row, half the API calls.
+        for r in target_rows:
+            data.append({
+                "range": f"{tab}!{entered_by_letter}{r}:{entered_on_letter}{r}",
+                "values": [[entered_by, entered_on]],
+            })
+    else:
+        for r in target_rows:
+            data.append({"range": f"{tab}!{entered_by_letter}{r}", "values": [[entered_by]]})
+            data.append({"range": f"{tab}!{entered_on_letter}{r}", "values": [[entered_on]]})
+
+    _ssl_retry(lambda: svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"valueInputOption": "RAW", "data": data},
+    ).execute())
+    return len(target_rows)
+
+
+def update_entry_status_in_sheets(
+    db: Session,
+    job_uuid: str,
+    entered_by: str,
+    entered_on: str,
+) -> Dict[str, int]:
+    """Write the admin's data-entry checkpoint into every job-related
+    worksheet for this job. Returns {tab: rows_updated} for diagnostics.
+    Failures on individual tabs are swallowed and logged so a single
+    transient Sheets hiccup can't take the whole sweep down."""
+    if not job_uuid:
+        return {}
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    svc = _get_sheets_svc(db)
+
+    targets = [
+        os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events",
+        os.getenv("SHEETS_MATERIALS_TAB", DEFAULT_MATERIALS_TAB).strip() or DEFAULT_MATERIALS_TAB,
+        os.getenv("SHEETS_JOB_REPORTS_TAB", "JobReports").strip() or "JobReports",
+        os.getenv("SHEETS_BILLS_TAB", "Bills").strip() or "Bills",
+    ]
+
+    counts: Dict[str, int] = {}
+    for tab in targets:
+        try:
+            counts[tab] = _sweep_sheet_entry_status(
+                svc, spreadsheet_id, tab, job_uuid, entered_by, entered_on
+            )
+        except Exception as exc:
+            counts[tab] = 0
+            print(f"[entry-status sweep] {tab} failed for {job_uuid}: {exc}")
+    return counts

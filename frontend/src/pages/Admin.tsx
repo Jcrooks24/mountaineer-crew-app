@@ -16,10 +16,12 @@ import {
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
+import { roundBillableQuarter } from "../components/JobReport";
 import {
   formatMountainDate,
   formatMountainDateTime,
   formatMountainTime,
+  mountainDateYYYYMMDD,
 } from "../lib/time";
 
 type AdminUser = {
@@ -2376,9 +2378,17 @@ type JobSummary = {
     dumpster_pct: number;
     recycling_pct: number;
     billing_method: string;
-    review_candidate: boolean;
+    review_candidate: "yes" | "no" | "na";
     hours_match: boolean;
     hours_mismatch_reason: string | null;
+    employee_hours: Array<{
+      name: string;
+      start: string;
+      end: string;
+      break_hours: number;
+      hours: number;
+      non_billable?: boolean;
+    }>;
     updated_at: string | null;
   } | null;
   bill: {
@@ -2390,6 +2400,12 @@ type JobSummary = {
   } | null;
   photos: Array<{ id: string; caption: string; drive_url: string; created_by: string | null; created_at: string | null }>;
   admin_notes: Array<{ id: number; title: string; body: string; created_by_name: string | null; updated_at: string | null }>;
+  entry_status: {
+    entered_by: string;
+    entered_on: string;
+    updated_by_name: string | null;
+    updated_at: string | null;
+  } | null;
 };
 
 type JobCandidate = {
@@ -2398,6 +2414,7 @@ type JobCandidate = {
   dates: string[];
   event_count: number;
   material_count: number;
+  entered: boolean;
 };
 
 function JobSummaryTab() {
@@ -2407,6 +2424,16 @@ function JobSummaryTab() {
   const [summary, setSummary] = useState<JobSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [invoiceCopied, setInvoiceCopied] = useState(false);
+
+  // Admin data-entry checkpoint local state for the inputs on the
+  // entry-status card; falls back to today's date so the typical
+  // "I just entered this" path is one tap.
+  const [entryInitials, setEntryInitials] = useState("");
+  const [entryDate, setEntryDate] = useState(() => mountainDateYYYYMMDD());
+  const [entrySaving, setEntrySaving] = useState(false);
+  const [entrySaved, setEntrySaved] = useState(false);
+  const [entryError, setEntryError] = useState<string | null>(null);
 
   async function search() {
     if (!date && !name.trim()) {
@@ -2434,9 +2461,15 @@ function JobSummaryTab() {
     setLoading(true);
     setErr(null);
     setSummary(null);
+    setEntrySaved(false);
+    setEntryError(null);
     try {
       const data = await apiFetch<JobSummary>(`/api/admin/job-summary/${encodeURIComponent(jobUuid)}`);
       setSummary(data);
+      // Pre-fill the entry-status form. Existing entries hydrate verbatim;
+      // new jobs default to today's Mountain date and an empty initials box.
+      setEntryInitials(data.entry_status?.entered_by ?? "");
+      setEntryDate(data.entry_status?.entered_on || mountainDateYYYYMMDD());
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to load summary");
     } finally {
@@ -2444,7 +2477,133 @@ function JobSummaryTab() {
     }
   }
 
+  async function saveEntryStatus() {
+    if (!summary) return;
+    const initials = entryInitials.trim();
+    if (!initials) {
+      setEntryError("Initials are required.");
+      return;
+    }
+    if (!entryDate) {
+      setEntryError("Date is required.");
+      return;
+    }
+    setEntrySaving(true);
+    setEntryError(null);
+    setEntrySaved(false);
+    try {
+      const updated = await apiFetch<{ entry_status: NonNullable<JobSummary["entry_status"]> }>(
+        `/api/admin/job-entry-status/${encodeURIComponent(summary.job_uuid)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ entered_by: initials, entered_on: entryDate }),
+        },
+      );
+      setSummary((prev) => (prev ? { ...prev, entry_status: updated.entry_status } : prev));
+      setEntrySaved(true);
+    } catch (e: any) {
+      setEntryError(e instanceof ApiError ? e.message : "Save failed.");
+    } finally {
+      setEntrySaving(false);
+    }
+  }
+
   const materialsTotal = summary?.materials.reduce((s, m) => s + (m.total || 0), 0) ?? 0;
+
+  // Plain-text invoice block — admin office assistant pastes this into invoice
+  // software, so the layout favors easy copy-paste over visual polish.
+  // Excludes the JOB_NOTES sentinel rows used for the global-notes textarea
+  // (they aren't crew activity, just a transport for the Notes field).
+  const invoiceText = useMemo(() => {
+    if (!summary) return "";
+    const lines: string[] = [];
+    const header = summary.job_name || "Unnamed job";
+    lines.push(header);
+
+    const dates = Array.from(
+      new Set(
+        summary.events
+          .map((e) => e.timestamp)
+          .filter((t): t is string => !!t)
+          .map((t) => formatMountainDate(t)),
+      ),
+    );
+    if (dates.length === 1) lines.push(dates[0]);
+    else if (dates.length > 1) lines.push(`${dates[0]} → ${dates[dates.length - 1]}`);
+    lines.push("");
+
+    const events = summary.events
+      .filter((e) => e.type !== "JOB_NOTES" && !!e.timestamp)
+      .sort((a, b) => new Date(a.timestamp!).getTime() - new Date(b.timestamp!).getTime());
+    if (events.length > 0) {
+      lines.push("TIMESTAMPS:");
+      for (const e of events) {
+        lines.push(`  ${e.type.padEnd(10, " ")} ${formatMountainTime(e.timestamp!)}`);
+      }
+      lines.push("");
+    }
+
+    // Aggregate material qtys across submissions so the office assistant
+    // doesn't have to add by hand.
+    const materialTotals = new Map<string, number>();
+    for (const m of summary.materials) {
+      for (const it of m.items) {
+        materialTotals.set(it.name, (materialTotals.get(it.name) ?? 0) + (it.qty || 0));
+      }
+    }
+    if (materialTotals.size > 0) {
+      lines.push("MATERIALS:");
+      const sorted = [...materialTotals.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [n, qty] of sorted) {
+        lines.push(`  ${qty} × ${n}`);
+      }
+      lines.push("");
+    }
+
+    const hours = summary.job_report?.employee_hours ?? [];
+    if (hours.length > 0) {
+      lines.push("EMPLOYEE HOURS:");
+      let totalActual = 0;
+      for (const emp of hours) {
+        const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
+        const breakStr = emp.break_hours > 0 ? `, break ${emp.break_hours.toFixed(2)}h` : "";
+        const actual = emp.hours || 0;
+        const rounded = roundBillableQuarter(actual);
+        // Always show both rounded and actual on every row, billable or
+        // not, so the office assistant has the full picture even when no
+        // rounding occurred. Total still rounds the *summed actuals*
+        // once at the end — invoice off the totals line, not by adding
+        // rows. Non-billable rows display the same way but are excluded
+        // from the total sum.
+        const tail = `${rounded.toFixed(2)}h (actual ${actual.toFixed(2)}h)`;
+        if (emp.non_billable) {
+          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → non-billable ${tail}`);
+        } else {
+          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → ${tail}`);
+          totalActual += actual;
+        }
+      }
+      const totalBillable = roundBillableQuarter(totalActual);
+      lines.push(
+        `  Total man-hours: ${totalBillable.toFixed(2)}h (actual ${totalActual.toFixed(2)}h)`
+      );
+    }
+
+    return lines.join("\n").replace(/\n+$/, "");
+  }, [summary]);
+
+  async function copyInvoice() {
+    try {
+      await navigator.clipboard.writeText(invoiceText);
+      setInvoiceCopied(true);
+      window.setTimeout(() => setInvoiceCopied(false), 1800);
+    } catch {
+      // Clipboard API blocked (HTTP, permissions) — fall back to selecting the
+      // textarea so the user can Cmd/Ctrl-C manually.
+      const ta = document.getElementById("invoice-copy-text") as HTMLTextAreaElement | null;
+      ta?.select();
+    }
+  }
   const billTotal = summary?.bill
     ? summary.bill.items.reduce((s, it) => {
         const qty = it.qty || 0;
@@ -2506,8 +2665,21 @@ function JobSummaryTab() {
                   onClick={() => loadSummary(c.job_uuid)}
                   style={{ textAlign: "left" }}
                 >
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>
-                    {c.job_name || "(unnamed job)"}
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                      {c.job_name || "(unnamed job)"}
+                    </div>
+                    <span
+                      className="chip"
+                      style={{
+                        fontSize: 10,
+                        padding: "2px 8px",
+                        color: c.entered ? "var(--ok)" : "var(--brand2)",
+                        borderColor: c.entered ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                      }}
+                    >
+                      {c.entered ? "✓ Entered" : "Pending entry"}
+                    </span>
                   </div>
                   <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                     {c.dates.length > 0
@@ -2601,38 +2773,6 @@ function JobSummaryTab() {
           </div>
 
           <div className="card">
-            <div className="sectionTitle">DVIRs ({summary.dvirs.length})</div>
-            {summary.dvirs.length === 0 ? (
-              <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
-            ) : (
-              <div className="col" style={{ gap: 10 }}>
-                {summary.dvirs.map((d) => (
-                  <div key={d.dvir_id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                    <div className="row" style={{ justifyContent: "space-between", gap: 6 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>
-                        {d.vehicle_number}{d.trailer_number ? ` / ${d.trailer_number}` : ""} · {d.inspection_type}
-                      </div>
-                      <span className="chip" style={{ fontSize: 11, color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)" }}>
-                        {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} defect${d.defects.length === 1 ? "" : "s"}`}
-                      </span>
-                    </div>
-                    <div className="small" style={{ color: "var(--muted)" }}>
-                      {d.inspection_date} · driver {d.driver_name}
-                      {d.mechanic_name ? ` · mechanic ${d.mechanic_name}` : ""}
-                    </div>
-                    {d.defects.length > 0 && (
-                      <div className="small" style={{ marginTop: 4 }}>
-                        Defects: {d.defects.join(", ")}
-                      </div>
-                    )}
-                    {d.defect_notes && <div style={{ fontSize: 13, marginTop: 4 }}>{d.defect_notes}</div>}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="card">
             <div className="sectionTitle">
               Materials ({summary.materials.length})
               <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
@@ -2667,6 +2807,180 @@ function JobSummaryTab() {
           </div>
 
           <div className="card">
+            {(() => {
+              // Round-at-end: sum actual billable hours first, round once.
+              // Per-row displays show actuals so the office assistant can see
+              // the raw math before the company rule kicks in.
+              const rows = summary.job_report?.employee_hours ?? [];
+              const totalActual = rows.reduce(
+                (s, e) => s + (e.non_billable ? 0 : (e.hours || 0)),
+                0,
+              );
+              const totalBillable = roundBillableQuarter(totalActual);
+              return (
+                <>
+                  <div className="sectionTitle">
+                    Employee Hours
+                    {summary.job_report && rows.length > 0 && (
+                      <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+                        Total {totalBillable.toFixed(2)}h
+                      </span>
+                    )}
+                  </div>
+                  {!summary.job_report || rows.length === 0 ? (
+                    <div className="small" style={{ color: "var(--muted)" }}>
+                      {!summary.job_report
+                        ? "Job report not yet submitted."
+                        : "No employee hours recorded for this job."}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="col" style={{ gap: 0 }}>
+                        {rows.map((emp, i) => {
+                          const span = emp.start && emp.end ? `${emp.start}–${emp.end}` : (emp.start || emp.end || "");
+                          return (
+                            <div
+                              key={i}
+                              className="row"
+                              style={{
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                gap: 8,
+                                padding: "8px 0",
+                                borderBottom: "1px solid var(--border)",
+                                opacity: emp.non_billable ? 0.7 : 1,
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                                  <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name || "—"}</div>
+                                  {emp.non_billable && (
+                                    <span
+                                      className="chip"
+                                      style={{
+                                        fontSize: 10,
+                                        padding: "2px 8px",
+                                        color: "var(--muted)",
+                                      }}
+                                    >
+                                      Non-billable
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                                  {span}
+                                  {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
+                                </div>
+                              </div>
+                              <div style={{ flex: "0 0 auto", textAlign: "right" }}>
+                                {emp.non_billable ? (
+                                  <div className="small" style={{ color: "var(--muted)" }}>
+                                    {roundBillableQuarter(emp.hours || 0).toFixed(2)}h
+                                    {" "}(actual {(emp.hours || 0).toFixed(2)}h)
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <span style={{ fontWeight: 700, fontSize: 14 }}>
+                                      {roundBillableQuarter(emp.hours || 0).toFixed(2)}h
+                                    </span>
+                                    <span
+                                      className="small"
+                                      style={{ color: "var(--muted)", marginLeft: 6 }}
+                                    >
+                                      (actual {(emp.hours || 0).toFixed(2)}h)
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div
+                        className="row"
+                        style={{
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          paddingTop: 10,
+                          fontWeight: 700,
+                        }}
+                      >
+                        <span>Total man-hours</span>
+                        <span>
+                          {totalBillable.toFixed(2)}h
+                          <span
+                            className="small"
+                            style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}
+                          >
+                            (actual {totalActual.toFixed(2)}h)
+                          </span>
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+
+          <div className="card">
+            <div className="sectionTitle">DVIRs ({summary.dvirs.length})</div>
+            {summary.dvirs.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                {summary.dvirs.map((d) => (
+                  <div key={d.dvir_id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="row" style={{ justifyContent: "space-between", gap: 6 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>
+                        {d.vehicle_number}{d.trailer_number ? ` / ${d.trailer_number}` : ""} · {d.inspection_type}
+                      </div>
+                      <span className="chip" style={{ fontSize: 11, color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)" }}>
+                        {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} defect${d.defects.length === 1 ? "" : "s"}`}
+                      </span>
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)" }}>
+                      {d.inspection_date} · driver {d.driver_name}
+                      {d.mechanic_name ? ` · mechanic ${d.mechanic_name}` : ""}
+                    </div>
+                    {d.defects.length > 0 && (
+                      <div className="small" style={{ marginTop: 4 }}>
+                        Defects: {d.defects.join(", ")}
+                      </div>
+                    )}
+                    {d.defect_notes && <div style={{ fontSize: 13, marginTop: 4 }}>{d.defect_notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="sectionTitle">Invoice copy-paste</div>
+              <button onClick={copyInvoice} disabled={!invoiceText} style={{ fontSize: 12 }}>
+                {invoiceCopied ? "✓ Copied" : "Copy"}
+              </button>
+            </div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+              Plain-text timestamps + materials counts, ready to paste into invoice software.
+            </div>
+            <textarea
+              id="invoice-copy-text"
+              readOnly
+              value={invoiceText}
+              rows={Math.min(20, Math.max(6, invoiceText.split("\n").length))}
+              style={{
+                width: "100%",
+                fontFamily: "monospace",
+                fontSize: 12,
+                whiteSpace: "pre",
+                resize: "vertical",
+              }}
+            />
+          </div>
+
+          <div className="card">
             <div className="sectionTitle">Job Report</div>
             {!summary.job_report ? (
               <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
@@ -2677,7 +2991,12 @@ function JobSummaryTab() {
                 <div className="small"><strong>M1 dumpster:</strong> {summary.job_report.dumpster_pct}%</div>
                 <div className="small"><strong>M1 recycling:</strong> {summary.job_report.recycling_pct}%</div>
                 <div className="small"><strong>Billing method:</strong> {summary.job_report.billing_method}</div>
-                <div className="small"><strong>Review candidate:</strong> {summary.job_report.review_candidate ? "Yes" : "No"}</div>
+                <div className="small"><strong>Review candidate:</strong> {
+                  summary.job_report.review_candidate === "yes" ? "Yes" :
+                  summary.job_report.review_candidate === "no"  ? "No"  :
+                  summary.job_report.review_candidate === "na"  ? "N/A" :
+                  "—"
+                }</div>
                 <div className="small">
                   <strong>Hours match:</strong> {summary.job_report.hours_match ? "Yes" : "No"}
                   {!summary.job_report.hours_match && summary.job_report.hours_mismatch_reason
@@ -2740,6 +3059,69 @@ function JobSummaryTab() {
                     </div>
                   </a>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="sectionTitle">Data entry</div>
+              <span
+                className="chip"
+                style={{
+                  fontSize: 10,
+                  padding: "2px 8px",
+                  color: summary.entry_status ? "var(--ok)" : "var(--brand2)",
+                  borderColor: summary.entry_status ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                }}
+              >
+                {summary.entry_status ? "✓ Entered" : "Pending entry"}
+              </span>
+            </div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+              Record your initials and the date once you've entered this job's data into the books.
+              Saving also writes the values into every job-related sheet for this job.
+            </div>
+            <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
+              <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
+                <input
+                  type="text"
+                  value={entryInitials}
+                  onChange={(e) => { setEntryInitials(e.target.value); setEntrySaved(false); }}
+                  placeholder="e.g. JC"
+                  maxLength={16}
+                />
+              </label>
+              <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Entered on</span>
+                <input
+                  type="date"
+                  value={entryDate}
+                  onChange={(e) => { setEntryDate(e.target.value); setEntrySaved(false); }}
+                />
+              </label>
+              <button
+                onClick={saveEntryStatus}
+                disabled={entrySaving}
+                className="btnPrimary"
+                style={{ flex: "0 0 auto" }}
+              >
+                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Mark entered")}
+              </button>
+            </div>
+            {entryError && (
+              <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{entryError}</div>
+            )}
+            {entrySaved && !entryError && (
+              <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>
+                ✓ Saved and propagated to sheets
+              </div>
+            )}
+            {summary.entry_status && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                Last updated by {summary.entry_status.updated_by_name || "—"}
+                {summary.entry_status.updated_at ? ` on ${formatMountainDateTime(summary.entry_status.updated_at)}` : ""}
               </div>
             )}
           </div>

@@ -1,5 +1,13 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { apiFetch } from "../api/client";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { apiFetch, ApiError } from "../api/client";
 import { MATERIAL_CATALOG } from "../data/catalog";
 import { useTheme } from "../theme/ThemeContext";
 import {
@@ -40,7 +48,52 @@ export type BillHandle = {
   /** Returns current bill data, or null if not loaded. The "reviewed"
    * confirmation lives on the Report (after the M1 sliders) — not here. */
   getData: () => { items: LineItem[]; globalDiscount: number; notes: string } | null;
+  /** Discard the in-progress localStorage draft for the active job. Called
+   * by JobReport after a successful submit so the next load reads the
+   * server's authoritative copy instead of the stale draft. */
+  clearDraft: () => void;
+  /** Cancel the autosave debounce and write the current bill values to
+   * localStorage *now*. JobReport calls this right before POSTing so a
+   * fast click after typing can't submit with a stale draft on disk
+   * (the load-effect fallback would otherwise restore the wrong state
+   * if the POST fails and the user navigates away). */
+  flushDraft: () => void;
 };
+
+// In-progress bill draft persisted to localStorage so notes / discounts /
+// manual line-item edits survive tab switches, reloads, and offline use.
+// Per-job_uuid keying mirrors the report-tab draft (REPORT_DRAFT_PREFIX in
+// JobReport.tsx). Cleared on successful submit via clearDraft().
+const BILL_DRAFT_PREFIX = "crew_bill_draft_v1:";
+
+function billDraftKey(uuid: string) {
+  return `${BILL_DRAFT_PREFIX}${uuid || "none"}`;
+}
+function loadBillDraft(uuid: string): Bill | null {
+  try {
+    const raw = localStorage.getItem(billDraftKey(uuid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.items)) return null;
+    return {
+      items: parsed.items,
+      globalDiscount: Number(parsed.globalDiscount) || 0,
+      notes: typeof parsed.notes === "string" ? parsed.notes : "",
+    };
+  } catch {
+    return null;
+  }
+}
+function saveBillDraft(uuid: string, bill: Bill) {
+  try {
+    localStorage.setItem(billDraftKey(uuid), JSON.stringify(bill));
+  } catch {}
+}
+function clearBillDraftStorage(uuid: string) {
+  try {
+    localStorage.removeItem(billDraftKey(uuid));
+  } catch {}
+}
 
 // ── Company charges ───────────────────────────────────────────────────────────
 
@@ -97,15 +150,27 @@ function materialExt(m: LiveMaterial): number {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+// When `children` is supplied, the parent positions the three slots itself —
+// lets JobReport interleave M1 cards between Bill Helper and Discounts/Total
+// without exporting BillCalculator's internal state. Default render keeps the
+// original stacked layout for any caller that still uses BillCalculator as a
+// drop-in.
+export type BillSlots = {
+  billHelper: ReactNode;
+  totals: ReactNode;
+  notes: ReactNode;
+};
+
 type Props = {
   jobUuid: string;
   jobName: string;
   dumpsterPct?: number;   // 0–100 from M1 estimate
   recyclingPct?: number;  // 0–100 from M1 estimate
+  children?: (slots: BillSlots) => ReactNode;
 };
 
 const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
-  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0 },
+  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, children },
   ref,
 ) {
   const { settings: themeSettings } = useTheme();
@@ -127,8 +192,26 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const [matErr, setMatErr] = useState<string>("");
   const [showAddMaterial, setShowAddMaterial] = useState(false);
 
+  // Debounce timer for the bill draft autosave. Pending writes are
+  // cancelled by clearDraft() so a save can't sneak through after submit.
+  const billSaveTimeoutRef = useRef<number | null>(null);
+  function cancelPendingBillSave() {
+    if (billSaveTimeoutRef.current !== null) {
+      window.clearTimeout(billSaveTimeoutRef.current);
+      billSaveTimeoutRef.current = null;
+    }
+  }
+
   useImperativeHandle(ref, () => ({
     getData: () => loaded ? { ...bill } : null,
+    clearDraft: () => {
+      cancelPendingBillSave();
+      if (jobUuid) clearBillDraftStorage(jobUuid);
+    },
+    flushDraft: () => {
+      cancelPendingBillSave();
+      if (jobUuid && loaded) saveBillDraft(jobUuid, bill);
+    },
   }));
 
   // ── Load: saved bill first, then seed ────────────────────────────────────────
@@ -136,17 +219,41 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     if (!jobUuid) { setLoaded(false); return; }
     setLoaded(false);
 
+    // Load order: server bill (or seed on 404), then the localStorage draft
+    // wins if one exists. Drafts represent the user's most-recent typing on
+    // this device — clobbering them with stale server data on every refresh
+    // was what made bill notes feel like they didn't autosave.
     apiFetch<{ items: LineItem[]; global_discount: number; notes: string }>(
       `/api/bill?job_uuid=${encodeURIComponent(jobUuid)}`
     )
       .then((r) => {
-        setBill({ items: r.items, globalDiscount: r.global_discount, notes: r.notes ?? "" });
+        const draft = loadBillDraft(jobUuid);
+        setBill(
+          draft ?? { items: r.items, globalDiscount: r.global_discount, notes: r.notes ?? "" },
+        );
         setLoaded(true);
       })
-      .catch(() => {
-        // No saved bill — seed from events + M1 estimates (materials live separately now)
+      .catch((e) => {
+        // Real 404 = no saved bill yet, seed from events + M1 estimates.
+        // Network errors / 5xx must NOT fall through to the seed path —
+        // the seed call would also fail, leaving us with no bill data
+        // even though the user may have a perfectly good draft. Restore
+        // the draft directly and bail.
+        if (!(e instanceof ApiError) || e.status !== 404) {
+          const draft = loadBillDraft(jobUuid);
+          if (draft) setBill(draft);
+          setLoaded(true);
+          return;
+        }
+
+        // 404 path — try to seed from events.
         apiFetch<SeedData>(`/api/bill/seed?job_uuid=${encodeURIComponent(jobUuid)}`)
           .then((seed) => {
+            const draft = loadBillDraft(jobUuid);
+            if (draft) {
+              setBill(draft);
+              return;
+            }
             const items: LineItem[] = [];
             for (const h of seed.hours_lines) {
               items.push({ id: uuid(), label: h.label, qty: h.hours, rate: 0, unit: "hr", discount: 0, source: "hours" });
@@ -155,11 +262,29 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             // see the dumpsterPct/recyclingPct sync effect below.
             setBill({ items, globalDiscount: 0, notes: "" });
           })
-          .catch(() => {})
+          .catch(() => {
+            const draft = loadBillDraft(jobUuid);
+            if (draft) setBill(draft);
+          })
           .finally(() => setLoaded(true));
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);
+
+  // ── Debounced bill draft autosave ────────────────────────────────────────
+  // Captures every change to items / globalDiscount / notes once the bill is
+  // loaded so a tab switch or refresh doesn't lose the work. Cleared on
+  // successful submit by JobReport calling our clearDraft handle.
+  useEffect(() => {
+    if (!loaded || !jobUuid) return;
+    cancelPendingBillSave();
+    billSaveTimeoutRef.current = window.setTimeout(() => {
+      billSaveTimeoutRef.current = null;
+      saveBillDraft(jobUuid, bill);
+    }, 750);
+    return cancelPendingBillSave;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bill, jobUuid, loaded]);
 
   // ── Keep M1 line items (dumpster/recycling) in sync with the Report sliders.
   // Runs after initial load, whenever either slider changes.
@@ -369,24 +494,32 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // ── Empty / loading states ────────────────────────────────────────────────────
 
   if (!jobUuid) {
-    return (
+    const placeholder = (
       <div className="card" style={{ color: "var(--muted)", textAlign: "center", padding: "28px 16px" }}>
         Select a job to build a bill.
       </div>
     );
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null })}</>;
+    return placeholder;
   }
 
   if (!loaded) {
-    return <div className="card" style={{ color: "var(--muted)", fontSize: 13, padding: 14 }}>Loading bill…</div>;
+    const placeholder = (
+      <div className="card" style={{ color: "var(--muted)", fontSize: 13, padding: 14 }}>Loading bill…</div>
+    );
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null })}</>;
+    return placeholder;
   }
 
   const { subtotal, discountAmt, total } = calcTotals(bill.items, bill.globalDiscount);
   const grandTotal = total + materialsTotal;
 
   // ── Render ────────────────────────────────────────────────────────────────────
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-
+  // Build the three sections as slot nodes so a render-prop caller can
+  // interleave them with its own cards. When no `children` is provided we
+  // fall back to the original stacked layout.
+  const billHelperSlot = (
+    <>
       <div className="sectionTitle" style={{ marginBottom: 0 }}>Bill Helper</div>
       {jobName && (
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
@@ -568,45 +701,58 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           )}
         </div>
       </div>
+    </>
+  );
 
-      {/* ── Totals ── */}
-      <div className="card">
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <label style={{ fontSize: 13, color: "var(--muted)" }}>Global discount (%)</label>
-            <input type="number" min={0} max={100} step={1} value={bill.globalDiscount}
-              onChange={(e) => setBill((prev) => ({ ...prev, globalDiscount: Math.min(100, Math.max(0, Number(e.target.value) || 0)) }))}
-              style={{ ...numInputStyle, width: 80 }} />
+  const totalsSlot = (
+    <div className="card">
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <label style={{ fontSize: 13, color: "var(--muted)" }}>Global discount (%)</label>
+          <input type="number" min={0} max={100} step={1} value={bill.globalDiscount}
+            onChange={(e) => setBill((prev) => ({ ...prev, globalDiscount: Math.min(100, Math.max(0, Number(e.target.value) || 0)) }))}
+            style={{ ...numInputStyle, width: 80 }} />
+        </div>
+        <div style={{ height: 1, background: "var(--border)" }} />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
+          <span>Line-items subtotal</span><span>{fmt(subtotal)}</span>
+        </div>
+        {discountAmt > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--danger)" }}>
+            <span>Discount ({bill.globalDiscount}%)</span><span>−{fmt(discountAmt)}</span>
           </div>
-          <div style={{ height: 1, background: "var(--border)" }} />
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
-            <span>Line-items subtotal</span><span>{fmt(subtotal)}</span>
-          </div>
-          {discountAmt > 0 && (
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--danger)" }}>
-              <span>Discount ({bill.globalDiscount}%)</span><span>−{fmt(discountAmt)}</span>
-            </div>
-          )}
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
-            <span>Materials</span><span>{fmt(materialsTotal)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 18 }}>
-            <span>Total</span>
-            <span style={{ color: "var(--brand)" }}>{fmt(grandTotal)}</span>
-          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
+          <span>Materials</span><span>{fmt(materialsTotal)}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 18 }}>
+          <span>Total</span>
+          <span style={{ color: "var(--brand)" }}>{fmt(grandTotal)}</span>
         </div>
       </div>
+    </div>
+  );
 
-      {/* ── Notes ── */}
-      <div className="card">
-        <div className="sectionTitle">Bill Notes</div>
-        <textarea value={bill.notes}
-          onChange={(e) => setBill((prev) => ({ ...prev, notes: e.target.value }))}
-          placeholder={ht.billNotesPlaceholder}
-          rows={3}
-          style={{ width: "100%", marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, resize: "vertical", boxSizing: "border-box" }} />
-      </div>
+  const notesSlot = (
+    <div className="card">
+      <div className="sectionTitle">Bill Notes</div>
+      <textarea value={bill.notes}
+        onChange={(e) => setBill((prev) => ({ ...prev, notes: e.target.value }))}
+        placeholder={ht.billNotesPlaceholder}
+        rows={3}
+        style={{ width: "100%", marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, resize: "vertical", boxSizing: "border-box" }} />
+    </div>
+  );
 
+  if (children) {
+    return <>{children({ billHelper: billHelperSlot, totals: totalsSlot, notes: notesSlot })}</>;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {billHelperSlot}
+      {totalsSlot}
+      {notesSlot}
     </div>
   );
 });

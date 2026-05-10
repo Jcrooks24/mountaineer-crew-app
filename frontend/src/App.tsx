@@ -76,6 +76,16 @@ const JOB_KEY = "crew_active_job_uuid_v1";
 const JOB_STATUS_KEY = "crew_job_status_v1"; // "active" | "closed"
 const COMMENTS_PREFIX = "crew_job_comments_v1:"; // per job_uuid
 
+// Maps job_uuid → event_id of the JOB_NOTES sentinel event we created for it.
+// Lets repeat edits PATCH the same row instead of creating a new event each save.
+const JOB_NOTES_EVENT_PREFIX = "crew_job_notes_event_v1:"; // per job_uuid
+
+// Per-job snapshot of the notes text that was last accepted into the sync
+// pipeline. Compared against the live `jobComments` to decide whether the
+// debounce should fire — survives across reloads and job switches so a save
+// pending at the moment of switch eventually flushes when the user returns.
+const NOTES_SYNCED_PREFIX = "crew_job_notes_synced_v1:"; // per job_uuid
+
 // Per-job metadata (existing)
 const JOB_NAME_PREFIX = "crew_job_name_v1:"; // per job_uuid
 const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
@@ -310,6 +320,14 @@ export default function App() {
   // Comments (per job_uuid)
   const [jobComments, setJobComments] = useState<string>("");
 
+  // Sync status for the global Notes textarea. Drives the small status pill
+  // shown next to the Notes header so crew can confirm their text reached the
+  // queue (the previous behavior wrote to localStorage only — sheets never saw
+  // it, so admin couldn't read the notes off-device).
+  type NotesSyncStatus = "idle" | "saving" | "saved" | "offline";
+  const [notesStatus, setNotesStatus] = useState<NotesSyncStatus>("idle");
+  const notesSaveTimeoutRef = useRef<number | null>(null);
+
   // Calendar
   const [calLoading, setCalLoading] = useState(false);
   const [calError, setCalError] = useState<string>("");
@@ -426,6 +444,38 @@ export default function App() {
   function saveCommentsForJob(uuid: string, text: string) {
     try {
       localStorage.setItem(commentsKeyForJob(uuid), text);
+    } catch {}
+  }
+
+  function jobNotesEventKey(uuid: string) {
+    return `${JOB_NOTES_EVENT_PREFIX}${uuid || "none"}`;
+  }
+  function loadJobNotesEventId(uuid: string): string | null {
+    try {
+      return localStorage.getItem(jobNotesEventKey(uuid));
+    } catch {
+      return null;
+    }
+  }
+  function saveJobNotesEventId(uuid: string, eventId: string) {
+    try {
+      localStorage.setItem(jobNotesEventKey(uuid), eventId);
+    } catch {}
+  }
+
+  function notesSyncedKey(uuid: string) {
+    return `${NOTES_SYNCED_PREFIX}${uuid || "none"}`;
+  }
+  function loadSyncedNotes(uuid: string): string {
+    try {
+      return localStorage.getItem(notesSyncedKey(uuid)) || "";
+    } catch {
+      return "";
+    }
+  }
+  function saveSyncedNotes(uuid: string, text: string) {
+    try {
+      localStorage.setItem(notesSyncedKey(uuid), text);
     } catch {}
   }
 
@@ -691,6 +741,62 @@ export default function App() {
     saveNotePatchQueue(nextPatchQueue);
 
     drainNotePatchQueue();
+  }
+
+  // Persist the global Notes textarea for `jobUuidArg` into the same sync
+  // pipeline used for activity events. The first call for a job creates a
+  // sentinel JOB_NOTES event whose `note` field carries the full text;
+  // subsequent calls PATCH that same event in place via the existing
+  // event-patch queue. Filtered out of the timeline render so it doesn't
+  // appear as activity.
+  async function flushJobNotes(jobUuidArg: string, text: string) {
+    if (!jobUuidArg) return;
+    const noteValue = text.trim() ? text.trim() : null;
+
+    let eventId = loadJobNotesEventId(jobUuidArg);
+
+    if (!eventId) {
+      eventId = crypto.randomUUID();
+      saveJobNotesEventId(jobUuidArg, eventId);
+
+      const nowIso = new Date().toISOString();
+      const ev: EventRecord = {
+        event_id: eventId,
+        job_uuid: jobUuidArg,
+        type: "JOB_NOTES",
+        timestamp: nowIso,
+        logged_at: nowIso,
+        lat: null,
+        lng: null,
+        accuracy_m: null,
+        note: noteValue,
+        created_by: user?.name || user?.email || "",
+        sync_status: "queued",
+      };
+
+      const log = loadLog();
+      log.unshift(ev);
+      saveLog(log);
+      setActivityLog(log);
+
+      const q = loadQueue();
+      q.unshift(ev);
+      saveQueue(q);
+
+      saveSyncedNotes(jobUuidArg, text);
+
+      if (navigator.onLine) {
+        void syncQueueNow();
+        setNotesStatus("saved");
+      } else {
+        setNotesStatus("offline");
+      }
+      return;
+    }
+
+    await updateEventNote(eventId, text);
+    saveSyncedNotes(jobUuidArg, text);
+    setNotesStatus(navigator.onLine ? "saved" : "offline");
   }
 
   async function syncQueueNow() {
@@ -1244,9 +1350,76 @@ export default function App() {
   }, [jobUuid, jobStatus, activityLog]);
 
   useEffect(() => {
-    if (!jobUuid.trim()) return;
-    saveCommentsForJob(jobUuid.trim(), jobComments);
+    const uuid = jobUuid.trim();
+    if (!uuid) return;
+
+    // Always persist locally on every keystroke so a refresh never loses text,
+    // independent of the debounced backend flush below.
+    saveCommentsForJob(uuid, jobComments);
+
+    const synced = loadSyncedNotes(uuid);
+    if (jobComments === synced) {
+      setNotesStatus("idle");
+      return;
+    }
+
+    if (notesSaveTimeoutRef.current !== null) {
+      window.clearTimeout(notesSaveTimeoutRef.current);
+    }
+    setNotesStatus("saving");
+    notesSaveTimeoutRef.current = window.setTimeout(() => {
+      notesSaveTimeoutRef.current = null;
+      void flushJobNotes(uuid, jobComments);
+    }, 1500);
+
+    return () => {
+      if (notesSaveTimeoutRef.current !== null) {
+        window.clearTimeout(notesSaveTimeoutRef.current);
+        notesSaveTimeoutRef.current = null;
+      }
+    };
   }, [jobUuid, jobComments]);
+
+  // When connectivity returns, kick both sync queues and reconcile the Notes
+  // pill. The window 'online' event listener at mount also drains the queues,
+  // but doesn't fire on every transition (some browsers miss it after sleep
+  // or VPN flaps). Driving the drain off React's isOnline state catches those
+  // gaps. Cheap: both functions early-return when their queue is empty.
+  useEffect(() => {
+    if (!isOnline) return;
+    void syncQueueNow();
+    void drainNotePatchQueue();
+    if (notesStatus === "offline") setNotesStatus("saved");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline]);
+
+  // When the server-events fetch returns a JOB_NOTES row for the active job,
+  // mirror it into local state so a fresh device/install sees notes typed
+  // on another device. Only hydrate when the user hasn't typed anything
+  // locally yet — otherwise their unsaved keystrokes would be clobbered.
+  useEffect(() => {
+    const uuid = jobUuid.trim();
+    if (!uuid) return;
+    const notesEvent = serverEvents.find(
+      (e) => e.job_uuid === uuid && e.type === "JOB_NOTES",
+    );
+    if (!notesEvent) return;
+
+    if (loadJobNotesEventId(uuid) !== notesEvent.event_id) {
+      saveJobNotesEventId(uuid, notesEvent.event_id);
+    }
+
+    const localText = loadCommentsForJob(uuid);
+    const serverText = notesEvent.note ?? "";
+    if (!localText && serverText) {
+      saveSyncedNotes(uuid, serverText);
+      setJobComments(serverText);
+    } else if (localText && localText === serverText) {
+      // Local and server agree — record the sync baseline so the autosave
+      // effect doesn't fire a needless re-flush.
+      saveSyncedNotes(uuid, serverText);
+    }
+  }, [jobUuid, serverEvents]);
 
   useEffect(() => {
     if (!jobUuid.trim()) return;
@@ -1335,9 +1508,12 @@ export default function App() {
       e.sync_status === "queued" ? e : (serverById.get(e.event_id) ?? e)
     );
     const serverOnly = serverByJob.filter((e) => !localIds.has(e.event_id));
-    return [...reconciled, ...serverOnly].sort(
-      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-    );
+    // JOB_NOTES is a sentinel event used to ferry the global Notes textarea
+    // through the sync pipeline; it carries no activity meaning, so hide it
+    // from the timeline view (the textarea itself is its UI).
+    return [...reconciled, ...serverOnly]
+      .filter((e) => e.type !== "JOB_NOTES")
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, [activityLog, serverEvents, jobUuid]);
 
   // Aggregate totals for the current job's materials (populated from the
@@ -1589,11 +1765,33 @@ export default function App() {
           </div>
 
           <div className="card">
-            <div className="sectionTitle">Notes</div>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="sectionTitle">Notes</div>
+              {jobUuid.trim() ? (
+                <span
+                  className="small"
+                  aria-live="polite"
+                  style={{
+                    color:
+                      notesStatus === "saved"
+                        ? "var(--ok)"
+                        : notesStatus === "offline"
+                          ? "var(--brand2)"
+                          : "var(--muted)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {notesStatus === "saving" && "Saving…"}
+                  {notesStatus === "saved" && "✓ Saved"}
+                  {notesStatus === "offline" && "Saved offline — will sync"}
+                </span>
+              ) : null}
+            </div>
             <textarea
               value={jobComments}
               onChange={(e) => setJobComments(e.target.value)}
               placeholder={ht.jobNotesPlaceholder}
+              disabled={!jobUuid.trim()}
             />
           </div>
 
@@ -2015,7 +2213,7 @@ export default function App() {
 
       {/* Report */}
       {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} />
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} />
       )}
 
       {/* DVIR reminder modal — shown before START or FINISH */}

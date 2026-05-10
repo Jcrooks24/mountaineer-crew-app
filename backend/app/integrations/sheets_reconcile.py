@@ -18,11 +18,12 @@ Used by:
 from __future__ import annotations
 
 import time as _time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.time_utils import utc_naive_to_mountain_date
 from app.integrations.sheets_export import export_events_to_sheets
 
 
@@ -56,6 +57,28 @@ def _iso_or_empty(dt: Any) -> str:
     return str(dt)
 
 
+def _job_dates_for(db: Session, job_uuids: Set[str]) -> Dict[str, str]:
+    """Look up YYYY-MM-DD `job_date` for a batch of job_uuids from the
+    materials_submissions table. Materials posts always carry the date
+    (the live event-sync path doesn't persist it on the event row), so
+    this is the most reliable recoverable source for orphaned events.
+
+    Returns a uuid → date map; uuids with no materials submission are
+    absent from the result so the caller can apply its fallback."""
+    if not job_uuids:
+        return {}
+    rows = db.execute(
+        text(
+            "SELECT DISTINCT ON (job_uuid) job_uuid, job_date "
+            "FROM materials_submissions "
+            "WHERE job_uuid IN :uuids AND job_date IS NOT NULL AND job_date <> '' "
+            "ORDER BY job_uuid, created_at DESC"
+        ),
+        {"uuids": tuple(job_uuids)},
+    ).fetchall()
+    return {r[0]: r[1] for r in rows if r[0] and r[1]}
+
+
 def find_unexported_events(db: Session, limit: int) -> List[Dict[str, Any]]:
     """Return up to `limit` events that exist in `events` but have no row in
     `sheet_event_exports`, shaped for `export_events_to_sheets`.
@@ -69,19 +92,30 @@ def find_unexported_events(db: Session, limit: int) -> List[Dict[str, Any]]:
 
     rows = db.execute(_UNEXPORTED_QUERY, {"limit": limit}).mappings().all()
 
+    # Recover job_date per row. Materials submissions are the canonical
+    # secondary source (job_date is set on every submit); for jobs that
+    # never submitted materials we fall back to the event's own timestamp
+    # in Mountain time, which is what crew see as "today" in the field.
+    job_uuids = {r["job_uuid"] for r in rows if r["job_uuid"]}
+    materials_dates = _job_dates_for(db, job_uuids)
+
     out: List[Dict[str, Any]] = []
     for r in rows:
-        # job_date isn't stored on the event row — the live sync path pulls
-        # it from device localStorage. Reconciled rows carry "" so admins can
-        # tell them apart in the sheet if they look. The remaining columns
-        # are fully populated from the events row.
+        job_uuid = r["job_uuid"] or ""
+        job_date = materials_dates.get(job_uuid) or ""
+        if not job_date and r["timestamp"] is not None:
+            try:
+                job_date = utc_naive_to_mountain_date(r["timestamp"]).isoformat()
+            except Exception:
+                job_date = ""
+
         out.append({
             "event_id":   r["event_id"],
             "timestamp":  _iso_or_empty(r["timestamp"]),
             "logged_at":  _iso_or_empty(r["logged_at"]),
-            "job_uuid":   r["job_uuid"] or "",
+            "job_uuid":   job_uuid,
             "job_name":   r["job_name"] or "",
-            "job_date":   "",
+            "job_date":   job_date,
             "type":       r["type"],
             "note":       r["note"],
             "lat":        r["lat"],

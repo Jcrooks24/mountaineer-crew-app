@@ -8,6 +8,11 @@ from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, T
 from app.db.session import Base
 
 
+# Allowed values for `review_candidate`. Mirrors the frontend ThreeWay
+# picker; sheet export maps to "Yes" / "No" / "N/A" for human readability.
+REVIEW_CANDIDATE_VALUES = ("yes", "no", "na")
+
+
 class JobReport(Base):
     __tablename__ = "job_reports"
 
@@ -34,12 +39,18 @@ class JobReport(Base):
     # One of: crew_cash_check | office_invoice | office_arrange | end_of_job
     billing_method = Column(String, nullable=False)
 
-    # Should the office reach out for a review?
-    review_candidate = Column(Boolean, nullable=False)
+    # Should the office reach out for a review? One of REVIEW_CANDIDATE_VALUES.
+    review_candidate = Column(String(8), nullable=False)
 
     # Do hours worked match hours billed?
     hours_match = Column(Boolean, nullable=False)
     hours_mismatch_reason = Column(Text, nullable=True)
+
+    # JSON-encoded list of per-employee entries:
+    #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float }]
+    # Crew enters these on the Report tab using the time-math helper. Stored
+    # as Text to match the existing JobBill / MaterialsSubmission pattern.
+    employee_hours_json = Column(Text, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, nullable=False)
