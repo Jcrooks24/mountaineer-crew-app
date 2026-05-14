@@ -4,6 +4,7 @@ import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { refreshDirectory } from "../lib/userDirectory";
 import { markPatchNotesSeenNow } from "../lib/patchNotesSeen";
+import { APP_BUILD_ID, checkForAppUpdate, type UpdateResult } from "../lib/appUpdate";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
@@ -212,6 +213,37 @@ export default function Profile() {
         </div>
       </div>
 
+      {/* Reimbursement — crew can request mileage / business-expense refunds */}
+      <div className="card">
+        <div className="sectionTitle">Reimbursement</div>
+        <div className="col" style={{ gap: 8 }}>
+          <button onClick={() => nav("/reimbursement")} style={{ textAlign: "left" }}>
+            Submit a reimbursement request
+          </button>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Odometer photos for mileage, or a receipt photo for business expenses.
+          </div>
+        </div>
+      </div>
+
+      {/* Admin-only: Office Hours entry */}
+      {user?.role === "admin" && (
+        <div className="card">
+          <div className="sectionTitle">Office Hours</div>
+          <div className="col" style={{ gap: 8 }}>
+            <button onClick={() => nav("/office-hours")} style={{ textAlign: "left" }}>
+              Log office hours
+            </button>
+            <div className="small" style={{ color: "var(--muted)" }}>
+              Admin-only — for office staff who don't log against a job.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Crew Settings — small per-device controls available to any user */}
+      <CrewSettingsCard />
+
       {/* Sign out — placed above Patch Notes so a long changelog
           never buries it off-screen */}
       <div className="card">
@@ -231,6 +263,70 @@ export default function Profile() {
 
       {/* Patch Notes — shows most recent 3 by default with an expander */}
       <PatchNotesCard />
+    </div>
+  );
+}
+
+function CrewSettingsCard() {
+  const [status, setStatus] = useState<"idle" | "checking" | "result">("idle");
+  const [result, setResult] = useState<UpdateResult | null>(null);
+
+  async function handleCheck() {
+    setStatus("checking");
+    setResult(null);
+    try {
+      const r = await checkForAppUpdate();
+      setResult(r);
+      setStatus("result");
+    } catch (e: any) {
+      setResult({ kind: "error", message: e?.message || "Update check failed" });
+      setStatus("result");
+    }
+  }
+
+  const message = result
+    ? result.kind === "latest"
+      ? "You're on the latest version."
+      : result.kind === "updating"
+        ? "Update found — reloading…"
+        : result.kind === "offline"
+          ? "You're offline — can't check for updates."
+          : result.kind === "unsupported"
+            ? "Updates can't be checked on this browser."
+            : result.message
+    : null;
+
+  const messageColor = result?.kind === "latest"
+    ? "var(--ok)"
+    : result?.kind === "updating"
+      ? "var(--brand)"
+      : result?.kind === "error" || result?.kind === "offline"
+        ? "var(--danger)"
+        : "var(--muted)";
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Crew Settings</div>
+      <div className="col" style={{ gap: 10 }}>
+        <div>
+          <div className="label">App version</div>
+          <div className="small" style={{ marginTop: 4, color: "var(--muted)", fontFamily: "monospace" }}>
+            {APP_BUILD_ID}
+          </div>
+        </div>
+        <button
+          onClick={handleCheck}
+          disabled={status === "checking"}
+          style={{ textAlign: "left" }}
+        >
+          {status === "checking" ? "Checking for updates…" : "Check for updates"}
+        </button>
+        {message && (
+          <div className="small" style={{ color: messageColor }}>
+            {message}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -15,7 +15,19 @@ export default defineConfig(({ mode }) => {
     // malformed URL — fall back to localhost so the build doesn't break
   }
 
+  // Build identifier surfaced in the Profile "Crew Settings" card so crew can
+  // verify they're on a fresh build after tapping "Check for updates". Prefer
+  // a Vercel-provided commit SHA; fall back to the local build timestamp so
+  // local dev builds still show something meaningful.
+  const commitSha = env.VITE_BUILD_ID || env.VERCEL_GIT_COMMIT_SHA || "";
+  const shortSha = commitSha ? commitSha.slice(0, 7) : "";
+  const buildStamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 13);
+  const buildId = shortSha ? `${shortSha}-${buildStamp}` : `dev-${buildStamp}`;
+
   return {
+    define: {
+      __APP_BUILD_ID__: JSON.stringify(buildId),
+    },
     plugins: [
       react(),
 
