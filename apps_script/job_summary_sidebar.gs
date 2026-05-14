@@ -38,6 +38,23 @@ const PROD_TABS = {
 // invoice-block copy-paste flow office assistants already use.
 const MOUNTAIN_TZ = 'America/Denver';
 
+// Cached Intl formatters — substantially faster per call than
+// Utilities.formatDate (cross-VM round-trip per cell). The hot path is
+// searchJobs / _buildSummary scanning thousands of rows.
+// `en-CA` is ISO-like: yyyy-MM-dd and 24h time.
+const _FMT_YMD = new Intl.DateTimeFormat('en-CA', {
+  timeZone: MOUNTAIN_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+});
+const _FMT_HM = new Intl.DateTimeFormat('en-CA', {
+  timeZone: MOUNTAIN_TZ, hour: '2-digit', minute: '2-digit', hour12: false,
+});
+
+// Per-invocation memo for Date → string conversions. Each google.script.run
+// call spins up a fresh V8 context, so these maps reset between client
+// calls — no unbounded growth across sessions.
+const _ymdMemo = new Map();
+const _hmMemo = new Map();
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Mountaineer')
@@ -76,43 +93,58 @@ function _readTab(tabName) {
 
 // ── Date / time helpers ─────────────────────────────────────────────────────
 
+function _ymdOfDate(d) {
+  const k = d.getTime();
+  let hit = _ymdMemo.get(k);
+  if (hit !== undefined) return hit;
+  hit = _FMT_YMD.format(d);
+  _ymdMemo.set(k, hit);
+  return hit;
+}
+
+function _hmOfDate(d) {
+  const k = d.getTime();
+  let hit = _hmMemo.get(k);
+  if (hit !== undefined) return hit;
+  hit = _FMT_HM.format(d);
+  _hmMemo.set(k, hit);
+  return hit;
+}
+
 function _toYMD(value) {
   if (value === null || value === undefined || value === '') return '';
-  if (value instanceof Date) {
-    return Utilities.formatDate(value, MOUNTAIN_TZ, 'yyyy-MM-dd');
-  }
+  if (value instanceof Date) return _ymdOfDate(value);
   const s = String(value);
+  // Fast path: ISO-prefixed strings (the common case for stringly-stored dates).
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return m[1] + '-' + m[2] + '-' + m[3];
   const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    return Utilities.formatDate(d, MOUNTAIN_TZ, 'yyyy-MM-dd');
-  }
+  if (!isNaN(d.getTime())) return _ymdOfDate(d);
   return '';
 }
 
 function _toTime(value) {
   if (value === null || value === undefined || value === '') return '';
-  if (value instanceof Date) {
-    return Utilities.formatDate(value, MOUNTAIN_TZ, 'HH:mm');
-  }
+  if (value instanceof Date) return _hmOfDate(value);
   const d = new Date(String(value));
-  if (!isNaN(d.getTime())) {
-    return Utilities.formatDate(d, MOUNTAIN_TZ, 'HH:mm');
-  }
+  if (!isNaN(d.getTime())) return _hmOfDate(d);
   return '';
 }
 
 function _toDateTime(value) {
   if (value === null || value === undefined || value === '') return '';
-  if (value instanceof Date) {
-    return Utilities.formatDate(value, MOUNTAIN_TZ, 'yyyy-MM-dd HH:mm');
-  }
+  if (value instanceof Date) return _ymdOfDate(value) + ' ' + _hmOfDate(value);
   const d = new Date(String(value));
-  if (!isNaN(d.getTime())) {
-    return Utilities.formatDate(d, MOUNTAIN_TZ, 'yyyy-MM-dd HH:mm');
-  }
+  if (!isNaN(d.getTime())) return _ymdOfDate(d) + ' ' + _hmOfDate(d);
   return '';
+}
+
+function _updatedAtMillis(value) {
+  if (value instanceof Date) return value.getTime();
+  if (value === null || value === undefined || value === '') return 0;
+  const d = new Date(String(value));
+  const t = d.getTime();
+  return isNaN(t) ? 0 : t;
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
@@ -261,6 +293,19 @@ function _buildSummary(jobUuid, tabs, longDistance) {
     const d = _toYMD(r.job_date) || _toYMD(r.created_at);
     if (d) dateSet.add(d);
   }
+  // Fallback: jobs with only a JobReport or Bill (no Events/Materials)
+  // would otherwise miss DVIRs/RODS/PriorOnDuty matching. Seed dateSet
+  // from those rows' created_at / updated_at.
+  if (dateSet.size === 0) {
+    for (const r of jobReportRows) {
+      const d = _toYMD(r.updated_at) || _toYMD(r.created_at);
+      if (d) dateSet.add(d);
+    }
+    for (const r of billRows) {
+      const d = _toYMD(r.created_at) || _toYMD(r.updated_at);
+      if (d) dateSet.add(d);
+    }
+  }
   const jobDates = Array.from(dateSet).sort();
 
   // DVIRs: heuristic match — inspection_date falls on one of the job's dates.
@@ -317,7 +362,10 @@ function _buildSummary(jobUuid, tabs, longDistance) {
   // already a pre-formatted multi-line string from the backend.
   let jobReport = null;
   if (jobReportRows.length > 0) {
-    jobReportRows.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+    // Sort by absolute timestamp, descending. Earlier impl used
+    // String(Date).localeCompare which compares by day-name first
+    // ("Tue May 13 …" vs "Wed May 14 …") and picked the wrong row.
+    jobReportRows.sort((a, b) => _updatedAtMillis(b.updated_at) - _updatedAtMillis(a.updated_at));
     const r = jobReportRows[0];
     jobReport = {
       submitted_by: String(r.submitted_by || ''),
