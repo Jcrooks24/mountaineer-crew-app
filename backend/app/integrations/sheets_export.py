@@ -1598,3 +1598,139 @@ def update_entry_status_in_sheets(
             counts[tab] = 0
             print(f"[entry-status sweep] {tab} failed for {job_uuid}: {exc}")
     return counts
+
+
+# ── Office Hours ─────────────────────────────────────────────────────────────
+
+OFFICE_HOURS_HEADERS = [
+    "entry_uuid", "user_name", "work_date",
+    "start_time", "end_time", "break_hours",
+    "hours", "hours_rounded",
+    "notes", "created_at", "updated_at",
+]
+
+
+def export_office_hours_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """Replace-style export: exactly one row per entry_uuid in the
+    OfficeHours tab. Each save re-appends so the sheet always reflects the
+    current DB state, no stale duplicates from edits.
+
+    Worksheet name read from SHEETS_OFFICE_HOURS_TAB so staging
+    (OfficeHoursStaging) and prod (OfficeHours) land in distinct tabs
+    inside the same spreadsheet — never hardcoded."""
+    tab = os.getenv("SHEETS_OFFICE_HOURS_TAB", "OfficeHours").strip() or "OfficeHours"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    entry_uuid = entry.get("entry_uuid", "") or ""
+    if not entry_uuid:
+        return 0
+
+    try:
+        raw_hours = float(entry.get("hours") or 0)
+    except (TypeError, ValueError):
+        raw_hours = 0.0
+    rounded = _round_billable_quarter(raw_hours)
+
+    row = {
+        "entry_uuid": entry_uuid,
+        "user_name": entry.get("user_name", "") or "",
+        "work_date": entry.get("work_date", "") or "",
+        "start_time": entry.get("start_time", "") or "",
+        "end_time": entry.get("end_time", "") or "",
+        "break_hours": entry.get("break_hours", 0) or 0,
+        "hours": raw_hours,
+        "hours_rounded": rounded,
+        "notes": entry.get("notes", "") or "",
+        "created_at": _iso(entry.get("created_at")),
+        "updated_at": _iso(entry.get("updated_at")),
+    }
+
+    svc = _get_sheets_svc(db)
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, OFFICE_HOURS_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", entry_uuid)
+    rows = [_build_row(row, actual_headers)]
+
+    def _append():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    _ssl_retry(_append)
+    return 1
+
+
+# ── Reimbursements ───────────────────────────────────────────────────────────
+
+REIMBURSEMENT_HEADERS = [
+    "reimbursement_uuid", "user_name", "submitted_at", "type",
+    "job_name", "job_date",
+    "odometer_start", "odometer_end", "miles",
+    "odometer_start_photo_url", "odometer_end_photo_url",
+    "amount", "category", "receipt_photo_url",
+    "notes", "status", "approver", "approved_at", "approval_notes",
+    "created_at", "updated_at",
+]
+
+
+def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """Replace-style export: one row per reimbursement_uuid. Re-runs after
+    an approve/reject overwrite in place. Worksheet name controlled by
+    SHEETS_REIMBURSEMENTS_TAB so staging and prod land separately."""
+    tab = os.getenv("SHEETS_REIMBURSEMENTS_TAB", "Reimbursements").strip() or "Reimbursements"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    reimbursement_uuid = entry.get("reimbursement_uuid", "") or ""
+    if not reimbursement_uuid:
+        return 0
+
+    try:
+        odo_start = entry.get("odometer_start")
+        odo_end = entry.get("odometer_end")
+        miles = ""
+        if odo_start is not None and odo_end is not None:
+            miles = max(0, int(odo_end) - int(odo_start))
+    except (TypeError, ValueError):
+        miles = ""
+
+    row = {
+        "reimbursement_uuid": reimbursement_uuid,
+        "user_name": entry.get("user_name", "") or "",
+        "submitted_at": _iso(entry.get("created_at")),
+        "type": entry.get("type", "") or "",
+        "job_name": entry.get("job_name", "") or "",
+        "job_date": entry.get("job_date", "") or "",
+        "odometer_start": entry.get("odometer_start", "") if entry.get("odometer_start") is not None else "",
+        "odometer_end": entry.get("odometer_end", "") if entry.get("odometer_end") is not None else "",
+        "miles": miles,
+        "odometer_start_photo_url": entry.get("odometer_start_photo_url", "") or "",
+        "odometer_end_photo_url": entry.get("odometer_end_photo_url", "") or "",
+        "amount": entry.get("amount", "") if entry.get("amount") is not None else "",
+        "category": entry.get("category", "") or "",
+        "receipt_photo_url": entry.get("receipt_photo_url", "") or "",
+        "notes": entry.get("notes", "") or "",
+        "status": entry.get("status", "") or "submitted",
+        "approver": entry.get("approver_name", "") or "",
+        "approved_at": _iso(entry.get("approved_at")),
+        "approval_notes": entry.get("approval_notes", "") or "",
+        "created_at": _iso(entry.get("created_at")),
+        "updated_at": _iso(entry.get("updated_at")),
+    }
+
+    svc = _get_sheets_svc(db)
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, REIMBURSEMENT_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "reimbursement_uuid", reimbursement_uuid)
+    rows = [_build_row(row, actual_headers)]
+
+    def _append():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    _ssl_retry(_append)
+    return 1

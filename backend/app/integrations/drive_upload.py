@@ -30,6 +30,11 @@ DEFAULT_PARENT_FOLDER_NAME = "Mountaineer Crew Photos"
 # URL — the bit between /folders/ and any ?query).
 ESTIMATOR_PARENT_ENV_VAR = "DRIVE_ESTIMATOR_PARENT_FOLDER_ID"
 
+# Reimbursement photos (odometer + receipts) land in their own folder so
+# admin can audit them separately from job photos. Falls back to the
+# default crew-photos parent if the env var isn't set.
+REIMBURSEMENT_PARENT_ENV_VAR = "DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID"
+
 _cached_drive_service = None
 
 
@@ -177,6 +182,90 @@ def upload_photo_to_drive(
     file_id = result["id"]
 
     # Make file publicly viewable so any crew member can see it without Google login
+    svc.permissions().create(
+        fileId=file_id,
+        body={"type": "anyone", "role": "reader"},
+        fields="id",
+    ).execute()
+
+    return {
+        "file_id": file_id,
+        "url": result.get("webViewLink", ""),
+        "thumb_url": f"https://drive.google.com/thumbnail?id={file_id}&sz=w800",
+    }
+
+
+# ── Reimbursement photo uploader ─────────────────────────────────────────────
+
+def upload_reimbursement_photo_to_drive(
+    db: Session,
+    file_obj: BinaryIO,
+    filename: str,
+    mime_type: str,
+    user_name: str,
+    reimbursement_uuid: str,
+    kind: str,           # "odo_start" | "odo_end" | "receipt"
+    caption: str = "",
+) -> dict:
+    """Upload a reimbursement photo to Drive.
+
+    Folder layout:
+        <parent> / Reimbursements / <user_name> - YYYY-MM / <kind> - <uuid8>.jpg
+
+    Grouping by user + month so admin can scan a month's submissions for
+    one crew member without having to filter on date in Sheets. The
+    REIMBURSEMENT_PARENT_ENV_VAR override keeps these out of the main
+    crew-photos parent; if unset, falls back to the default parent.
+
+    `kind` is one of "odo_start", "odo_end", "receipt" — written into the
+    filename so the admin can tell what they're looking at at a glance.
+    """
+    import datetime as _dt
+
+    svc = _get_drive_service(db)
+
+    reimb_parent = os.getenv(REIMBURSEMENT_PARENT_ENV_VAR, "").strip()
+    parent_id = reimb_parent or _get_parent_folder_id(svc, db)
+    if not reimb_parent:
+        print(
+            f"[drive] {REIMBURSEMENT_PARENT_ENV_VAR} not set — reimbursement photo "
+            f"landing in default crew-photos parent instead"
+        )
+
+    # "Reimbursements" container folder so the parent stays scannable.
+    reimb_folder_id = _get_or_create_folder(svc, "Reimbursements", parent_id)
+
+    safe_user = _safe(user_name or "Unknown")
+    month_label = _dt.datetime.utcnow().strftime("%Y-%m")
+    user_folder_label = f"{safe_user} - {month_label}"[:100]
+    user_folder_id = _get_or_create_folder(svc, user_folder_label, reimb_folder_id)
+
+    ext = mime_type.split("/")[-1] if "/" in mime_type else "jpg"
+    ext = ext if ext in ("jpg", "jpeg", "png", "heic", "webp") else "jpg"
+    short_id = (reimbursement_uuid or filename or "photo")[:8]
+    drive_filename = f"{kind} - {short_id}.{ext}"
+
+    print(f"[drive] uploading reimbursement '{drive_filename}' into '{user_folder_label}'")
+
+    file_obj.seek(0)
+    media = MediaIoBaseUpload(
+        file_obj,
+        mimetype=mime_type,
+        resumable=True,
+        chunksize=DRIVE_UPLOAD_CHUNK_SIZE,
+    )
+    request = svc.files().create(
+        body={
+            "name": drive_filename,
+            "parents": [user_folder_id],
+            "description": caption or "",
+        },
+        media_body=media,
+        fields="id, webViewLink",
+    )
+    result = _execute_resumable(request)
+    file_id = result["id"]
+
     svc.permissions().create(
         fileId=file_id,
         body={"type": "anyone", "role": "reader"},
