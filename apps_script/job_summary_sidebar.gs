@@ -37,14 +37,18 @@ const MOUNTAIN_TZ = 'America/Denver';
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Mountaineer')
-    .addItem('Job Summary…', 'showJobSummarySidebar')
+    .addItem('Job Summary…', 'showJobSummaryDialog')
     .addToUi();
 }
 
-function showJobSummarySidebar() {
+function showJobSummaryDialog() {
+  // Modal centered dialog — wider than a sidebar so the composite-summary
+  // table has room to render multi-column comparisons without horizontal
+  // scroll on a typical laptop.
   const html = HtmlService.createHtmlOutputFromFile('job_summary_sidebar')
-    .setTitle('Job Summary');
-  SpreadsheetApp.getUi().showSidebar(html);
+    .setWidth(1200)
+    .setHeight(720);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Job Summary');
 }
 
 // ── Tab reader ──────────────────────────────────────────────────────────────
@@ -194,15 +198,41 @@ function searchJobs(dateStr, nameFragment) {
  */
 function getJobSummary(jobUuid) {
   if (!jobUuid) throw new Error('jobUuid required');
-  jobUuid = String(jobUuid);
+  return _buildSummary(String(jobUuid), _loadAllTabs());
+}
 
-  const events = _readTab(PROD_TABS.events);
-  const materials = _readTab(PROD_TABS.materials);
-  const jobReports = _readTab(PROD_TABS.jobReports);
-  const bills = _readTab(PROD_TABS.bills);
-  const dvirs = _readTab(PROD_TABS.dvirs);
-  const estimates = _readTab(PROD_TABS.estimates);
-  const estimateItems = _readTab(PROD_TABS.estimateItems);
+/**
+ * Build a summary for each job_uuid in `uuids`, returned in the same order.
+ * Used by the composite-summary view so the seven tabs are read once total
+ * (not once per job) — meaningful when comparing 5–10 jobs over a slow
+ * connection.
+ */
+function getJobSummariesByUuids(uuids) {
+  if (!Array.isArray(uuids) || uuids.length === 0) return [];
+  const tabs = _loadAllTabs();
+  return uuids.map(u => _buildSummary(String(u), tabs));
+}
+
+function _loadAllTabs() {
+  return {
+    events: _readTab(PROD_TABS.events),
+    materials: _readTab(PROD_TABS.materials),
+    jobReports: _readTab(PROD_TABS.jobReports),
+    bills: _readTab(PROD_TABS.bills),
+    dvirs: _readTab(PROD_TABS.dvirs),
+    estimates: _readTab(PROD_TABS.estimates),
+    estimateItems: _readTab(PROD_TABS.estimateItems),
+  };
+}
+
+function _buildSummary(jobUuid, tabs) {
+  const events = tabs.events;
+  const materials = tabs.materials;
+  const jobReports = tabs.jobReports;
+  const bills = tabs.bills;
+  const dvirs = tabs.dvirs;
+  const estimates = tabs.estimates;
+  const estimateItems = tabs.estimateItems;
 
   const eventRows = (events ? events.rows : []).filter(r => String(r.job_uuid) === jobUuid);
   const materialRows = (materials ? materials.rows : []).filter(r => String(r.job_uuid) === jobUuid);

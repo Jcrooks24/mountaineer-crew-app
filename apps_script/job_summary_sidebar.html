@@ -3,189 +3,231 @@
   <head>
     <base target="_top">
     <style>
+      html, body { margin: 0; padding: 0; height: 100%; }
       body {
         font-family: 'Roboto', Arial, sans-serif;
         font-size: 13px;
-        margin: 0;
-        padding: 12px;
         color: #1f2937;
+        background: #f9fafb;
       }
-      h2 { margin: 0 0 8px; font-size: 14px; }
+      .container { padding: 12px 16px; box-sizing: border-box; }
+
+      h1 { font-size: 18px; margin: 0 0 8px; }
       h3 {
-        margin: 14px 0 4px;
+        margin: 12px 0 4px;
         font-size: 13px;
         color: #374151;
         border-bottom: 1px solid #e5e7eb;
         padding-bottom: 2px;
       }
-      label { display: block; font-size: 11px; color: #6b7280; margin-top: 6px; }
-      input[type="date"], input[type="text"] {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 6px;
-        border: 1px solid #d1d5db;
-        border-radius: 4px;
-        font-size: 13px;
+
+      /* Tabs */
+      .tabs {
+        display: flex; gap: 4px;
+        border-bottom: 1px solid #e5e7eb;
+        margin-bottom: 12px;
       }
+      .tab {
+        background: transparent; border: 1px solid transparent; border-bottom: 0;
+        padding: 7px 14px; cursor: pointer; font-size: 13px; color: #6b7280;
+        border-top-left-radius: 4px; border-top-right-radius: 4px;
+      }
+      .tab.active {
+        background: white; border-color: #e5e7eb; color: #2563eb;
+        font-weight: 600;
+      }
+      .panel { display: none; }
+      .panel.active { display: block; }
+
+      /* Forms */
+      .search-bar { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 8px; }
+      .field { display: flex; flex-direction: column; gap: 2px; }
+      .field label { font-size: 11px; color: #6b7280; }
+      input[type="date"], input[type="text"] {
+        padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px;
+        font-size: 13px; box-sizing: border-box;
+      }
+      .field-name input { width: 280px; }
+
       button {
         background: #2563eb; color: white; border: 0; border-radius: 4px;
-        padding: 6px 12px; cursor: pointer; font-size: 12px;
+        padding: 7px 14px; cursor: pointer; font-size: 12px;
       }
       button.secondary {
-        background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+        background: white; color: #374151; border: 1px solid #d1d5db;
       }
       button:disabled { opacity: 0.5; cursor: default; }
+
+      .err { color: #b91c1c; font-size: 12px; margin: 6px 0; }
       .small { font-size: 11px; color: #6b7280; }
-      .err { color: #b91c1c; font-size: 12px; margin-top: 6px; }
+
+      /* Candidate cards */
       .candidate {
         display: block; width: 100%; text-align: left;
         border: 1px solid #e5e7eb; background: white;
-        padding: 10px 12px; border-radius: 6px; margin-bottom: 8px; cursor: pointer;
+        padding: 10px 12px; border-radius: 6px;
+        margin-bottom: 8px; cursor: pointer;
       }
       .candidate:hover { background: #f9fafb; border-color: #93c5fd; }
       .candidate .name {
-        font-size: 16px; font-weight: 700; color: #111827; line-height: 1.2;
+        font-size: 15px; font-weight: 700; color: #111827; line-height: 1.2;
         word-break: break-word;
       }
-      .candidate .meta {
-        font-size: 11px; color: #6b7280; margin-top: 4px;
+      .candidate .meta { font-size: 11px; color: #6b7280; margin-top: 4px; }
+      label.candidate { cursor: pointer; }
+      label.candidate input[type="checkbox"] {
+        margin-right: 8px; vertical-align: middle; transform: scale(1.1);
       }
-      .uuid { font-family: monospace; font-size: 10px; color: #9ca3af; word-break: break-all; }
+      label.candidate input[type="checkbox"]:disabled + .name { color: #9ca3af; }
+
+      /* Single layout: results | summary */
+      .single-area { display: flex; gap: 16px; align-items: flex-start; }
+      .single-results-col { flex: 0 0 320px; }
+      .single-summary-col { flex: 1; min-width: 0; }
+
       pre {
         white-space: pre-wrap;
         font-family: 'SF Mono', Consolas, monospace;
         font-size: 11px;
-        background: #f9fafb;
+        background: white;
         border: 1px solid #e5e7eb;
-        padding: 8px;
-        border-radius: 4px;
-        max-height: 600px;
+        padding: 12px;
+        border-radius: 6px;
+        max-height: 540px;
         overflow: auto;
+        margin: 0;
       }
+      .uuid { font-family: monospace; font-size: 10px; color: #9ca3af; word-break: break-all; }
       .copy-btn { margin: 6px 0; }
-      .back-btn { margin-bottom: 8px; }
+
+      /* Composite layout */
+      .comp-area { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
+      .comp-results, .comp-selected {
+        flex: 1; min-width: 0;
+        background: white; border: 1px solid #e5e7eb; border-radius: 6px;
+        padding: 10px;
+        max-height: 380px; overflow-y: auto;
+      }
+      .comp-results .candidate, .comp-selected .selected-item { margin-bottom: 6px; }
+      .selected-item {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 6px 8px; border: 1px solid #e5e7eb; border-radius: 4px;
+        background: #f9fafb;
+      }
+      .selected-item .si-info .name { font-weight: 600; font-size: 13px; }
+      .selected-item .si-info .meta { font-size: 11px; color: #6b7280; }
+      .selected-item button { padding: 2px 8px; font-size: 11px; }
+      .comp-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+      /* Composite table */
+      .comp-table-wrap {
+        background: white; border: 1px solid #e5e7eb; border-radius: 6px;
+        padding: 0; overflow-x: auto; overflow-y: auto;
+        max-height: 540px;
+      }
+      .comp-table {
+        border-collapse: collapse; min-width: 100%; font-size: 12px;
+      }
+      .comp-table th, .comp-table td {
+        border: 1px solid #e5e7eb; padding: 6px 10px; vertical-align: top;
+        text-align: left; white-space: pre-wrap; word-break: break-word;
+        min-width: 180px;
+      }
+      .comp-table th {
+        background: #f3f4f6; font-weight: 600;
+        position: sticky; top: 0; z-index: 1;
+      }
+      .comp-table .field-label {
+        background: #f9fafb; font-weight: 600; color: #374151;
+        position: sticky; left: 0; z-index: 2;
+        min-width: 180px; max-width: 220px;
+      }
+      .comp-table th.field-label { z-index: 3; background: #f3f4f6; }
+      .comp-table tr.section-header td {
+        background: #eff6ff; color: #1e3a8a;
+        font-weight: 700; font-size: 12px;
+        position: sticky; left: 0;
+      }
+      .comp-table td.no-resp { color: #9ca3af; font-style: italic; }
+      .comp-table th .job-name { font-size: 14px; font-weight: 700; color: #111827; }
+      .comp-table th .job-uuid { font-family: monospace; font-size: 10px; color: #9ca3af; word-break: break-all; font-weight: normal; }
     </style>
   </head>
   <body>
-    <div id="search-panel">
-      <h2>Job Summary</h2>
-      <label for="date">Job date (optional)</label>
-      <input type="date" id="date">
-      <label for="name">Job name (partial, optional)</label>
-      <input type="text" id="name" placeholder="e.g. Smith move">
-      <div style="margin-top: 10px;">
-        <button id="btnSearch">Search</button>
-      </div>
-      <div id="searchErr" class="err"></div>
-    </div>
+    <div class="container">
+      <h1>Job Summary</h1>
+      <nav class="tabs">
+        <button class="tab active" data-tab="single">Single job</button>
+        <button class="tab" data-tab="composite">Composite (compare jobs)</button>
+      </nav>
 
-    <div id="results"></div>
-    <div id="summary"></div>
+      <!-- SINGLE -->
+      <section id="panel-single" class="panel active">
+        <div class="search-bar">
+          <div class="field">
+            <label for="single-date">Job date (optional)</label>
+            <input type="date" id="single-date">
+          </div>
+          <div class="field field-name">
+            <label for="single-name">Job name (partial, optional)</label>
+            <input type="text" id="single-name" placeholder="e.g. Smith move">
+          </div>
+          <button id="single-search-btn">Search</button>
+        </div>
+        <div id="single-err" class="err"></div>
+        <div class="single-area">
+          <div class="single-results-col" id="single-results"></div>
+          <div class="single-summary-col" id="single-summary"></div>
+        </div>
+      </section>
+
+      <!-- COMPOSITE -->
+      <section id="panel-composite" class="panel">
+        <div class="search-bar">
+          <div class="field">
+            <label for="comp-date">Job date (optional)</label>
+            <input type="date" id="comp-date">
+          </div>
+          <div class="field field-name">
+            <label for="comp-name">Job name (partial, optional)</label>
+            <input type="text" id="comp-name" placeholder="e.g. Smith move">
+          </div>
+          <button id="comp-search-btn">Search</button>
+        </div>
+        <div id="comp-err" class="err"></div>
+
+        <div class="comp-area">
+          <div class="comp-results">
+            <h3>Search results</h3>
+            <div id="comp-search-results"><div class="small">Run a search to see candidates.</div></div>
+            <div class="comp-actions">
+              <button id="comp-add-btn" class="secondary">Add checked to composite</button>
+            </div>
+          </div>
+          <div class="comp-selected">
+            <h3>Selected jobs (<span id="comp-count">0</span>)</h3>
+            <div id="comp-selected-list"><div class="small">No jobs selected yet.</div></div>
+            <div class="comp-actions">
+              <button id="comp-build-btn">Build composite</button>
+              <button id="comp-clear-btn" class="secondary">Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="comp-table-container"></div>
+      </section>
+    </div>
 
     <script>
       function $(id) { return document.getElementById(id); }
-
-      function setBusy(busy) { $('btnSearch').disabled = busy; }
 
       function escapeHtml(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, ch =>
           ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[ch])
         );
       }
+      function pad(s, n) { s = String(s); while (s.length < n) s += ' '; return s; }
 
-      function pad(s, n) {
-        s = String(s);
-        while (s.length < n) s += ' ';
-        return s;
-      }
-
-      function onSearch() {
-        const date = $('date').value;
-        const name = $('name').value;
-        const err = $('searchErr');
-        err.textContent = '';
-        if (!date && !name.trim()) {
-          err.textContent = 'Enter a date, a name, or both.';
-          return;
-        }
-        setBusy(true);
-        $('results').innerHTML = '<div class="small">Searching…</div>';
-        $('summary').innerHTML = '';
-        google.script.run
-          .withSuccessHandler(renderResults)
-          .withFailureHandler(e => {
-            err.textContent = (e && e.message) || 'Search failed.';
-            $('results').innerHTML = '';
-            setBusy(false);
-          })
-          .searchJobs(date, name);
-      }
-
-      function renderResults(matches) {
-        setBusy(false);
-        const div = $('results');
-        if (!matches || !matches.length) {
-          div.innerHTML = '<h3>Matches (0)</h3><div class="small">No jobs found.</div>';
-          return;
-        }
-        let html = '<h3>Matches (' + matches.length + ')</h3>';
-        for (const m of matches) {
-          const range = m.dates.length === 0 ? 'no dates'
-            : (m.dates.length === 1 ? m.dates[0]
-                : m.dates[0] + ' → ' + m.dates[m.dates.length - 1]);
-          html += '<button class="candidate" data-uuid="' + escapeHtml(m.job_uuid) + '">'
-                +   '<div class="name">' + escapeHtml(m.job_name || '(unnamed job)') + '</div>'
-                +   '<div class="meta">' + escapeHtml(range)
-                +     ' · ' + m.event_count + ' event' + (m.event_count === 1 ? '' : 's')
-                +     ' · ' + m.material_count + ' material' + (m.material_count === 1 ? '' : 's')
-                +   '</div>'
-                + '</button>';
-        }
-        div.innerHTML = html;
-        Array.from(div.querySelectorAll('.candidate')).forEach(b => {
-          b.addEventListener('click', () => loadSummary(b.dataset.uuid));
-        });
-      }
-
-      function loadSummary(uuid) {
-        const sum = $('summary');
-        sum.innerHTML = '<div class="small">Loading…</div>';
-        google.script.run
-          .withSuccessHandler(renderSummary)
-          .withFailureHandler(e => {
-            sum.innerHTML = '<div class="err">' + escapeHtml((e && e.message) || 'Load failed.') + '</div>';
-          })
-          .getJobSummary(uuid);
-      }
-
-      function renderSummary(s) {
-        const text = formatSummaryText(s);
-        $('summary').innerHTML =
-            '<button class="secondary back-btn" id="backBtn">← Back to matches</button>'
-          + '<h3>' + escapeHtml(s.job_name || 'Unnamed job') + '</h3>'
-          + '<div class="uuid">' + escapeHtml(s.job_uuid) + '</div>'
-          + '<button class="copy-btn secondary" id="copyBtn">Copy summary</button>'
-          + '<pre>' + escapeHtml(text) + '</pre>';
-        $('backBtn').addEventListener('click', () => { $('summary').innerHTML = ''; });
-        $('copyBtn').addEventListener('click', () => {
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          ta.style.position = 'fixed';
-          ta.style.opacity = '0';
-          document.body.appendChild(ta);
-          ta.select();
-          try { document.execCommand('copy'); } catch (_) {}
-          document.body.removeChild(ta);
-          const b = $('copyBtn');
-          const orig = b.textContent;
-          b.textContent = 'Copied ✓';
-          setTimeout(() => { b.textContent = orig; }, 1500);
-        });
-      }
-
-      // Treat null/undefined/empty-string/whitespace as "no response". Numbers
-      // including 0 are valid responses and pass through. Yes/No strings from
-      // the sheet pass through verbatim.
       const NO_RESP = 'no response';
       function fmt(v) {
         if (v === null || v === undefined) return NO_RESP;
@@ -198,21 +240,113 @@
         return r === NO_RESP ? NO_RESP : r + '%';
       }
       function fmtMoney(v) {
-        if (v === null || v === undefined || v === '' ) return NO_RESP;
+        if (v === null || v === undefined || v === '') return NO_RESP;
         const n = Number(v);
         return isNaN(n) ? NO_RESP : '$' + n.toFixed(2);
+      }
+      function fmtRange(dates) {
+        if (!dates || !dates.length) return 'no dates';
+        return dates.length === 1
+          ? dates[0]
+          : dates[0] + ' → ' + dates[dates.length - 1];
+      }
+
+      // ── Tab switching ────────────────────────────────────────────────────
+      document.querySelectorAll('.tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+          btn.classList.add('active');
+          $('panel-' + btn.dataset.tab).classList.add('active');
+        });
+      });
+
+      function copyTextToClipboard(text, btn) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+        if (btn) {
+          const orig = btn.textContent;
+          btn.textContent = 'Copied ✓';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        }
+      }
+
+      // ── Single tab ───────────────────────────────────────────────────────
+      function singleSearch() {
+        const date = $('single-date').value;
+        const name = $('single-name').value;
+        const err = $('single-err');
+        err.textContent = '';
+        if (!date && !name.trim()) {
+          err.textContent = 'Enter a date, a name, or both.';
+          return;
+        }
+        $('single-search-btn').disabled = true;
+        $('single-results').innerHTML = '<div class="small">Searching…</div>';
+        $('single-summary').innerHTML = '';
+        google.script.run
+          .withSuccessHandler(renderSingleResults)
+          .withFailureHandler(e => {
+            err.textContent = (e && e.message) || 'Search failed.';
+            $('single-results').innerHTML = '';
+            $('single-search-btn').disabled = false;
+          })
+          .searchJobs(date, name);
+      }
+
+      function renderSingleResults(matches) {
+        $('single-search-btn').disabled = false;
+        if (!matches || !matches.length) {
+          $('single-results').innerHTML = '<h3>Matches (0)</h3><div class="small">No jobs found.</div>';
+          return;
+        }
+        let html = '<h3>Matches (' + matches.length + ')</h3>';
+        for (const m of matches) {
+          html += '<button class="candidate" data-uuid="' + escapeHtml(m.job_uuid) + '">'
+                +   '<div class="name">' + escapeHtml(m.job_name || '(unnamed job)') + '</div>'
+                +   '<div class="meta">' + escapeHtml(fmtRange(m.dates))
+                +     ' · ' + m.event_count + ' event' + (m.event_count === 1 ? '' : 's')
+                +     ' · ' + m.material_count + ' material' + (m.material_count === 1 ? '' : 's')
+                +   '</div>'
+                + '</button>';
+        }
+        $('single-results').innerHTML = html;
+        Array.from($('single-results').querySelectorAll('.candidate')).forEach(b => {
+          b.addEventListener('click', () => loadSingleSummary(b.dataset.uuid));
+        });
+      }
+
+      function loadSingleSummary(uuid) {
+        const sum = $('single-summary');
+        sum.innerHTML = '<div class="small">Loading…</div>';
+        google.script.run
+          .withSuccessHandler(renderSingleSummary)
+          .withFailureHandler(e => {
+            sum.innerHTML = '<div class="err">' + escapeHtml((e && e.message) || 'Load failed.') + '</div>';
+          })
+          .getJobSummary(uuid);
+      }
+
+      function renderSingleSummary(s) {
+        const text = formatSummaryText(s);
+        $('single-summary').innerHTML =
+            '<h3>' + escapeHtml(s.job_name || '(unnamed job)') + '</h3>'
+          + '<div class="uuid">' + escapeHtml(s.job_uuid) + '</div>'
+          + '<button class="copy-btn secondary" id="copyBtn">Copy summary</button>'
+          + '<pre>' + escapeHtml(text) + '</pre>';
+        $('copyBtn').addEventListener('click', () => copyTextToClipboard(text, $('copyBtn')));
       }
 
       function formatSummaryText(s) {
         const lines = [];
         lines.push(s.job_name || '(unnamed job)');
-        if (s.job_dates && s.job_dates.length) {
-          lines.push(s.job_dates.length === 1
-            ? s.job_dates[0]
-            : s.job_dates[0] + ' → ' + s.job_dates[s.job_dates.length - 1]);
-        } else {
-          lines.push(NO_RESP);
-        }
+        lines.push(s.job_dates && s.job_dates.length ? fmtRange(s.job_dates) : NO_RESP);
         lines.push('');
 
         // TIMESTAMPS
@@ -240,7 +374,7 @@
         }
         lines.push('');
 
-        // JOB REPORT — every field listed, blanks marked as "no response".
+        // JOB REPORT
         lines.push('JOB REPORT:');
         if (s.job_report) {
           const j = s.job_report;
@@ -256,9 +390,7 @@
           lines.push('  EMPLOYEE HOURS:');
           const ehText = String(j.employee_hours || '').trim();
           if (ehText) {
-            for (const eh of ehText.split('\n')) {
-              if (eh) lines.push('    ' + eh);
-            }
+            for (const eh of ehText.split('\n')) if (eh) lines.push('    ' + eh);
           } else {
             lines.push('    ' + NO_RESP);
           }
@@ -267,7 +399,7 @@
         }
         lines.push('');
 
-        // BILL — every field listed, blanks marked as "no response".
+        // BILL
         lines.push('BILL:');
         if (s.bill) {
           lines.push('  Items:');
@@ -293,7 +425,7 @@
         }
         lines.push('');
 
-        // DVIRS — matched by inspection date, every field per row.
+        // DVIRS
         lines.push('DVIRS (matched by inspection date):');
         if (s.dvirs && s.dvirs.length) {
           for (const d of s.dvirs) {
@@ -315,14 +447,14 @@
         }
         lines.push('');
 
-        // ESTIMATES — matched by job-name substring, every field per row.
+        // ESTIMATES
         lines.push('ESTIMATES (matched by job name):');
         if (s.estimates && s.estimates.length) {
           for (const e of s.estimates) {
-            lines.push('  Customer name:   ' + fmt(e.customer_name));
-            lines.push('  Move date:       ' + fmt(e.move_date));
-            lines.push('  Origin:          ' + fmt(e.origin_address));
-            lines.push('  Destination:     ' + fmt(e.destination_address));
+            lines.push('  Customer name:    ' + fmt(e.customer_name));
+            lines.push('  Move date:        ' + fmt(e.move_date));
+            lines.push('  Origin:           ' + fmt(e.origin_address));
+            lines.push('  Destination:      ' + fmt(e.destination_address));
             lines.push('  Estimated weight: '
               + (e.estimated_weight_lbs ? Math.round(e.estimated_weight_lbs) + ' lbs' : NO_RESP));
             lines.push('  Estimated volume: '
@@ -345,8 +477,292 @@
         return lines.join('\n').replace(/\n+$/, '');
       }
 
-      $('btnSearch').addEventListener('click', onSearch);
-      $('name').addEventListener('keydown', e => { if (e.key === 'Enter') onSearch(); });
+      // ── Composite tab ────────────────────────────────────────────────────
+      // Selected jobs persist across multiple searches so admins can pull
+      // jobs from different days into the same comparison.
+      let compSelected = []; // [{ job_uuid, job_name, dates }]
+      let compSearchResults = [];
+
+      function compSearch() {
+        const date = $('comp-date').value;
+        const name = $('comp-name').value;
+        const err = $('comp-err');
+        err.textContent = '';
+        if (!date && !name.trim()) {
+          err.textContent = 'Enter a date, a name, or both.';
+          return;
+        }
+        $('comp-search-btn').disabled = true;
+        $('comp-search-results').innerHTML = '<div class="small">Searching…</div>';
+        google.script.run
+          .withSuccessHandler(renderCompResults)
+          .withFailureHandler(e => {
+            err.textContent = (e && e.message) || 'Search failed.';
+            $('comp-search-results').innerHTML = '';
+            $('comp-search-btn').disabled = false;
+          })
+          .searchJobs(date, name);
+      }
+
+      function renderCompResults(matches) {
+        $('comp-search-btn').disabled = false;
+        compSearchResults = matches || [];
+        if (!compSearchResults.length) {
+          $('comp-search-results').innerHTML = '<div class="small">No jobs found.</div>';
+          return;
+        }
+        const selectedUuids = new Set(compSelected.map(s => s.job_uuid));
+        let html = '';
+        for (const m of compSearchResults) {
+          const checked = selectedUuids.has(m.job_uuid);
+          html += '<label class="candidate">'
+                +   '<input type="checkbox" data-uuid="' + escapeHtml(m.job_uuid) + '"'
+                +     (checked ? ' checked disabled' : '') + '>'
+                +   '<span class="name">' + escapeHtml(m.job_name || '(unnamed job)') + '</span>'
+                +   '<div class="meta">' + escapeHtml(fmtRange(m.dates))
+                +     ' · ' + m.event_count + ' event' + (m.event_count === 1 ? '' : 's')
+                +     ' · ' + m.material_count + ' material' + (m.material_count === 1 ? '' : 's')
+                +     (checked ? ' · <em>already selected</em>' : '')
+                +   '</div>'
+                + '</label>';
+        }
+        $('comp-search-results').innerHTML = html;
+      }
+
+      function compAddSelected() {
+        const boxes = $('comp-search-results').querySelectorAll(
+          'input[type="checkbox"]:checked:not(:disabled)'
+        );
+        const have = new Set(compSelected.map(s => s.job_uuid));
+        boxes.forEach(cb => {
+          const uuid = cb.dataset.uuid;
+          if (have.has(uuid)) return;
+          const m = compSearchResults.find(x => x.job_uuid === uuid);
+          if (m) compSelected.push({ job_uuid: m.job_uuid, job_name: m.job_name, dates: m.dates });
+        });
+        renderCompSelected();
+        renderCompResults(compSearchResults);
+      }
+
+      function renderCompSelected() {
+        $('comp-count').textContent = compSelected.length;
+        if (!compSelected.length) {
+          $('comp-selected-list').innerHTML = '<div class="small">No jobs selected yet.</div>';
+          return;
+        }
+        let html = '';
+        compSelected.forEach((s, i) => {
+          html += '<div class="selected-item">'
+                +   '<div class="si-info">'
+                +     '<div class="name">' + escapeHtml(s.job_name || '(unnamed)') + '</div>'
+                +     '<div class="meta">' + escapeHtml(fmtRange(s.dates)) + '</div>'
+                +   '</div>'
+                +   '<button class="secondary" data-remove="' + i + '">Remove</button>'
+                + '</div>';
+        });
+        $('comp-selected-list').innerHTML = html;
+        $('comp-selected-list').querySelectorAll('button[data-remove]').forEach(b => {
+          b.addEventListener('click', () => {
+            compSelected.splice(Number(b.dataset.remove), 1);
+            renderCompSelected();
+            renderCompResults(compSearchResults);
+          });
+        });
+      }
+
+      function compClear() {
+        compSelected = [];
+        $('comp-table-container').innerHTML = '';
+        renderCompSelected();
+        renderCompResults(compSearchResults);
+      }
+
+      function compBuild() {
+        if (!compSelected.length) {
+          $('comp-err').textContent = 'Select at least one job first.';
+          return;
+        }
+        $('comp-err').textContent = '';
+        $('comp-build-btn').disabled = true;
+        $('comp-table-container').innerHTML = '<div class="small">Building composite…</div>';
+        google.script.run
+          .withSuccessHandler(summaries => {
+            $('comp-build-btn').disabled = false;
+            renderCompositeTable(summaries);
+          })
+          .withFailureHandler(e => {
+            $('comp-build-btn').disabled = false;
+            $('comp-err').textContent = (e && e.message) || 'Build failed.';
+            $('comp-table-container').innerHTML = '';
+          })
+          .getJobSummariesByUuids(compSelected.map(s => s.job_uuid));
+      }
+
+      // Build the comparison table. Each column is a job. Most rows are a
+      // single field; for TIMESTAMPS and MATERIALS the row list is the union
+      // of event-types / item-names across all selected jobs so the same row
+      // can be read across at a glance — a job that didn't log that event /
+      // material shows "no response" in its column.
+      function renderCompositeTable(summaries) {
+        if (!summaries || !summaries.length) {
+          $('comp-table-container').innerHTML = '<div class="small">Nothing to show.</div>';
+          return;
+        }
+
+        const rows = []; // { kind: 'section'|'field', label, values[] }
+        function section(label) { rows.push({ kind: 'section', label }); }
+        function field(label, valuesFn) {
+          rows.push({ kind: 'field', label, values: summaries.map(valuesFn) });
+        }
+
+        section('JOB');
+        field('Dates', s => s.job_dates && s.job_dates.length ? fmtRange(s.job_dates) : NO_RESP);
+
+        section('TIMESTAMPS');
+        const allTypes = new Set();
+        summaries.forEach(s => (s.timestamps || []).forEach(e => allTypes.add(e.type)));
+        const typeList = Array.from(allTypes).sort();
+        if (!typeList.length) {
+          field('(none logged)', () => NO_RESP);
+        } else {
+          for (const t of typeList) {
+            field(t, s => {
+              const xs = (s.timestamps || []).filter(e => e.type === t);
+              if (!xs.length) return NO_RESP;
+              return xs.map(e =>
+                e.time + (e.note ? ' (note: ' + e.note + ')' : '')
+              ).join('\n');
+            });
+          }
+        }
+
+        section('MATERIALS');
+        const allMats = new Set();
+        summaries.forEach(s => (s.materials_aggregated || []).forEach(m => allMats.add(m.name)));
+        const matList = Array.from(allMats).sort();
+        if (!matList.length) {
+          field('(none logged)', () => NO_RESP);
+        } else {
+          for (const name of matList) {
+            field(name, s => {
+              const m = (s.materials_aggregated || []).find(x => x.name === name);
+              return m ? String(m.qty) : NO_RESP;
+            });
+          }
+        }
+        field('Materials total', s =>
+          s.materials_total > 0 ? '$' + s.materials_total.toFixed(2) : NO_RESP
+        );
+
+        section('JOB REPORT');
+        const jr = s => s.job_report;
+        field('Submitted by',          s => jr(s) ? fmt(jr(s).submitted_by)         : NO_RESP);
+        field('Billing method',        s => jr(s) ? fmt(jr(s).billing_method)       : NO_RESP);
+        field('Personal vehicles',     s => jr(s) ? fmt(jr(s).personal_vehicles)    : NO_RESP);
+        field('Dumpster',              s => jr(s) ? fmtPct(jr(s).dumpster_pct)      : NO_RESP);
+        field('Recycling',             s => jr(s) ? fmtPct(jr(s).recycling_pct)     : NO_RESP);
+        field('Review candidate',      s => jr(s) ? fmt(jr(s).review_candidate)     : NO_RESP);
+        field('Hours match',           s => jr(s) ? fmt(jr(s).hours_match)          : NO_RESP);
+        field('Hours mismatch reason', s => jr(s) ? fmt(jr(s).hours_mismatch_reason): NO_RESP);
+        field('Last updated',          s => jr(s) ? fmt(jr(s).updated_at)           : NO_RESP);
+        field('Employee hours',        s => jr(s) ? fmt(jr(s).employee_hours)       : NO_RESP);
+
+        section('BILL');
+        field('Items', s => {
+          if (!s.bill || !s.bill.items || !s.bill.items.length) return NO_RESP;
+          return s.bill.items.map(i => {
+            const parts = [i.label || '(unlabeled)'];
+            if (i.qty) parts.push(i.qty + (i.unit ? ' ' + i.unit : ''));
+            if (i.rate) parts.push('@ $' + i.rate);
+            if (i.discount) parts.push('-' + i.discount + '%');
+            if (i.amount != null) parts.push('= $' + Number(i.amount).toFixed(2));
+            return parts.join(' ');
+          }).join('\n');
+        });
+        field('Global discount', s => s.bill ? fmtPct(s.bill.global_discount_pct) : NO_RESP);
+        field('Notes',           s => s.bill ? fmt(s.bill.notes)                  : NO_RESP);
+        field('Bill total',      s => s.bill ? fmtMoney(s.bill.total)             : NO_RESP);
+
+        section('DVIRS (by inspection date)');
+        field('Count', s => String((s.dvirs || []).length));
+        field('Inspections', s => {
+          if (!s.dvirs || !s.dvirs.length) return NO_RESP;
+          return s.dvirs.map(d => {
+            const head = d.inspection_date + ' · ' + d.inspection_type
+              + ' · ' + d.vehicle_number + (d.trailer_number ? '/' + d.trailer_number : '')
+              + ' · ' + d.condition
+              + (d.driver_name ? ' · ' + d.driver_name : '');
+            const extras = [];
+            if (d.defects) extras.push('  Defects: ' + d.defects);
+            if (d.defect_notes) extras.push('  Notes: ' + d.defect_notes);
+            return head + (extras.length ? '\n' + extras.join('\n') : '');
+          }).join('\n──\n');
+        });
+
+        section('ESTIMATES (by job name)');
+        field('Count', s => String((s.estimates || []).length));
+        field('Estimates', s => {
+          if (!s.estimates || !s.estimates.length) return NO_RESP;
+          return s.estimates.map(e => {
+            const parts = [e.customer_name || '(no name)'];
+            if (e.move_date) parts.push('move ' + e.move_date);
+            if (e.estimated_weight_lbs) parts.push(Math.round(e.estimated_weight_lbs) + ' lbs');
+            if (e.estimated_cubic_ft) parts.push(e.estimated_cubic_ft.toFixed(1) + ' cu ft');
+            return parts.join(' · ');
+          }).join('\n');
+        });
+
+        // Render
+        const colCount = summaries.length;
+        let html = '<div class="comp-actions"><button id="comp-copy-tsv" class="secondary">Copy as TSV</button></div>';
+        html += '<div class="comp-table-wrap"><table class="comp-table">';
+        html += '<tr><th class="field-label">Field</th>';
+        for (const s of summaries) {
+          html += '<th><div class="job-name">' + escapeHtml(s.job_name || '(unnamed)') + '</div>'
+                + '<div class="job-uuid">' + escapeHtml(s.job_uuid) + '</div></th>';
+        }
+        html += '</tr>';
+        for (const r of rows) {
+          if (r.kind === 'section') {
+            html += '<tr class="section-header"><td colspan="' + (colCount + 1) + '">'
+                  + escapeHtml(r.label) + '</td></tr>';
+          } else {
+            html += '<tr><td class="field-label">' + escapeHtml(r.label) + '</td>';
+            for (const v of r.values) {
+              const isNone = v === NO_RESP;
+              html += '<td' + (isNone ? ' class="no-resp"' : '') + '>' + escapeHtml(v) + '</td>';
+            }
+            html += '</tr>';
+          }
+        }
+        html += '</table></div>';
+        $('comp-table-container').innerHTML = html;
+
+        $('comp-copy-tsv').addEventListener('click', () => {
+          const lines = [];
+          lines.push(['Field', ...summaries.map(s => s.job_name || '(unnamed)')].join('\t'));
+          for (const r of rows) {
+            if (r.kind === 'section') {
+              lines.push(r.label + '\t' + new Array(colCount).fill('').join('\t'));
+            } else {
+              // Newlines and tabs in values would break TSV — replace inline.
+              lines.push([r.label, ...r.values.map(v =>
+                String(v).replace(/\t/g, ' ').replace(/\n/g, ' ⏎ ')
+              )].join('\t'));
+            }
+          }
+          copyTextToClipboard(lines.join('\n'), $('comp-copy-tsv'));
+        });
+      }
+
+      // ── Wire up ───────────────────────────────────────────────────────────
+      $('single-search-btn').addEventListener('click', singleSearch);
+      $('single-name').addEventListener('keydown', e => { if (e.key === 'Enter') singleSearch(); });
+      $('comp-search-btn').addEventListener('click', compSearch);
+      $('comp-name').addEventListener('keydown', e => { if (e.key === 'Enter') compSearch(); });
+      $('comp-add-btn').addEventListener('click', compAddSelected);
+      $('comp-build-btn').addEventListener('click', compBuild);
+      $('comp-clear-btn').addEventListener('click', compClear);
     </script>
   </body>
 </html>
