@@ -1,0 +1,377 @@
+/**
+ * Job Summary sidebar — server-side Apps Script.
+ *
+ * Adds a "Mountaineer ▸ Job Summary…" menu item that opens an HTML sidebar
+ * for searching jobs by date and/or customer name, then rendering a
+ * one-page summary pulling from the production worksheets:
+ *   Events, Materials, JobReports, Bills, DVIRs, Estimates, EstimateItems.
+ *
+ * Reads only. Never writes to the spreadsheet.
+ *
+ * Install
+ * -------
+ * 1. Open the Mountaineer crew-logs spreadsheet.
+ * 2. Extensions → Apps Script.
+ * 3. Paste this file's contents into Code.gs (or any .gs file).
+ * 4. File → New → HTML, name it `job_summary_sidebar`, paste the contents
+ *    of `apps_script/job_summary_sidebar.html` into it.
+ * 5. Save. Reload the spreadsheet — "Mountaineer" menu appears.
+ * 6. First run will prompt for spreadsheet permissions — accept.
+ */
+
+const PROD_TABS = {
+  events: 'Events',
+  materials: 'Materials',
+  jobReports: 'JobReports',
+  bills: 'Bills',
+  dvirs: 'DVIRs',
+  estimates: 'Estimates',
+  estimateItems: 'EstimateItems',
+};
+
+// Mountain time is what the app uses end-to-end for crew-facing dates; matching
+// it here keeps the sidebar's date strings consistent with the app and the
+// invoice-block copy-paste flow office assistants already use.
+const MOUNTAIN_TZ = 'America/Denver';
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Mountaineer')
+    .addItem('Job Summary…', 'showJobSummarySidebar')
+    .addToUi();
+}
+
+function showJobSummarySidebar() {
+  const html = HtmlService.createHtmlOutputFromFile('job_summary_sidebar')
+    .setTitle('Job Summary');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+// ── Tab reader ──────────────────────────────────────────────────────────────
+
+function _readTab(tabName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(tabName);
+  if (!sh) return null;
+  const lastRow = sh.getLastRow();
+  const lastCol = sh.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return { headers: [], rows: [] };
+  const values = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  const headers = values[0].map(h => String(h));
+  const rows = values.slice(1).map(row => {
+    const obj = {};
+    for (let i = 0; i < headers.length; i++) obj[headers[i]] = row[i];
+    return obj;
+  });
+  return { headers, rows };
+}
+
+// ── Date / time helpers ─────────────────────────────────────────────────────
+
+function _toYMD(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (value instanceof Date) {
+    return Utilities.formatDate(value, MOUNTAIN_TZ, 'yyyy-MM-dd');
+  }
+  const s = String(value);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    return Utilities.formatDate(d, MOUNTAIN_TZ, 'yyyy-MM-dd');
+  }
+  return '';
+}
+
+function _toTime(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (value instanceof Date) {
+    return Utilities.formatDate(value, MOUNTAIN_TZ, 'HH:mm');
+  }
+  const d = new Date(String(value));
+  if (!isNaN(d.getTime())) {
+    return Utilities.formatDate(d, MOUNTAIN_TZ, 'HH:mm');
+  }
+  return '';
+}
+
+function _toDateTime(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (value instanceof Date) {
+    return Utilities.formatDate(value, MOUNTAIN_TZ, 'yyyy-MM-dd HH:mm');
+  }
+  const d = new Date(String(value));
+  if (!isNaN(d.getTime())) {
+    return Utilities.formatDate(d, MOUNTAIN_TZ, 'yyyy-MM-dd HH:mm');
+  }
+  return '';
+}
+
+// ── Search ──────────────────────────────────────────────────────────────────
+
+/**
+ * Search for jobs by date and/or customer-name fragment.
+ * Returns an array of { job_uuid, job_name, dates[], event_count, material_count }.
+ *
+ * `dateStr` is YYYY-MM-DD; `nameFragment` is a case-insensitive substring of
+ * job_name. At least one must be provided.
+ */
+function searchJobs(dateStr, nameFragment) {
+  const nf = (nameFragment || '').trim().toLowerCase();
+  const ds = (dateStr || '').trim();
+  if (!nf && !ds) throw new Error('Enter a date, a name, or both.');
+
+  const events = _readTab(PROD_TABS.events);
+  const materials = _readTab(PROD_TABS.materials);
+
+  const byJob = new Map();
+
+  function bump(uuid, name, dateYMD, kind) {
+    if (!uuid) return;
+    let b = byJob.get(uuid);
+    if (!b) {
+      b = { job_uuid: uuid, job_name: name || '', dates: new Set(), event_count: 0, material_count: 0 };
+      byJob.set(uuid, b);
+    }
+    if (name && !b.job_name) b.job_name = String(name);
+    if (dateYMD) b.dates.add(dateYMD);
+    if (kind === 'event') b.event_count++;
+    else if (kind === 'material') b.material_count++;
+  }
+
+  function rowDate(r, kind) {
+    if (kind === 'event') return _toYMD(r.job_date) || _toYMD(r.timestamp) || _toYMD(r.logged_at);
+    return _toYMD(r.job_date) || _toYMD(r.created_at);
+  }
+
+  function rowMatches(r, kind) {
+    const name = String(r.job_name || '').toLowerCase();
+    const matchesName = !nf || name.indexOf(nf) >= 0;
+    const matchesDate = !ds || rowDate(r, kind) === ds;
+    return matchesName && matchesDate;
+  }
+
+  if (events) {
+    for (const r of events.rows) {
+      if (!rowMatches(r, 'event')) continue;
+      bump(String(r.job_uuid || ''), r.job_name, rowDate(r, 'event'), 'event');
+    }
+  }
+  if (materials) {
+    for (const r of materials.rows) {
+      if (!rowMatches(r, 'material')) continue;
+      bump(String(r.job_uuid || ''), r.job_name, rowDate(r, 'material'), 'material');
+    }
+  }
+
+  const out = Array.from(byJob.values()).map(b => ({
+    job_uuid: b.job_uuid,
+    job_name: b.job_name,
+    dates: Array.from(b.dates).sort(),
+    event_count: b.event_count,
+    material_count: b.material_count,
+  }));
+
+  // Newest job first, by latest date; ties break by job_name asc.
+  out.sort((a, b) => {
+    const da = a.dates[a.dates.length - 1] || '';
+    const db = b.dates[b.dates.length - 1] || '';
+    if (da !== db) return db < da ? -1 : 1;
+    return a.job_name.localeCompare(b.job_name);
+  });
+
+  return out;
+}
+
+// ── Summary ─────────────────────────────────────────────────────────────────
+
+/**
+ * Build a structured one-job summary by joining every production worksheet on
+ * `jobUuid` (Events, Materials, JobReports, Bills). DVIRs are matched by
+ * inspection_date intersecting the job's event dates, since DVIRs aren't
+ * keyed on job_uuid in the sheet. Estimates are matched by customer_name
+ * substring against the job_name.
+ */
+function getJobSummary(jobUuid) {
+  if (!jobUuid) throw new Error('jobUuid required');
+  jobUuid = String(jobUuid);
+
+  const events = _readTab(PROD_TABS.events);
+  const materials = _readTab(PROD_TABS.materials);
+  const jobReports = _readTab(PROD_TABS.jobReports);
+  const bills = _readTab(PROD_TABS.bills);
+  const dvirs = _readTab(PROD_TABS.dvirs);
+  const estimates = _readTab(PROD_TABS.estimates);
+  const estimateItems = _readTab(PROD_TABS.estimateItems);
+
+  const eventRows = (events ? events.rows : []).filter(r => String(r.job_uuid) === jobUuid);
+  const materialRows = (materials ? materials.rows : []).filter(r => String(r.job_uuid) === jobUuid);
+  const jobReportRows = (jobReports ? jobReports.rows : []).filter(r => String(r.job_uuid) === jobUuid);
+  const billRows = (bills ? bills.rows : []).filter(r => String(r.job_uuid) === jobUuid);
+
+  let jobName = '';
+  const dateSet = new Set();
+  for (const r of eventRows) {
+    if (!jobName && r.job_name) jobName = String(r.job_name);
+    const d = _toYMD(r.job_date) || _toYMD(r.timestamp);
+    if (d) dateSet.add(d);
+  }
+  for (const r of materialRows) {
+    if (!jobName && r.job_name) jobName = String(r.job_name);
+    const d = _toYMD(r.job_date) || _toYMD(r.created_at);
+    if (d) dateSet.add(d);
+  }
+  const jobDates = Array.from(dateSet).sort();
+
+  // DVIRs: heuristic match — inspection_date falls on one of the job's dates.
+  const dvirRows = (dvirs ? dvirs.rows : []).filter(r => {
+    const d = _toYMD(r.inspection_date);
+    return d && dateSet.has(d);
+  });
+
+  // Estimates: customer_name ≈ job_name (substring either way, case-insensitive).
+  const jobNameLower = jobName.toLowerCase();
+  function estimateMatches(r) {
+    if (!jobNameLower) return false;
+    const c = String(r.customer_name || '').toLowerCase().trim();
+    if (!c) return false;
+    return jobNameLower.indexOf(c) >= 0 || c.indexOf(jobNameLower) >= 0;
+  }
+  const estimateRows = (estimates ? estimates.rows : []).filter(estimateMatches);
+  const matchedEstimateUuids = new Set(estimateRows.map(r => String(r.estimate_uuid || '')));
+  const estimateItemRows = (estimateItems ? estimateItems.rows : []).filter(
+    r => matchedEstimateUuids.has(String(r.estimate_uuid || ''))
+  );
+
+  // TIMESTAMPS — events sorted ascending; JOB_NOTES sentinel rows excluded
+  // (they're a transport for the global notes textarea, not crew activity).
+  const timestamps = eventRows
+    .filter(r => String(r.type) !== 'JOB_NOTES' && r.timestamp)
+    .map(r => ({
+      type: String(r.type || ''),
+      time: _toTime(r.timestamp),
+      datetime: _toDateTime(r.timestamp),
+      note: r.note ? String(r.note) : '',
+      created_by: r.created_by ? String(r.created_by) : '',
+    }))
+    .sort((a, b) => a.datetime.localeCompare(b.datetime));
+
+  // MATERIALS — aggregate qty per item name across every submission; sum line
+  // totals for a back-of-the-envelope materials charge.
+  const matAgg = new Map();
+  let materialsTotal = 0;
+  for (const r of materialRows) {
+    const name = String(r.item_name || '');
+    if (!name) continue;
+    const qty = Number(r.qty) || 0;
+    matAgg.set(name, (matAgg.get(name) || 0) + qty);
+    const lt = Number(r.line_total);
+    if (!isNaN(lt)) materialsTotal += lt;
+  }
+  const materialsAggregated = Array.from(matAgg.entries())
+    .map(([name, qty]) => ({ name, qty }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // JOB REPORT — keep the most-recent row by updated_at. employee_hours is
+  // already a pre-formatted multi-line string from the backend.
+  let jobReport = null;
+  if (jobReportRows.length > 0) {
+    jobReportRows.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+    const r = jobReportRows[0];
+    jobReport = {
+      submitted_by: String(r.submitted_by || ''),
+      personal_vehicles: r.personal_vehicles,
+      dumpster_pct: r.dumpster_pct,
+      recycling_pct: r.recycling_pct,
+      billing_method: String(r.billing_method || ''),
+      review_candidate: String(r.review_candidate || ''),
+      hours_match: String(r.hours_match || ''),
+      hours_mismatch_reason: String(r.hours_mismatch_reason || ''),
+      employee_hours: String(r.employee_hours || ''),
+      updated_at: _toDateTime(r.updated_at),
+    };
+  }
+
+  // BILL — every row is one line item; first row carries the global discount
+  // and notes (they're duplicated across rows on export). Total = sum of
+  // item_amount, then apply the global discount once.
+  let billTotal = 0;
+  const billItems = billRows.map(r => {
+    const qty = Number(r.item_qty) || 0;
+    const rate = Number(r.item_rate) || 0;
+    const disc = Number(r.item_discount_pct) || 0;
+    const amount = Number(r.item_amount);
+    if (!isNaN(amount)) billTotal += amount;
+    return {
+      label: String(r.item_label || ''),
+      qty,
+      unit: String(r.item_unit || ''),
+      rate,
+      discount: disc,
+      amount: isNaN(amount) ? null : amount,
+      source: String(r.item_source || ''),
+    };
+  });
+  const billGlobalDiscount = billRows.length > 0 ? (Number(billRows[0].global_discount_pct) || 0) : 0;
+  const billNotes = billRows.length > 0 ? String(billRows[0].bill_notes || '') : '';
+  if (billGlobalDiscount > 0) billTotal = billTotal * (1 - billGlobalDiscount / 100);
+  billTotal = Math.round(billTotal * 100) / 100;
+
+  // DVIRS
+  const dvirsOut = dvirRows.map(r => ({
+    dvir_id: String(r.dvir_id || ''),
+    phase: String(r.phase || ''),
+    inspection_type: String(r.inspection_type || ''),
+    inspection_date: _toYMD(r.inspection_date) || String(r.inspection_date || ''),
+    vehicle_number: String(r.vehicle_number || ''),
+    trailer_number: String(r.trailer_number || ''),
+    driver_name: String(r.driver_name || ''),
+    condition: String(r.condition || ''),
+    defects: String(r.defects || ''),
+    defect_notes: String(r.defect_notes || ''),
+    mechanic_name: String(r.mechanic_name || ''),
+    created_at: _toDateTime(r.created_at),
+  }));
+
+  // ESTIMATES — collapse item rows under their parent estimate_uuid.
+  const estUuidToItems = new Map();
+  for (const r of estimateItemRows) {
+    const eu = String(r.estimate_uuid || '');
+    if (!estUuidToItems.has(eu)) estUuidToItems.set(eu, []);
+    estUuidToItems.get(eu).push({
+      room: String(r.room || ''),
+      item_name: String(r.item_name || ''),
+      qty: Number(r.qty) || 0,
+      total_weight_lbs: Number(r.total_weight_lbs) || 0,
+      total_cubic_ft: Number(r.total_cubic_ft) || 0,
+    });
+  }
+  const estimatesOut = estimateRows.map(r => ({
+    estimate_uuid: String(r.estimate_uuid || ''),
+    customer_name: String(r.customer_name || ''),
+    move_date: _toYMD(r.move_date) || String(r.move_date || ''),
+    origin_address: String(r.origin_address || ''),
+    destination_address: String(r.destination_address || ''),
+    estimated_weight_lbs: Number(r.estimated_weight_lbs) || 0,
+    estimated_cubic_ft: Number(r.estimated_cubic_ft) || 0,
+    items: estUuidToItems.get(String(r.estimate_uuid || '')) || [],
+  }));
+
+  return {
+    job_uuid: jobUuid,
+    job_name: jobName,
+    job_dates: jobDates,
+    timestamps,
+    materials_aggregated: materialsAggregated,
+    materials_total: Math.round(materialsTotal * 100) / 100,
+    job_report: jobReport,
+    bill: billRows.length > 0 ? {
+      items: billItems,
+      global_discount_pct: billGlobalDiscount,
+      notes: billNotes,
+      total: billTotal,
+    } : null,
+    dvirs: dvirsOut,
+    estimates: estimatesOut,
+  };
+}

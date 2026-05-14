@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: 'Roboto', Arial, sans-serif;
+        font-size: 13px;
+        margin: 0;
+        padding: 12px;
+        color: #1f2937;
+      }
+      h2 { margin: 0 0 8px; font-size: 14px; }
+      h3 {
+        margin: 14px 0 4px;
+        font-size: 13px;
+        color: #374151;
+        border-bottom: 1px solid #e5e7eb;
+        padding-bottom: 2px;
+      }
+      label { display: block; font-size: 11px; color: #6b7280; margin-top: 6px; }
+      input[type="date"], input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        font-size: 13px;
+      }
+      button {
+        background: #2563eb; color: white; border: 0; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer; font-size: 12px;
+      }
+      button.secondary {
+        background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .small { font-size: 11px; color: #6b7280; }
+      .err { color: #b91c1c; font-size: 12px; margin-top: 6px; }
+      .candidate {
+        display: block; width: 100%; text-align: left;
+        border: 1px solid #e5e7eb; background: white;
+        padding: 6px 8px; border-radius: 4px; margin-bottom: 6px; cursor: pointer;
+      }
+      .candidate:hover { background: #f9fafb; }
+      .uuid { font-family: monospace; font-size: 10px; color: #9ca3af; word-break: break-all; }
+      pre {
+        white-space: pre-wrap;
+        font-family: 'SF Mono', Consolas, monospace;
+        font-size: 11px;
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+        padding: 8px;
+        border-radius: 4px;
+        max-height: 600px;
+        overflow: auto;
+      }
+      .copy-btn { margin: 6px 0; }
+      .back-btn { margin-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="search-panel">
+      <h2>Job Summary</h2>
+      <label for="date">Job date (optional)</label>
+      <input type="date" id="date">
+      <label for="name">Customer name (partial, optional)</label>
+      <input type="text" id="name" placeholder="e.g. Smith">
+      <div style="margin-top: 10px;">
+        <button id="btnSearch">Search</button>
+      </div>
+      <div id="searchErr" class="err"></div>
+    </div>
+
+    <div id="results"></div>
+    <div id="summary"></div>
+
+    <script>
+      function $(id) { return document.getElementById(id); }
+
+      function setBusy(busy) { $('btnSearch').disabled = busy; }
+
+      function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, ch =>
+          ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[ch])
+        );
+      }
+
+      function pad(s, n) {
+        s = String(s);
+        while (s.length < n) s += ' ';
+        return s;
+      }
+
+      function onSearch() {
+        const date = $('date').value;
+        const name = $('name').value;
+        const err = $('searchErr');
+        err.textContent = '';
+        if (!date && !name.trim()) {
+          err.textContent = 'Enter a date, a name, or both.';
+          return;
+        }
+        setBusy(true);
+        $('results').innerHTML = '<div class="small">Searching…</div>';
+        $('summary').innerHTML = '';
+        google.script.run
+          .withSuccessHandler(renderResults)
+          .withFailureHandler(e => {
+            err.textContent = (e && e.message) || 'Search failed.';
+            $('results').innerHTML = '';
+            setBusy(false);
+          })
+          .searchJobs(date, name);
+      }
+
+      function renderResults(matches) {
+        setBusy(false);
+        const div = $('results');
+        if (!matches || !matches.length) {
+          div.innerHTML = '<h3>Matches (0)</h3><div class="small">No jobs found.</div>';
+          return;
+        }
+        let html = '<h3>Matches (' + matches.length + ')</h3>';
+        for (const m of matches) {
+          const range = m.dates.length === 0 ? 'no dates'
+            : (m.dates.length === 1 ? m.dates[0]
+                : m.dates[0] + ' → ' + m.dates[m.dates.length - 1]);
+          html += '<button class="candidate" data-uuid="' + escapeHtml(m.job_uuid) + '">'
+                +   '<div><b>' + escapeHtml(m.job_name || '(unnamed)') + '</b></div>'
+                +   '<div class="small">' + escapeHtml(range)
+                +     ' · ' + m.event_count + ' event' + (m.event_count === 1 ? '' : 's')
+                +     ' · ' + m.material_count + ' material' + (m.material_count === 1 ? '' : 's')
+                +   '</div>'
+                +   '<div class="uuid">' + escapeHtml(m.job_uuid) + '</div>'
+                + '</button>';
+        }
+        div.innerHTML = html;
+        Array.from(div.querySelectorAll('.candidate')).forEach(b => {
+          b.addEventListener('click', () => loadSummary(b.dataset.uuid));
+        });
+      }
+
+      function loadSummary(uuid) {
+        const sum = $('summary');
+        sum.innerHTML = '<div class="small">Loading…</div>';
+        google.script.run
+          .withSuccessHandler(renderSummary)
+          .withFailureHandler(e => {
+            sum.innerHTML = '<div class="err">' + escapeHtml((e && e.message) || 'Load failed.') + '</div>';
+          })
+          .getJobSummary(uuid);
+      }
+
+      function renderSummary(s) {
+        const text = formatSummaryText(s);
+        $('summary').innerHTML =
+            '<button class="secondary back-btn" id="backBtn">← Back to matches</button>'
+          + '<h3>' + escapeHtml(s.job_name || 'Unnamed job') + '</h3>'
+          + '<div class="uuid">' + escapeHtml(s.job_uuid) + '</div>'
+          + '<button class="copy-btn secondary" id="copyBtn">Copy summary</button>'
+          + '<pre>' + escapeHtml(text) + '</pre>';
+        $('backBtn').addEventListener('click', () => { $('summary').innerHTML = ''; });
+        $('copyBtn').addEventListener('click', () => {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); } catch (_) {}
+          document.body.removeChild(ta);
+          const b = $('copyBtn');
+          const orig = b.textContent;
+          b.textContent = 'Copied ✓';
+          setTimeout(() => { b.textContent = orig; }, 1500);
+        });
+      }
+
+      function formatSummaryText(s) {
+        const lines = [];
+        lines.push(s.job_name || 'Unnamed job');
+        if (s.job_dates && s.job_dates.length) {
+          lines.push(s.job_dates.length === 1
+            ? s.job_dates[0]
+            : s.job_dates[0] + ' → ' + s.job_dates[s.job_dates.length - 1]);
+        }
+        lines.push('');
+
+        if (s.timestamps && s.timestamps.length) {
+          lines.push('TIMESTAMPS:');
+          for (const e of s.timestamps) {
+            let line = '  ' + pad(e.type, 12) + ' ' + e.time;
+            if (e.note) line += '   note: ' + e.note;
+            lines.push(line);
+          }
+          lines.push('');
+        }
+
+        if (s.materials_aggregated && s.materials_aggregated.length) {
+          lines.push('MATERIALS:');
+          for (const m of s.materials_aggregated) {
+            lines.push('  ' + m.qty + ' × ' + m.name);
+          }
+          if (s.materials_total > 0) {
+            lines.push('  Materials total: $' + s.materials_total.toFixed(2));
+          }
+          lines.push('');
+        }
+
+        if (s.job_report) {
+          lines.push('JOB REPORT:');
+          const j = s.job_report;
+          if (j.submitted_by) lines.push('  Submitted by: ' + j.submitted_by);
+          if (j.billing_method) lines.push('  Billing: ' + j.billing_method);
+          if (j.personal_vehicles !== '' && j.personal_vehicles != null)
+            lines.push('  Personal vehicles: ' + j.personal_vehicles);
+          if (j.dumpster_pct !== '' && j.dumpster_pct != null)
+            lines.push('  Dumpster: ' + j.dumpster_pct + '%');
+          if (j.recycling_pct !== '' && j.recycling_pct != null)
+            lines.push('  Recycling: ' + j.recycling_pct + '%');
+          if (j.hours_match) {
+            lines.push('  Hours match: ' + j.hours_match
+              + (j.hours_mismatch_reason ? ' (' + j.hours_mismatch_reason + ')' : ''));
+          }
+          if (j.employee_hours) {
+            lines.push('  EMPLOYEE HOURS:');
+            for (const eh of String(j.employee_hours).split('\n')) {
+              if (eh) lines.push('    ' + eh);
+            }
+          }
+          lines.push('');
+        }
+
+        if (s.bill) {
+          lines.push('BILL:');
+          for (const i of s.bill.items) {
+            let segs = '  ' + (i.label || '(unlabeled)');
+            const parts = [];
+            if (i.qty) parts.push(i.qty + (i.unit ? ' ' + i.unit : ''));
+            if (i.rate) parts.push('@ $' + i.rate);
+            if (i.discount) parts.push('-' + i.discount + '%');
+            if (parts.length) segs += '  (' + parts.join(' ') + ')';
+            if (i.amount != null) segs += '  $' + Number(i.amount).toFixed(2);
+            lines.push(segs);
+          }
+          if (s.bill.global_discount_pct)
+            lines.push('  Global discount: ' + s.bill.global_discount_pct + '%');
+          if (s.bill.notes) lines.push('  Notes: ' + s.bill.notes);
+          lines.push('  Bill total: $' + Number(s.bill.total || 0).toFixed(2));
+          lines.push('');
+        }
+
+        if (s.dvirs && s.dvirs.length) {
+          lines.push('DVIRS (matched by inspection date):');
+          for (const d of s.dvirs) {
+            let head = '  ' + d.inspection_date
+              + ' · ' + d.inspection_type
+              + ' · ' + d.vehicle_number
+              + (d.trailer_number ? '/' + d.trailer_number : '')
+              + ' · ' + d.condition;
+            if (d.driver_name) head += ' · ' + d.driver_name;
+            if (d.phase) head += ' [' + d.phase + ']';
+            lines.push(head);
+            if (d.defects) lines.push('    Defects: ' + d.defects);
+            if (d.defect_notes) lines.push('    Notes: ' + d.defect_notes);
+            if (d.mechanic_name) lines.push('    Mechanic: ' + d.mechanic_name);
+          }
+          lines.push('');
+        }
+
+        if (s.estimates && s.estimates.length) {
+          lines.push('ESTIMATES (matched by customer name):');
+          for (const e of s.estimates) {
+            lines.push('  ' + (e.customer_name || '(no name)')
+              + (e.move_date ? ' · move ' + e.move_date : ''));
+            if (e.origin_address) lines.push('    From: ' + e.origin_address);
+            if (e.destination_address) lines.push('    To:   ' + e.destination_address);
+            if (e.estimated_weight_lbs)
+              lines.push('    Weight: ' + Math.round(e.estimated_weight_lbs) + ' lbs');
+            if (e.estimated_cubic_ft)
+              lines.push('    Volume: ' + e.estimated_cubic_ft.toFixed(1) + ' cu ft');
+            if (e.items && e.items.length) {
+              for (const it of e.items) {
+                lines.push('    ' + it.qty + ' × ' + it.item_name
+                  + (it.room ? ' (' + it.room + ')' : ''));
+              }
+            }
+          }
+          lines.push('');
+        }
+
+        return lines.join('\n').replace(/\n+$/, '');
+      }
+
+      $('btnSearch').addEventListener('click', onSearch);
+      $('name').addEventListener('keydown', e => { if (e.key === 'Enter') onSearch(); });
+    </script>
+  </body>
+</html>
