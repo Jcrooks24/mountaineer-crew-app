@@ -40,9 +40,16 @@
       .candidate {
         display: block; width: 100%; text-align: left;
         border: 1px solid #e5e7eb; background: white;
-        padding: 6px 8px; border-radius: 4px; margin-bottom: 6px; cursor: pointer;
+        padding: 10px 12px; border-radius: 6px; margin-bottom: 8px; cursor: pointer;
       }
-      .candidate:hover { background: #f9fafb; }
+      .candidate:hover { background: #f9fafb; border-color: #93c5fd; }
+      .candidate .name {
+        font-size: 16px; font-weight: 700; color: #111827; line-height: 1.2;
+        word-break: break-word;
+      }
+      .candidate .meta {
+        font-size: 11px; color: #6b7280; margin-top: 4px;
+      }
       .uuid { font-family: monospace; font-size: 10px; color: #9ca3af; word-break: break-all; }
       pre {
         white-space: pre-wrap;
@@ -64,8 +71,8 @@
       <h2>Job Summary</h2>
       <label for="date">Job date (optional)</label>
       <input type="date" id="date">
-      <label for="name">Customer name (partial, optional)</label>
-      <input type="text" id="name" placeholder="e.g. Smith">
+      <label for="name">Job name (partial, optional)</label>
+      <input type="text" id="name" placeholder="e.g. Smith move">
       <div style="margin-top: 10px;">
         <button id="btnSearch">Search</button>
       </div>
@@ -127,12 +134,11 @@
             : (m.dates.length === 1 ? m.dates[0]
                 : m.dates[0] + ' → ' + m.dates[m.dates.length - 1]);
           html += '<button class="candidate" data-uuid="' + escapeHtml(m.job_uuid) + '">'
-                +   '<div><b>' + escapeHtml(m.job_name || '(unnamed)') + '</b></div>'
-                +   '<div class="small">' + escapeHtml(range)
+                +   '<div class="name">' + escapeHtml(m.job_name || '(unnamed job)') + '</div>'
+                +   '<div class="meta">' + escapeHtml(range)
                 +     ' · ' + m.event_count + ' event' + (m.event_count === 1 ? '' : 's')
                 +     ' · ' + m.material_count + ' material' + (m.material_count === 1 ? '' : 's')
                 +   '</div>'
-                +   '<div class="uuid">' + escapeHtml(m.job_uuid) + '</div>'
                 + '</button>';
         }
         div.innerHTML = html;
@@ -177,117 +183,163 @@
         });
       }
 
+      // Treat null/undefined/empty-string/whitespace as "no response". Numbers
+      // including 0 are valid responses and pass through. Yes/No strings from
+      // the sheet pass through verbatim.
+      const NO_RESP = 'no response';
+      function fmt(v) {
+        if (v === null || v === undefined) return NO_RESP;
+        if (typeof v === 'number') return String(v);
+        const s = String(v);
+        return s.trim() === '' ? NO_RESP : s;
+      }
+      function fmtPct(v) {
+        const r = fmt(v);
+        return r === NO_RESP ? NO_RESP : r + '%';
+      }
+      function fmtMoney(v) {
+        if (v === null || v === undefined || v === '' ) return NO_RESP;
+        const n = Number(v);
+        return isNaN(n) ? NO_RESP : '$' + n.toFixed(2);
+      }
+
       function formatSummaryText(s) {
         const lines = [];
-        lines.push(s.job_name || 'Unnamed job');
+        lines.push(s.job_name || '(unnamed job)');
         if (s.job_dates && s.job_dates.length) {
           lines.push(s.job_dates.length === 1
             ? s.job_dates[0]
             : s.job_dates[0] + ' → ' + s.job_dates[s.job_dates.length - 1]);
+        } else {
+          lines.push(NO_RESP);
         }
         lines.push('');
 
+        // TIMESTAMPS
+        lines.push('TIMESTAMPS:');
         if (s.timestamps && s.timestamps.length) {
-          lines.push('TIMESTAMPS:');
           for (const e of s.timestamps) {
-            let line = '  ' + pad(e.type, 12) + ' ' + e.time;
-            if (e.note) line += '   note: ' + e.note;
-            lines.push(line);
+            lines.push('  ' + pad(e.type, 12) + ' ' + (e.time || NO_RESP)
+              + '   note: ' + fmt(e.note));
           }
-          lines.push('');
+        } else {
+          lines.push('  ' + NO_RESP);
         }
+        lines.push('');
 
+        // MATERIALS
+        lines.push('MATERIALS:');
         if (s.materials_aggregated && s.materials_aggregated.length) {
-          lines.push('MATERIALS:');
           for (const m of s.materials_aggregated) {
             lines.push('  ' + m.qty + ' × ' + m.name);
           }
-          if (s.materials_total > 0) {
-            lines.push('  Materials total: $' + s.materials_total.toFixed(2));
-          }
-          lines.push('');
+          lines.push('  Materials total: '
+            + (s.materials_total > 0 ? '$' + s.materials_total.toFixed(2) : NO_RESP));
+        } else {
+          lines.push('  ' + NO_RESP);
         }
+        lines.push('');
 
+        // JOB REPORT — every field listed, blanks marked as "no response".
+        lines.push('JOB REPORT:');
         if (s.job_report) {
-          lines.push('JOB REPORT:');
           const j = s.job_report;
-          if (j.submitted_by) lines.push('  Submitted by: ' + j.submitted_by);
-          if (j.billing_method) lines.push('  Billing: ' + j.billing_method);
-          if (j.personal_vehicles !== '' && j.personal_vehicles != null)
-            lines.push('  Personal vehicles: ' + j.personal_vehicles);
-          if (j.dumpster_pct !== '' && j.dumpster_pct != null)
-            lines.push('  Dumpster: ' + j.dumpster_pct + '%');
-          if (j.recycling_pct !== '' && j.recycling_pct != null)
-            lines.push('  Recycling: ' + j.recycling_pct + '%');
-          if (j.hours_match) {
-            lines.push('  Hours match: ' + j.hours_match
-              + (j.hours_mismatch_reason ? ' (' + j.hours_mismatch_reason + ')' : ''));
-          }
-          if (j.employee_hours) {
-            lines.push('  EMPLOYEE HOURS:');
-            for (const eh of String(j.employee_hours).split('\n')) {
+          lines.push('  Submitted by:          ' + fmt(j.submitted_by));
+          lines.push('  Billing method:        ' + fmt(j.billing_method));
+          lines.push('  Personal vehicles:     ' + fmt(j.personal_vehicles));
+          lines.push('  Dumpster:              ' + fmtPct(j.dumpster_pct));
+          lines.push('  Recycling:             ' + fmtPct(j.recycling_pct));
+          lines.push('  Review candidate:      ' + fmt(j.review_candidate));
+          lines.push('  Hours match:           ' + fmt(j.hours_match));
+          lines.push('  Hours mismatch reason: ' + fmt(j.hours_mismatch_reason));
+          lines.push('  Last updated:          ' + fmt(j.updated_at));
+          lines.push('  EMPLOYEE HOURS:');
+          const ehText = String(j.employee_hours || '').trim();
+          if (ehText) {
+            for (const eh of ehText.split('\n')) {
               if (eh) lines.push('    ' + eh);
             }
+          } else {
+            lines.push('    ' + NO_RESP);
           }
-          lines.push('');
+        } else {
+          lines.push('  ' + NO_RESP);
         }
+        lines.push('');
 
+        // BILL — every field listed, blanks marked as "no response".
+        lines.push('BILL:');
         if (s.bill) {
-          lines.push('BILL:');
-          for (const i of s.bill.items) {
-            let segs = '  ' + (i.label || '(unlabeled)');
-            const parts = [];
-            if (i.qty) parts.push(i.qty + (i.unit ? ' ' + i.unit : ''));
-            if (i.rate) parts.push('@ $' + i.rate);
-            if (i.discount) parts.push('-' + i.discount + '%');
-            if (parts.length) segs += '  (' + parts.join(' ') + ')';
-            if (i.amount != null) segs += '  $' + Number(i.amount).toFixed(2);
-            lines.push(segs);
+          lines.push('  Items:');
+          if (s.bill.items && s.bill.items.length) {
+            for (const i of s.bill.items) {
+              lines.push('    Label:    ' + fmt(i.label));
+              lines.push('    Qty:      ' + fmt(i.qty));
+              lines.push('    Unit:     ' + fmt(i.unit));
+              lines.push('    Rate:     ' + fmtMoney(i.rate));
+              lines.push('    Discount: ' + fmtPct(i.discount));
+              lines.push('    Amount:   ' + fmtMoney(i.amount));
+              lines.push('    Source:   ' + fmt(i.source));
+              lines.push('    ──');
+            }
+          } else {
+            lines.push('    ' + NO_RESP);
           }
-          if (s.bill.global_discount_pct)
-            lines.push('  Global discount: ' + s.bill.global_discount_pct + '%');
-          if (s.bill.notes) lines.push('  Notes: ' + s.bill.notes);
-          lines.push('  Bill total: $' + Number(s.bill.total || 0).toFixed(2));
-          lines.push('');
+          lines.push('  Global discount: ' + fmtPct(s.bill.global_discount_pct));
+          lines.push('  Notes:           ' + fmt(s.bill.notes));
+          lines.push('  Bill total:      ' + fmtMoney(s.bill.total));
+        } else {
+          lines.push('  ' + NO_RESP);
         }
+        lines.push('');
 
+        // DVIRS — matched by inspection date, every field per row.
+        lines.push('DVIRS (matched by inspection date):');
         if (s.dvirs && s.dvirs.length) {
-          lines.push('DVIRS (matched by inspection date):');
           for (const d of s.dvirs) {
-            let head = '  ' + d.inspection_date
-              + ' · ' + d.inspection_type
-              + ' · ' + d.vehicle_number
-              + (d.trailer_number ? '/' + d.trailer_number : '')
-              + ' · ' + d.condition;
-            if (d.driver_name) head += ' · ' + d.driver_name;
-            if (d.phase) head += ' [' + d.phase + ']';
-            lines.push(head);
-            if (d.defects) lines.push('    Defects: ' + d.defects);
-            if (d.defect_notes) lines.push('    Notes: ' + d.defect_notes);
-            if (d.mechanic_name) lines.push('    Mechanic: ' + d.mechanic_name);
+            lines.push('  Inspection date: ' + fmt(d.inspection_date));
+            lines.push('  Inspection type: ' + fmt(d.inspection_type));
+            lines.push('  Phase:           ' + fmt(d.phase));
+            lines.push('  Vehicle:         ' + fmt(d.vehicle_number));
+            lines.push('  Trailer:         ' + fmt(d.trailer_number));
+            lines.push('  Driver:          ' + fmt(d.driver_name));
+            lines.push('  Condition:       ' + fmt(d.condition));
+            lines.push('  Defects:         ' + fmt(d.defects));
+            lines.push('  Defect notes:    ' + fmt(d.defect_notes));
+            lines.push('  Mechanic:        ' + fmt(d.mechanic_name));
+            lines.push('  Created at:      ' + fmt(d.created_at));
+            lines.push('  ──');
           }
-          lines.push('');
+        } else {
+          lines.push('  ' + NO_RESP);
         }
+        lines.push('');
 
+        // ESTIMATES — matched by job-name substring, every field per row.
+        lines.push('ESTIMATES (matched by job name):');
         if (s.estimates && s.estimates.length) {
-          lines.push('ESTIMATES (matched by customer name):');
           for (const e of s.estimates) {
-            lines.push('  ' + (e.customer_name || '(no name)')
-              + (e.move_date ? ' · move ' + e.move_date : ''));
-            if (e.origin_address) lines.push('    From: ' + e.origin_address);
-            if (e.destination_address) lines.push('    To:   ' + e.destination_address);
-            if (e.estimated_weight_lbs)
-              lines.push('    Weight: ' + Math.round(e.estimated_weight_lbs) + ' lbs');
-            if (e.estimated_cubic_ft)
-              lines.push('    Volume: ' + e.estimated_cubic_ft.toFixed(1) + ' cu ft');
+            lines.push('  Customer name:   ' + fmt(e.customer_name));
+            lines.push('  Move date:       ' + fmt(e.move_date));
+            lines.push('  Origin:          ' + fmt(e.origin_address));
+            lines.push('  Destination:     ' + fmt(e.destination_address));
+            lines.push('  Estimated weight: '
+              + (e.estimated_weight_lbs ? Math.round(e.estimated_weight_lbs) + ' lbs' : NO_RESP));
+            lines.push('  Estimated volume: '
+              + (e.estimated_cubic_ft ? e.estimated_cubic_ft.toFixed(1) + ' cu ft' : NO_RESP));
+            lines.push('  Items:');
             if (e.items && e.items.length) {
               for (const it of e.items) {
                 lines.push('    ' + it.qty + ' × ' + it.item_name
                   + (it.room ? ' (' + it.room + ')' : ''));
               }
+            } else {
+              lines.push('    ' + NO_RESP);
             }
+            lines.push('  ──');
           }
-          lines.push('');
+        } else {
+          lines.push('  ' + NO_RESP);
         }
 
         return lines.join('\n').replace(/\n+$/, '');
