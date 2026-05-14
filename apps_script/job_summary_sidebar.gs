@@ -4,7 +4,11 @@
  * Adds a "Mountaineer ▸ Job Summary…" menu item that opens an HTML sidebar
  * for searching jobs by date and/or customer name, then rendering a
  * one-page summary pulling from the production worksheets:
- *   Events, Materials, JobReports, Bills, DVIRs, Estimates, EstimateItems.
+ *   Events, Materials, JobReports, Bills, DVIRs.
+ *
+ * Long-distance mode additionally pulls RODS (Record of Duty Status) and
+ * PriorOnDuty (Prior On-Duty Hours Statement) rows whose log_date /
+ * statement_date intersects the job's event dates.
  *
  * Reads only. Never writes to the spreadsheet.
  *
@@ -25,8 +29,8 @@ const PROD_TABS = {
   jobReports: 'JobReports',
   bills: 'Bills',
   dvirs: 'DVIRs',
-  estimates: 'Estimates',
-  estimateItems: 'EstimateItems',
+  rods: 'RODS',
+  priorOnDuty: 'PriorOnDuty',
 };
 
 // Mountain time is what the app uses end-to-end for crew-facing dates; matching
@@ -193,46 +197,52 @@ function searchJobs(dateStr, nameFragment) {
  * Build a structured one-job summary by joining every production worksheet on
  * `jobUuid` (Events, Materials, JobReports, Bills). DVIRs are matched by
  * inspection_date intersecting the job's event dates, since DVIRs aren't
- * keyed on job_uuid in the sheet. Estimates are matched by customer_name
- * substring against the job_name.
+ * keyed on job_uuid in the sheet. When `longDistance` is true, RODS and
+ * PriorOnDuty rows are matched the same way (log_date / statement_date
+ * intersecting the job's dates).
  */
-function getJobSummary(jobUuid) {
+function getJobSummary(jobUuid, longDistance) {
   if (!jobUuid) throw new Error('jobUuid required');
-  return _buildSummary(String(jobUuid), _loadAllTabs());
+  const ld = !!longDistance;
+  return _buildSummary(String(jobUuid), _loadAllTabs(ld), ld);
 }
 
 /**
  * Build a summary for each job_uuid in `uuids`, returned in the same order.
- * Used by the composite-summary view so the seven tabs are read once total
+ * Used by the composite-summary view so every tab is read once total
  * (not once per job) — meaningful when comparing 5–10 jobs over a slow
  * connection.
  */
-function getJobSummariesByUuids(uuids) {
+function getJobSummariesByUuids(uuids, longDistance) {
   if (!Array.isArray(uuids) || uuids.length === 0) return [];
-  const tabs = _loadAllTabs();
-  return uuids.map(u => _buildSummary(String(u), tabs));
+  const ld = !!longDistance;
+  const tabs = _loadAllTabs(ld);
+  return uuids.map(u => _buildSummary(String(u), tabs, ld));
 }
 
-function _loadAllTabs() {
-  return {
+function _loadAllTabs(longDistance) {
+  const tabs = {
     events: _readTab(PROD_TABS.events),
     materials: _readTab(PROD_TABS.materials),
     jobReports: _readTab(PROD_TABS.jobReports),
     bills: _readTab(PROD_TABS.bills),
     dvirs: _readTab(PROD_TABS.dvirs),
-    estimates: _readTab(PROD_TABS.estimates),
-    estimateItems: _readTab(PROD_TABS.estimateItems),
   };
+  if (longDistance) {
+    tabs.rods = _readTab(PROD_TABS.rods);
+    tabs.priorOnDuty = _readTab(PROD_TABS.priorOnDuty);
+  }
+  return tabs;
 }
 
-function _buildSummary(jobUuid, tabs) {
+function _buildSummary(jobUuid, tabs, longDistance) {
   const events = tabs.events;
   const materials = tabs.materials;
   const jobReports = tabs.jobReports;
   const bills = tabs.bills;
   const dvirs = tabs.dvirs;
-  const estimates = tabs.estimates;
-  const estimateItems = tabs.estimateItems;
+  const rods = tabs.rods;
+  const priorOnDuty = tabs.priorOnDuty;
 
   const eventRows = (events ? events.rows : []).filter(r => String(r.job_uuid) === jobUuid);
   const materialRows = (materials ? materials.rows : []).filter(r => String(r.job_uuid) === jobUuid);
@@ -259,19 +269,20 @@ function _buildSummary(jobUuid, tabs) {
     return d && dateSet.has(d);
   });
 
-  // Estimates: customer_name ≈ job_name (substring either way, case-insensitive).
-  const jobNameLower = jobName.toLowerCase();
-  function estimateMatches(r) {
-    if (!jobNameLower) return false;
-    const c = String(r.customer_name || '').toLowerCase().trim();
-    if (!c) return false;
-    return jobNameLower.indexOf(c) >= 0 || c.indexOf(jobNameLower) >= 0;
-  }
-  const estimateRows = (estimates ? estimates.rows : []).filter(estimateMatches);
-  const matchedEstimateUuids = new Set(estimateRows.map(r => String(r.estimate_uuid || '')));
-  const estimateItemRows = (estimateItems ? estimateItems.rows : []).filter(
-    r => matchedEstimateUuids.has(String(r.estimate_uuid || ''))
-  );
+  // RODS / PriorOnDuty: same heuristic — log_date / statement_date falls on
+  // one of the job's dates. Only loaded in long-distance mode.
+  const rodsRows = longDistance
+    ? (rods ? rods.rows : []).filter(r => {
+        const d = _toYMD(r.log_date);
+        return d && dateSet.has(d);
+      })
+    : [];
+  const priorHoursRows = longDistance
+    ? (priorOnDuty ? priorOnDuty.rows : []).filter(r => {
+        const d = _toYMD(r.statement_date);
+        return d && dateSet.has(d);
+      })
+    : [];
 
   // TIMESTAMPS — events sorted ascending; JOB_NOTES sentinel rows excluded
   // (they're a transport for the global notes textarea, not crew activity).
@@ -363,31 +374,46 @@ function _buildSummary(jobUuid, tabs) {
     created_at: _toDateTime(r.created_at),
   }));
 
-  // ESTIMATES — collapse item rows under their parent estimate_uuid.
-  const estUuidToItems = new Map();
-  for (const r of estimateItemRows) {
-    const eu = String(r.estimate_uuid || '');
-    if (!estUuidToItems.has(eu)) estUuidToItems.set(eu, []);
-    estUuidToItems.get(eu).push({
-      room: String(r.room || ''),
-      item_name: String(r.item_name || ''),
-      qty: Number(r.qty) || 0,
-      total_weight_lbs: Number(r.total_weight_lbs) || 0,
-      total_cubic_ft: Number(r.total_cubic_ft) || 0,
-    });
-  }
-  const estimatesOut = estimateRows.map(r => ({
-    estimate_uuid: String(r.estimate_uuid || ''),
-    customer_name: String(r.customer_name || ''),
-    move_date: _toYMD(r.move_date) || String(r.move_date || ''),
-    origin_address: String(r.origin_address || ''),
-    destination_address: String(r.destination_address || ''),
-    estimated_weight_lbs: Number(r.estimated_weight_lbs) || 0,
-    estimated_cubic_ft: Number(r.estimated_cubic_ft) || 0,
-    items: estUuidToItems.get(String(r.estimate_uuid || '')) || [],
-  }));
+  // RODS — one row per driver per day, sorted by log_date then driver_name.
+  const rodsOut = rodsRows.map(r => ({
+    rods_id: String(r.rods_id || ''),
+    log_date: _toYMD(r.log_date) || String(r.log_date || ''),
+    driver_name: String(r.driver_name || ''),
+    co_driver_name: String(r.co_driver_name || ''),
+    vehicle_number: String(r.vehicle_number || ''),
+    trailer_number: String(r.trailer_number || ''),
+    origin: String(r.origin || ''),
+    destination: String(r.destination || ''),
+    total_miles: String(r.total_miles || ''),
+    shipping_docs: String(r.shipping_docs || ''),
+    carrier: String(r.carrier || ''),
+    total_off_duty: String(r.total_off_duty || ''),
+    total_sleeper: String(r.total_sleeper || ''),
+    total_driving: String(r.total_driving || ''),
+    total_on_duty: String(r.total_on_duty || ''),
+    duty_changes: String(r.duty_changes || ''),
+    remarks: String(r.remarks || ''),
+    signed_at: _toDateTime(r.signed_at),
+  })).sort((a, b) => {
+    if (a.log_date !== b.log_date) return a.log_date.localeCompare(b.log_date);
+    return a.driver_name.localeCompare(b.driver_name);
+  });
 
-  return {
+  // PRIOR ON-DUTY HOURS STATEMENTS — one row per driver per trip.
+  const priorHoursOut = priorHoursRows.map(r => ({
+    statement_id: String(r.statement_id || ''),
+    statement_date: _toYMD(r.statement_date) || String(r.statement_date || ''),
+    driver_name: String(r.driver_name || ''),
+    hours_last_24: String(r.hours_last_24 || ''),
+    total_last_7: String(r.total_last_7 || ''),
+    daily_breakdown: String(r.daily_breakdown || ''),
+    signed_at: _toDateTime(r.signed_at),
+  })).sort((a, b) => {
+    if (a.statement_date !== b.statement_date) return a.statement_date.localeCompare(b.statement_date);
+    return a.driver_name.localeCompare(b.driver_name);
+  });
+
+  const out = {
     job_uuid: jobUuid,
     job_name: jobName,
     job_dates: jobDates,
@@ -402,6 +428,11 @@ function _buildSummary(jobUuid, tabs) {
       total: billTotal,
     } : null,
     dvirs: dvirsOut,
-    estimates: estimatesOut,
   };
+  if (longDistance) {
+    out.long_distance = true;
+    out.rods = rodsOut;
+    out.prior_hours = priorHoursOut;
+  }
+  return out;
 }

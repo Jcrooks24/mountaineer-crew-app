@@ -40,9 +40,16 @@
       .panel.active { display: block; }
 
       /* Forms */
-      .search-bar { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 8px; }
+      .search-bar { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 8px; flex-wrap: wrap; }
       .field { display: flex; flex-direction: column; gap: 2px; }
       .field label { font-size: 11px; color: #6b7280; }
+      .ld-toggle {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 12px; color: #374151; padding: 6px 8px;
+        border: 1px solid #d1d5db; border-radius: 4px; background: white;
+        cursor: pointer; user-select: none;
+      }
+      .ld-toggle input[type="checkbox"] { margin: 0; }
       input[type="date"], input[type="text"] {
         padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px;
         font-size: 13px; box-sizing: border-box;
@@ -172,6 +179,10 @@
             <label for="single-name">Job name (partial, optional)</label>
             <input type="text" id="single-name" placeholder="e.g. Smith move">
           </div>
+          <label class="ld-toggle" title="Include RODS and PriorOnDuty rows whose date intersects this job">
+            <input type="checkbox" id="single-long-distance">
+            Long distance mode
+          </label>
           <button id="single-search-btn">Search</button>
         </div>
         <div id="single-err" class="err"></div>
@@ -192,6 +203,10 @@
             <label for="comp-name">Job name (partial, optional)</label>
             <input type="text" id="comp-name" placeholder="e.g. Smith move">
           </div>
+          <label class="ld-toggle" title="Include RODS and PriorOnDuty rows whose date intersects each job">
+            <input type="checkbox" id="comp-long-distance">
+            Long distance mode
+          </label>
           <button id="comp-search-btn">Search</button>
         </div>
         <div id="comp-err" class="err"></div>
@@ -325,12 +340,13 @@
       function loadSingleSummary(uuid) {
         const sum = $('single-summary');
         sum.innerHTML = '<div class="small">Loading…</div>';
+        const longDistance = $('single-long-distance').checked;
         google.script.run
           .withSuccessHandler(renderSingleSummary)
           .withFailureHandler(e => {
             sum.innerHTML = '<div class="err">' + escapeHtml((e && e.message) || 'Load failed.') + '</div>';
           })
-          .getJobSummary(uuid);
+          .getJobSummary(uuid, longDistance);
       }
 
       function renderSingleSummary(s) {
@@ -447,31 +463,48 @@
         }
         lines.push('');
 
-        // ESTIMATES
-        lines.push('ESTIMATES (matched by job name):');
-        if (s.estimates && s.estimates.length) {
-          for (const e of s.estimates) {
-            lines.push('  Customer name:    ' + fmt(e.customer_name));
-            lines.push('  Move date:        ' + fmt(e.move_date));
-            lines.push('  Origin:           ' + fmt(e.origin_address));
-            lines.push('  Destination:      ' + fmt(e.destination_address));
-            lines.push('  Estimated weight: '
-              + (e.estimated_weight_lbs ? Math.round(e.estimated_weight_lbs) + ' lbs' : NO_RESP));
-            lines.push('  Estimated volume: '
-              + (e.estimated_cubic_ft ? e.estimated_cubic_ft.toFixed(1) + ' cu ft' : NO_RESP));
-            lines.push('  Items:');
-            if (e.items && e.items.length) {
-              for (const it of e.items) {
-                lines.push('    ' + it.qty + ' × ' + it.item_name
-                  + (it.room ? ' (' + it.room + ')' : ''));
-              }
-            } else {
-              lines.push('    ' + NO_RESP);
+        // LONG DISTANCE — RODS + PRIOR ON-DUTY (only present when toggle was on)
+        if (s.long_distance) {
+          lines.push('RODS (matched by log date):');
+          if (s.rods && s.rods.length) {
+            for (const r of s.rods) {
+              lines.push('  Log date:        ' + fmt(r.log_date));
+              lines.push('  Driver:          ' + fmt(r.driver_name));
+              lines.push('  Co-driver:       ' + fmt(r.co_driver_name));
+              lines.push('  Vehicle:         ' + fmt(r.vehicle_number));
+              lines.push('  Trailer:         ' + fmt(r.trailer_number));
+              lines.push('  Origin:          ' + fmt(r.origin));
+              lines.push('  Destination:     ' + fmt(r.destination));
+              lines.push('  Total miles:     ' + fmt(r.total_miles));
+              lines.push('  Shipping docs:   ' + fmt(r.shipping_docs));
+              lines.push('  Off-duty total:  ' + fmt(r.total_off_duty));
+              lines.push('  Sleeper total:   ' + fmt(r.total_sleeper));
+              lines.push('  Driving total:   ' + fmt(r.total_driving));
+              lines.push('  On-duty total:   ' + fmt(r.total_on_duty));
+              lines.push('  Duty changes:    ' + fmt(r.duty_changes));
+              lines.push('  Remarks:         ' + fmt(r.remarks));
+              lines.push('  Signed at:       ' + fmt(r.signed_at));
+              lines.push('  ──');
             }
-            lines.push('  ──');
+          } else {
+            lines.push('  ' + NO_RESP);
           }
-        } else {
-          lines.push('  ' + NO_RESP);
+          lines.push('');
+
+          lines.push('PRIOR ON-DUTY HOURS (matched by statement date):');
+          if (s.prior_hours && s.prior_hours.length) {
+            for (const p of s.prior_hours) {
+              lines.push('  Statement date:  ' + fmt(p.statement_date));
+              lines.push('  Driver:          ' + fmt(p.driver_name));
+              lines.push('  Hours last 24:   ' + fmt(p.hours_last_24));
+              lines.push('  Total last 7:    ' + fmt(p.total_last_7));
+              lines.push('  Daily breakdown: ' + fmt(p.daily_breakdown));
+              lines.push('  Signed at:       ' + fmt(p.signed_at));
+              lines.push('  ──');
+            }
+          } else {
+            lines.push('  ' + NO_RESP);
+          }
         }
 
         return lines.join('\n').replace(/\n+$/, '');
@@ -585,6 +618,7 @@
         $('comp-err').textContent = '';
         $('comp-build-btn').disabled = true;
         $('comp-table-container').innerHTML = '<div class="small">Building composite…</div>';
+        const longDistance = $('comp-long-distance').checked;
         google.script.run
           .withSuccessHandler(summaries => {
             $('comp-build-btn').disabled = false;
@@ -595,7 +629,7 @@
             $('comp-err').textContent = (e && e.message) || 'Build failed.';
             $('comp-table-container').innerHTML = '';
           })
-          .getJobSummariesByUuids(compSelected.map(s => s.job_uuid));
+          .getJobSummariesByUuids(compSelected.map(s => s.job_uuid), longDistance);
       }
 
       // Build the comparison table. Each column is a job. Most rows are a
@@ -699,18 +733,48 @@
           }).join('\n──\n');
         });
 
-        section('ESTIMATES (by job name)');
-        field('Count', s => String((s.estimates || []).length));
-        field('Estimates', s => {
-          if (!s.estimates || !s.estimates.length) return NO_RESP;
-          return s.estimates.map(e => {
-            const parts = [e.customer_name || '(no name)'];
-            if (e.move_date) parts.push('move ' + e.move_date);
-            if (e.estimated_weight_lbs) parts.push(Math.round(e.estimated_weight_lbs) + ' lbs');
-            if (e.estimated_cubic_ft) parts.push(e.estimated_cubic_ft.toFixed(1) + ' cu ft');
-            return parts.join(' · ');
-          }).join('\n');
-        });
+        // Long-distance sections — only shown if every summary was built
+        // with long_distance on. (Mixed mode would just show "no response"
+        // for jobs without the data, which is misleading.)
+        if (summaries.every(s => s.long_distance)) {
+          section('RODS (by log date)');
+          field('Count', s => String((s.rods || []).length));
+          field('Logs', s => {
+            if (!s.rods || !s.rods.length) return NO_RESP;
+            return s.rods.map(r => {
+              const head = r.log_date + ' · ' + r.driver_name
+                + (r.co_driver_name ? ' / ' + r.co_driver_name : '')
+                + (r.vehicle_number ? ' · ' + r.vehicle_number : '')
+                + (r.trailer_number ? '/' + r.trailer_number : '');
+              const route = (r.origin || r.destination)
+                ? '  ' + (r.origin || '?') + ' → ' + (r.destination || '?')
+                  + (r.total_miles ? ' (' + r.total_miles + ' mi)' : '')
+                : '';
+              const totals = '  off ' + (r.total_off_duty || '0')
+                + ' / sleeper ' + (r.total_sleeper || '0')
+                + ' / drive ' + (r.total_driving || '0')
+                + ' / on ' + (r.total_on_duty || '0');
+              const extras = [];
+              if (r.shipping_docs) extras.push('  Docs: ' + r.shipping_docs);
+              if (r.duty_changes) extras.push('  Changes: ' + r.duty_changes);
+              if (r.remarks) extras.push('  Remarks: ' + r.remarks);
+              return [head, route, totals].filter(Boolean).concat(extras).join('\n');
+            }).join('\n──\n');
+          });
+
+          section('PRIOR ON-DUTY HOURS (by statement date)');
+          field('Count', s => String((s.prior_hours || []).length));
+          field('Statements', s => {
+            if (!s.prior_hours || !s.prior_hours.length) return NO_RESP;
+            return s.prior_hours.map(p => {
+              const head = p.statement_date + ' · ' + p.driver_name;
+              const totals = '  last 24h: ' + (p.hours_last_24 || '0')
+                + ' · last 7d: ' + (p.total_last_7 || '0');
+              const daily = p.daily_breakdown ? '  ' + p.daily_breakdown : '';
+              return [head, totals, daily].filter(Boolean).join('\n');
+            }).join('\n──\n');
+          });
+        }
 
         // Render
         const colCount = summaries.length;
