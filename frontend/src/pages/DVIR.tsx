@@ -114,6 +114,9 @@ type PrevDVIR = {
   driver_name: string;
   mechanic_signature: string | null;
   mechanic_name: string | null;
+  mechanic_signed_at: string | null;
+  repairs_made: boolean | null;
+  mechanic_notes: string | null;
 };
 
 type DVIRResponse = {
@@ -557,32 +560,78 @@ export default function DVIRPage() {
               <div className="small" style={{ color: "var(--muted)" }}>Loading previous report…</div>
             ) : prevDVIR ? (
               <>
-                <div
-                  style={{
-                    padding: "10px 12px",
-                    borderRadius: 8,
-                    background: prevDVIR.condition === "satisfactory" ? "rgba(45,212,191,0.08)" : "rgba(255,107,107,0.08)",
-                    border: `1px solid ${prevDVIR.condition === "satisfactory" ? "rgba(45,212,191,0.25)" : "rgba(255,107,107,0.25)"}`,
-                    marginBottom: 10,
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 3 }}>
-                    Last inspection: {prevDVIR.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} — {prevDVIR.inspection_date}
-                  </div>
-                  <div className="small" style={{ color: "var(--muted)", marginBottom: prevDVIR.defects.length > 0 ? 6 : 0 }}>
-                    Driver: {prevDVIR.driver_name} ·{" "}
-                    <span style={{ color: prevDVIR.condition === "satisfactory" ? "var(--ok)" : "var(--danger)", fontWeight: 600 }}>
-                      {prevDVIR.condition === "satisfactory" ? "Satisfactory" : `${prevDVIR.defects.length} defect${prevDVIR.defects.length !== 1 ? "s" : ""} noted`}
-                    </span>
-                  </div>
-                  {prevDVIR.defects.length > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      {prevDVIR.defects.map((d) => (
-                        <span key={d} className="chip" style={{ fontSize: 11, background: "rgba(255,107,107,0.15)", color: "var(--danger)" }}>{d}</span>
-                      ))}
+                {/* This tile only renders when the vehicle is cleared to drive:
+                    either the last inspection was satisfactory, or it had
+                    defects that a mechanic has since signed off. (An unresolved
+                    defect is intercepted by the out-of-service block above.)
+                    So a defects-noted report here means "repaired & approved",
+                    not "open defect" — surface that explicitly. */}
+                {(() => {
+                  const resolvedByMechanic =
+                    prevDVIR.defects.length > 0 && !!prevDVIR.mechanic_signature;
+                  return (
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        background: "rgba(45,212,191,0.08)",
+                        border: "1px solid rgba(45,212,191,0.25)",
+                        marginBottom: 10,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 3 }}>
+                        Last inspection: {prevDVIR.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} — {prevDVIR.inspection_date}
+                      </div>
+                      <div className="small" style={{ color: "var(--muted)", marginBottom: prevDVIR.defects.length > 0 ? 6 : 0 }}>
+                        Driver: {prevDVIR.driver_name} ·{" "}
+                        <span style={{ color: "var(--ok)", fontWeight: 600 }}>
+                          {resolvedByMechanic
+                            ? `${prevDVIR.defects.length} defect${prevDVIR.defects.length !== 1 ? "s" : ""} — repaired & approved`
+                            : "Satisfactory"}
+                        </span>
+                      </div>
+                      {prevDVIR.defects.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                          {prevDVIR.defects.map((d) => (
+                            <span key={d} className="chip" style={{ fontSize: 11, background: "rgba(45,212,191,0.15)", color: "var(--ok)" }}>{d}</span>
+                          ))}
+                        </div>
+                      )}
+                      {resolvedByMechanic && (
+                        <div
+                          style={{
+                            marginTop: 8,
+                            paddingTop: 8,
+                            borderTop: "1px solid rgba(45,212,191,0.2)",
+                            fontSize: 12,
+                            color: "var(--text)",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, color: "var(--ok)" }}>
+                            ✓ Approved for use by mechanic
+                          </div>
+                          <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                            {prevDVIR.mechanic_name || "Mechanic"}
+                            {prevDVIR.mechanic_signed_at
+                              ? ` · ${new Date(prevDVIR.mechanic_signed_at).toLocaleDateString()}`
+                              : ""}
+                            {prevDVIR.repairs_made === true
+                              ? " · Repairs completed"
+                              : prevDVIR.repairs_made === false
+                                ? " · No repairs needed"
+                                : ""}
+                          </div>
+                          {prevDVIR.mechanic_notes && (
+                            <div style={{ marginTop: 4, fontStyle: "italic", color: "var(--muted)" }}>
+                              "{prevDVIR.mechanic_notes}"
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  );
+                })()}
                 <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 13 }}>
                   <input
                     type="checkbox"
