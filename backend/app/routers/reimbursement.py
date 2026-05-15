@@ -55,6 +55,7 @@ class ReimbursementOut(BaseModel):
     amount: Optional[float]
     category: Optional[str]
     receipt_photo_url: Optional[str]
+    payment_method: Optional[str]
     notes: Optional[str]
     status: str
     approver_name: Optional[str]
@@ -87,6 +88,7 @@ def _to_out(row: Reimbursement) -> ReimbursementOut:
         amount=float(row.amount) if row.amount is not None else None,
         category=row.category,
         receipt_photo_url=row.receipt_photo_url,
+        payment_method=row.payment_method,
         notes=row.notes,
         status=row.status,
         approver_name=row.approver_name,
@@ -111,6 +113,7 @@ def _row_to_export_dict(row: Reimbursement) -> dict:
         "amount": float(row.amount) if row.amount is not None else None,
         "category": row.category or "",
         "receipt_photo_url": row.receipt_photo_url or "",
+        "payment_method": row.payment_method or "",
         "notes": row.notes or "",
         "status": row.status,
         "approver_name": row.approver_name or "",
@@ -259,6 +262,7 @@ def submit_expense(
     reimbursement_uuid: str = Form(...),
     amount: Optional[float] = Form(default=None),
     category: str = Form(default=""),
+    payment_method: str = Form(default="personal"),
     job_uuid: str = Form(default=""),
     job_name: str = Form(default=""),
     job_date: str = Form(default=""),
@@ -271,6 +275,12 @@ def submit_expense(
     # reject a negative amount, which is never meaningful.
     if amount is not None and amount < 0:
         raise HTTPException(status_code=400, detail="Amount cannot be negative")
+
+    # Default to "personal" (reimbursement requested) for any unexpected value
+    # so a malformed client can't strand a row in an unknown state.
+    method = payment_method.strip().lower()
+    if method not in ("personal", "company"):
+        method = "personal"
 
     existing = (
         db.query(Reimbursement)
@@ -312,6 +322,7 @@ def submit_expense(
         category=category or None,
         receipt_photo_drive_id=upload["file_id"] if upload else None,
         receipt_photo_url=upload["url"] if upload else None,
+        payment_method=method,
         notes=notes or None,
         status="submitted",
         created_at=now,

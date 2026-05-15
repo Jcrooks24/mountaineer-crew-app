@@ -9,6 +9,7 @@ import {
   newReimbursementUuid,
   renderedRows,
   syncQueue,
+  type PaymentMethod,
   type ReimbursementRow,
 } from "../lib/reimbursementStore";
 
@@ -33,6 +34,7 @@ export default function Reimbursement() {
   // Expense form state
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("personal");
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
 
   // Shared
@@ -75,6 +77,7 @@ export default function Reimbursement() {
   function clearExpense() {
     setAmount("");
     setCategory("");
+    setPaymentMethod("personal");
     setReceiptFile(null);
     if (receiptRef.current) receiptRef.current.value = "";
   }
@@ -155,6 +158,7 @@ export default function Reimbursement() {
         type: "expense",
         amount: amt === null ? null : Math.round(amt * 100) / 100,
         category,
+        payment_method: paymentMethod,
         job_uuid: "",
         job_name: "",
         job_date: "",
@@ -181,7 +185,7 @@ export default function Reimbursement() {
   return (
     <div className="container" style={{ maxWidth: 640 }}>
       <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Reimbursement</div>
+        <div style={{ fontWeight: 900, fontSize: 15 }}>Log Expense / Request Reimbursement</div>
         <button
           onClick={() => nav(-1)}
           style={{
@@ -309,6 +313,30 @@ export default function Reimbursement() {
                 </div>
               </div>
               <div>
+                <div className="label">Paid with</div>
+                <div className="row" style={{ gap: 8, marginTop: 4 }}>
+                  {([
+                    { v: "personal" as PaymentMethod, label: "Personal card", sub: "request reimbursement" },
+                    { v: "company" as PaymentMethod, label: "Company card", sub: "log only — no reimbursement" },
+                  ]).map((opt) => (
+                    <button
+                      key={opt.v}
+                      type="button"
+                      onClick={() => setPaymentMethod(opt.v)}
+                      style={{
+                        flex: 1, padding: "8px 10px", borderRadius: 8, textAlign: "left",
+                        border: paymentMethod === opt.v ? "2px solid var(--brand)" : "1px solid var(--border)",
+                        background: paymentMethod === opt.v ? "rgba(93,214,194,0.12)" : "var(--card)",
+                        color: "var(--text)", cursor: "pointer",
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{opt.label}</div>
+                      <div className="small" style={{ color: "var(--muted)" }}>{opt.sub}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
                 <div className="label">Receipt photo</div>
                 <input
                   ref={receiptRef}
@@ -340,7 +368,11 @@ export default function Reimbursement() {
           {ok && <div className="small" style={{ color: "var(--ok)" }}>{ok}</div>}
 
           <button className="btnPrimary" disabled={busy} type="submit">
-            {busy ? "Saving…" : "Submit request"}
+            {busy
+              ? "Saving…"
+              : mode === "expense" && paymentMethod === "company"
+                ? "Log expense"
+                : "Submit request"}
           </button>
           <div className="small" style={{ color: "var(--muted)" }}>
             Works offline — queued submissions sync automatically when you're back online.
@@ -372,6 +404,11 @@ export default function Reimbursement() {
                   </div>
                   <div className="small" style={{ color: "var(--muted)" }}>
                     {new Date(r.created_at).toLocaleString()} · <StatusBadge status={r.status} />
+                    {r.type === "expense" && r.payment_method === "company" && (
+                      <span style={{ marginLeft: 6, color: "var(--muted)" }}>
+                        · Company card (log only)
+                      </span>
+                    )}
                   </div>
                   {r.notes && (
                     <div style={{ fontSize: 13, marginTop: 4, whiteSpace: "pre-wrap" }}>

@@ -219,15 +219,17 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Reimbursement — crew can request mileage / business-expense refunds */}
+      {/* Expenses / reimbursement — mileage, personal-card reimbursement,
+          or company-card expense logging. */}
       <div className="card">
-        <div className="sectionTitle">Reimbursement</div>
+        <div className="sectionTitle">Log Expense / Request Reimbursement</div>
         <div className="col" style={{ gap: 8 }}>
           <button onClick={() => nav("/reimbursement")} style={{ textAlign: "left" }}>
-            Submit a reimbursement request
+            Log an expense or request reimbursement
           </button>
           <div className="small" style={{ color: "var(--muted)" }}>
-            Odometer photos for mileage, or a receipt photo for business expenses.
+            Mileage with odometer photos, personal-card reimbursements, or
+            company-card expense receipts.
           </div>
         </div>
       </div>

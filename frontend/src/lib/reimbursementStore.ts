@@ -31,6 +31,7 @@ export type ReimbursementRow = {
   amount: number | null;
   category: string | null;
   receipt_photo_url: string | null;
+  payment_method: string | null;
   notes: string | null;
   status: ReimbursementStatus;
   approver_name: string | null;
@@ -56,11 +57,14 @@ export type MileageQueueEntry = {
   created_at: string;
 };
 
+export type PaymentMethod = "personal" | "company";
+
 export type ExpenseQueueEntry = {
   reimbursement_uuid: string;
   type: "expense";
   amount: number | null;
   category: string;
+  payment_method: PaymentMethod;
   job_uuid: string;
   job_name: string;
   job_date: string;
@@ -229,6 +233,7 @@ export async function renderedRows(): Promise<ReimbursementRow[]> {
         amount: null,
         category: null,
         receipt_photo_url: null,
+        payment_method: null,
         notes: p.notes || null,
         status: "pending",
         approver_name: null,
@@ -252,6 +257,7 @@ export async function renderedRows(): Promise<ReimbursementRow[]> {
       amount: p.amount,
       category: p.category || null,
       receipt_photo_url: null,
+      payment_method: p.payment_method,
       notes: p.notes || null,
       status: "pending",
       approver_name: null,
@@ -336,6 +342,7 @@ export async function syncQueue(): Promise<number> {
             form.append("amount", String(entry.amount));
           }
           form.append("category", entry.category || "");
+          form.append("payment_method", entry.payment_method);
           if (entry.receipt_blob) {
             form.append("receipt_photo", entry.receipt_blob, "receipt.jpg");
           }

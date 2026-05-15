@@ -24,6 +24,11 @@ from app.db.session import Base
 # Allowed values, kept here so frontend + sheets export stay in sync.
 REIMBURSEMENT_TYPES = ("mileage", "expense")
 REIMBURSEMENT_STATUSES = ("submitted", "approved", "rejected")
+# Expense payment method:
+#   "personal" — paid with a personal card; the crew wants reimbursement.
+#   "company"  — paid with a company card; this is an expense log only,
+#                no money is owed back. Null for mileage rows.
+REIMBURSEMENT_PAYMENT_METHODS = ("personal", "company")
 
 
 class Reimbursement(Base):
@@ -58,9 +63,12 @@ class Reimbursement(Base):
 
     # Expense fields — null for mileage rows.
     amount = Column(Numeric(precision=10, scale=2), nullable=True)
-    category = Column(String, nullable=True)   # optional free-text (Fuel, Supplies, ...)
+    category = Column(String, nullable=True)   # one of the fixed expense categories
     receipt_photo_drive_id = Column(String, nullable=True)
     receipt_photo_url = Column(String, nullable=True)
+    # "personal" (reimburse the crew) or "company" (expense log only).
+    # Null for mileage rows. See REIMBURSEMENT_PAYMENT_METHODS.
+    payment_method = Column(String(16), nullable=True)
 
     notes = Column(Text, nullable=True)
 

@@ -1669,7 +1669,7 @@ REIMBURSEMENT_HEADERS = [
     "job_name", "job_date",
     "odometer_start", "odometer_end", "miles",
     "odometer_start_photo_url", "odometer_end_photo_url",
-    "amount", "category", "receipt_photo_url",
+    "amount", "category", "payment_method", "receipt_photo_url",
     "notes", "status", "approver", "approved_at", "approval_notes",
     "created_at", "updated_at",
 ]
@@ -1708,6 +1708,7 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         "odometer_end_photo_url": entry.get("odometer_end_photo_url", "") or "",
         "amount": entry.get("amount", "") if entry.get("amount") is not None else "",
         "category": entry.get("category", "") or "",
+        "payment_method": entry.get("payment_method", "") or "",
         "receipt_photo_url": entry.get("receipt_photo_url", "") or "",
         "notes": entry.get("notes", "") or "",
         "status": entry.get("status", "") or "submitted",
