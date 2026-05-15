@@ -360,8 +360,15 @@ export async function syncQueue(): Promise<number> {
         await removeFromQueue(entry.reimbursement_uuid);
         synced++;
       } catch (e) {
+        // 401/403 are excluded — an expired token is transient; dropping the
+        // op would silently lose a crew member's reimbursement submission.
         const isPermanent =
-          e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408;
+          e instanceof ApiError &&
+          e.status >= 400 &&
+          e.status < 500 &&
+          e.status !== 408 &&
+          e.status !== 401 &&
+          e.status !== 403;
         if (isPermanent) {
           // Drop poison-pill so the queue can drain (server rejected payload).
           console.warn(

@@ -59,10 +59,12 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             ts = datetime.fromisoformat(e.timestamp.replace("Z", "+00:00"))
         except Exception:
             errors += 1
+            # A malformed timestamp can't be fixed by retrying — permanent.
             failed.append({
                 "event_id": e.event_id,
                 "reason": "bad_timestamp",
                 "timestamp": e.timestamp,
+                "retryable": False,
             })
             continue
 
@@ -117,9 +119,14 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
         except Exception:
             db.rollback()
             errors += 1
+            # A DB error here is almost always transient (connection blip,
+            # timeout, deadlock on the small Render instance) — the event
+            # never inserted, so the client must keep it queued and retry.
+            # Marking it non-retryable would silently lose a logged event.
             failed.append({
                 "event_id": e.event_id,
                 "reason": "db_error",
+                "retryable": True,
             })
 
     # Export to Sheets in the bounded background pool — keeps the request

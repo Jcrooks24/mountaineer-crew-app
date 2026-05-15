@@ -112,12 +112,21 @@ export async function drain(
       removeOp(op.id);
       onResolved(op.tempId, server);
     } catch (e) {
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408) {
-        // Permanent rejection — drop op, let caller clean UI.
+      if (
+        e instanceof ApiError &&
+        e.status >= 400 &&
+        e.status < 500 &&
+        e.status !== 408 &&
+        e.status !== 401 &&
+        e.status !== 403
+      ) {
+        // Permanent rejection — drop op, let caller clean UI. 401/403 are
+        // excluded: an expired token is transient, and dropping the op would
+        // silently lose queued field work — leave it for the next pass.
         removeOp(op.id);
         onDropped(op.tempId, e.message);
       } else {
-        // Network / 5xx / timeout — leave queued, stop draining for this pass.
+        // Network / 5xx / timeout / auth — leave queued, stop this pass.
         return;
       }
     }

@@ -269,8 +269,15 @@ export async function syncQueue(): Promise<number> {
         }
         synced++;
       } catch (e) {
+        // 401/403 are excluded — an expired token is transient; dropping the
+        // op would silently lose the admin's queued hours entry.
         const isPermanent =
-          e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408;
+          e instanceof ApiError &&
+          e.status >= 400 &&
+          e.status < 500 &&
+          e.status !== 408 &&
+          e.status !== 401 &&
+          e.status !== 403;
         if (isPermanent) {
           const label = op.op === "delete" ? `delete ${op.entry_uuid}` : `upsert ${op.payload.entry_uuid}`;
           console.warn(

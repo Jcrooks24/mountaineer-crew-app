@@ -1,7 +1,7 @@
 import traceback
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
@@ -26,6 +26,20 @@ def upload_photo(
     current_user: User = Depends(get_current_user),
 ):
     mime_type = file.content_type or "image/jpeg"
+
+    # Idempotent: if this photo_id is already stored, skip the Drive upload
+    # and return the existing record. The offline queue retries with the same
+    # photo_id, and Drive uploads are NOT idempotent — re-uploading would
+    # orphan a duplicate public file.
+    existing = db.query(Photo).filter(Photo.id == photo_id).first()
+    if existing:
+        return {
+            "ok": True,
+            "photo_id": photo_id,
+            "drive_file_id": existing.drive_file_id,
+            "drive_url": existing.drive_url,
+            "thumb_url": f"https://drive.google.com/thumbnail?id={existing.drive_file_id}&sz=w800",
+        }
 
     try:
         result = upload_photo_to_drive(
@@ -56,7 +70,13 @@ def upload_photo(
     try:
         db.commit()
     except IntegrityError:
-        db.rollback()  # duplicate photo_id — already uploaded
+        db.rollback()  # raced a concurrent upload of the same photo_id
+    except SQLAlchemyError:
+        # Non-duplicate DB failure (connection blip, etc.). Return ok=false so
+        # the client keeps the photo queued and retries, instead of a 500.
+        db.rollback()
+        traceback.print_exc()
+        return {"ok": False, "photo_id": photo_id, "error": "Failed to save photo record"}
 
     return {
         "ok": True,

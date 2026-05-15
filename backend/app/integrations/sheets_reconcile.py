@@ -20,7 +20,7 @@ from __future__ import annotations
 import time as _time
 from typing import Any, Dict, List, Set
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import utc_naive_to_mountain_date
@@ -73,8 +73,8 @@ def _job_dates_for(db: Session, job_uuids: Set[str]) -> Dict[str, str]:
             "FROM materials_submissions "
             "WHERE job_uuid IN :uuids AND job_date IS NOT NULL AND job_date <> '' "
             "ORDER BY job_uuid, created_at DESC"
-        ),
-        {"uuids": tuple(job_uuids)},
+        ).bindparams(bindparam("uuids", expanding=True)),
+        {"uuids": list(job_uuids)},
     ).fetchall()
     return {r[0]: r[1] for r in rows if r[0] and r[1]}
 

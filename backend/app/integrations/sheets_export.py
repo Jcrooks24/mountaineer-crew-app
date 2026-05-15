@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Callable, List, Dict, Any, Optional, Set
 
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from app.core.google_cal_oauth import _build_authorized_http, _ssl_retry, _get_creds
 
@@ -336,8 +336,9 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
     # 1) Filter out already-exported event_ids (single IN query instead of N queries)
     all_ids = [str(ev["event_id"]) for ev in events]
     rows = db.execute(
-        text("SELECT event_id FROM sheet_event_exports WHERE event_id IN :ids"),
-        {"ids": tuple(all_ids)},
+        text("SELECT event_id FROM sheet_event_exports WHERE event_id IN :ids")
+        .bindparams(bindparam("ids", expanding=True)),
+        {"ids": all_ids},
     ).fetchall()
     already_exported = {r[0] for r in rows}
     new_events = [ev for ev in events if str(ev["event_id"]) not in already_exported]

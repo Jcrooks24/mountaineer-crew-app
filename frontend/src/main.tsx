@@ -9,6 +9,7 @@ import App from "./App";
 import { AuthProvider } from "./auth/AuthContext";
 import { ThemeProvider } from "./theme/ThemeContext";
 import RequireAuth from "./auth/RequireAuth";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -27,6 +28,7 @@ createRoot(document.getElementById("root")!).render(
     <ThemeProvider>
     <AuthProvider>
       <BrowserRouter>
+        <ErrorBoundary>
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
@@ -54,6 +56,7 @@ createRoot(document.getElementById("root")!).render(
             }
           />
         </Routes>
+        </ErrorBoundary>
       </BrowserRouter>
     </AuthProvider>
     </ThemeProvider>
