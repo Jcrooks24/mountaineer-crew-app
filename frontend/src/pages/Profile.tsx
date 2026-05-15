@@ -4,7 +4,12 @@ import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { refreshDirectory } from "../lib/userDirectory";
 import { markPatchNotesSeenNow } from "../lib/patchNotesSeen";
-import { APP_BUILD_ID, checkForAppUpdate, type UpdateResult } from "../lib/appUpdate";
+import {
+  APP_BUILD_ID,
+  APP_VERSION_NAME,
+  checkForAppUpdate,
+  type UpdateResult,
+} from "../lib/appUpdate";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
@@ -322,12 +327,20 @@ function AppRefreshButton() {
         <span style={{ fontSize: 18 }}>{checking ? "⟳" : "↻"}</span>
         {checking ? "Checking for updates…" : "Update app to latest version"}
       </button>
-      <div
-        className="small"
-        style={{ textAlign: "center", color: message ? messageColor : "var(--muted)" }}
-      >
-        {message || `Version ${APP_BUILD_ID}`}
-      </div>
+      {message ? (
+        <div className="small" style={{ textAlign: "center", color: messageColor }}>
+          {message}
+        </div>
+      ) : (
+        <div style={{ textAlign: "center" }}>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Version <strong style={{ color: "var(--text)" }}>{APP_VERSION_NAME}</strong>
+          </div>
+          <div style={{ fontSize: 10, color: "var(--muted)", opacity: 0.65, marginTop: 1 }}>
+            build {APP_BUILD_ID}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

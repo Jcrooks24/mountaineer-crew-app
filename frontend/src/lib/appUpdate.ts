@@ -17,11 +17,15 @@ export type UpdateResult =
   | { kind: "offline" }             // navigator.onLine === false
   | { kind: "error"; message: string };
 
-/** Build ID baked into the bundle at compile time. Surfaced read-only to the
- * user so they can compare what they're running against what the team shipped.
- */
+/** Build ID baked into the bundle at compile time — the precise identifier
+ * (commit + timestamp), kept for support/debugging. */
 export const APP_BUILD_ID: string =
   typeof __APP_BUILD_ID__ !== "undefined" ? __APP_BUILD_ID__ : "dev";
+
+/** Friendly two-word version name derived from the build, e.g. "Brave Otter".
+ * This is what we show the crew — far more memorable than the raw build id. */
+export const APP_VERSION_NAME: string =
+  typeof __APP_VERSION_NAME__ !== "undefined" ? __APP_VERSION_NAME__ : "Local Build";
 
 export async function checkForAppUpdate(timeoutMs = 8000): Promise<UpdateResult> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
