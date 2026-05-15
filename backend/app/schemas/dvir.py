@@ -32,6 +32,31 @@ class MechanicSignRequest(BaseModel):
     mechanic_notes: Optional[str] = None
 
 
+class MechanicSignatureEmailRequest(BaseModel):
+    """Admin asks the server to email a remote sign-off link to a mechanic."""
+    mechanic_email: str
+    mechanic_name: Optional[str] = None
+
+
+class MechanicReviewResponse(BaseModel):
+    """Trimmed DVIR view returned to a remote mechanic over the token-scoped
+    public endpoint. Deliberately omits driver/mechanic signature images and
+    internal ids — the mechanic only needs the inspection facts to decide."""
+    dvir_id: str
+    vehicle_number: str
+    trailer_number: Optional[str]
+    odometer: Optional[int]
+    inspection_type: str
+    inspection_date: str
+    defects: List[str]
+    defect_notes: Optional[str]
+    condition: str
+    driver_name: str
+    created_at: datetime
+    already_signed: bool
+    needs_mechanic_review: bool
+
+
 class DVIRResponse(BaseModel):
     id: int
     dvir_id: str
@@ -57,6 +82,8 @@ class DVIRResponse(BaseModel):
     mechanic_signed_at: Optional[datetime]
     repairs_made: Optional[bool]
     mechanic_notes: Optional[str]
+    mechanic_signature_requested_at: Optional[datetime] = None
+    mechanic_signature_requested_email: Optional[str] = None
     created_at: datetime
     needs_mechanic_review: bool = False
 

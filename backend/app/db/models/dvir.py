@@ -59,4 +59,12 @@ class DVIR(Base):
     repairs_made = Column(Boolean, nullable=True)
     mechanic_notes = Column(Text, nullable=True)
 
+    # ── Remote mechanic signature request ────────────────────────────────────
+    # Set when an admin emails a remote sign-off link to a mechanic. Lets the
+    # Admin → DVIR Review screen show "request sent to X" while awaiting the
+    # mechanic's remote signature. Cleared implicitly once mechanic_signature
+    # is populated (the DVIR is then approved).
+    mechanic_signature_requested_at = Column(DateTime, nullable=True)
+    mechanic_signature_requested_email = Column(String, nullable=True)
+
     created_at = Column(DateTime, nullable=False)

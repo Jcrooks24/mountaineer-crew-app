@@ -14,6 +14,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import MechanicSign from "./pages/MechanicSign";
 import Profile from "./pages/Profile";
 import Admin from "./pages/Admin";
 import DVIRPage from "./pages/DVIR";
@@ -32,6 +33,8 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/signup" element={<Signup />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          {/* Public — a mechanic with no account signs off a DVIR via an emailed token link */}
+          <Route path="/mechanic-sign" element={<MechanicSign />} />
 
           {/* Protected */}
           <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />

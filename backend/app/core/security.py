@@ -88,6 +88,39 @@ def create_reset_token() -> tuple[str, datetime]:
     return token, expiry
 
 
+# Mechanics who sign a DVIR remotely have no app account, so the e-signature
+# link carries a self-contained JWT instead of a session. 14-day expiry —
+# generous because a mechanic may not get to the truck right away. Reuse is
+# naturally blocked downstream: once a DVIR's mechanic_signature is set, the
+# submit endpoint rejects further attempts (409).
+MECHANIC_SIGN_TOKEN_EXPIRE_DAYS = 14
+
+
+def create_mechanic_sign_token(dvir_id: str) -> str:
+    """Signed JWT authorizing a remote mechanic sign-off for one DVIR."""
+    now = datetime.now(timezone.utc)
+    exp = now + timedelta(days=MECHANIC_SIGN_TOKEN_EXPIRE_DAYS)
+    payload: dict[str, Any] = {
+        "sub": dvir_id,
+        "iat": int(now.timestamp()),
+        "exp": int(exp.timestamp()),
+        "type": "mechanic_sign",
+    }
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_mechanic_sign_token(token: str) -> str:
+    """Validate a mechanic-sign JWT and return the dvir_id it authorizes.
+    Raises ValueError if the token is invalid, expired, or the wrong type."""
+    payload = decode_token(token)
+    if payload.get("type") != "mechanic_sign":
+        raise ValueError("Invalid token type")
+    dvir_id = payload.get("sub")
+    if not dvir_id:
+        raise ValueError("Invalid token payload")
+    return str(dvir_id)
+
+
 def decode_token(token: str) -> dict[str, Any]:
     """
     Decode and validate a JWT.
