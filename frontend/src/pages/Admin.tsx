@@ -16,6 +16,7 @@ import {
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
+import OfficeHoursPanel from "./OfficeHours";
 import { roundBillableQuarter } from "../components/JobReport";
 import {
   formatMountainDate,
@@ -52,7 +53,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "dvir" | "estimator" | "notes" | "summary";
+type Tab = "employees" | "map" | "settings" | "advanced" | "dvir" | "estimator" | "notes" | "summary" | "office";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -80,7 +81,7 @@ export default function Admin() {
 
       {/* Tabs */}
       <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary"] as Tab[]).map((t) => (
+        {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary", "office"] as Tab[]).map((t) => (
           <button
             key={t}
             className={"tab " + (tab === t || (tab === "advanced" && t === "settings") ? "active" : "")}
@@ -91,6 +92,7 @@ export default function Admin() {
               : t === "dvir" ? "DVIR Review"
               : t === "notes" ? "Notes"
               : t === "summary" ? "Job Summary"
+              : t === "office" ? "Office Hours"
               : t}
           </button>
         ))}
@@ -104,6 +106,7 @@ export default function Admin() {
       {tab === "estimator" && <EstimatorTab />}
       {tab === "notes" && <NotesTab />}
       {tab === "summary" && <JobSummaryTab />}
+      {tab === "office" && <OfficeHoursPanel />}
     </div>
   );
 }

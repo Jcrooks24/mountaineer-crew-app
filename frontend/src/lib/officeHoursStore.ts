@@ -59,19 +59,61 @@ export function newEntryUuid(): string {
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** Net hours = (end - start) - break, in decimal hours. Negative or NaN → 0. */
-export function computeHours(start: string, end: string, breakHours: number): number {
-  const [sh, sm] = start.split(":").map(Number);
-  const [eh, em] = end.split(":").map(Number);
-  if (!Number.isFinite(sh) || !Number.isFinite(sm) || !Number.isFinite(eh) || !Number.isFinite(em)) {
-    return 0;
+/** A clocked-out period inside a shift. Mirrors the Report tab's break model:
+ *  the crew enters when they stopped and resumed, not a raw hours number. */
+export type BreakPeriod = { start: string; end: string };
+
+/** HH:MM → minutes-of-day, or null if not a valid time string. */
+function hhmmToMinutes(s: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((s || "").trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+  return h * 60 + mm;
+}
+
+export type HoursComputation =
+  | { kind: "ok"; spanHours: number; breakHours: number; hours: number }
+  | { kind: "incomplete" }
+  | { kind: "error"; message: string };
+
+/** Net worked hours from a start, end, and a list of clocked-out periods.
+ *  Same math as the Report tab's employee-hours editor: span minus the sum
+ *  of break spans, midnight-wrap aware. Incomplete breaks are ignored so a
+ *  half-typed period doesn't error the whole form. */
+export function computeWorkedHours(
+  start: string,
+  end: string,
+  breaks: BreakPeriod[],
+): HoursComputation {
+  const startMin = hhmmToMinutes(start);
+  const endMin = hhmmToMinutes(end);
+  if (startMin === null || endMin === null) return { kind: "incomplete" };
+
+  let span = endMin - startMin;
+  if (span <= 0) span += 24 * 60; // crossed midnight
+  if (span <= 0) return { kind: "error", message: "End time is at or before start time." };
+
+  let breakMin = 0;
+  for (const b of breaks) {
+    const bs = hhmmToMinutes(b.start);
+    const be = hhmmToMinutes(b.end);
+    if (bs === null || be === null) continue; // half-entered — skip
+    let bSpan = be - bs;
+    if (bSpan <= 0) bSpan += 24 * 60;
+    if (bSpan > 0) breakMin += bSpan;
   }
-  const startMin = sh * 60 + sm;
-  let endMin = eh * 60 + em;
-  // Overnight shifts wrap past midnight — rare for office hours but cheap to support.
-  if (endMin < startMin) endMin += 24 * 60;
-  const worked = (endMin - startMin) / 60 - (Number(breakHours) || 0);
-  return worked > 0 ? Math.round(worked * 100) / 100 : 0;
+  if (breakMin >= span) {
+    return { kind: "error", message: "Clocked-out periods exceed the worked span." };
+  }
+
+  return {
+    kind: "ok",
+    spanHours: Math.round((span / 60) * 100) / 100,
+    breakHours: Math.round((breakMin / 60) * 100) / 100,
+    hours: Math.round(((span - breakMin) / 60) * 100) / 100,
+  };
 }
 
 // ── Storage ──────────────────────────────────────────────────────────────────

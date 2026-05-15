@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import {
-  computeHours,
+  computeWorkedHours,
   enqueueDeleteOrCancel,
   enqueueUpsert,
   fetchAndCache,
@@ -10,6 +9,7 @@ import {
   pendingOpCount,
   rendered,
   syncQueue,
+  type BreakPeriod,
   type OfficeHoursEntry,
   type OfficeHoursInput,
 } from "../lib/officeHoursStore";
@@ -27,25 +27,34 @@ type FormState = {
   work_date: string;
   start_time: string;
   end_time: string;
-  break_hours: string;
+  breaks: BreakPeriod[];
   notes: string;
 };
 
-const EMPTY_FORM: FormState = {
-  entry_uuid: "",
-  work_date: todayISO(),
-  start_time: "09:00",
-  end_time: "17:00",
-  break_hours: "0",
-  notes: "",
-};
+function emptyForm(): FormState {
+  return {
+    entry_uuid: "",
+    work_date: todayISO(),
+    start_time: "",
+    end_time: "",
+    breaks: [],
+    notes: "",
+  };
+}
 
-export default function OfficeHours() {
+/**
+ * Office Hours entry panel — embedded as a tab in the Admin dashboard.
+ * Admin-only; the Admin page already gates on role so no extra check here.
+ *
+ * Time entry mirrors the Report tab's employee-hours editor: a start and an
+ * end time, plus any number of clocked-out periods entered as their own
+ * start/end pairs. Net hours are derived, not typed.
+ */
+export default function OfficeHoursPanel() {
   const { user } = useAuth();
-  const nav = useNavigate();
 
   const [entries, setEntries] = useState<OfficeHoursEntry[]>(() => rendered());
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [form, setForm] = useState<FormState>(emptyForm);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -56,14 +65,6 @@ export default function OfficeHours() {
     setPendingCount(pendingOpCount());
   }
 
-  // Bounce non-admins. RequireAuth handles the unauthenticated case; this
-  // handles the wrong-role case (a regular crew user with a stale tab open).
-  useEffect(() => {
-    if (user && user.role !== "admin") nav("/", { replace: true });
-  }, [user, nav]);
-
-  // On mount: drain any queue + refetch from server, then re-render. The
-  // optimistic render runs immediately so the page is never blank.
   useEffect(() => {
     (async () => {
       await syncQueue();
@@ -82,42 +83,63 @@ export default function OfficeHours() {
     return () => window.removeEventListener("online", onOnline);
   }, []);
 
-  const hoursPreview = useMemo(() => {
-    const br = Number(form.break_hours) || 0;
-    return computeHours(form.start_time, form.end_time, br);
-  }, [form.start_time, form.end_time, form.break_hours]);
+  const computation = useMemo(
+    () => computeWorkedHours(form.start_time, form.end_time, form.breaks),
+    [form.start_time, form.end_time, form.breaks],
+  );
 
   function resetForm() {
-    setForm(EMPTY_FORM);
+    setForm(emptyForm());
     setEditing(false);
     setErr(null);
   }
 
   function startEdit(e: OfficeHoursEntry) {
     setEditing(true);
+    // Saved rows only persist a break-hours total, not the individual
+    // periods. Surface a single representative period if there was any
+    // break time, so the editor stays consistent — the admin can re-split
+    // it if they want different math.
+    const breaks: BreakPeriod[] =
+      e.break_hours > 0 ? [{ start: "", end: "" }] : [];
     setForm({
       entry_uuid: e.entry_uuid,
       work_date: e.work_date,
       start_time: e.start_time,
       end_time: e.end_time,
-      break_hours: String(e.break_hours ?? 0),
+      breaks,
       notes: e.notes ?? "",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  async function handleSubmit(ev: React.FormEvent) {
+  function addBreak() {
+    setForm((f) => ({ ...f, breaks: [...f.breaks, { start: "", end: "" }] }));
+  }
+  function updateBreak(i: number, patch: Partial<BreakPeriod>) {
+    setForm((f) => ({
+      ...f,
+      breaks: f.breaks.map((b, idx) => (idx === i ? { ...b, ...patch } : b)),
+    }));
+  }
+  function removeBreak(i: number) {
+    setForm((f) => ({ ...f, breaks: f.breaks.filter((_, idx) => idx !== i) }));
+  }
+
+  function handleSubmit(ev: React.FormEvent) {
     ev.preventDefault();
     setErr(null);
 
     if (!form.work_date || !form.start_time || !form.end_time) {
-      setErr("Date, start, and end are required.");
+      setErr("Date, start, and end times are required.");
       return;
     }
-    const breakHours = Number(form.break_hours) || 0;
-    const hours = computeHours(form.start_time, form.end_time, breakHours);
-    if (hours <= 0) {
-      setErr("End time must be after start time (plus break).");
+    if (computation.kind === "error") {
+      setErr(computation.message);
+      return;
+    }
+    if (computation.kind !== "ok") {
+      setErr("Enter valid start and end times.");
       return;
     }
 
@@ -126,8 +148,8 @@ export default function OfficeHours() {
       work_date: form.work_date,
       start_time: form.start_time,
       end_time: form.end_time,
-      break_hours: breakHours,
-      hours,
+      break_hours: computation.breakHours,
+      hours: computation.hours,
       notes: form.notes,
     };
 
@@ -135,7 +157,6 @@ export default function OfficeHours() {
     try {
       enqueueUpsert(input, user?.name || user?.email || "");
       refresh();
-      // Best-effort sync — keeps the queue from sitting around when online.
       (async () => {
         await syncQueue();
         await fetchAndCache();
@@ -147,7 +168,7 @@ export default function OfficeHours() {
     }
   }
 
-  async function handleDelete(entry_uuid: string) {
+  function handleDelete(entry_uuid: string) {
     if (!window.confirm("Delete this entry?")) return;
     enqueueDeleteOrCancel(entry_uuid);
     refresh();
@@ -159,22 +180,9 @@ export default function OfficeHours() {
   }
 
   return (
-    <div className="container" style={{ maxWidth: 640 }}>
-      <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Office Hours</div>
-        <button
-          onClick={() => nav(-1)}
-          style={{
-            background: "none", border: "none", color: "var(--muted)",
-            cursor: "pointer", fontSize: 13, padding: "4px 8px",
-          }}
-        >
-          &larr; Back
-        </button>
-      </div>
-
+    <div className="col" style={{ gap: 16 }}>
       <div className="card">
-        <div className="sectionTitle">{editing ? "Edit entry" : "New entry"}</div>
+        <div className="sectionTitle">{editing ? "Edit entry" : "Log office hours"}</div>
         <form onSubmit={handleSubmit} className="col" style={{ gap: 10 }}>
           <div>
             <div className="label">Date</div>
@@ -186,8 +194,8 @@ export default function OfficeHours() {
             />
           </div>
           <div className="row" style={{ gap: 10 }}>
-            <div style={{ flex: 1 }}>
-              <div className="label">Start</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="label">Clock in</div>
               <input
                 type="time"
                 value={form.start_time}
@@ -195,8 +203,8 @@ export default function OfficeHours() {
                 required
               />
             </div>
-            <div style={{ flex: 1 }}>
-              <div className="label">End</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="label">Clock out</div>
               <input
                 type="time"
                 value={form.end_time}
@@ -204,20 +212,73 @@ export default function OfficeHours() {
                 required
               />
             </div>
-            <div style={{ flex: 1 }}>
-              <div className="label">Break (h)</div>
-              <input
-                type="number"
-                step={0.25}
-                min={0}
-                value={form.break_hours}
-                onChange={(e) => setForm((f) => ({ ...f, break_hours: e.target.value }))}
-              />
+          </div>
+
+          {/* Breaks — clocked-out periods, entered as start/end pairs to
+              match the Report tab's employee-hours editor. */}
+          <div>
+            <div className="label">Breaks / clocked-out time</div>
+            {form.breaks.length === 0 && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                No breaks added.
+              </div>
+            )}
+            <div className="col" style={{ gap: 8, marginTop: 6 }}>
+              {form.breaks.map((b, i) => (
+                <div key={i} className="row" style={{ gap: 8, alignItems: "center" }}>
+                  <input
+                    type="time"
+                    value={b.start}
+                    onChange={(e) => updateBreak(i, { start: e.target.value })}
+                    aria-label="Break start"
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                  <span className="small" style={{ color: "var(--muted)" }}>to</span>
+                  <input
+                    type="time"
+                    value={b.end}
+                    onChange={(e) => updateBreak(i, { end: e.target.value })}
+                    aria-label="Break end"
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeBreak(i)}
+                    style={{
+                      fontSize: 12, color: "var(--danger)",
+                      border: "1px solid var(--danger)", background: "none",
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
             </div>
+            <button
+              type="button"
+              onClick={addBreak}
+              style={{ fontSize: 13, marginTop: 8 }}
+            >
+              + Add break
+            </button>
           </div>
-          <div className="small" style={{ color: "var(--muted)" }}>
-            Hours: <strong>{hoursPreview.toFixed(2)}</strong>
+
+          <div
+            className="small"
+            style={{
+              color: computation.kind === "error" ? "var(--danger)" : "var(--muted)",
+            }}
+          >
+            {computation.kind === "ok"
+              ? `Worked ${computation.hours.toFixed(2)}h` +
+                (computation.breakHours > 0
+                  ? ` (${computation.spanHours.toFixed(2)}h span − ${computation.breakHours.toFixed(2)}h break)`
+                  : "")
+              : computation.kind === "error"
+                ? computation.message
+                : "Enter clock-in and clock-out times to see total hours."}
           </div>
+
           <div>
             <div className="label">Notes</div>
             <textarea
@@ -276,7 +337,7 @@ export default function OfficeHours() {
                   </div>
                   <div className="small" style={{ color: "var(--muted)" }}>
                     {e.start_time}–{e.end_time}
-                    {e.break_hours > 0 ? ` · break ${e.break_hours}h` : ""}
+                    {e.break_hours > 0 ? ` · break ${e.break_hours.toFixed(2)}h` : ""}
                   </div>
                   {e.notes && (
                     <div style={{ fontSize: 13, marginTop: 4, whiteSpace: "pre-wrap" }}>
