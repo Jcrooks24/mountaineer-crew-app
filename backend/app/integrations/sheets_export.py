@@ -1670,6 +1670,7 @@ REIMBURSEMENT_HEADERS = [
     "odometer_start", "odometer_end", "miles",
     "odometer_start_photo_url", "odometer_end_photo_url",
     "amount", "category", "vendor", "payment_method", "receipt_photo_url",
+    "photos_link",
     "notes", "status", "approver", "approved_at", "approval_notes",
     "created_at", "updated_at",
 ]
@@ -1711,6 +1712,7 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         "vendor": entry.get("vendor", "") or "",
         "payment_method": entry.get("payment_method", "") or "",
         "receipt_photo_url": entry.get("receipt_photo_url", "") or "",
+        "photos_link": entry.get("photos_drive_url", "") or "",
         "notes": entry.get("notes", "") or "",
         "status": entry.get("status", "") or "submitted",
         "approver": entry.get("approver_name", "") or "",

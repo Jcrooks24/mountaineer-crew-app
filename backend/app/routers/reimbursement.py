@@ -56,6 +56,7 @@ class ReimbursementOut(BaseModel):
     category: Optional[str]
     vendor: Optional[str]
     receipt_photo_url: Optional[str]
+    photos_drive_url: Optional[str]
     payment_method: Optional[str]
     notes: Optional[str]
     status: str
@@ -90,6 +91,7 @@ def _to_out(row: Reimbursement) -> ReimbursementOut:
         category=row.category,
         vendor=row.vendor,
         receipt_photo_url=row.receipt_photo_url,
+        photos_drive_url=row.photos_drive_url,
         payment_method=row.payment_method,
         notes=row.notes,
         status=row.status,
@@ -116,6 +118,7 @@ def _row_to_export_dict(row: Reimbursement) -> dict:
         "category": row.category or "",
         "vendor": row.vendor or "",
         "receipt_photo_url": row.receipt_photo_url or "",
+        "photos_drive_url": row.photos_drive_url or "",
         "payment_method": row.payment_method or "",
         "notes": row.notes or "",
         "status": row.status,
@@ -216,6 +219,14 @@ def submit_mileage(
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Photo upload failed: {e}")
 
+    # Both odometer photos share one per-submission folder, so either
+    # upload's folder_url is the link to where the pair lives.
+    photos_folder = None
+    if start_upload:
+        photos_folder = start_upload.get("folder_url")
+    elif end_upload:
+        photos_folder = end_upload.get("folder_url")
+
     now = datetime.now(timezone.utc)
     row = Reimbursement(
         reimbursement_uuid=reimbursement_uuid,
@@ -231,6 +242,7 @@ def submit_mileage(
         odometer_start_photo_url=start_upload["url"] if start_upload else None,
         odometer_end_photo_drive_id=end_upload["file_id"] if end_upload else None,
         odometer_end_photo_url=end_upload["url"] if end_upload else None,
+        photos_drive_url=photos_folder,
         notes=notes or None,
         status="submitted",
         created_at=now,
@@ -327,6 +339,8 @@ def submit_expense(
         vendor=vendor.strip() or None,
         receipt_photo_drive_id=upload["file_id"] if upload else None,
         receipt_photo_url=upload["url"] if upload else None,
+        # A receipt is a single file — the file link is the photo location.
+        photos_drive_url=upload["url"] if upload else None,
         payment_method=method,
         notes=notes or None,
         status="submitted",

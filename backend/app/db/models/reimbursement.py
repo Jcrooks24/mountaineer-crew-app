@@ -72,6 +72,12 @@ class Reimbursement(Base):
     # Null for mileage rows. See REIMBURSEMENT_PAYMENT_METHODS.
     payment_method = Column(String(16), nullable=True)
 
+    # One "click here for the photo(s)" Drive link per submission, surfaced
+    # in the Reimbursements sheet. For mileage it points at the per-
+    # submission odometer folder; for an expense it points at the receipt
+    # file. Null if the submission had no photos.
+    photos_drive_url = Column(String, nullable=True)
+
     notes = Column(Text, nullable=True)
 
     # Approval workflow — defaults to "submitted". Admin endpoints flip to

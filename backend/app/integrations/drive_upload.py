@@ -280,6 +280,10 @@ def upload_reimbursement_photo_to_drive(
         "file_id": file_id,
         "url": result.get("webViewLink", ""),
         "thumb_url": f"https://drive.google.com/thumbnail?id={file_id}&sz=w800",
+        # Link to the folder the photo landed in. For odometer photos this
+        # is the per-submission folder holding both photos; for receipts it
+        # is the parent reimbursement folder.
+        "folder_url": f"https://drive.google.com/drive/folders/{target_folder_id}",
     }
 
 
