@@ -209,14 +209,19 @@ def upload_reimbursement_photo_to_drive(
 ) -> dict:
     """Upload a reimbursement photo to Drive.
 
-    Photos land directly in the reimbursement parent folder
+    Base location is the reimbursement parent folder
     (DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID, or the default crew-photos
-    parent if unset) — no per-user or per-month subfolders. Submissions
-    come in one at a time, so the descriptive filename is enough to tell
-    them apart without extra folder nesting.
+    parent if unset).
 
-    `kind` is one of "odo_start", "odo_end", "receipt" — written into the
-    filename so the admin can tell what they're looking at at a glance.
+    - Receipt photos (kind="receipt") land directly in that parent — a
+      receipt is a single photo per submission, so no folder is needed.
+    - Odometer photos (kind="odo_start"/"odo_end") go into a per-submission
+      subfolder, since a mileage request has two photos that belong
+      together. Both photos of one submission share the same folder
+      (keyed on reimbursement_uuid).
+
+    `kind` is written into the filename so the admin can tell what they're
+    looking at at a glance.
     """
     svc = _get_drive_service(db)
 
@@ -232,7 +237,16 @@ def upload_reimbursement_photo_to_drive(
     ext = ext if ext in ("jpg", "jpeg", "png", "heic", "webp") else "jpg"
     short_id = (reimbursement_uuid or filename or "photo")[:8]
     safe_user = _safe(user_name or "Unknown")
-    # Filename carries all the context now that there's no folder structure.
+
+    # Odometer photos come in pairs — group each submission's two photos in
+    # their own folder. Receipts are single, so they stay flat in the parent.
+    if kind in ("odo_start", "odo_end"):
+        folder_label = f"{safe_user} - Mileage - {short_id}"[:100]
+        target_folder_id = _get_or_create_folder(svc, folder_label, parent_id)
+    else:
+        target_folder_id = parent_id
+
+    # Filename carries the context regardless of where the file lands.
     drive_filename = f"{safe_user} - {kind} - {short_id}.{ext}"
 
     print(f"[drive] uploading reimbursement '{drive_filename}'")
@@ -247,7 +261,7 @@ def upload_reimbursement_photo_to_drive(
     request = svc.files().create(
         body={
             "name": drive_filename,
-            "parents": [parent_id],
+            "parents": [target_folder_id],
             "description": caption or "",
         },
         media_body=media,
