@@ -24,11 +24,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db, require_admin
-from app.db.models.reimbursement import (
-    REIMBURSEMENT_STATUSES,
-    REIMBURSEMENT_TYPES,
-    Reimbursement,
-)
+from app.db.models.reimbursement import REIMBURSEMENT_STATUSES, Reimbursement
 from app.db.models.user import User
 from app.integrations.drive_upload import upload_reimbursement_photo_to_drive
 from app.integrations.sheets_export import (
@@ -402,9 +398,3 @@ def approve_reimbursement(
 
     _queue_export(row)
     return _to_out(row)
-
-
-# Re-export type constant so the frontend can stay in sync via the OpenAPI
-# schema. Not strictly needed since types are duplicated in the TS side, but
-# keeps the symbol referenced so a future enum tightening propagates.
-__all__ = ["router", "REIMBURSEMENT_TYPES"]

@@ -92,7 +92,10 @@ export type QueueEntry = MileageQueueEntry | ExpenseQueueEntry;
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
 const DB_NAME = "crew_app_db";
-const DB_VERSION = 2;                 // bump from photoStore's 1 — we add a new store
+// Shared crew_app_db version — MUST stay in sync with photoStore.ts. Both
+// modules open the same database; IndexedDB rejects opening with a version
+// below the current one, so both upgrade handlers create the full schema.
+const DB_VERSION = 2;
 const STORE_REIMBURSEMENTS = "reimbursement_queue";
 const HISTORY_CACHE_KEY = "crew_reimbursement_history_cache_v1";
 
@@ -110,8 +113,9 @@ function openDb(): Promise<IDBDatabase> {
 
     req.onupgradeneeded = () => {
       const db = req.result;
-      // Re-create the photoStore objectStore if missing (DB_VERSION bump may
-      // run an upgrade for fresh installs that never had v1).
+      // Both object stores are created here so this module can build the
+      // full schema if it's the first to open crew_app_db. The "photos"
+      // store is otherwise owned by photoStore.ts.
       if (!db.objectStoreNames.contains("photos")) {
         const store = db.createObjectStore("photos", { keyPath: "id" });
         store.createIndex("by_job", "job_uuid", { unique: false });
