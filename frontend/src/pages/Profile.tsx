@@ -130,6 +130,12 @@ export default function Profile() {
         </button>
       </div>
 
+      {/* App refresh — kept near the top so crew can always find it to
+          pull the latest build and confirm they're current. */}
+      <div style={{ marginBottom: 12 }}>
+        <AppRefreshButton />
+      </div>
+
       {/* Avatar */}
       <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
         <div
@@ -226,24 +232,6 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Admin-only: Office Hours entry */}
-      {user?.role === "admin" && (
-        <div className="card">
-          <div className="sectionTitle">Office Hours</div>
-          <div className="col" style={{ gap: 8 }}>
-            <button onClick={() => nav("/office-hours")} style={{ textAlign: "left" }}>
-              Log office hours
-            </button>
-            <div className="small" style={{ color: "var(--muted)" }}>
-              Admin-only — for office staff who don't log against a job.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Crew Settings — small per-device controls available to any user */}
-      <CrewSettingsCard />
-
       {/* Sign out — placed above Patch Notes so a long changelog
           never buries it off-screen */}
       <div className="card">
@@ -267,7 +255,7 @@ export default function Profile() {
   );
 }
 
-function CrewSettingsCard() {
+function AppRefreshButton() {
   const [status, setStatus] = useState<"idle" | "checking" | "result">("idle");
   const [result, setResult] = useState<UpdateResult | null>(null);
 
@@ -304,28 +292,39 @@ function CrewSettingsCard() {
         ? "var(--danger)"
         : "var(--muted)";
 
+  const checking = status === "checking";
+
   return (
-    <div className="card">
-      <div className="sectionTitle">Crew Settings</div>
-      <div className="col" style={{ gap: 10 }}>
-        <div>
-          <div className="label">App version</div>
-          <div className="small" style={{ marginTop: 4, color: "var(--muted)", fontFamily: "monospace" }}>
-            {APP_BUILD_ID}
-          </div>
-        </div>
-        <button
-          onClick={handleCheck}
-          disabled={status === "checking"}
-          style={{ textAlign: "left" }}
-        >
-          {status === "checking" ? "Checking for updates…" : "Check for updates"}
-        </button>
-        {message && (
-          <div className="small" style={{ color: messageColor }}>
-            {message}
-          </div>
-        )}
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <button
+        onClick={handleCheck}
+        disabled={checking}
+        style={{
+          width: "100%",
+          padding: "14px 16px",
+          background: "linear-gradient(135deg, var(--brand), var(--brand2))",
+          color: "var(--on-brand)",
+          border: "none",
+          borderRadius: 14,
+          cursor: checking ? "default" : "pointer",
+          fontSize: 16,
+          fontWeight: 800,
+          boxShadow: "var(--shadow)",
+          opacity: checking ? 0.7 : 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+        }}
+      >
+        <span style={{ fontSize: 18 }}>{checking ? "⟳" : "↻"}</span>
+        {checking ? "Checking for updates…" : "Update app to latest version"}
+      </button>
+      <div
+        className="small"
+        style={{ textAlign: "center", color: message ? messageColor : "var(--muted)" }}
+      >
+        {message || `Version ${APP_BUILD_ID}`}
       </div>
     </div>
   );
