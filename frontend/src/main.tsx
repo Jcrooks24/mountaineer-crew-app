@@ -9,28 +9,34 @@ import App from "./App";
 import { AuthProvider } from "./auth/AuthContext";
 import { ThemeProvider } from "./theme/ThemeContext";
 import RequireAuth from "./auth/RequireAuth";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import MechanicSign from "./pages/MechanicSign";
 import Profile from "./pages/Profile";
 import Admin from "./pages/Admin";
 import DVIRPage from "./pages/DVIR";
 import LongDistance from "./pages/LongDistance";
 import DocumentLibrary from "./pages/DocumentLibrary";
+import Reimbursement from "./pages/Reimbursement";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
     <AuthProvider>
       <BrowserRouter>
+        <ErrorBoundary>
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          {/* Public — a mechanic with no account signs off a DVIR via an emailed token link */}
+          <Route path="/mechanic-sign" element={<MechanicSign />} />
 
           {/* Protected */}
           <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
@@ -38,6 +44,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/dvir" element={<RequireAuth><DVIRPage /></RequireAuth>} />
           <Route path="/long-distance" element={<RequireAuth><LongDistance /></RequireAuth>} />
           <Route path="/documents" element={<RequireAuth><DocumentLibrary /></RequireAuth>} />
+          <Route path="/reimbursement" element={<RequireAuth><Reimbursement /></RequireAuth>} />
 
           {/* Everything else requires auth */}
           <Route
@@ -49,6 +56,7 @@ createRoot(document.getElementById("root")!).render(
             }
           />
         </Routes>
+        </ErrorBoundary>
       </BrowserRouter>
     </AuthProvider>
     </ThemeProvider>

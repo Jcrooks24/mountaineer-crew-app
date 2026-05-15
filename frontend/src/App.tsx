@@ -841,22 +841,38 @@ export default function App() {
 
       const json = await res.json();
 
-      // Any event that arrived at the server has been "handled" — either
-      // inserted, deduped, or permanently rejected. Retrying rejected events
-      // just wedges the queue forever. So: if we got any well-formed
-      // response back, drop the whole batch and warn on the failures.
-      // Only keep the queue when the HTTP request itself errored (catch).
+      // An event the server "handled" — inserted, deduped, or *permanently*
+      // rejected (e.g. a malformed timestamp) — leaves the queue; retrying it
+      // would just wedge the queue. But a `retryable` failure (a transient
+      // server-side DB error means the event never persisted) must stay
+      // queued — dropping it silently loses a logged field event.
       if (json?.ok === true) {
-        const failed: { event_id: string; reason?: string }[] = json.failed ?? [];
-        const ids = new Set(q.map((e) => e.event_id));
-        markLogEventsSyncedByIds(ids);
-        saveQueue([]);
-        if (failed.length > 0) {
+        const failed: { event_id: string; reason?: string; retryable?: boolean }[] =
+          json.failed ?? [];
+        const retryableIds = new Set(
+          failed.filter((f) => f.retryable).map((f) => f.event_id),
+        );
+        const permanentFailed = failed.filter((f) => !f.retryable);
+
+        const handledIds = new Set(
+          q.map((e) => e.event_id).filter((id) => !retryableIds.has(id)),
+        );
+        markLogEventsSyncedByIds(handledIds);
+        const remaining = q.filter((e) => retryableIds.has(e.event_id));
+        saveQueue(remaining);
+
+        if (permanentFailed.length > 0) {
           console.warn(
-            `[sync] server rejected ${failed.length} event(s):`,
-            failed.map((f) => `${f.event_id} (${f.reason ?? "unknown"})`).join(", "),
+            `[sync] server rejected ${permanentFailed.length} event(s):`,
+            permanentFailed
+              .map((f) => `${f.event_id} (${f.reason ?? "unknown"})`)
+              .join(", "),
           );
-          setStatus(`Synced — ${failed.length} rejected`);
+        }
+        if (remaining.length > 0) {
+          setStatus(`Synced — ${remaining.length} will retry`);
+        } else if (permanentFailed.length > 0) {
+          setStatus(`Synced — ${permanentFailed.length} rejected`);
         } else {
           setStatus("Synced");
         }

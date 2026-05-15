@@ -15,9 +15,14 @@ export type StoredPhoto = {
 };
 
 const DB_NAME = "crew_app_db";
-const DB_VERSION = 1;
+// Shared crew_app_db version — MUST stay in sync with reimbursementStore.ts.
+// IndexedDB rejects opening a DB with a version lower than its current one,
+// so every module that opens crew_app_db must use the same number and its
+// upgrade handler must create the full schema.
+const DB_VERSION = 2;
 
 const STORE_PHOTOS = "photos";
+const STORE_REIMBURSEMENTS = "reimbursement_queue";
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -29,6 +34,14 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_PHOTOS)) {
         const store = db.createObjectStore(STORE_PHOTOS, { keyPath: "id" });
         store.createIndex("by_job", "job_uuid", { unique: false });
+        store.createIndex("by_created", "created_at", { unique: false });
+      }
+      // Created here too so whichever store module opens crew_app_db first
+      // builds the full v2 schema. This store is owned by reimbursementStore.ts.
+      if (!db.objectStoreNames.contains(STORE_REIMBURSEMENTS)) {
+        const store = db.createObjectStore(STORE_REIMBURSEMENTS, {
+          keyPath: "reimbursement_uuid",
+        });
         store.createIndex("by_created", "created_at", { unique: false });
       }
     };

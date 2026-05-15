@@ -30,7 +30,7 @@ type LineItem = {
   rate: number;
   unit: Unit;
   discount: number;   // per-line % (0–100)
-  source: "hours" | "materials" | "m1" | "charge" | "custom";
+  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips";
 };
 
 type Bill = {
@@ -405,6 +405,14 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     setShowAddMenu(false);
   }
 
+  function addTipsItem() {
+    setBill((prev) => ({
+      ...prev,
+      items: [...prev.items, { id: uuid(), label: "Tips", qty: 1, rate: 0, unit: "flat", discount: 0, source: "tips" }],
+    }));
+    setShowAddMenu(false);
+  }
+
   function addChargeItem(charge: ChargeItem) {
     setBill((prev) => ({
       ...prev,
@@ -693,6 +701,11 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   ))}
                 </div>
               ))}
+              <button type="button" onClick={addTipsItem}
+                style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", textAlign: "left", padding: "10px 14px", background: "none", border: "none", borderBottom: "1px solid var(--border)", color: "var(--text)", fontSize: 13, cursor: "pointer", gap: 8 }}>
+                <span>Tips</span>
+                <span style={{ color: "var(--muted)", fontSize: 11, flexShrink: 0 }}>flat</span>
+              </button>
               <button type="button" onClick={addCustomItem}
                 style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 14px", background: "none", border: "none", color: "var(--muted)", fontSize: 13, cursor: "pointer" }}>
                 Custom item…

@@ -4,6 +4,12 @@ import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { refreshDirectory } from "../lib/userDirectory";
 import { markPatchNotesSeenNow } from "../lib/patchNotesSeen";
+import {
+  APP_BUILD_ID,
+  APP_VERSION_NAME,
+  checkForAppUpdate,
+  type UpdateResult,
+} from "../lib/appUpdate";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
@@ -129,6 +135,12 @@ export default function Profile() {
         </button>
       </div>
 
+      {/* App refresh — kept near the top so crew can always find it to
+          pull the latest build and confirm they're current. */}
+      <div style={{ marginBottom: 12 }}>
+        <AppRefreshButton />
+      </div>
+
       {/* Avatar */}
       <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
         <div
@@ -212,6 +224,21 @@ export default function Profile() {
         </div>
       </div>
 
+      {/* Expenses / reimbursement — mileage, personal-card reimbursement,
+          or company-card expense logging. */}
+      <div className="card">
+        <div className="sectionTitle">Log Expense / Request Reimbursement</div>
+        <div className="col" style={{ gap: 8 }}>
+          <button onClick={() => nav("/reimbursement")} style={{ textAlign: "left" }}>
+            Log an expense or request reimbursement
+          </button>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Mileage with odometer photos, personal-card reimbursements, or
+            company-card expense receipts.
+          </div>
+        </div>
+      </div>
+
       {/* Sign out — placed above Patch Notes so a long changelog
           never buries it off-screen */}
       <div className="card">
@@ -231,6 +258,89 @@ export default function Profile() {
 
       {/* Patch Notes — shows most recent 3 by default with an expander */}
       <PatchNotesCard />
+    </div>
+  );
+}
+
+function AppRefreshButton() {
+  const [status, setStatus] = useState<"idle" | "checking" | "result">("idle");
+  const [result, setResult] = useState<UpdateResult | null>(null);
+
+  async function handleCheck() {
+    setStatus("checking");
+    setResult(null);
+    try {
+      const r = await checkForAppUpdate();
+      setResult(r);
+      setStatus("result");
+    } catch (e: any) {
+      setResult({ kind: "error", message: e?.message || "Update check failed" });
+      setStatus("result");
+    }
+  }
+
+  const message = result
+    ? result.kind === "latest"
+      ? "You're on the latest version."
+      : result.kind === "updating"
+        ? "Update found — reloading…"
+        : result.kind === "offline"
+          ? "You're offline — can't check for updates."
+          : result.kind === "unsupported"
+            ? "Updates can't be checked on this browser."
+            : result.message
+    : null;
+
+  const messageColor = result?.kind === "latest"
+    ? "var(--ok)"
+    : result?.kind === "updating"
+      ? "var(--brand)"
+      : result?.kind === "error" || result?.kind === "offline"
+        ? "var(--danger)"
+        : "var(--muted)";
+
+  const checking = status === "checking";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <button
+        onClick={handleCheck}
+        disabled={checking}
+        style={{
+          width: "100%",
+          padding: "14px 16px",
+          background: "linear-gradient(135deg, var(--brand), var(--brand2))",
+          color: "var(--on-brand)",
+          border: "none",
+          borderRadius: 14,
+          cursor: checking ? "default" : "pointer",
+          fontSize: 16,
+          fontWeight: 800,
+          boxShadow: "var(--shadow)",
+          opacity: checking ? 0.7 : 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+        }}
+      >
+        <span style={{ fontSize: 18 }}>{checking ? "⟳" : "↻"}</span>
+        {checking ? "Checking for updates…" : "Update app to latest version"}
+      </button>
+      {message ? (
+        <div className="small" style={{ textAlign: "center", color: messageColor }}>
+          {message}
+        </div>
+      ) : (
+        <div style={{ textAlign: "center" }}>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Version <strong style={{ color: "var(--text)" }}>{APP_VERSION_NAME}</strong>
+          </div>
+          <div style={{ fontSize: 10, color: "var(--muted)", opacity: 0.65, marginTop: 1 }}>
+            build {APP_BUILD_ID}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

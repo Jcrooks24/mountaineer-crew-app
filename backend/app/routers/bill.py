@@ -101,7 +101,7 @@ def get_bill_seed(
                 hours = round((finish_ts - start_ts).total_seconds() / 3600, 2)
                 hours_lines.append({
                     "created_by": person,
-                    "label": f"Labor – {person}",
+                    "label": "Labor (per hour)",
                     "hours": hours,
                 })
 

@@ -16,6 +16,7 @@ import {
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
+import OfficeHoursPanel from "./OfficeHours";
 import { roundBillableQuarter } from "../components/JobReport";
 import {
   formatMountainDate,
@@ -52,7 +53,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "dvir" | "estimator" | "notes" | "summary";
+type Tab = "employees" | "map" | "settings" | "advanced" | "dvir" | "estimator" | "notes" | "summary" | "office";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -80,7 +81,7 @@ export default function Admin() {
 
       {/* Tabs */}
       <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary"] as Tab[]).map((t) => (
+        {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary", "office"] as Tab[]).map((t) => (
           <button
             key={t}
             className={"tab " + (tab === t || (tab === "advanced" && t === "settings") ? "active" : "")}
@@ -91,6 +92,7 @@ export default function Admin() {
               : t === "dvir" ? "DVIR Review"
               : t === "notes" ? "Notes"
               : t === "summary" ? "Job Summary"
+              : t === "office" ? "Office Hours"
               : t}
           </button>
         ))}
@@ -104,6 +106,7 @@ export default function Admin() {
       {tab === "estimator" && <EstimatorTab />}
       {tab === "notes" && <NotesTab />}
       {tab === "summary" && <JobSummaryTab />}
+      {tab === "office" && <OfficeHoursPanel />}
     </div>
   );
 }
@@ -1353,6 +1356,8 @@ type DVIRRecord = {
   mechanic_signed_at: string | null;
   repairs_made: boolean | null;
   mechanic_notes: string | null;
+  mechanic_signature_requested_at: string | null;
+  mechanic_signature_requested_email: string | null;
   created_at: string;
   needs_mechanic_review: boolean;
 };
@@ -1645,6 +1650,47 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Remote signature request — email a sign-off link to a mechanic.
+  const [reqEmail, setReqEmail] = useState("");
+  const [reqName, setReqName] = useState("");
+  const [reqBusy, setReqBusy] = useState(false);
+  const [reqErr, setReqErr] = useState<string | null>(null);
+  const [requestedAt, setRequestedAt] = useState<string | null>(
+    dvir.mechanic_signature_requested_at,
+  );
+  const [requestedEmail, setRequestedEmail] = useState<string | null>(
+    dvir.mechanic_signature_requested_email,
+  );
+
+  async function handleSendRequest(e: React.FormEvent) {
+    e.preventDefault();
+    setReqErr(null);
+    if (!reqEmail.trim() || !reqEmail.includes("@")) {
+      return setReqErr("Enter a valid mechanic email.");
+    }
+    setReqBusy(true);
+    try {
+      const updated = await apiFetch<DVIRRecord>(
+        `/api/dvir/${dvir.dvir_id}/request-mechanic-signature`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            mechanic_email: reqEmail.trim(),
+            mechanic_name: reqName.trim() || null,
+          }),
+        },
+      );
+      setRequestedAt(updated.mechanic_signature_requested_at);
+      setRequestedEmail(updated.mechanic_signature_requested_email);
+      setReqEmail("");
+      setReqName("");
+    } catch (e: any) {
+      setReqErr(e?.message ?? "Failed to send signature request.");
+    } finally {
+      setReqBusy(false);
+    }
+  }
+
   async function handleSign(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
@@ -1764,9 +1810,65 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
           </div>
         </div>
       ) : (
-        /* Mechanic sign form */
+        <>
+        {/* Remote signature request — email a sign-off link to a mechanic */}
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="label" style={{ fontWeight: 700, marginBottom: 6 }}>
+            Request Remote Mechanic Sign-Off
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+            Email a secure link to a mechanic so they can review the defect and sign off
+            remotely. The vehicle is cleared automatically once they sign.
+          </div>
+
+          {requestedAt && (
+            <div
+              style={{
+                padding: "8px 12px", borderRadius: 8, marginBottom: 12,
+                background: "rgba(255,200,50,0.1)", border: "1px solid rgba(255,200,50,0.3)",
+                fontSize: 13, color: "var(--text)",
+              }}
+            >
+              Request sent to <strong>{requestedEmail}</strong> on{" "}
+              {formatMountainDateTime(requestedAt)} — awaiting signature. You can resend below.
+            </div>
+          )}
+
+          <form onSubmit={handleSendRequest} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Email *</div>
+              <input
+                type="email"
+                value={reqEmail}
+                onChange={(e) => setReqEmail(e.target.value)}
+                placeholder="mechanic@example.com"
+                style={mechInputStyle}
+              />
+            </div>
+            <div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name (optional)</div>
+              <input
+                value={reqName}
+                onChange={(e) => setReqName(e.target.value)}
+                placeholder="For the email greeting"
+                style={mechInputStyle}
+              />
+            </div>
+            {reqErr && (
+              <div style={{ color: "var(--danger)", fontSize: 13 }}>{reqErr}</div>
+            )}
+            <button type="submit" disabled={reqBusy} style={{ fontSize: 13, alignSelf: "flex-start" }}>
+              {reqBusy ? "Sending…" : requestedAt ? "Resend signature request" : "Email signature request"}
+            </button>
+          </form>
+        </div>
+
+        {/* Mechanic sign form — in-person sign-off on this device */}
         <div className="card">
-          <div className="label" style={{ fontWeight: 700, marginBottom: 12 }}>Mechanic Approval</div>
+          <div className="label" style={{ fontWeight: 700, marginBottom: 4 }}>Sign Off In Person</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+            Or hand this device to the mechanic to sign now.
+          </div>
 
           <form onSubmit={handleSign} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
@@ -1842,6 +1944,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             </button>
           </form>
         </div>
+        </>
       )}
     </div>
   );

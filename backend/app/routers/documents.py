@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_admin
@@ -61,8 +62,19 @@ def upload_document(
         created_at=datetime.now(timezone.utc),
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    try:
+        db.commit()
+        db.refresh(row)
+    except SQLAlchemyError:
+        db.rollback()
+        traceback.print_exc()
+        # The file is already in Drive but the DB row failed — delete the
+        # orphan so the admin can cleanly retry without piling up dupes.
+        try:
+            delete_drive_file(db, result["file_id"])
+        except Exception:
+            traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to save document record")
     return row
 
 
