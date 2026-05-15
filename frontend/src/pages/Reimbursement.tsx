@@ -34,6 +34,7 @@ export default function Reimbursement() {
   // Expense form state
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
+  const [vendor, setVendor] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("personal");
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
 
@@ -77,6 +78,7 @@ export default function Reimbursement() {
   function clearExpense() {
     setAmount("");
     setCategory("");
+    setVendor("");
     setPaymentMethod("personal");
     setReceiptFile(null);
     if (receiptRef.current) receiptRef.current.value = "";
@@ -146,7 +148,8 @@ export default function Reimbursement() {
     if (amt !== null && (!Number.isFinite(amt) || amt < 0)) {
       setErr("Amount must be a positive number."); return;
     }
-    const expenseEmpty = amt === null && !category && !receiptFile && !notes.trim();
+    const expenseEmpty =
+      amt === null && !category && !vendor.trim() && !receiptFile && !notes.trim();
     if (expenseEmpty) {
       setErr("Add at least one detail or photo before submitting."); return;
     }
@@ -158,6 +161,7 @@ export default function Reimbursement() {
         type: "expense",
         amount: amt === null ? null : Math.round(amt * 100) / 100,
         category,
+        vendor,
         payment_method: paymentMethod,
         job_uuid: "",
         job_name: "",
@@ -313,6 +317,19 @@ export default function Reimbursement() {
                 </div>
               </div>
               <div>
+                <div className="label">Vendor</div>
+                <input
+                  type="text"
+                  value={vendor}
+                  onChange={(e) => setVendor(e.target.value)}
+                  placeholder="e.g. Home Depot, Shell, U-Haul"
+                />
+                <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                  The store or business where the purchase was made — enter it as
+                  it appears on the receipt.
+                </div>
+              </div>
+              <div>
                 <div className="label">Paid with</div>
                 <div className="row" style={{ gap: 8, marginTop: 4 }}>
                   {([
@@ -400,7 +417,7 @@ export default function Reimbursement() {
                   <div style={{ fontWeight: 700, fontSize: 14 }}>
                     {r.type === "mileage"
                       ? `Mileage · ${r.odometer_start ?? "?"} → ${r.odometer_end ?? "?"}`
-                      : `Expense · $${(r.amount ?? 0).toFixed(2)}${r.category ? ` · ${r.category}` : ""}`}
+                      : `Expense · $${(r.amount ?? 0).toFixed(2)}${r.vendor ? ` · ${r.vendor}` : ""}${r.category ? ` · ${r.category}` : ""}`}
                   </div>
                   <div className="small" style={{ color: "var(--muted)" }}>
                     {new Date(r.created_at).toLocaleString()} · <StatusBadge status={r.status} />

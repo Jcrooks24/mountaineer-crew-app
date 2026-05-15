@@ -30,6 +30,7 @@ export type ReimbursementRow = {
   odometer_end_photo_url: string | null;
   amount: number | null;
   category: string | null;
+  vendor: string | null;
   receipt_photo_url: string | null;
   payment_method: string | null;
   notes: string | null;
@@ -64,6 +65,7 @@ export type ExpenseQueueEntry = {
   type: "expense";
   amount: number | null;
   category: string;
+  vendor: string;
   payment_method: PaymentMethod;
   job_uuid: string;
   job_name: string;
@@ -232,6 +234,7 @@ export async function renderedRows(): Promise<ReimbursementRow[]> {
         odometer_end_photo_url: null,
         amount: null,
         category: null,
+        vendor: null,
         receipt_photo_url: null,
         payment_method: null,
         notes: p.notes || null,
@@ -256,6 +259,7 @@ export async function renderedRows(): Promise<ReimbursementRow[]> {
       odometer_end_photo_url: null,
       amount: p.amount,
       category: p.category || null,
+      vendor: p.vendor || null,
       receipt_photo_url: null,
       payment_method: p.payment_method,
       notes: p.notes || null,
@@ -342,6 +346,7 @@ export async function syncQueue(): Promise<number> {
             form.append("amount", String(entry.amount));
           }
           form.append("category", entry.category || "");
+          form.append("vendor", entry.vendor || "");
           form.append("payment_method", entry.payment_method);
           if (entry.receipt_blob) {
             form.append("receipt_photo", entry.receipt_blob, "receipt.jpg");

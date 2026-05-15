@@ -54,6 +54,7 @@ class ReimbursementOut(BaseModel):
     odometer_end_photo_url: Optional[str]
     amount: Optional[float]
     category: Optional[str]
+    vendor: Optional[str]
     receipt_photo_url: Optional[str]
     payment_method: Optional[str]
     notes: Optional[str]
@@ -87,6 +88,7 @@ def _to_out(row: Reimbursement) -> ReimbursementOut:
         odometer_end_photo_url=row.odometer_end_photo_url,
         amount=float(row.amount) if row.amount is not None else None,
         category=row.category,
+        vendor=row.vendor,
         receipt_photo_url=row.receipt_photo_url,
         payment_method=row.payment_method,
         notes=row.notes,
@@ -112,6 +114,7 @@ def _row_to_export_dict(row: Reimbursement) -> dict:
         "odometer_end_photo_url": row.odometer_end_photo_url or "",
         "amount": float(row.amount) if row.amount is not None else None,
         "category": row.category or "",
+        "vendor": row.vendor or "",
         "receipt_photo_url": row.receipt_photo_url or "",
         "payment_method": row.payment_method or "",
         "notes": row.notes or "",
@@ -262,6 +265,7 @@ def submit_expense(
     reimbursement_uuid: str = Form(...),
     amount: Optional[float] = Form(default=None),
     category: str = Form(default=""),
+    vendor: str = Form(default=""),
     payment_method: str = Form(default="personal"),
     job_uuid: str = Form(default=""),
     job_name: str = Form(default=""),
@@ -320,6 +324,7 @@ def submit_expense(
         job_date=job_date or None,
         amount=amount,
         category=category or None,
+        vendor=vendor.strip() or None,
         receipt_photo_drive_id=upload["file_id"] if upload else None,
         receipt_photo_url=upload["url"] if upload else None,
         payment_method=method,

@@ -64,6 +64,8 @@ class Reimbursement(Base):
     # Expense fields — null for mileage rows.
     amount = Column(Numeric(precision=10, scale=2), nullable=True)
     category = Column(String, nullable=True)   # one of the fixed expense categories
+    # Free-text store/business the purchase was made at (e.g. "Home Depot").
+    vendor = Column(String, nullable=True)
     receipt_photo_drive_id = Column(String, nullable=True)
     receipt_photo_url = Column(String, nullable=True)
     # "personal" (reimburse the crew) or "company" (expense log only).
