@@ -40,32 +40,46 @@ export type ReimbursementRow = {
   updated_at: string;
 };
 
+// Every field below the uuid/type is optional — crew may submit a partial
+// request and the admin follows up. null means "not provided".
 export type MileageQueueEntry = {
   reimbursement_uuid: string;
   type: "mileage";
-  odometer_start: number;
-  odometer_end: number;
+  odometer_start: number | null;
+  odometer_end: number | null;
   job_uuid: string;
   job_name: string;
   job_date: string;
   notes: string;
-  odo_start_blob: Blob;
-  odo_end_blob: Blob;
+  odo_start_blob: Blob | null;
+  odo_end_blob: Blob | null;
   created_at: string;
 };
 
 export type ExpenseQueueEntry = {
   reimbursement_uuid: string;
   type: "expense";
-  amount: number;
+  amount: number | null;
   category: string;
   job_uuid: string;
   job_name: string;
   job_date: string;
   notes: string;
-  receipt_blob: Blob;
+  receipt_blob: Blob | null;
   created_at: string;
 };
+
+// Expense categories — fixed list so the form offers a dropdown rather than
+// free text, keeping the Reimbursements sheet filterable for admin.
+export const EXPENSE_CATEGORIES = [
+  "Fuel",
+  "Supplies / Materials",
+  "Tolls & Parking",
+  "Meals",
+  "Equipment Rental",
+  "Vehicle Maintenance",
+  "Other",
+] as const;
 
 export type QueueEntry = MileageQueueEntry | ExpenseQueueEntry;
 
@@ -301,15 +315,30 @@ export async function syncQueue(): Promise<number> {
         form.append("job_date", entry.job_date || "");
         form.append("notes", entry.notes || "");
         if (entry.type === "mileage") {
-          form.append("odometer_start", String(entry.odometer_start));
-          form.append("odometer_end", String(entry.odometer_end));
-          form.append("odometer_start_photo", entry.odo_start_blob, "odo_start.jpg");
-          form.append("odometer_end_photo", entry.odo_end_blob, "odo_end.jpg");
+          // Only append fields the crew actually provided — the backend
+          // treats every field as optional, so omitting a blank one keeps
+          // it null rather than coercing "null"/"" into the record.
+          if (entry.odometer_start != null) {
+            form.append("odometer_start", String(entry.odometer_start));
+          }
+          if (entry.odometer_end != null) {
+            form.append("odometer_end", String(entry.odometer_end));
+          }
+          if (entry.odo_start_blob) {
+            form.append("odometer_start_photo", entry.odo_start_blob, "odo_start.jpg");
+          }
+          if (entry.odo_end_blob) {
+            form.append("odometer_end_photo", entry.odo_end_blob, "odo_end.jpg");
+          }
           await postMultipart("/api/reimbursements/mileage", form);
         } else {
-          form.append("amount", String(entry.amount));
+          if (entry.amount != null) {
+            form.append("amount", String(entry.amount));
+          }
           form.append("category", entry.category || "");
-          form.append("receipt_photo", entry.receipt_blob, "receipt.jpg");
+          if (entry.receipt_blob) {
+            form.append("receipt_photo", entry.receipt_blob, "receipt.jpg");
+          }
           await postMultipart("/api/reimbursements/expense", form);
         }
         await removeFromQueue(entry.reimbursement_uuid);

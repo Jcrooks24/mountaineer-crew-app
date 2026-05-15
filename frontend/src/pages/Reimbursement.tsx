@@ -4,6 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import {
   enqueueExpense,
   enqueueMileage,
+  EXPENSE_CATEGORIES,
   fetchHistory,
   newReimbursementUuid,
   renderedRows,
@@ -84,16 +85,24 @@ export default function Reimbursement() {
     setOk(null);
 
     if (mode === "mileage") {
-      const start = Number(odoStart);
-      const end = Number(odoEnd);
-      if (!Number.isFinite(start) || !Number.isFinite(end)) {
-        setErr("Enter both odometer readings."); return;
+      // Fields are all optional — crew can submit a partial request and
+      // the admin follows up. Only block a completely empty form, and a
+      // genuine reading inversion (both numbers present, end < start).
+      const start = odoStart.trim() === "" ? null : Math.floor(Number(odoStart));
+      const end = odoEnd.trim() === "" ? null : Math.floor(Number(odoEnd));
+      if (start !== null && !Number.isFinite(start)) {
+        setErr("Start odometer must be a number."); return;
       }
-      if (end < start) {
-        setErr("End odometer must be ≥ start odometer."); return;
+      if (end !== null && !Number.isFinite(end)) {
+        setErr("End odometer must be a number."); return;
       }
-      if (!odoStartFile || !odoEndFile) {
-        setErr("Attach both odometer photos."); return;
+      if (start !== null && end !== null && end < start) {
+        setErr("End odometer can't be lower than the start odometer."); return;
+      }
+      const isEmpty =
+        start === null && end === null && !odoStartFile && !odoEndFile && !notes.trim();
+      if (isEmpty) {
+        setErr("Add at least one detail or photo before submitting."); return;
       }
 
       setBusy(true);
@@ -101,8 +110,8 @@ export default function Reimbursement() {
         await enqueueMileage({
           reimbursement_uuid: newReimbursementUuid(),
           type: "mileage",
-          odometer_start: Math.floor(start),
-          odometer_end: Math.floor(end),
+          odometer_start: start,
+          odometer_end: end,
           job_uuid: "",
           job_name: "",
           job_date: "",
@@ -130,12 +139,13 @@ export default function Reimbursement() {
     }
 
     // expense
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) {
-      setErr("Enter a positive dollar amount."); return;
+    const amt = amount.trim() === "" ? null : Number(amount);
+    if (amt !== null && (!Number.isFinite(amt) || amt < 0)) {
+      setErr("Amount must be a positive number."); return;
     }
-    if (!receiptFile) {
-      setErr("Attach a receipt photo."); return;
+    const expenseEmpty = amt === null && !category && !receiptFile && !notes.trim();
+    if (expenseEmpty) {
+      setErr("Add at least one detail or photo before submitting."); return;
     }
 
     setBusy(true);
@@ -143,7 +153,7 @@ export default function Reimbursement() {
       await enqueueExpense({
         reimbursement_uuid: newReimbursementUuid(),
         type: "expense",
-        amount: Math.round(amt * 100) / 100,
+        amount: amt === null ? null : Math.round(amt * 100) / 100,
         category,
         job_uuid: "",
         job_name: "",
@@ -281,12 +291,21 @@ export default function Reimbursement() {
                 </div>
                 <div style={{ flex: 1 }}>
                   <div className="label">Category</div>
-                  <input
-                    type="text"
+                  <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
-                    placeholder="Fuel, supplies, meals…"
-                  />
+                    style={{
+                      width: "100%", padding: "9px 10px", borderRadius: 8,
+                      border: "1px solid var(--border)", background: "var(--bg)",
+                      color: "var(--text)", fontSize: 14, boxSizing: "border-box",
+                      appearance: "auto",
+                    }}
+                  >
+                    <option value="">Select a category…</option>
+                    {EXPENSE_CATEGORIES.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <div>

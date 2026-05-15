@@ -148,18 +148,26 @@ def list_reimbursements(
 @router.post("/mileage", response_model=ReimbursementOut)
 def submit_mileage(
     reimbursement_uuid: str = Form(...),
-    odometer_start: int = Form(...),
-    odometer_end: int = Form(...),
+    odometer_start: Optional[int] = Form(default=None),
+    odometer_end: Optional[int] = Form(default=None),
     job_uuid: str = Form(default=""),
     job_name: str = Form(default=""),
     job_date: str = Form(default=""),
     notes: str = Form(default=""),
-    odometer_start_photo: UploadFile = File(...),
-    odometer_end_photo: UploadFile = File(...),
+    odometer_start_photo: Optional[UploadFile] = File(default=None),
+    odometer_end_photo: Optional[UploadFile] = File(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if odometer_end < odometer_start:
+    # Fields are intentionally all optional — crew can submit a partial
+    # request (e.g. only one odometer photo) and the admin follows up.
+    # The only sanity guard is a reading inversion, and only when both
+    # numbers are actually present.
+    if (
+        odometer_start is not None
+        and odometer_end is not None
+        and odometer_end < odometer_start
+    ):
         raise HTTPException(status_code=400, detail="End odometer must be >= start odometer")
 
     existing = (
@@ -173,27 +181,31 @@ def submit_mileage(
 
     user_name = current_user.name or current_user.email or ""
 
+    start_upload = None
+    end_upload = None
     try:
-        start_upload = upload_reimbursement_photo_to_drive(
-            db=db,
-            file_obj=odometer_start_photo.file,
-            filename=f"{reimbursement_uuid}-start",
-            mime_type=odometer_start_photo.content_type or "image/jpeg",
-            user_name=user_name,
-            reimbursement_uuid=reimbursement_uuid,
-            kind="odo_start",
-            caption=f"Start odometer: {odometer_start}",
-        )
-        end_upload = upload_reimbursement_photo_to_drive(
-            db=db,
-            file_obj=odometer_end_photo.file,
-            filename=f"{reimbursement_uuid}-end",
-            mime_type=odometer_end_photo.content_type or "image/jpeg",
-            user_name=user_name,
-            reimbursement_uuid=reimbursement_uuid,
-            kind="odo_end",
-            caption=f"End odometer: {odometer_end}",
-        )
+        if odometer_start_photo is not None:
+            start_upload = upload_reimbursement_photo_to_drive(
+                db=db,
+                file_obj=odometer_start_photo.file,
+                filename=f"{reimbursement_uuid}-start",
+                mime_type=odometer_start_photo.content_type or "image/jpeg",
+                user_name=user_name,
+                reimbursement_uuid=reimbursement_uuid,
+                kind="odo_start",
+                caption=f"Start odometer: {odometer_start if odometer_start is not None else '—'}",
+            )
+        if odometer_end_photo is not None:
+            end_upload = upload_reimbursement_photo_to_drive(
+                db=db,
+                file_obj=odometer_end_photo.file,
+                filename=f"{reimbursement_uuid}-end",
+                mime_type=odometer_end_photo.content_type or "image/jpeg",
+                user_name=user_name,
+                reimbursement_uuid=reimbursement_uuid,
+                kind="odo_end",
+                caption=f"End odometer: {odometer_end if odometer_end is not None else '—'}",
+            )
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Photo upload failed: {e}")
@@ -209,10 +221,10 @@ def submit_mileage(
         job_date=job_date or None,
         odometer_start=odometer_start,
         odometer_end=odometer_end,
-        odometer_start_photo_drive_id=start_upload["file_id"],
-        odometer_start_photo_url=start_upload["url"],
-        odometer_end_photo_drive_id=end_upload["file_id"],
-        odometer_end_photo_url=end_upload["url"],
+        odometer_start_photo_drive_id=start_upload["file_id"] if start_upload else None,
+        odometer_start_photo_url=start_upload["url"] if start_upload else None,
+        odometer_end_photo_drive_id=end_upload["file_id"] if end_upload else None,
+        odometer_end_photo_url=end_upload["url"] if end_upload else None,
         notes=notes or None,
         status="submitted",
         created_at=now,
@@ -245,18 +257,20 @@ def submit_mileage(
 @router.post("/expense", response_model=ReimbursementOut)
 def submit_expense(
     reimbursement_uuid: str = Form(...),
-    amount: float = Form(...),
+    amount: Optional[float] = Form(default=None),
     category: str = Form(default=""),
     job_uuid: str = Form(default=""),
     job_name: str = Form(default=""),
     job_date: str = Form(default=""),
     notes: str = Form(default=""),
-    receipt_photo: UploadFile = File(...),
+    receipt_photo: Optional[UploadFile] = File(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="Amount must be > 0")
+    # All fields optional so a partial request can still be filed; only
+    # reject a negative amount, which is never meaningful.
+    if amount is not None and amount < 0:
+        raise HTTPException(status_code=400, detail="Amount cannot be negative")
 
     existing = (
         db.query(Reimbursement)
@@ -268,17 +282,19 @@ def submit_expense(
 
     user_name = current_user.name or current_user.email or ""
 
+    upload = None
     try:
-        upload = upload_reimbursement_photo_to_drive(
-            db=db,
-            file_obj=receipt_photo.file,
-            filename=f"{reimbursement_uuid}-receipt",
-            mime_type=receipt_photo.content_type or "image/jpeg",
-            user_name=user_name,
-            reimbursement_uuid=reimbursement_uuid,
-            kind="receipt",
-            caption=f"Receipt: ${amount:.2f}",
-        )
+        if receipt_photo is not None:
+            upload = upload_reimbursement_photo_to_drive(
+                db=db,
+                file_obj=receipt_photo.file,
+                filename=f"{reimbursement_uuid}-receipt",
+                mime_type=receipt_photo.content_type or "image/jpeg",
+                user_name=user_name,
+                reimbursement_uuid=reimbursement_uuid,
+                kind="receipt",
+                caption=f"Receipt: ${amount:.2f}" if amount is not None else "Receipt",
+            )
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Photo upload failed: {e}")
@@ -294,8 +310,8 @@ def submit_expense(
         job_date=job_date or None,
         amount=amount,
         category=category or None,
-        receipt_photo_drive_id=upload["file_id"],
-        receipt_photo_url=upload["url"],
+        receipt_photo_drive_id=upload["file_id"] if upload else None,
+        receipt_photo_url=upload["url"] if upload else None,
         notes=notes or None,
         status="submitted",
         created_at=now,
