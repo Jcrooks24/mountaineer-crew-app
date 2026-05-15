@@ -209,19 +209,15 @@ def upload_reimbursement_photo_to_drive(
 ) -> dict:
     """Upload a reimbursement photo to Drive.
 
-    Folder layout:
-        <parent> / Reimbursements / <user_name> - YYYY-MM / <kind> - <uuid8>.jpg
-
-    Grouping by user + month so admin can scan a month's submissions for
-    one crew member without having to filter on date in Sheets. The
-    REIMBURSEMENT_PARENT_ENV_VAR override keeps these out of the main
-    crew-photos parent; if unset, falls back to the default parent.
+    Photos land directly in the reimbursement parent folder
+    (DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID, or the default crew-photos
+    parent if unset) — no per-user or per-month subfolders. Submissions
+    come in one at a time, so the descriptive filename is enough to tell
+    them apart without extra folder nesting.
 
     `kind` is one of "odo_start", "odo_end", "receipt" — written into the
     filename so the admin can tell what they're looking at at a glance.
     """
-    import datetime as _dt
-
     svc = _get_drive_service(db)
 
     reimb_parent = os.getenv(REIMBURSEMENT_PARENT_ENV_VAR, "").strip()
@@ -232,20 +228,14 @@ def upload_reimbursement_photo_to_drive(
             f"landing in default crew-photos parent instead"
         )
 
-    # "Reimbursements" container folder so the parent stays scannable.
-    reimb_folder_id = _get_or_create_folder(svc, "Reimbursements", parent_id)
-
-    safe_user = _safe(user_name or "Unknown")
-    month_label = _dt.datetime.utcnow().strftime("%Y-%m")
-    user_folder_label = f"{safe_user} - {month_label}"[:100]
-    user_folder_id = _get_or_create_folder(svc, user_folder_label, reimb_folder_id)
-
     ext = mime_type.split("/")[-1] if "/" in mime_type else "jpg"
     ext = ext if ext in ("jpg", "jpeg", "png", "heic", "webp") else "jpg"
     short_id = (reimbursement_uuid or filename or "photo")[:8]
-    drive_filename = f"{kind} - {short_id}.{ext}"
+    safe_user = _safe(user_name or "Unknown")
+    # Filename carries all the context now that there's no folder structure.
+    drive_filename = f"{safe_user} - {kind} - {short_id}.{ext}"
 
-    print(f"[drive] uploading reimbursement '{drive_filename}' into '{user_folder_label}'")
+    print(f"[drive] uploading reimbursement '{drive_filename}'")
 
     file_obj.seek(0)
     media = MediaIoBaseUpload(
@@ -257,7 +247,7 @@ def upload_reimbursement_photo_to_drive(
     request = svc.files().create(
         body={
             "name": drive_filename,
-            "parents": [user_folder_id],
+            "parents": [parent_id],
             "description": caption or "",
         },
         media_body=media,
