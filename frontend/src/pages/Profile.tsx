@@ -214,31 +214,25 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Compliance & reference resources */}
+      {/* Tools & resources — the three nav links grouped into one card with
+          consistent flat rows, so the page reads as a short list instead of
+          a stack of heavy buttons. */}
       <div className="card">
-        <div className="sectionTitle">Compliance & Reference</div>
+        <div className="sectionTitle">Tools & Resources</div>
         <div className="col" style={{ gap: 8 }}>
-          <button onClick={() => nav("/long-distance")} style={{ textAlign: "left" }}>
-            Long Distance Compliance
-          </button>
-          <button onClick={() => nav("/documents")} style={{ textAlign: "left" }}>
-            Document Library
-          </button>
-        </div>
-      </div>
-
-      {/* Expenses / reimbursement — mileage, personal-card reimbursement,
-          or company-card expense logging. */}
-      <div className="card">
-        <div className="sectionTitle">Log Expense / Request Reimbursement</div>
-        <div className="col" style={{ gap: 8 }}>
-          <button onClick={() => nav("/reimbursement")} style={{ textAlign: "left" }}>
-            Log an expense or request reimbursement
-          </button>
-          <div className="small" style={{ color: "var(--muted)" }}>
-            Mileage with odometer photos, personal-card reimbursements, or
-            company-card expense receipts.
-          </div>
+          <ProfileNavRow
+            label="Log Expense / Reimbursement"
+            hint="Mileage, personal-card reimbursement, or company-card receipts"
+            onClick={() => nav("/reimbursement")}
+          />
+          <ProfileNavRow
+            label="Long Distance Compliance"
+            onClick={() => nav("/long-distance")}
+          />
+          <ProfileNavRow
+            label="Document Library"
+            onClick={() => nav("/documents")}
+          />
         </div>
       </div>
 
@@ -262,6 +256,37 @@ export default function Profile() {
       {/* Patch Notes — shows most recent 3 by default with an expander */}
       <PatchNotesCard />
     </div>
+  );
+}
+
+// Flat, list-style navigation row — lighter than a default button so a card
+// full of links doesn't read as a wall of buttons.
+function ProfileNavRow({
+  label,
+  hint,
+  onClick,
+}: {
+  label: string;
+  hint?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 12, width: "100%", textAlign: "left",
+        padding: "11px 14px", fontSize: 14, fontWeight: 600,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <span className="col" style={{ gap: 2 }}>
+        <span>{label}</span>
+        {hint && <span className="small" style={{ color: "var(--muted)" }}>{hint}</span>}
+      </span>
+      <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
+    </button>
   );
 }
 

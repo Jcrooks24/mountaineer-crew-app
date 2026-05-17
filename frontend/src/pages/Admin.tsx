@@ -558,7 +558,7 @@ function SettingsTab({
     <div>
       <SettingsNavCard
         title="Theme & Appearance"
-        desc="Theme templates, colors, fonts, button style, map pins, and field help text."
+        desc="Theme templates, colors, fonts, button style, and map pins."
         action="Open Theme & Appearance →"
         onClick={onOpenAppearance}
       />
@@ -569,6 +569,7 @@ function SettingsTab({
         onClick={onOpenAdvanced}
       />
       <DVIRUnitsCard />
+      <HelpTextCard />
       <SheetSyncCard />
       <AppHealthCard />
     </div>
@@ -1169,9 +1170,6 @@ function ThemeAppearancePage({ onBack }: { onBack: () => void }) {
 
         </div>
       </div>
-
-      {/* ── Help text ── */}
-      <HelpTextCard />
 
       {/* ── Apply to all users ── */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
