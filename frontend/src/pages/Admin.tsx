@@ -60,10 +60,24 @@ type CalStatus = {
 
 type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office";
 
+const TAB_TITLES: Record<Tab, string> = {
+  map: "Admin Dashboard",
+  employees: "Employees",
+  dvir: "DVIR Review",
+  estimator: "Estimator",
+  notes: "Notes",
+  summary: "Job Summary",
+  office: "Office Hours",
+  settings: "Settings",
+  advanced: "Advanced Settings",
+  appearance: "Theme & Appearance",
+};
+
 export default function Admin() {
   const { user } = useAuth();
   const nav = useNavigate();
-  const [tab, setTab] = useState<Tab>("employees");
+  // The Map is the dashboard home; every other tool opens as a sub-view.
+  const [tab, setTab] = useState<Tab>("map");
 
   useEffect(() => {
     if (user && user.role !== "admin") nav("/", { replace: true });
@@ -71,61 +85,88 @@ export default function Admin() {
 
   if (!user || user.role !== "admin") return null;
 
+  const isHome = tab === "map";
+  // Settings sub-pages step back to Settings; every other tool to the home.
+  const backTo: Tab = tab === "advanced" || tab === "appearance" ? "settings" : "map";
+  const backLabel = isHome
+    ? "← Back"
+    : backTo === "settings"
+      ? "← Settings"
+      : "← Dashboard";
+
   return (
     <div className="container" style={{ maxWidth: 860 }}>
       {/* Header */}
       <div className="topbar" style={{ marginBottom: 12 }}>
-        <span style={{ fontWeight: 700, fontSize: 16 }}>Admin Dashboard</span>
+        <span style={{ fontWeight: 700, fontSize: 16 }}>{TAB_TITLES[tab]}</span>
         <button
-          onClick={() => nav(-1)}
+          onClick={() => (isHome ? nav(-1) : setTab(backTo))}
           style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
         >
-          ← Back
+          {backLabel}
         </button>
       </div>
 
-      {/* Tabs — even grid so 8 tabs read as tidy rows instead of a ragged,
-          stretched flex-wrap */}
-      <div
-        className="tabbar"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))",
-          gap: 8,
-        }}
-      >
-        {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary", "office"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            className={"tab " + (tab === t || ((tab === "advanced" || tab === "appearance") && t === "settings") ? "active" : "")}
-            onClick={() => setTab(t)}
-            style={{ textTransform: "capitalize", flex: "none", fontSize: 12, padding: "8px 6px" }}
-          >
-            {t === "map" ? "Map (Today)"
-              : t === "dvir" ? "DVIR Review"
-              : t === "notes" ? "Notes"
-              : t === "summary" ? "Job Summary"
-              : t === "office" ? "Office Hours"
-              : t}
-          </button>
-        ))}
-      </div>
-
+      {tab === "map" && (
+        <>
+          <AdminToolMenu onPick={setTab} />
+          <MapTab />
+        </>
+      )}
       {tab === "employees" && <EmployeesTab />}
-      {tab === "map" && <MapTab />}
+      {tab === "dvir" && <DVIRTab />}
+      {tab === "estimator" && <EstimatorTab />}
+      {tab === "notes" && <NotesTab />}
+      {tab === "summary" && <JobSummaryTab />}
+      {tab === "office" && <OfficeHoursPanel />}
       {tab === "settings" && (
         <SettingsTab
           onOpenAdvanced={() => setTab("advanced")}
           onOpenAppearance={() => setTab("appearance")}
         />
       )}
-      {tab === "advanced" && <AdvancedSettingsPage onBack={() => setTab("settings")} />}
-      {tab === "appearance" && <ThemeAppearancePage onBack={() => setTab("settings")} />}
-      {tab === "dvir" && <DVIRTab />}
-      {tab === "estimator" && <EstimatorTab />}
-      {tab === "notes" && <NotesTab />}
-      {tab === "summary" && <JobSummaryTab />}
-      {tab === "office" && <OfficeHoursPanel />}
+      {tab === "advanced" && <AdvancedSettingsPage />}
+      {tab === "appearance" && <ThemeAppearancePage />}
+    </div>
+  );
+}
+
+// Dashboard home menu — list-style links to each admin tool. The Map is the
+// home itself, so it isn't listed here.
+function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
+  const tools: { tab: Tab; label: string; hint: string }[] = [
+    { tab: "employees", label: "Employees",    hint: "Crew access and roles" },
+    { tab: "dvir",      label: "DVIR Review",  hint: "Mechanic sign-off on inspections" },
+    { tab: "estimator", label: "Estimator",    hint: "Build and price estimates" },
+    { tab: "notes",     label: "Notes",        hint: "Patch notes and admin notes" },
+    { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
+    { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
+    { tab: "settings",  label: "Settings",     hint: "Theme, field config, and advanced options" },
+  ];
+  return (
+    <div className="card">
+      <div className="sectionTitle">Tools</div>
+      <div className="col" style={{ gap: 8 }}>
+        {tools.map((t) => (
+          <button
+            key={t.tab}
+            onClick={() => onPick(t.tab)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: 12, width: "100%", textAlign: "left",
+              padding: "11px 14px", fontSize: 14, fontWeight: 600,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <span className="col" style={{ gap: 2 }}>
+              <span>{t.label}</span>
+              <span className="small" style={{ color: "var(--muted)" }}>{t.hint}</span>
+            </span>
+            <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -617,7 +658,7 @@ function SettingsNavCard({
 // ─────────────────────────────────────────
 // Theme & Appearance sub-page — every look-and-feel control.
 // ─────────────────────────────────────────
-function ThemeAppearancePage({ onBack }: { onBack: () => void }) {
+function ThemeAppearancePage() {
   const { settings, update, reset } = useTheme();
   const preset = THEME_PRESETS[settings.themeId] ?? THEME_PRESETS["dark-ocean"];
 
@@ -713,17 +754,6 @@ function ThemeAppearancePage({ onBack }: { onBack: () => void }) {
 
   return (
     <div>
-      {/* Back to the Settings landing */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-        <button
-          onClick={onBack}
-          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, padding: 0 }}
-        >
-          ← Back to Settings
-        </button>
-        <span style={{ fontWeight: 700, fontSize: 15 }}>Theme &amp; Appearance</span>
-      </div>
-
       {/* ── Theme templates ── */}
       <div className="card">
         <div className="sectionTitle">Theme Template</div>
@@ -1473,19 +1503,9 @@ function computeOverall(
 // ─────────────────────────────────────────
 // Advanced Settings page
 // ─────────────────────────────────────────
-function AdvancedSettingsPage({ onBack }: { onBack: () => void }) {
+function AdvancedSettingsPage() {
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-        <button
-          onClick={onBack}
-          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, padding: 0 }}
-        >
-          ← Back to Settings
-        </button>
-        <span style={{ fontWeight: 700, fontSize: 15 }}>Advanced Settings</span>
-      </div>
-
       <div className="card">
         <div className="sectionTitle">Google Calendar</div>
         <CalendarTab />
