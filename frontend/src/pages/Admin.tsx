@@ -84,14 +84,22 @@ export default function Admin() {
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="tabbar" style={{ flexWrap: "wrap" }}>
+      {/* Tabs — even grid so 8 tabs read as tidy rows instead of a ragged,
+          stretched flex-wrap */}
+      <div
+        className="tabbar"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))",
+          gap: 8,
+        }}
+      >
         {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary", "office"] as Tab[]).map((t) => (
           <button
             key={t}
             className={"tab " + (tab === t || ((tab === "advanced" || tab === "appearance") && t === "settings") ? "active" : "")}
             onClick={() => setTab(t)}
-            style={{ textTransform: "capitalize" }}
+            style={{ textTransform: "capitalize", flex: "none", fontSize: 12, padding: "8px 6px" }}
           >
             {t === "map" ? "Map (Today)"
               : t === "dvir" ? "DVIR Review"
@@ -1863,6 +1871,12 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
   const [requestedEmail, setRequestedEmail] = useState<string | null>(
     dvir.mechanic_signature_requested_email,
   );
+  // Remote sign-off is the secondary path — collapsed by default so the
+  // review screen isn't two big stacked forms. Auto-expanded when a request
+  // is already out, so its "awaiting signature" status stays in view.
+  const [remoteOpen, setRemoteOpen] = useState<boolean>(
+    !!dvir.mechanic_signature_requested_at,
+  );
 
   async function handleSendRequest(e: React.FormEvent) {
     e.preventDefault();
@@ -2013,56 +2027,76 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
         </div>
       ) : (
         <>
-        {/* Remote signature request — email a sign-off link to a mechanic */}
+        {/* Remote signature request — secondary path, collapsed by default */}
         <div className="card" style={{ marginBottom: 14 }}>
-          <div className="label" style={{ fontWeight: 700, marginBottom: 6 }}>
-            Request Remote Mechanic Sign-Off
-          </div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
-            Email a secure link to a mechanic so they can review the defect and sign off
-            remotely. The vehicle is cleared automatically once they sign.
-          </div>
+          <button
+            type="button"
+            onClick={() => setRemoteOpen((v) => !v)}
+            style={{
+              background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%",
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              color: "var(--text)",
+            }}
+          >
+            <span style={{ fontWeight: 700, fontSize: 13 }}>Request Remote Mechanic Sign-Off</span>
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>{remoteOpen ? "▾" : "▸"}</span>
+          </button>
 
-          {requestedAt && (
-            <div
-              style={{
-                padding: "8px 12px", borderRadius: 8, marginBottom: 12,
-                background: "rgba(255,200,50,0.1)", border: "1px solid rgba(255,200,50,0.3)",
-                fontSize: 13, color: "var(--text)",
-              }}
-            >
-              Request sent to <strong>{requestedEmail}</strong> on{" "}
-              {formatMountainDateTime(requestedAt)} — awaiting signature. You can resend below.
+          {requestedAt && !remoteOpen && (
+            <div className="small" style={{ color: "#f0c040", marginTop: 6 }}>
+              Request sent to {requestedEmail} — awaiting signature. Tap to resend.
             </div>
           )}
 
-          <form onSubmit={handleSendRequest} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Email *</div>
-              <input
-                type="email"
-                value={reqEmail}
-                onChange={(e) => setReqEmail(e.target.value)}
-                placeholder="mechanic@example.com"
-                style={mechInputStyle}
-              />
+          {remoteOpen && (
+            <div style={{ marginTop: 10 }}>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+                Email a secure link to a mechanic so they can review the defect and sign off
+                remotely. The vehicle is cleared automatically once they sign.
+              </div>
+
+              {requestedAt && (
+                <div
+                  style={{
+                    padding: "8px 12px", borderRadius: 8, marginBottom: 12,
+                    background: "rgba(255,200,50,0.1)", border: "1px solid rgba(255,200,50,0.3)",
+                    fontSize: 13, color: "var(--text)",
+                  }}
+                >
+                  Request sent to <strong>{requestedEmail}</strong> on{" "}
+                  {formatMountainDateTime(requestedAt)} — awaiting signature. You can resend below.
+                </div>
+              )}
+
+              <form onSubmit={handleSendRequest} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Email *</div>
+                  <input
+                    type="email"
+                    value={reqEmail}
+                    onChange={(e) => setReqEmail(e.target.value)}
+                    placeholder="mechanic@example.com"
+                    style={mechInputStyle}
+                  />
+                </div>
+                <div>
+                  <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name (optional)</div>
+                  <input
+                    value={reqName}
+                    onChange={(e) => setReqName(e.target.value)}
+                    placeholder="For the email greeting"
+                    style={mechInputStyle}
+                  />
+                </div>
+                {reqErr && (
+                  <div style={{ color: "var(--danger)", fontSize: 13 }}>{reqErr}</div>
+                )}
+                <button type="submit" disabled={reqBusy} style={{ fontSize: 13, alignSelf: "flex-start" }}>
+                  {reqBusy ? "Sending…" : requestedAt ? "Resend signature request" : "Email signature request"}
+                </button>
+              </form>
             </div>
-            <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name (optional)</div>
-              <input
-                value={reqName}
-                onChange={(e) => setReqName(e.target.value)}
-                placeholder="For the email greeting"
-                style={mechInputStyle}
-              />
-            </div>
-            {reqErr && (
-              <div style={{ color: "var(--danger)", fontSize: 13 }}>{reqErr}</div>
-            )}
-            <button type="submit" disabled={reqBusy} style={{ fontSize: 13, alignSelf: "flex-start" }}>
-              {reqBusy ? "Sending…" : requestedAt ? "Resend signature request" : "Email signature request"}
-            </button>
-          </form>
+          )}
         </div>
 
         {/* Mechanic sign form — in-person sign-off on this device */}
@@ -3006,16 +3040,14 @@ function JobSummaryTab() {
       )}
 
       {summary && (
-        <div className="card">
-          <button onClick={() => { setSummary(null); }} style={{ fontSize: 12 }}>
-            ← Back to matches
-          </button>
-        </div>
-      )}
-
-      {summary && (
         <>
           <div className="card">
+            <button
+              onClick={() => setSummary(null)}
+              style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 12, padding: 0, marginBottom: 8 }}
+            >
+              ← Back to matches
+            </button>
             <div className="sectionTitle">{summary.job_name || "Unnamed job"}</div>
             <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace" }}>{summary.job_uuid}</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
