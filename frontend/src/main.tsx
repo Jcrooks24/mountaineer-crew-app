@@ -10,6 +10,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { ThemeProvider } from "./theme/ThemeContext";
 import RequireAuth from "./auth/RequireAuth";
 import ErrorBoundary from "./components/ErrorBoundary";
+import UpdateBanner from "./components/UpdateBanner";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -29,6 +30,8 @@ createRoot(document.getElementById("root")!).render(
     <AuthProvider>
       <BrowserRouter>
         <ErrorBoundary>
+        {/* App-wide; fixed-position, renders over whatever route is active */}
+        <UpdateBanner />
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />

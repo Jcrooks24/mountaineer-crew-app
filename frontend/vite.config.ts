@@ -77,8 +77,12 @@ export default defineConfig(({ mode }) => {
       react(),
 
       VitePWA({
-        // Auto-register SW; auto-update when you deploy new builds
-        registerType: "autoUpdate",
+        // "prompt" (not "autoUpdate"): a freshly deployed build installs in
+        // the background and then *waits* instead of silently reloading the
+        // page. UpdateBanner detects the waiting worker and lets the crew
+        // apply it when it's safe — important for an offline-first field app
+        // where a surprise reload could interrupt data entry or a sync.
+        registerType: "prompt",
         injectRegister: "auto",
 
         // Manifest served as /manifest.webmanifest
