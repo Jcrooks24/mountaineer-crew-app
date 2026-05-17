@@ -414,3 +414,86 @@ export function useResolvedLogo(): { src: string; variant: "light" | "dark" } {
           : "light";
   return { src: variant === "light" ? logoLight : logoDark, variant };
 }
+
+// ─── Custom (device-local) theme presets ──────────────────────────────────────
+//
+// Admins can snapshot the current look as a named preset that then shows up in
+// the Theme Template grid next to the built-ins. These live in localStorage on
+// that device only — no backend. To push a custom look to every crew member,
+// select it and use "Apply to all users", which saves the resolved settings to
+// the server config the same way a built-in selection does.
+
+// A theme preset captures everything visual *except* the editable help-text
+// copy — help text is content, not look-and-feel, and shouldn't ride along
+// when someone picks a different palette.
+export type ThemeStyle = Omit<ThemeSettings, "helpTexts">;
+
+export interface CustomPreset {
+  id: string;
+  label: string;
+  emoji: string;
+  style: ThemeStyle;
+}
+
+const CUSTOM_PRESETS_KEY = "crew_custom_theme_presets";
+
+// Pull the style fields out of a full settings object, in a fixed key order so
+// two snapshots of the same look stringify identically (used for the "active
+// preset" check in the UI).
+export function pickStyle(s: ThemeSettings): ThemeStyle {
+  return {
+    themeId: s.themeId,
+    brandOverride: s.brandOverride,
+    brand2Override: s.brand2Override,
+    textMode: s.textMode,
+    logoMode: s.logoMode,
+    fontValue: s.fontValue,
+    btnRadius: s.btnRadius,
+    btnBgFrom: s.btnBgFrom,
+    btnBgTo: s.btnBgTo,
+    btnSize: s.btnSize,
+    cardShadow: s.cardShadow,
+    density: s.density,
+    cardGlow: s.cardGlow,
+    pinSize: s.pinSize,
+    pinColors: s.pinColors,
+  };
+}
+
+export function loadCustomPresets(): CustomPreset[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_PRESETS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (p): p is CustomPreset =>
+        !!p &&
+        typeof (p as CustomPreset).id === "string" &&
+        typeof (p as CustomPreset).label === "string" &&
+        !!(p as CustomPreset).style,
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function persistCustomPresets(list: CustomPreset[]) {
+  try {
+    localStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify(list));
+  } catch {
+    /* storage unavailable (private mode / quota) — non-fatal */
+  }
+}
+
+// Swatch colors for a style snapshot: the preset palette with brand overrides
+// applied on top — matches what applySettings() would render.
+export function styleVars(
+  style: Pick<ThemeStyle, "themeId" | "brandOverride" | "brand2Override">,
+): ThemeVars {
+  const base = THEME_PRESETS[style.themeId] ?? THEME_PRESETS["dark-ocean"];
+  const vars = { ...base.vars };
+  if (style.brandOverride) vars["--brand"] = style.brandOverride;
+  if (style.brand2Override) vars["--brand2"] = style.brand2Override;
+  return vars;
+}

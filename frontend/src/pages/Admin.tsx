@@ -12,7 +12,12 @@ import {
   PIN_EVENT_TYPES,
   DEFAULT_PIN_COLORS,
   DEFAULT_HELP_TEXTS,
+  loadCustomPresets,
+  persistCustomPresets,
+  pickStyle,
+  styleVars,
   type HelpTexts,
+  type CustomPreset,
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
@@ -53,7 +58,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "dvir" | "estimator" | "notes" | "summary" | "office";
+type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -84,7 +89,7 @@ export default function Admin() {
         {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary", "office"] as Tab[]).map((t) => (
           <button
             key={t}
-            className={"tab " + (tab === t || (tab === "advanced" && t === "settings") ? "active" : "")}
+            className={"tab " + (tab === t || ((tab === "advanced" || tab === "appearance") && t === "settings") ? "active" : "")}
             onClick={() => setTab(t)}
             style={{ textTransform: "capitalize" }}
           >
@@ -100,8 +105,14 @@ export default function Admin() {
 
       {tab === "employees" && <EmployeesTab />}
       {tab === "map" && <MapTab />}
-      {tab === "settings" && <SettingsTab onOpenAdvanced={() => setTab("advanced")} />}
+      {tab === "settings" && (
+        <SettingsTab
+          onOpenAdvanced={() => setTab("advanced")}
+          onOpenAppearance={() => setTab("appearance")}
+        />
+      )}
       {tab === "advanced" && <AdvancedSettingsPage onBack={() => setTab("settings")} />}
+      {tab === "appearance" && <ThemeAppearancePage onBack={() => setTab("settings")} />}
       {tab === "dvir" && <DVIRTab />}
       {tab === "estimator" && <EstimatorTab />}
       {tab === "notes" && <NotesTab />}
@@ -533,9 +544,71 @@ function CalendarTab() {
 }
 
 // ─────────────────────────────────────────
-// Settings tab
+// Settings tab — lean landing page. Theme/style controls live on the
+// Theme & Appearance sub-page so this screen stays uncluttered.
 // ─────────────────────────────────────────
-function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
+function SettingsTab({
+  onOpenAdvanced,
+  onOpenAppearance,
+}: {
+  onOpenAdvanced: () => void;
+  onOpenAppearance: () => void;
+}) {
+  return (
+    <div>
+      <SettingsNavCard
+        title="Theme & Appearance"
+        desc="Theme templates, colors, fonts, button style, map pins, and field help text."
+        action="Open Theme & Appearance →"
+        onClick={onOpenAppearance}
+      />
+      <SettingsNavCard
+        title="Advanced Settings"
+        desc="Google Calendar integration, data management, and other advanced options."
+        action="Open Advanced Settings →"
+        onClick={onOpenAdvanced}
+      />
+      <DVIRUnitsCard />
+      <SheetSyncCard />
+      <AppHealthCard />
+    </div>
+  );
+}
+
+// Tappable card that navigates to a settings sub-page.
+function SettingsNavCard({
+  title,
+  desc,
+  action,
+  onClick,
+}: {
+  title: string;
+  desc: string;
+  action: string;
+  onClick: () => void;
+}) {
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="sectionTitle" style={{ marginBottom: 0 }}>{title}</div>
+      <div className="small" style={{ color: "var(--muted)" }}>{desc}</div>
+      <button
+        onClick={onClick}
+        style={{
+          alignSelf: "flex-start", padding: "8px 18px", fontSize: 13,
+          border: "1px solid var(--border)", borderRadius: "var(--btn-r)",
+          color: "var(--text)", background: "rgba(255,255,255,0.04)", cursor: "pointer",
+        }}
+      >
+        {action}
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Theme & Appearance sub-page — every look-and-feel control.
+// ─────────────────────────────────────────
+function ThemeAppearancePage({ onBack }: { onBack: () => void }) {
   const { settings, update, reset } = useTheme();
   const preset = THEME_PRESETS[settings.themeId] ?? THEME_PRESETS["dark-ocean"];
 
@@ -543,6 +616,12 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
   const [brand2Local, setBrand2Local] = useState(settings.brand2Override ?? preset.vars["--brand2"]);
   const [applyBusy, setApplyBusy] = useState(false);
   const [applyMsg, setApplyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Device-local custom theme presets (saved snapshots of the current look).
+  const [customPresets, setCustomPresets] = useState<CustomPreset[]>(loadCustomPresets);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newEmoji, setNewEmoji] = useState("🎨");
 
   async function applyToAllUsers() {
     setApplyBusy(true);
@@ -581,14 +660,67 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
     setBrand2Local(def.vars["--brand2"]);
   }
 
+  // ── Custom presets ──
+  // A custom preset is "active" when the live style exactly matches its
+  // snapshot. Comparing JSON is safe here: both sides come from pickStyle(),
+  // which writes keys in a fixed order.
+  const currentStyle = JSON.stringify(pickStyle(settings));
+  const activeCustomId =
+    customPresets.find((c) => JSON.stringify(c.style) === currentStyle)?.id ?? null;
+
+  function selectCustom(c: CustomPreset) {
+    update(c.style);
+    const v = styleVars(c.style);
+    setBrandLocal(v["--brand"]);
+    setBrand2Local(v["--brand2"]);
+  }
+
+  function saveCurrentAsPreset() {
+    const label = newName.trim();
+    if (!label) return;
+    const id =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `cp_${Date.now()}`;
+    const next: CustomPreset = {
+      id,
+      label,
+      emoji: newEmoji.trim() || "🎨",
+      style: pickStyle(settings),
+    };
+    const list = [...customPresets, next];
+    setCustomPresets(list);
+    persistCustomPresets(list);
+    setNewName("");
+    setNewEmoji("🎨");
+    setSaveOpen(false);
+  }
+
+  function deleteCustom(id: string) {
+    const list = customPresets.filter((c) => c.id !== id);
+    setCustomPresets(list);
+    persistCustomPresets(list);
+  }
+
   return (
     <div>
+      {/* Back to the Settings landing */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+        <button
+          onClick={onBack}
+          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, padding: 0 }}
+        >
+          ← Back to Settings
+        </button>
+        <span style={{ fontWeight: 700, fontSize: 15 }}>Theme &amp; Appearance</span>
+      </div>
+
       {/* ── Theme templates ── */}
       <div className="card">
         <div className="sectionTitle">Theme Template</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
           {Object.entries(THEME_PRESETS).map(([id, p]) => {
-            const active = settings.themeId === id;
+            const active = !activeCustomId && settings.themeId === id;
             return (
               <button
                 key={id}
@@ -613,6 +745,101 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
               </button>
             );
           })}
+
+          {/* Custom (device-local) presets — same tile, plus a delete control.
+              A div, not a button, so the delete control can nest inside it. */}
+          {customPresets.map((c) => {
+            const v = styleVars(c.style);
+            const active = activeCustomId === c.id;
+            return (
+              <div
+                key={c.id}
+                onClick={() => selectCustom(c)}
+                role="button"
+                style={{
+                  position: "relative",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+                  padding: "14px 10px",
+                  background: v["--card"],
+                  border: `2px solid ${active ? v["--brand"] : v["--border"]}`,
+                  borderRadius: "var(--btn-r)", cursor: "pointer",
+                  color: v["--text"], fontFamily: "var(--font)",
+                }}
+              >
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteCustom(c.id); }}
+                  title="Delete preset"
+                  aria-label={`Delete ${c.label} preset`}
+                  style={{
+                    position: "absolute", top: 4, right: 4,
+                    width: 22, height: 22, padding: 0, lineHeight: 1,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 13, borderRadius: "50%",
+                    background: "rgba(0,0,0,0.35)", color: v["--muted"],
+                    border: `1px solid ${v["--border"]}`, cursor: "pointer",
+                  }}
+                >
+                  ✕
+                </button>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[v["--brand"], v["--brand2"], v["--bg"]].map((col, i) => (
+                    <div key={i} style={{ width: 14, height: 14, borderRadius: "50%", background: col, border: "1px solid rgba(255,255,255,0.15)" }} />
+                  ))}
+                </div>
+                <span style={{ fontSize: 18 }}>{c.emoji}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: v["--text"], textAlign: "center" }}>{c.label}</span>
+                {active && <span style={{ fontSize: 10, color: v["--brand"], fontWeight: 700 }}>ACTIVE</span>}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Save the current look as a reusable preset */}
+        <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+          {!saveOpen ? (
+            <button onClick={() => setSaveOpen(true)} style={{ fontSize: 13 }}>
+              ＋ Save current theme as preset
+            </button>
+          ) : (
+            <div className="col" style={{ gap: 8 }}>
+              <label className="small">Name this theme preset</label>
+              <div className="row" style={{ gap: 8 }}>
+                <input
+                  value={newEmoji}
+                  onChange={(e) => setNewEmoji(e.target.value)}
+                  maxLength={2}
+                  aria-label="Preset icon"
+                  style={{ width: 56, textAlign: "center", fontSize: 18, flexShrink: 0 }}
+                />
+                <input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="e.g. Company Blue"
+                  style={{ flex: 1, fontSize: 14 }}
+                />
+              </div>
+              <div className="row" style={{ gap: 8 }}>
+                <button
+                  className="btnPrimary"
+                  onClick={saveCurrentAsPreset}
+                  disabled={!newName.trim()}
+                  style={{ fontSize: 13 }}
+                >
+                  Save preset
+                </button>
+                <button
+                  onClick={() => { setSaveOpen(false); setNewName(""); setNewEmoji("🎨"); }}
+                  style={{ fontSize: 13 }}
+                >
+                  Cancel
+                </button>
+              </div>
+              <div className="small" style={{ color: "var(--muted)" }}>
+                Saved on this device. To push a look to every crew member, select it
+                and use “Apply to all users” at the bottom of this page.
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -945,29 +1172,6 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
 
       {/* ── Help text ── */}
       <HelpTextCard />
-
-      {/* ── DVIR vehicle units ── */}
-      <DVIRUnitsCard />
-
-      {/* ── Sheet sync (admin recovery for missed events) ── */}
-      <SheetSyncCard />
-
-      {/* ── App health check ── */}
-      <AppHealthCard />
-
-      {/* ── Advanced settings ── */}
-      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div className="sectionTitle">Advanced Settings</div>
-        <div className="small" style={{ color: "var(--muted)" }}>
-          Google Calendar integration, data management, and other advanced options.
-        </div>
-        <button
-          onClick={onOpenAdvanced}
-          style={{ alignSelf: "flex-start", padding: "8px 18px", fontSize: 13, border: "1px solid var(--border)", borderRadius: "var(--btn-r)", color: "var(--text)", background: "rgba(255,255,255,0.04)", cursor: "pointer" }}
-        >
-          Open Advanced Settings →
-        </button>
-      </div>
 
       {/* ── Apply to all users ── */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>

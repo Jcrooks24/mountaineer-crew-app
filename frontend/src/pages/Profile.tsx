@@ -180,35 +180,38 @@ export default function Profile() {
         {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
       </div>
 
-      {/* Account info */}
+      {/* Account — read-only identity plus editable display name, grouped
+          into one card to keep the profile screen compact */}
       <div className="card">
         <div className="sectionTitle">Account</div>
-        <div className="col" style={{ gap: 12 }}>
-          <div>
-            <div className="label">Email</div>
-            <div style={{ marginTop: 4 }}>{user?.email}</div>
+        <div className="col" style={{ gap: 14 }}>
+          <div className="row" style={{ gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div style={{ flex: 1, minWidth: 150 }}>
+              <div className="label">Email</div>
+              <div style={{ marginTop: 4 }}>{user?.email}</div>
+            </div>
+            <div style={{ flex: 1, minWidth: 100 }}>
+              <div className="label">Role</div>
+              <div style={{ marginTop: 4, textTransform: "capitalize" }}>{user?.role ?? "user"}</div>
+            </div>
           </div>
-          <div>
-            <div className="label">Role</div>
-            <div style={{ marginTop: 4, textTransform: "capitalize" }}>{user?.role ?? "user"}</div>
-          </div>
+          <form
+            onSubmit={handleSaveName}
+            className="col"
+            style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}
+          >
+            <label className="label">Display name</label>
+            <input
+              value={name}
+              onChange={(e) => { setName(e.target.value); setSaved(false); }}
+              placeholder="Your name"
+            />
+            {saved && <div className="small" style={{ color: "var(--ok)" }}>Saved</div>}
+            <button className="btnPrimary" disabled={saving} style={{ alignSelf: "flex-start", fontSize: 13 }}>
+              {saving ? "Saving…" : "Save name"}
+            </button>
+          </form>
         </div>
-      </div>
-
-      {/* Edit name */}
-      <div className="card">
-        <div className="sectionTitle">Display name</div>
-        <form onSubmit={handleSaveName} className="col" style={{ gap: 12 }}>
-          <input
-            value={name}
-            onChange={(e) => { setName(e.target.value); setSaved(false); }}
-            placeholder="Your name"
-          />
-          {saved && <div className="small" style={{ color: "var(--ok)" }}>Saved</div>}
-          <button className="btnPrimary" disabled={saving}>
-            {saving ? "Saving…" : "Save name"}
-          </button>
-        </form>
       </div>
 
       {/* Compliance & reference resources */}
