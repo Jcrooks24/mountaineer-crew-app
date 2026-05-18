@@ -12,7 +12,12 @@ import {
   PIN_EVENT_TYPES,
   DEFAULT_PIN_COLORS,
   DEFAULT_HELP_TEXTS,
+  loadCustomPresets,
+  persistCustomPresets,
+  pickStyle,
+  styleVars,
   type HelpTexts,
+  type CustomPreset,
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
@@ -53,12 +58,26 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "dvir" | "estimator" | "notes" | "summary" | "office";
+type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office";
+
+const TAB_TITLES: Record<Tab, string> = {
+  map: "Admin Dashboard",
+  employees: "Employees",
+  dvir: "DVIR Review",
+  estimator: "Estimator",
+  notes: "Notes",
+  summary: "Job Summary",
+  office: "Office Hours",
+  settings: "Settings",
+  advanced: "Advanced Settings",
+  appearance: "Theme & Appearance",
+};
 
 export default function Admin() {
   const { user } = useAuth();
   const nav = useNavigate();
-  const [tab, setTab] = useState<Tab>("employees");
+  // The Map is the dashboard home; every other tool opens as a sub-view.
+  const [tab, setTab] = useState<Tab>("map");
 
   useEffect(() => {
     if (user && user.role !== "admin") nav("/", { replace: true });
@@ -66,47 +85,88 @@ export default function Admin() {
 
   if (!user || user.role !== "admin") return null;
 
+  const isHome = tab === "map";
+  // Settings sub-pages step back to Settings; every other tool to the home.
+  const backTo: Tab = tab === "advanced" || tab === "appearance" ? "settings" : "map";
+  const backLabel = isHome
+    ? "← Back"
+    : backTo === "settings"
+      ? "← Settings"
+      : "← Dashboard";
+
   return (
     <div className="container" style={{ maxWidth: 860 }}>
       {/* Header */}
       <div className="topbar" style={{ marginBottom: 12 }}>
-        <span style={{ fontWeight: 700, fontSize: 16 }}>Admin Dashboard</span>
+        <span style={{ fontWeight: 700, fontSize: 16 }}>{TAB_TITLES[tab]}</span>
         <button
-          onClick={() => nav(-1)}
+          onClick={() => (isHome ? nav(-1) : setTab(backTo))}
           style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
         >
-          ← Back
+          {backLabel}
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="tabbar" style={{ flexWrap: "wrap" }}>
-        {(["employees", "map", "settings", "dvir", "estimator", "notes", "summary", "office"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            className={"tab " + (tab === t || (tab === "advanced" && t === "settings") ? "active" : "")}
-            onClick={() => setTab(t)}
-            style={{ textTransform: "capitalize" }}
-          >
-            {t === "map" ? "Map (Today)"
-              : t === "dvir" ? "DVIR Review"
-              : t === "notes" ? "Notes"
-              : t === "summary" ? "Job Summary"
-              : t === "office" ? "Office Hours"
-              : t}
-          </button>
-        ))}
-      </div>
-
+      {tab === "map" && (
+        <>
+          <AdminToolMenu onPick={setTab} />
+          <MapTab />
+        </>
+      )}
       {tab === "employees" && <EmployeesTab />}
-      {tab === "map" && <MapTab />}
-      {tab === "settings" && <SettingsTab onOpenAdvanced={() => setTab("advanced")} />}
-      {tab === "advanced" && <AdvancedSettingsPage onBack={() => setTab("settings")} />}
       {tab === "dvir" && <DVIRTab />}
       {tab === "estimator" && <EstimatorTab />}
       {tab === "notes" && <NotesTab />}
       {tab === "summary" && <JobSummaryTab />}
       {tab === "office" && <OfficeHoursPanel />}
+      {tab === "settings" && (
+        <SettingsTab
+          onOpenAdvanced={() => setTab("advanced")}
+          onOpenAppearance={() => setTab("appearance")}
+        />
+      )}
+      {tab === "advanced" && <AdvancedSettingsPage />}
+      {tab === "appearance" && <ThemeAppearancePage />}
+    </div>
+  );
+}
+
+// Dashboard home menu — list-style links to each admin tool. The Map is the
+// home itself, so it isn't listed here.
+function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
+  const tools: { tab: Tab; label: string; hint: string }[] = [
+    { tab: "employees", label: "Employees",    hint: "Crew access and roles" },
+    { tab: "dvir",      label: "DVIR Review",  hint: "Mechanic sign-off on inspections" },
+    { tab: "estimator", label: "Estimator",    hint: "Build and price estimates" },
+    { tab: "notes",     label: "Notes",        hint: "Patch notes and admin notes" },
+    { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
+    { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
+    { tab: "settings",  label: "Settings",     hint: "Theme, field config, and advanced options" },
+  ];
+  return (
+    <div className="card">
+      <div className="sectionTitle">Tools</div>
+      <div className="col" style={{ gap: 8 }}>
+        {tools.map((t) => (
+          <button
+            key={t.tab}
+            onClick={() => onPick(t.tab)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: 12, width: "100%", textAlign: "left",
+              padding: "11px 14px", fontSize: 14, fontWeight: 600,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <span className="col" style={{ gap: 2 }}>
+              <span>{t.label}</span>
+              <span className="small" style={{ color: "var(--muted)" }}>{t.hint}</span>
+            </span>
+            <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -533,9 +593,72 @@ function CalendarTab() {
 }
 
 // ─────────────────────────────────────────
-// Settings tab
+// Settings tab — lean landing page. Theme/style controls live on the
+// Theme & Appearance sub-page so this screen stays uncluttered.
 // ─────────────────────────────────────────
-function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
+function SettingsTab({
+  onOpenAdvanced,
+  onOpenAppearance,
+}: {
+  onOpenAdvanced: () => void;
+  onOpenAppearance: () => void;
+}) {
+  return (
+    <div>
+      <SettingsNavCard
+        title="Theme & Appearance"
+        desc="Theme templates, colors, fonts, button style, and map pins."
+        action="Open Theme & Appearance →"
+        onClick={onOpenAppearance}
+      />
+      <SettingsNavCard
+        title="Advanced Settings"
+        desc="Google Calendar integration, data management, and other advanced options."
+        action="Open Advanced Settings →"
+        onClick={onOpenAdvanced}
+      />
+      <DVIRUnitsCard />
+      <HelpTextCard />
+      <SheetSyncCard />
+      <AppHealthCard />
+    </div>
+  );
+}
+
+// Tappable card that navigates to a settings sub-page.
+function SettingsNavCard({
+  title,
+  desc,
+  action,
+  onClick,
+}: {
+  title: string;
+  desc: string;
+  action: string;
+  onClick: () => void;
+}) {
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="sectionTitle" style={{ marginBottom: 0 }}>{title}</div>
+      <div className="small" style={{ color: "var(--muted)" }}>{desc}</div>
+      <button
+        onClick={onClick}
+        style={{
+          alignSelf: "flex-start", padding: "8px 18px", fontSize: 13,
+          border: "1px solid var(--border)", borderRadius: "var(--btn-r)",
+          color: "var(--text)", background: "rgba(255,255,255,0.04)", cursor: "pointer",
+        }}
+      >
+        {action}
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Theme & Appearance sub-page — every look-and-feel control.
+// ─────────────────────────────────────────
+function ThemeAppearancePage() {
   const { settings, update, reset } = useTheme();
   const preset = THEME_PRESETS[settings.themeId] ?? THEME_PRESETS["dark-ocean"];
 
@@ -543,6 +666,12 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
   const [brand2Local, setBrand2Local] = useState(settings.brand2Override ?? preset.vars["--brand2"]);
   const [applyBusy, setApplyBusy] = useState(false);
   const [applyMsg, setApplyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Device-local custom theme presets (saved snapshots of the current look).
+  const [customPresets, setCustomPresets] = useState<CustomPreset[]>(loadCustomPresets);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newEmoji, setNewEmoji] = useState("🎨");
 
   async function applyToAllUsers() {
     setApplyBusy(true);
@@ -581,6 +710,48 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
     setBrand2Local(def.vars["--brand2"]);
   }
 
+  // ── Custom presets ──
+  // A custom preset is "active" when the live style exactly matches its
+  // snapshot. Comparing JSON is safe here: both sides come from pickStyle(),
+  // which writes keys in a fixed order.
+  const currentStyle = JSON.stringify(pickStyle(settings));
+  const activeCustomId =
+    customPresets.find((c) => JSON.stringify(c.style) === currentStyle)?.id ?? null;
+
+  function selectCustom(c: CustomPreset) {
+    update(c.style);
+    const v = styleVars(c.style);
+    setBrandLocal(v["--brand"]);
+    setBrand2Local(v["--brand2"]);
+  }
+
+  function saveCurrentAsPreset() {
+    const label = newName.trim();
+    if (!label) return;
+    const id =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `cp_${Date.now()}`;
+    const next: CustomPreset = {
+      id,
+      label,
+      emoji: newEmoji.trim() || "🎨",
+      style: pickStyle(settings),
+    };
+    const list = [...customPresets, next];
+    setCustomPresets(list);
+    persistCustomPresets(list);
+    setNewName("");
+    setNewEmoji("🎨");
+    setSaveOpen(false);
+  }
+
+  function deleteCustom(id: string) {
+    const list = customPresets.filter((c) => c.id !== id);
+    setCustomPresets(list);
+    persistCustomPresets(list);
+  }
+
   return (
     <div>
       {/* ── Theme templates ── */}
@@ -588,7 +759,7 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
         <div className="sectionTitle">Theme Template</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
           {Object.entries(THEME_PRESETS).map(([id, p]) => {
-            const active = settings.themeId === id;
+            const active = !activeCustomId && settings.themeId === id;
             return (
               <button
                 key={id}
@@ -613,6 +784,101 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
               </button>
             );
           })}
+
+          {/* Custom (device-local) presets — same tile, plus a delete control.
+              A div, not a button, so the delete control can nest inside it. */}
+          {customPresets.map((c) => {
+            const v = styleVars(c.style);
+            const active = activeCustomId === c.id;
+            return (
+              <div
+                key={c.id}
+                onClick={() => selectCustom(c)}
+                role="button"
+                style={{
+                  position: "relative",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+                  padding: "14px 10px",
+                  background: v["--card"],
+                  border: `2px solid ${active ? v["--brand"] : v["--border"]}`,
+                  borderRadius: "var(--btn-r)", cursor: "pointer",
+                  color: v["--text"], fontFamily: "var(--font)",
+                }}
+              >
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteCustom(c.id); }}
+                  title="Delete preset"
+                  aria-label={`Delete ${c.label} preset`}
+                  style={{
+                    position: "absolute", top: 4, right: 4,
+                    width: 22, height: 22, padding: 0, lineHeight: 1,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 13, borderRadius: "50%",
+                    background: "rgba(0,0,0,0.35)", color: v["--muted"],
+                    border: `1px solid ${v["--border"]}`, cursor: "pointer",
+                  }}
+                >
+                  ✕
+                </button>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[v["--brand"], v["--brand2"], v["--bg"]].map((col, i) => (
+                    <div key={i} style={{ width: 14, height: 14, borderRadius: "50%", background: col, border: "1px solid rgba(255,255,255,0.15)" }} />
+                  ))}
+                </div>
+                <span style={{ fontSize: 18 }}>{c.emoji}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: v["--text"], textAlign: "center" }}>{c.label}</span>
+                {active && <span style={{ fontSize: 10, color: v["--brand"], fontWeight: 700 }}>ACTIVE</span>}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Save the current look as a reusable preset */}
+        <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+          {!saveOpen ? (
+            <button onClick={() => setSaveOpen(true)} style={{ fontSize: 13 }}>
+              ＋ Save current theme as preset
+            </button>
+          ) : (
+            <div className="col" style={{ gap: 8 }}>
+              <label className="small">Name this theme preset</label>
+              <div className="row" style={{ gap: 8 }}>
+                <input
+                  value={newEmoji}
+                  onChange={(e) => setNewEmoji(e.target.value)}
+                  maxLength={2}
+                  aria-label="Preset icon"
+                  style={{ width: 56, textAlign: "center", fontSize: 18, flexShrink: 0 }}
+                />
+                <input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="e.g. Company Blue"
+                  style={{ flex: 1, fontSize: 14 }}
+                />
+              </div>
+              <div className="row" style={{ gap: 8 }}>
+                <button
+                  className="btnPrimary"
+                  onClick={saveCurrentAsPreset}
+                  disabled={!newName.trim()}
+                  style={{ fontSize: 13 }}
+                >
+                  Save preset
+                </button>
+                <button
+                  onClick={() => { setSaveOpen(false); setNewName(""); setNewEmoji("🎨"); }}
+                  style={{ fontSize: 13 }}
+                >
+                  Cancel
+                </button>
+              </div>
+              <div className="small" style={{ color: "var(--muted)" }}>
+                Saved on this device. To push a look to every crew member, select it
+                and use “Apply to all users” at the bottom of this page.
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -943,32 +1209,6 @@ function SettingsTab({ onOpenAdvanced }: { onOpenAdvanced: () => void }) {
         </div>
       </div>
 
-      {/* ── Help text ── */}
-      <HelpTextCard />
-
-      {/* ── DVIR vehicle units ── */}
-      <DVIRUnitsCard />
-
-      {/* ── Sheet sync (admin recovery for missed events) ── */}
-      <SheetSyncCard />
-
-      {/* ── App health check ── */}
-      <AppHealthCard />
-
-      {/* ── Advanced settings ── */}
-      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div className="sectionTitle">Advanced Settings</div>
-        <div className="small" style={{ color: "var(--muted)" }}>
-          Google Calendar integration, data management, and other advanced options.
-        </div>
-        <button
-          onClick={onOpenAdvanced}
-          style={{ alignSelf: "flex-start", padding: "8px 18px", fontSize: 13, border: "1px solid var(--border)", borderRadius: "var(--btn-r)", color: "var(--text)", background: "rgba(255,255,255,0.04)", cursor: "pointer" }}
-        >
-          Open Advanced Settings →
-        </button>
-      </div>
-
       {/* ── Apply to all users ── */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="small" style={{ color: "var(--muted)" }}>
@@ -1263,19 +1503,9 @@ function computeOverall(
 // ─────────────────────────────────────────
 // Advanced Settings page
 // ─────────────────────────────────────────
-function AdvancedSettingsPage({ onBack }: { onBack: () => void }) {
+function AdvancedSettingsPage() {
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-        <button
-          onClick={onBack}
-          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, padding: 0 }}
-        >
-          ← Back to Settings
-        </button>
-        <span style={{ fontWeight: 700, fontSize: 15 }}>Advanced Settings</span>
-      </div>
-
       <div className="card">
         <div className="sectionTitle">Google Calendar</div>
         <CalendarTab />
@@ -1661,6 +1891,12 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
   const [requestedEmail, setRequestedEmail] = useState<string | null>(
     dvir.mechanic_signature_requested_email,
   );
+  // Remote sign-off is the secondary path — collapsed by default so the
+  // review screen isn't two big stacked forms. Auto-expanded when a request
+  // is already out, so its "awaiting signature" status stays in view.
+  const [remoteOpen, setRemoteOpen] = useState<boolean>(
+    !!dvir.mechanic_signature_requested_at,
+  );
 
   async function handleSendRequest(e: React.FormEvent) {
     e.preventDefault();
@@ -1811,56 +2047,76 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
         </div>
       ) : (
         <>
-        {/* Remote signature request — email a sign-off link to a mechanic */}
+        {/* Remote signature request — secondary path, collapsed by default */}
         <div className="card" style={{ marginBottom: 14 }}>
-          <div className="label" style={{ fontWeight: 700, marginBottom: 6 }}>
-            Request Remote Mechanic Sign-Off
-          </div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
-            Email a secure link to a mechanic so they can review the defect and sign off
-            remotely. The vehicle is cleared automatically once they sign.
-          </div>
+          <button
+            type="button"
+            onClick={() => setRemoteOpen((v) => !v)}
+            style={{
+              background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%",
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              color: "var(--text)",
+            }}
+          >
+            <span style={{ fontWeight: 700, fontSize: 13 }}>Request Remote Mechanic Sign-Off</span>
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>{remoteOpen ? "▾" : "▸"}</span>
+          </button>
 
-          {requestedAt && (
-            <div
-              style={{
-                padding: "8px 12px", borderRadius: 8, marginBottom: 12,
-                background: "rgba(255,200,50,0.1)", border: "1px solid rgba(255,200,50,0.3)",
-                fontSize: 13, color: "var(--text)",
-              }}
-            >
-              Request sent to <strong>{requestedEmail}</strong> on{" "}
-              {formatMountainDateTime(requestedAt)} — awaiting signature. You can resend below.
+          {requestedAt && !remoteOpen && (
+            <div className="small" style={{ color: "#f0c040", marginTop: 6 }}>
+              Request sent to {requestedEmail} — awaiting signature. Tap to resend.
             </div>
           )}
 
-          <form onSubmit={handleSendRequest} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Email *</div>
-              <input
-                type="email"
-                value={reqEmail}
-                onChange={(e) => setReqEmail(e.target.value)}
-                placeholder="mechanic@example.com"
-                style={mechInputStyle}
-              />
+          {remoteOpen && (
+            <div style={{ marginTop: 10 }}>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+                Email a secure link to a mechanic so they can review the defect and sign off
+                remotely. The vehicle is cleared automatically once they sign.
+              </div>
+
+              {requestedAt && (
+                <div
+                  style={{
+                    padding: "8px 12px", borderRadius: 8, marginBottom: 12,
+                    background: "rgba(255,200,50,0.1)", border: "1px solid rgba(255,200,50,0.3)",
+                    fontSize: 13, color: "var(--text)",
+                  }}
+                >
+                  Request sent to <strong>{requestedEmail}</strong> on{" "}
+                  {formatMountainDateTime(requestedAt)} — awaiting signature. You can resend below.
+                </div>
+              )}
+
+              <form onSubmit={handleSendRequest} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Email *</div>
+                  <input
+                    type="email"
+                    value={reqEmail}
+                    onChange={(e) => setReqEmail(e.target.value)}
+                    placeholder="mechanic@example.com"
+                    style={mechInputStyle}
+                  />
+                </div>
+                <div>
+                  <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name (optional)</div>
+                  <input
+                    value={reqName}
+                    onChange={(e) => setReqName(e.target.value)}
+                    placeholder="For the email greeting"
+                    style={mechInputStyle}
+                  />
+                </div>
+                {reqErr && (
+                  <div style={{ color: "var(--danger)", fontSize: 13 }}>{reqErr}</div>
+                )}
+                <button type="submit" disabled={reqBusy} style={{ fontSize: 13, alignSelf: "flex-start" }}>
+                  {reqBusy ? "Sending…" : requestedAt ? "Resend signature request" : "Email signature request"}
+                </button>
+              </form>
             </div>
-            <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Mechanic Name (optional)</div>
-              <input
-                value={reqName}
-                onChange={(e) => setReqName(e.target.value)}
-                placeholder="For the email greeting"
-                style={mechInputStyle}
-              />
-            </div>
-            {reqErr && (
-              <div style={{ color: "var(--danger)", fontSize: 13 }}>{reqErr}</div>
-            )}
-            <button type="submit" disabled={reqBusy} style={{ fontSize: 13, alignSelf: "flex-start" }}>
-              {reqBusy ? "Sending…" : requestedAt ? "Resend signature request" : "Email signature request"}
-            </button>
-          </form>
+          )}
         </div>
 
         {/* Mechanic sign form — in-person sign-off on this device */}
@@ -2804,16 +3060,14 @@ function JobSummaryTab() {
       )}
 
       {summary && (
-        <div className="card">
-          <button onClick={() => { setSummary(null); }} style={{ fontSize: 12 }}>
-            ← Back to matches
-          </button>
-        </div>
-      )}
-
-      {summary && (
         <>
           <div className="card">
+            <button
+              onClick={() => setSummary(null)}
+              style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 12, padding: 0, marginBottom: 8 }}
+            >
+              ← Back to matches
+            </button>
             <div className="sectionTitle">{summary.job_name || "Unnamed job"}</div>
             <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace" }}>{summary.job_uuid}</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>

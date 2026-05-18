@@ -45,6 +45,10 @@ export default function Profile() {
   const { user, logout, setUser } = useAuth();
   const nav = useNavigate();
 
+  // "main" = landing (app update, tools, patch notes); "profile" = the
+  // My Profile sub-page (photo + account config).
+  const [view, setView] = useState<"main" | "profile">("main");
+
   const [photo, setPhoto] = useState<string | null>(user?.profile_photo ?? null);
   const [name, setName] = useState(user?.name ?? "");
   const [saving, setSaving] = useState(false);
@@ -122,125 +126,165 @@ export default function Profile() {
 
   const initials = user?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? "?";
 
+  const backBtnStyle: React.CSSProperties = {
+    background: "none", border: "none", color: "var(--muted)",
+    cursor: "pointer", fontSize: 13, padding: "4px 8px",
+  };
+
+  // ── My Profile sub-page — photo + account config ──────────────────────────
+  if (view === "profile") {
+    return (
+      <div className="container" style={{ maxWidth: 480 }}>
+        <div className="topbar" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 900, fontSize: 15 }}>My Profile</div>
+          <button onClick={() => setView("main")} style={backBtnStyle}>
+            &larr; Profile
+          </button>
+        </div>
+
+        {/* Avatar */}
+        <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+          <div
+            style={{
+              width: 88, height: 88, borderRadius: "50%",
+              background: "linear-gradient(135deg, var(--brand), var(--brand2))",
+              overflow: "hidden",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 32, fontWeight: 900, color: "var(--on-brand)",
+            }}
+          >
+            {photo
+              ? <img src={photo} alt="Profile" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              : initials}
+          </div>
+
+          <div className="small" style={{ color: "var(--muted)", textAlign: "center", maxWidth: 260 }}>
+            Your profile photo is visible to other crew members across the app.
+          </div>
+
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhotoChange} />
+
+          <div className="row" style={{ gap: 8 }}>
+            <button onClick={() => fileRef.current?.click()} disabled={photoBusy} style={{ fontSize: 13 }}>
+              {photoBusy ? "Uploading…" : photo ? "Change photo" : "Upload photo"}
+            </button>
+            {photo && (
+              <button
+                onClick={handleRemovePhoto}
+                disabled={photoBusy}
+                style={{ fontSize: 13, background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+        </div>
+
+        {/* Account — read-only identity plus editable display name */}
+        <div className="card">
+          <div className="sectionTitle">Account</div>
+          <div className="col" style={{ gap: 14 }}>
+            <div className="row" style={{ gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <div className="label">Email</div>
+                <div style={{ marginTop: 4 }}>{user?.email}</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 100 }}>
+                <div className="label">Role</div>
+                <div style={{ marginTop: 4, textTransform: "capitalize" }}>{user?.role ?? "user"}</div>
+              </div>
+            </div>
+            <form
+              onSubmit={handleSaveName}
+              className="col"
+              style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}
+            >
+              <label className="label">Display name</label>
+              <input
+                value={name}
+                onChange={(e) => { setName(e.target.value); setSaved(false); }}
+                placeholder="Your name"
+              />
+              {saved && <div className="small" style={{ color: "var(--ok)" }}>Saved</div>}
+              <button className="btnPrimary" disabled={saving} style={{ alignSelf: "flex-start", fontSize: 13 }}>
+                {saving ? "Saving…" : "Save name"}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Main Profile landing ──────────────────────────────────────────────────
   return (
     <div className="container" style={{ maxWidth: 480 }}>
       {/* Header */}
       <div className="topbar" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 900, fontSize: 15 }}>Profile</div>
-        <button
-          onClick={() => nav(-1)}
-          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, padding: "4px 8px" }}
-        >
+        <button onClick={() => nav(-1)} style={backBtnStyle}>
           &larr; Back
         </button>
       </div>
 
-      {/* App refresh — kept near the top so crew can always find it to
-          pull the latest build and confirm they're current. */}
-      <div style={{ marginBottom: 12 }}>
-        <AppRefreshButton />
-      </div>
-
-      {/* Avatar */}
-      <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+      {/* My Profile entry — tap to open photo + account config */}
+      <div
+        role="button"
+        onClick={() => setView("profile")}
+        className="card"
+        style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
+      >
         <div
           style={{
-            width: 88, height: 88, borderRadius: "50%",
+            width: 48, height: 48, borderRadius: "50%", flexShrink: 0,
             background: "linear-gradient(135deg, var(--brand), var(--brand2))",
             overflow: "hidden",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 32, fontWeight: 900, color: "var(--on-brand)",
+            fontSize: 20, fontWeight: 900, color: "var(--on-brand)",
           }}
         >
           {photo
             ? <img src={photo} alt="Profile" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             : initials}
         </div>
-
-        <div className="small" style={{ color: "var(--muted)", textAlign: "center", maxWidth: 260 }}>
-          Your profile photo is visible to other crew members across the app.
+        <div className="col" style={{ gap: 2, flex: 1 }}>
+          <span style={{ fontWeight: 800, fontSize: 15 }}>{user?.name || "My Profile"}</span>
+          <span className="small" style={{ color: "var(--muted)" }}>{user?.email}</span>
         </div>
-
-        <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhotoChange} />
-
-        <div className="row" style={{ gap: 8 }}>
-          <button onClick={() => fileRef.current?.click()} disabled={photoBusy} style={{ fontSize: 13 }}>
-            {photoBusy ? "Uploading…" : photo ? "Change photo" : "Upload photo"}
-          </button>
-          {photo && (
-            <button
-              onClick={handleRemovePhoto}
-              disabled={photoBusy}
-              style={{ fontSize: 13, background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}
-            >
-              Remove
-            </button>
-          )}
-        </div>
-        {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+        <span style={{ color: "var(--muted)", fontSize: 18, flexShrink: 0 }}>›</span>
       </div>
 
-      {/* Account info */}
+      {/* App update — subdued so it doesn't dominate, but always in the same spot */}
       <div className="card">
-        <div className="sectionTitle">Account</div>
-        <div className="col" style={{ gap: 12 }}>
-          <div>
-            <div className="label">Email</div>
-            <div style={{ marginTop: 4 }}>{user?.email}</div>
-          </div>
-          <div>
-            <div className="label">Role</div>
-            <div style={{ marginTop: 4, textTransform: "capitalize" }}>{user?.role ?? "user"}</div>
-          </div>
-        </div>
+        <AppRefreshButton />
       </div>
 
-      {/* Edit name */}
+      {/* Tools & resources — nav links grouped into one card with consistent
+          flat rows, so the page reads as a short list. */}
       <div className="card">
-        <div className="sectionTitle">Display name</div>
-        <form onSubmit={handleSaveName} className="col" style={{ gap: 12 }}>
-          <input
-            value={name}
-            onChange={(e) => { setName(e.target.value); setSaved(false); }}
-            placeholder="Your name"
+        <div className="sectionTitle">Tools & Resources</div>
+        <div className="col" style={{ gap: 8 }}>
+          <ProfileNavRow
+            label="Log Expense / Reimbursement"
+            hint="Mileage, personal-card reimbursement, or company-card receipts"
+            onClick={() => nav("/reimbursement")}
           />
-          {saved && <div className="small" style={{ color: "var(--ok)" }}>Saved</div>}
-          <button className="btnPrimary" disabled={saving}>
-            {saving ? "Saving…" : "Save name"}
-          </button>
-        </form>
-      </div>
-
-      {/* Compliance & reference resources */}
-      <div className="card">
-        <div className="sectionTitle">Compliance & Reference</div>
-        <div className="col" style={{ gap: 8 }}>
-          <button onClick={() => nav("/long-distance")} style={{ textAlign: "left" }}>
-            Long Distance Compliance
-          </button>
-          <button onClick={() => nav("/documents")} style={{ textAlign: "left" }}>
-            Document Library
-          </button>
+          <ProfileNavRow
+            label="Long Distance Compliance"
+            onClick={() => nav("/long-distance")}
+          />
+          <ProfileNavRow
+            label="Document Library"
+            onClick={() => nav("/documents")}
+          />
         </div>
       </div>
 
-      {/* Expenses / reimbursement — mileage, personal-card reimbursement,
-          or company-card expense logging. */}
-      <div className="card">
-        <div className="sectionTitle">Log Expense / Request Reimbursement</div>
-        <div className="col" style={{ gap: 8 }}>
-          <button onClick={() => nav("/reimbursement")} style={{ textAlign: "left" }}>
-            Log an expense or request reimbursement
-          </button>
-          <div className="small" style={{ color: "var(--muted)" }}>
-            Mileage with odometer photos, personal-card reimbursements, or
-            company-card expense receipts.
-          </div>
-        </div>
-      </div>
+      {/* Patch Notes — latest notes collapsed to a preview */}
+      <PatchNotesCard />
 
-      {/* Sign out — placed above Patch Notes so a long changelog
-          never buries it off-screen */}
+      {/* Sign out */}
       <div className="card">
         <button
           onClick={handleSignOut}
@@ -255,10 +299,38 @@ export default function Profile() {
           Sign out
         </button>
       </div>
-
-      {/* Patch Notes — shows most recent 3 by default with an expander */}
-      <PatchNotesCard />
     </div>
+  );
+}
+
+// Flat, list-style navigation row — lighter than a default button so a card
+// full of links doesn't read as a wall of buttons.
+function ProfileNavRow({
+  label,
+  hint,
+  onClick,
+}: {
+  label: string;
+  hint?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 12, width: "100%", textAlign: "left",
+        padding: "11px 14px", fontSize: 14, fontWeight: 600,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <span className="col" style={{ gap: 2 }}>
+        <span>{label}</span>
+        {hint && <span className="small" style={{ color: "var(--muted)" }}>{hint}</span>}
+      </span>
+      <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
+    </button>
   );
 }
 
@@ -302,29 +374,23 @@ function AppRefreshButton() {
   const checking = status === "checking";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <button
         onClick={handleCheck}
         disabled={checking}
         style={{
           width: "100%",
-          padding: "14px 16px",
-          background: "linear-gradient(135deg, var(--brand), var(--brand2))",
-          color: "var(--on-brand)",
-          border: "none",
-          borderRadius: 14,
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          padding: "11px 14px",
+          fontSize: 14, fontWeight: 700,
+          background: "rgba(255,255,255,0.05)",
+          border: "1px solid var(--border)",
+          color: "var(--text)",
           cursor: checking ? "default" : "pointer",
-          fontSize: 16,
-          fontWeight: 800,
-          boxShadow: "var(--shadow)",
           opacity: checking ? 0.7 : 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
         }}
       >
-        <span style={{ fontSize: 18 }}>{checking ? "⟳" : "↻"}</span>
+        <span style={{ fontSize: 15 }}>↻</span>
         {checking ? "Checking for updates…" : "Update app to latest version"}
       </button>
       {message ? (
@@ -346,6 +412,46 @@ function AppRefreshButton() {
 }
 
 const PATCH_NOTES_INITIAL = 3;
+
+// Split a note body into a short lead (first paragraph) and the remainder, so
+// long changelogs collapse to a preview. A blank-line paragraph break is
+// preferred; otherwise fall back to a character budget at a word boundary.
+function splitNoteBody(body: string): { lead: string; rest: string } {
+  const text = body.trimEnd();
+  const para = text.match(/\n\s*\n/);
+  if (para && para.index !== undefined && para.index > 0) {
+    return { lead: text.slice(0, para.index).trimEnd(), rest: text.slice(para.index).trim() };
+  }
+  const LIMIT = 220;
+  if (text.length <= LIMIT) return { lead: text, rest: "" };
+  let cut = text.lastIndexOf(" ", LIMIT);
+  if (cut < LIMIT * 0.6) cut = LIMIT;
+  return { lead: text.slice(0, cut).trimEnd() + "…", rest: text.slice(cut).trim() };
+}
+
+function PatchNoteItem({ note }: { note: PatchNote }) {
+  const [open, setOpen] = useState(false);
+  const { lead, rest } = splitNoteBody(note.body);
+  const hasMore = rest.length > 0;
+
+  return (
+    <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+      <div style={{ fontWeight: 700, fontSize: 14 }}>{note.title}</div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+        {new Date(note.updated_at).toLocaleDateString()}
+        {note.created_by_name ? ` · ${note.created_by_name}` : ""}
+      </div>
+      <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>
+        {open || !hasMore ? note.body.trimEnd() : lead}
+      </div>
+      {hasMore && (
+        <button onClick={() => setOpen((v) => !v)} style={{ fontSize: 12, marginTop: 8 }}>
+          {open ? "Show less" : "Read more"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function PatchNotesCard() {
   const [notes, setNotes] = useState<PatchNote[] | null>(null);
@@ -380,14 +486,7 @@ function PatchNotesCard() {
       )}
       <div className="col" style={{ gap: 12 }}>
         {visible.map((n) => (
-          <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>{n.title}</div>
-            <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-              {new Date(n.updated_at).toLocaleDateString()}
-              {n.created_by_name ? ` · ${n.created_by_name}` : ""}
-            </div>
-            <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{n.body}</div>
-          </div>
+          <PatchNoteItem key={n.id} note={n} />
         ))}
         {hiddenCount > 0 && (
           <button

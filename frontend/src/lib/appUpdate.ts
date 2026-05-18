@@ -1,14 +1,15 @@
-// App update helper used by the Profile → Crew Settings card.
+// App update helpers.
 //
-// vite-plugin-pwa is configured with `registerType: "autoUpdate"`, so a newly
-// deployed build will normally take over silently on the next page load. This
-// module gives the crew a way to:
-//   1. Force a check NOW (without quitting the app or hard-refreshing), and
-//   2. Get explicit confirmation they're on the latest version.
+// vite-plugin-pwa is configured with `registerType: "prompt"`, so a newly
+// deployed build installs in the background and then *waits* — it does not
+// silently reload the page. Updates reach the crew two ways:
+//   • UpdateBanner — watches for the waiting worker, re-checks periodically
+//     and on focus, and shows a dismissible "new version" banner.
+//   • The Profile "Update app" button — an on-demand check via
+//     checkForAppUpdate(), with explicit "you're on the latest" feedback.
 //
-// Flow:
-//   getRegistration() → registration.update() → if a SW is `waiting`, post
-//   SKIP_WAITING + reload on `controllerchange`; otherwise report "latest".
+// Apply flow (shared): if a SW is `waiting`, post SKIP_WAITING and reload on
+// `controllerchange`; otherwise report "latest".
 
 export type UpdateResult =
   | { kind: "updating" }            // a new SW took over; we will reload
@@ -64,6 +65,29 @@ export async function checkForAppUpdate(timeoutMs = 8000): Promise<UpdateResult>
     return { kind: "latest" };
   } catch (e: any) {
     return { kind: "error", message: e?.message || "Update check failed" };
+  }
+}
+
+/**
+ * Apply an update that's already waiting — used by the in-app "update
+ * available" banner, where detection already happened and the user has
+ * tapped to apply. Resolves as the page reloads.
+ */
+export async function applyWaitingUpdate(timeoutMs = 8000): Promise<UpdateResult> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+    return { kind: "unsupported" };
+  }
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg?.waiting) {
+      return await activateWaiting(reg.waiting, timeoutMs);
+    }
+    // Nothing waiting — the worker may have already activated (e.g. another
+    // tab applied it). A plain reload pulls the fresh shell either way.
+    window.location.reload();
+    return { kind: "updating" };
+  } catch (e: any) {
+    return { kind: "error", message: e?.message || "Update failed" };
   }
 }
 
