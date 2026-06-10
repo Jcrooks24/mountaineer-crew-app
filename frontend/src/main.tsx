@@ -11,6 +11,7 @@ import { ThemeProvider } from "./theme/ThemeContext";
 import RequireAuth from "./auth/RequireAuth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateBanner from "./components/UpdateBanner";
+import AvailabilityReminderBanner from "./components/AvailabilityReminderBanner";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -33,6 +34,7 @@ createRoot(document.getElementById("root")!).render(
         <ErrorBoundary>
         {/* App-wide; fixed-position, renders over whatever route is active */}
         <UpdateBanner />
+        <AvailabilityReminderBanner />
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
