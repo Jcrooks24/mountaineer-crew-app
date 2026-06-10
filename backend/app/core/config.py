@@ -2,7 +2,13 @@
 Application configuration — reads from environment variables with sensible defaults.
 Set these on Render (or in a .env file locally):
   JWT_SECRET                    — required in prod; keep it secret
-  ACCESS_TOKEN_EXPIRE_MINUTES   — default 10080 (7 days)
+  ACCESS_TOKEN_EXPIRE_MINUTES   — default 129600 (90 days)
+
+The 90-day default is deliberately long: crew work in the field, often at
+sites with no signal, and a bounced session that forces them back to the
+login screen (which requires the network) leaves the app unusable mid-job.
+Reauth on a fixed cadence is enforced by the office when needed via a
+manual user deactivation, not by token TTL.
 """
 
 import os
@@ -29,7 +35,7 @@ class Settings(BaseModel):
     JWT_SECRET: str = _resolve_jwt_secret()
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
-        os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080")  # 7 days
+        os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "129600")  # 90 days
     )
 
 
