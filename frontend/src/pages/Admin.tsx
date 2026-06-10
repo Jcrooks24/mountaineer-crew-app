@@ -2087,7 +2087,133 @@ function AdvancedSettingsPage() {
         <CalendarTab />
       </div>
 
+      <CrewResourcesCard />
+
       <DataManagementCard />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Crew Resources event refresh
+// ─────────────────────────────────────────
+function CrewResourcesCard() {
+  const [busy, setBusy] = useState(false);
+  const [daysAhead, setDaysAhead] = useState<number>(14);
+  type ResultRow = {
+    ok: boolean;
+    date: string;
+    created?: boolean;
+    available_count?: number;
+    scheduled_count?: number;
+    reason?: string;
+    error?: string;
+  };
+  type Summary = {
+    ok: boolean;
+    days: number;
+    succeeded: number;
+    results: ResultRow[];
+  };
+  const [result, setResult] = useState<Summary | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function generate() {
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const r = await apiFetch<Summary>(
+        `/api/admin/crew-resources/refresh?days_ahead=${encodeURIComponent(daysAhead)}`,
+        { method: "POST" },
+      );
+      setResult(r);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to refresh");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const failedSample = result?.results.filter((r) => !r.ok).slice(0, 3) ?? [];
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Crew Resources events</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+        Force a refresh of the daily 5–6 AM "Crew Resources" events on the
+        Resources calendar. Events for today through today + N are created
+        if missing and otherwise patched with the latest description (crew
+        availability + scheduled blocks from the Jobs calendar). The hourly
+        background loop does the same thing automatically; this button is
+        for verifying the wiring or seeding the next batch immediately.
+      </div>
+
+      <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <label className="small" style={{ color: "var(--muted)" }}>
+          Days ahead
+        </label>
+        <input
+          type="number"
+          min={0}
+          max={60}
+          value={daysAhead}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (Number.isFinite(n)) setDaysAhead(Math.max(0, Math.min(60, Math.floor(n))));
+          }}
+          style={{
+            width: 80, padding: "6px 10px", borderRadius: 8,
+            border: "1px solid var(--border)", background: "var(--bg)",
+            color: "var(--text)", fontSize: 13, textAlign: "right",
+          }}
+        />
+        <button
+          onClick={generate}
+          disabled={busy}
+          className="btnPrimary"
+          style={{ padding: "8px 14px", fontSize: 13 }}
+        >
+          {busy ? "Refreshing…" : "Generate / refresh"}
+        </button>
+      </div>
+
+      {err && (
+        <div className="small" style={{ color: "var(--danger)", marginTop: 10 }}>
+          {err}
+        </div>
+      )}
+      {result && (
+        <div style={{ marginTop: 10 }}>
+          <div
+            className="small"
+            style={{
+              color: result.succeeded === result.days ? "var(--ok)" : "var(--muted)",
+              fontWeight: 700,
+            }}
+          >
+            {result.succeeded} of {result.days} day(s) refreshed.
+          </div>
+          {failedSample.length > 0 && (
+            <div className="small" style={{ color: "var(--danger)", marginTop: 6 }}>
+              First few failures:
+              <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                {failedSample.map((r) => (
+                  <li key={r.date} style={{ marginBottom: 2 }}>
+                    {r.date}: {r.error || r.reason || "unknown error"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {result.succeeded === result.days && result.days > 0 && (
+            <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+              Open the Resources calendar in Google Calendar — events should
+              be present for the next {result.days} day(s) at 5–6 AM.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
