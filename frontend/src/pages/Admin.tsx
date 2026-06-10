@@ -36,6 +36,13 @@ type AdminUser = {
   name: string | null;
   role: string;
   is_active: boolean;
+  tag_ids: number[];
+};
+
+type EmployeeTag = {
+  id: number;
+  name: string;
+  sort_order: number;
 };
 
 type GeoEvent = {
@@ -176,15 +183,26 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
 // ─────────────────────────────────────────
 function EmployeesTab() {
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [tags, setTags] = useState<EmployeeTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  const [editingTagsFor, setEditingTagsFor] = useState<AdminUser | null>(null);
 
   useEffect(() => {
-    apiFetch<AdminUser[]>("/api/admin/users")
-      .then(setUsers)
-      .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    Promise.all([
+      apiFetch<AdminUser[]>("/api/admin/users"),
+      apiFetch<EmployeeTag[]>("/api/admin/employee-tags"),
+    ])
+      .then(([u, t]) => {
+        if (cancelled) return;
+        setUsers(u);
+        setTags(t);
+      })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
   async function toggleAccess(u: AdminUser) {
@@ -219,69 +237,249 @@ function EmployeesTab() {
     }
   }
 
+  async function saveUserTags(userId: number, tagIds: number[]) {
+    const updated = await apiFetch<number[]>(`/api/admin/users/${userId}/employee-tags`, {
+      method: "PUT",
+      body: JSON.stringify({ tag_ids: tagIds }),
+    });
+    setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, tag_ids: updated } : u)));
+  }
+
+  const tagsById = useMemo(() => {
+    const m = new Map<number, EmployeeTag>();
+    for (const t of tags) m.set(t.id, t);
+    return m;
+  }, [tags]);
+
   if (loading) return <div className="card small">Loading...</div>;
   if (err) return <div className="card" style={{ color: "var(--danger)" }}>{err}</div>;
 
   return (
-    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 540 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
-            {["Name", "Email", "Role", "Status", "Actions"].map((h) => (
-              <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((u, i) => (
-            <tr
-              key={u.id}
-              style={{
-                borderBottom: i < users.length - 1 ? "1px solid var(--border)" : "none",
-                opacity: u.is_active ? 1 : 0.45,
-              }}
-            >
-              <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>—</span>}</td>
-              <td style={{ padding: "10px 14px", color: "var(--muted)" }}>{u.email}</td>
-              <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role}</td>
-              <td style={{ padding: "10px 14px" }}>
-                <span style={{
-                  fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
-                  background: u.is_active ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
-                  color: u.is_active ? "var(--ok)" : "var(--danger)",
-                }}>
-                  {u.is_active ? "Active" : "Disabled"}
-                </span>
-              </td>
-              <td style={{ padding: "10px 14px" }}>
-                <div className="row" style={{ gap: 6 }}>
-                  <button
-                    disabled={busy === u.id}
-                    onClick={() => toggleAccess(u)}
-                    style={{
-                      fontSize: 12, padding: "4px 10px",
-                      background: u.is_active ? "rgba(255,107,107,0.2)" : "rgba(45,212,191,0.2)",
-                      border: `1px solid ${u.is_active ? "var(--danger)" : "var(--ok)"}`,
-                      color: u.is_active ? "var(--danger)" : "var(--ok)",
-                      borderRadius: 8,
-                    }}
-                  >
-                    {u.is_active ? "Revoke" : "Restore"}
-                  </button>
-                  <button
-                    disabled={busy === u.id}
-                    onClick={() => toggleRole(u)}
-                    style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
-                  >
-                    → {u.role === "admin" ? "User" : "Admin"}
-                  </button>
-                </div>
-              </td>
+    <>
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+              {["Name", "Email", "Role", "Status", "Tags", "Actions"].map((h) => (
+                <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {users.map((u, i) => (
+              <tr
+                key={u.id}
+                style={{
+                  borderBottom: i < users.length - 1 ? "1px solid var(--border)" : "none",
+                  opacity: u.is_active ? 1 : 0.45,
+                }}
+              >
+                <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>—</span>}</td>
+                <td style={{ padding: "10px 14px", color: "var(--muted)" }}>{u.email}</td>
+                <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role}</td>
+                <td style={{ padding: "10px 14px" }}>
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
+                    background: u.is_active ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+                    color: u.is_active ? "var(--ok)" : "var(--danger)",
+                  }}>
+                    {u.is_active ? "Active" : "Disabled"}
+                  </span>
+                </td>
+                <td style={{ padding: "10px 14px" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+                    {u.tag_ids.length === 0 ? (
+                      <span className="small" style={{ color: "var(--muted)" }}>—</span>
+                    ) : (
+                      u.tag_ids
+                        .map((tid) => tagsById.get(tid))
+                        .filter((t): t is EmployeeTag => !!t)
+                        .sort((a, b) => a.sort_order - b.sort_order)
+                        .map((t) => (
+                          <span
+                            key={t.id}
+                            style={{
+                              fontSize: 11, fontWeight: 600,
+                              padding: "2px 8px", borderRadius: 999,
+                              background: "rgba(93,214,194,0.12)",
+                              color: "var(--brand)",
+                              border: "1px solid rgba(93,214,194,0.4)",
+                            }}
+                          >
+                            {t.name}
+                          </span>
+                        ))
+                    )}
+                    <button
+                      onClick={() => setEditingTagsFor(u)}
+                      style={{
+                        fontSize: 11, padding: "2px 8px", borderRadius: 999,
+                        background: "none", color: "var(--muted)",
+                        border: "1px dashed var(--border)", cursor: "pointer",
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </td>
+                <td style={{ padding: "10px 14px" }}>
+                  <div className="row" style={{ gap: 6 }}>
+                    <button
+                      disabled={busy === u.id}
+                      onClick={() => toggleAccess(u)}
+                      style={{
+                        fontSize: 12, padding: "4px 10px",
+                        background: u.is_active ? "rgba(255,107,107,0.2)" : "rgba(45,212,191,0.2)",
+                        border: `1px solid ${u.is_active ? "var(--danger)" : "var(--ok)"}`,
+                        color: u.is_active ? "var(--danger)" : "var(--ok)",
+                        borderRadius: 8,
+                      }}
+                    >
+                      {u.is_active ? "Revoke" : "Restore"}
+                    </button>
+                    <button
+                      disabled={busy === u.id}
+                      onClick={() => toggleRole(u)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
+                    >
+                      → {u.role === "admin" ? "User" : "Admin"}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>
+      </div>
+
+      {editingTagsFor && (
+        <EmployeeTagsPicker
+          user={editingTagsFor}
+          allTags={tags}
+          onCancel={() => setEditingTagsFor(null)}
+          onSave={async (tagIds) => {
+            await saveUserTags(editingTagsFor.id, tagIds);
+            setEditingTagsFor(null);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// Tag picker modal — checkbox grid keyed off the admin-managed tag list.
+function EmployeeTagsPicker({
+  user,
+  allTags,
+  onCancel,
+  onSave,
+}: {
+  user: AdminUser;
+  allTags: EmployeeTag[];
+  onCancel: () => void;
+  onSave: (tagIds: number[]) => Promise<void> | void;
+}) {
+  const [selected, setSelected] = useState<Set<number>>(() => new Set(user.tag_ids));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function toggle(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setErr(null);
+    try {
+      await onSave(Array.from(selected));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onCancel}
+      style={{
+        position: "fixed", inset: 0, padding: 16, zIndex: 1000,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--card)", borderRadius: 12,
+          border: "1px solid var(--border)",
+          maxWidth: 420, width: "100%",
+          padding: 18, display: "flex", flexDirection: "column", gap: 12,
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 800 }}>
+          Tags for {user.name || user.email}
+        </div>
+        {allTags.length === 0 ? (
+          <div className="small" style={{ color: "var(--muted)" }}>
+            No tags defined yet. Create some in Settings → Employee Tags.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {[...allTags].sort((a, b) => a.sort_order - b.sort_order).map((t) => {
+              const on = selected.has(t.id);
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => toggle(t.id)}
+                  style={{
+                    fontSize: 13, padding: "6px 12px", borderRadius: 999,
+                    background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                    color: on ? "var(--brand)" : "var(--text)",
+                    border: `1px solid ${on ? "var(--brand)" : "var(--border)"}`,
+                    fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  {t.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            style={{
+              background: "none",
+              color: "var(--muted)",
+              border: "1px solid var(--border)",
+              padding: "8px 14px", fontSize: 13,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btnPrimary"
+            onClick={handleSave}
+            disabled={saving}
+            style={{ padding: "8px 14px" }}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -618,9 +816,180 @@ function SettingsTab({
         onClick={onOpenAdvanced}
       />
       <DVIRUnitsCard />
+      <EmployeeTagsManagerCard />
       <HelpTextCard />
       <SheetSyncCard />
       <AppHealthCard />
+    </div>
+  );
+}
+
+// Admin CRUD for the employee tag list. Inline add / rename / delete —
+// admin can also drag-style reorder via the sort-order input, but most
+// reordering is rare enough not to warrant a fancier UI.
+function EmployeeTagsManagerCard() {
+  const [tags, setTags] = useState<EmployeeTag[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<EmployeeTag[]>("/api/admin/employee-tags")
+      .then((t) => { if (!cancelled) setTags(t); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function createTag() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const created = await apiFetch<EmployeeTag>("/api/admin/employee-tags", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      setTags((prev) => [...prev, created].sort((a, b) => a.sort_order - b.sort_order));
+      setNewName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to create tag");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function renameTag(id: number) {
+    const name = editName.trim();
+    if (!name) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const updated = await apiFetch<EmployeeTag>(`/api/admin/employee-tags/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      });
+      setTags((prev) => prev.map((t) => (t.id === id ? updated : t)));
+      setEditing(null);
+      setEditName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to rename");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteTag(t: EmployeeTag) {
+    if (!confirm(`Delete tag "${t.name}"? This removes it from any employee who has it.`)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/employee-tags/${t.id}`, { method: "DELETE" });
+      setTags((prev) => prev.filter((x) => x.id !== t.id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to delete");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Employee Tags</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Tag list shown when assigning tags on the Employees tab (e.g. Driver,
+        Has CC, Tier I). Renaming a tag updates it everywhere it's already
+        assigned. Deleting a tag removes it from all employees.
+      </div>
+
+      {loading ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div className="col" style={{ gap: 6 }}>
+          {tags.map((t) => {
+            const isEditing = editing === t.id;
+            return (
+              <div
+                key={t.id}
+                className="row"
+                style={{
+                  gap: 8, alignItems: "center", justifyContent: "space-between",
+                  padding: "6px 0", borderBottom: "1px solid var(--border)",
+                }}
+              >
+                {isEditing ? (
+                  <input
+                    autoFocus
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") renameTag(t.id); if (e.key === "Escape") setEditing(null); }}
+                    style={{ flex: 1, padding: "4px 8px", fontSize: 13 }}
+                  />
+                ) : (
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{t.name}</span>
+                )}
+                <div className="row" style={{ gap: 6 }}>
+                  {isEditing ? (
+                    <>
+                      <button onClick={() => renameTag(t.id)} disabled={busy} style={{ fontSize: 12, padding: "4px 10px" }}>
+                        Save
+                      </button>
+                      <button onClick={() => { setEditing(null); setEditName(""); }} style={{ fontSize: 12, padding: "4px 10px", background: "none", border: "1px solid var(--border)", color: "var(--muted)" }}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => { setEditing(t.id); setEditName(t.name); }}
+                        style={{ fontSize: 12, padding: "4px 10px" }}
+                      >
+                        Rename
+                      </button>
+                      <button
+                        onClick={() => deleteTag(t)}
+                        disabled={busy}
+                        style={{
+                          fontSize: 12, padding: "4px 10px",
+                          background: "none", color: "var(--danger)",
+                          border: "1px solid var(--danger)",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") createTag(); }}
+          placeholder="New tag name"
+          style={{ flex: 1, padding: "6px 10px", fontSize: 13 }}
+        />
+        <button
+          onClick={createTag}
+          disabled={busy || !newName.trim()}
+          className="btnPrimary"
+          style={{ padding: "6px 14px", fontSize: 13 }}
+        >
+          Add
+        </button>
+      </div>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
     </div>
   );
 }

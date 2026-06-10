@@ -27,6 +27,7 @@ from app.db.models.job_report import JobReport
 from app.db.models.materials import MaterialsSubmission
 from app.db.models.photo import Photo
 from app.db.models.system_config import SystemConfig
+from app.db.models.employee_tag import user_employee_tags
 from app.db.models.user import User
 from app.db.session import get_db
 from app.integrations.sheets_export import update_entry_status_in_sheets
@@ -49,6 +50,7 @@ class UserAdminResponse(BaseModel):
     name: Optional[str] = None
     role: str
     is_active: bool
+    tag_ids: List[int] = []
 
     class Config:
         from_attributes = True
@@ -59,6 +61,28 @@ class UpdateUserRequest(BaseModel):
     role: Optional[str] = None
 
 
+def _tag_ids_by_user(db: Session) -> Dict[int, List[int]]:
+    """One query for every (user_id, tag_id) pair → dict per user."""
+    rows = db.execute(
+        user_employee_tags.select()
+    ).all()
+    out: Dict[int, List[int]] = {}
+    for r in rows:
+        out.setdefault(r.user_id, []).append(r.tag_id)
+    return out
+
+
+def _user_with_tags(user: User, tag_ids: List[int]) -> UserAdminResponse:
+    return UserAdminResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        is_active=user.is_active,
+        tag_ids=tag_ids,
+    )
+
+
 # ---------------------------
 # List all users
 # ---------------------------
@@ -67,7 +91,9 @@ def list_users(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    return db.query(User).order_by(User.id).all()
+    users = db.query(User).order_by(User.id).all()
+    tags_by_user = _tag_ids_by_user(db)
+    return [_user_with_tags(u, tags_by_user.get(u.id, [])) for u in users]
 
 
 # ---------------------------
@@ -94,7 +120,8 @@ def update_user(
 
     db.commit()
     db.refresh(user)
-    return user
+    tag_ids = _tag_ids_by_user(db).get(user.id, [])
+    return _user_with_tags(user, tag_ids)
 
 
 # ---------------------------
