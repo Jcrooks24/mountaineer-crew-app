@@ -110,6 +110,17 @@ def on_startup() -> None:
         print("[startup] WARNING — could not ensure sheet export tables:")
         traceback.print_exc()
 
+    # Auto-reconciler — periodically catches events that landed in Postgres
+    # but never made it to the Events sheet (e.g. background export thread
+    # killed by worker recycling or OOM). Without this, admin had to click
+    # Refresh manually whenever App Health flagged drift.
+    try:
+        from app.integrations.auto_reconciler import start_auto_reconciler
+        start_auto_reconciler()
+    except Exception:
+        print("[startup] WARNING — could not start auto-reconciler:")
+        traceback.print_exc()
+
     # Auto-promote ADMIN_EMAIL to admin role on every startup.
     # Set this env var on Render to grant admin access without a shell.
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
