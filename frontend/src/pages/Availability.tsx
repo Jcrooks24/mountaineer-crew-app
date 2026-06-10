@@ -388,41 +388,17 @@ export default function Availability() {
         </button>
       </div>
 
-      {/* Admin-only "View as" picker. Choosing another user fetches their
-          availability and makes History cells click-cycle editable. */}
+      {/* Admin-only "View as" picker. Collapsed by default so the page
+          reads the same way for admins on a normal day. The viewed-user
+          name surfaces in the collapsed header as a hint when admin is
+          acting on someone else's data. */}
       {isAdmin && (
-        <div className="card">
-          <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div className="col" style={{ gap: 2, flex: "1 1 200px" }}>
-              <div className="sectionTitle" style={{ marginBottom: 0 }}>Admin view</div>
-              <div className="small" style={{ color: "var(--muted)" }}>
-                Tap a cell in History to cycle status. Edits bypass the 2-week lock.
-              </div>
-            </div>
-            <select
-              value={viewingUserId === null ? "" : String(viewingUserId)}
-              onChange={(e) => {
-                const v = e.target.value;
-                setViewingUserId(v === "" ? null : Number(v));
-              }}
-              style={{
-                flex: "1 1 200px", padding: "8px 10px",
-                borderRadius: 8, border: "1px solid var(--border)",
-                background: "var(--bg)", color: "var(--text)", fontSize: 13,
-              }}
-            >
-              <option value="">Yourself (default)</option>
-              {adminUsers
-                .filter((u) => u.is_active && u.id !== user?.id)
-                .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email))
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name || u.email}
-                  </option>
-                ))}
-            </select>
-          </div>
-        </div>
+        <AdminViewToggle
+          users={adminUsers}
+          currentUserId={user?.id ?? null}
+          viewingUserId={viewingUserId}
+          onChange={setViewingUserId}
+        />
       )}
 
       {/* Tab switcher — Submit hidden when an admin is viewing another user
@@ -813,6 +789,96 @@ export default function Availability() {
           onCancel={() => setShowConfirm(false)}
           onConfirm={handleConfirmSubmit}
         />
+      )}
+    </div>
+  );
+}
+
+// ── Admin "View as" toggle ───────────────────────────────────────────────────
+
+function AdminViewToggle({
+  users,
+  currentUserId,
+  viewingUserId,
+  onChange,
+}: {
+  users: AdminUserLite[];
+  currentUserId: number | null;
+  viewingUserId: number | null;
+  onChange: (id: number | null) => void;
+}) {
+  // Auto-expand when admin is already acting on someone else, so they can
+  // see + change/clear the selection without hunting for the toggle.
+  const [open, setOpen] = useState<boolean>(viewingUserId !== null);
+  useEffect(() => {
+    if (viewingUserId !== null) setOpen(true);
+  }, [viewingUserId]);
+
+  const viewingUser =
+    viewingUserId !== null ? users.find((u) => u.id === viewingUserId) : null;
+
+  return (
+    <div
+      className="card"
+      style={{ padding: open ? undefined : "6px 10px" }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          width: "100%", gap: 8,
+          background: "none", border: "none", padding: 0,
+          color: "var(--muted)", fontSize: 12, cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <span>
+          Admin view
+          {viewingUser && (
+            <span style={{ color: "var(--brand)", fontWeight: 700 }}>
+              {" · acting as "}{viewingUser.name || viewingUser.email}
+            </span>
+          )}
+        </span>
+        <span style={{ fontSize: 13 }}>{open ? "▾" : "▸"}</span>
+      </button>
+
+      {open && (
+        <div
+          className="row"
+          style={{
+            alignItems: "center", gap: 10, flexWrap: "wrap",
+            marginTop: 10,
+          }}
+        >
+          <div className="small" style={{ color: "var(--muted)", flex: "1 1 220px" }}>
+            Tap a cell in History to cycle status. Edits bypass the 2-week lock.
+          </div>
+          <select
+            value={viewingUserId === null ? "" : String(viewingUserId)}
+            onChange={(e) => {
+              const v = e.target.value;
+              onChange(v === "" ? null : Number(v));
+            }}
+            style={{
+              flex: "1 1 200px", padding: "8px 10px",
+              borderRadius: 8, border: "1px solid var(--border)",
+              background: "var(--bg)", color: "var(--text)", fontSize: 13,
+            }}
+          >
+            <option value="">Yourself (default)</option>
+            {users
+              .filter((u) => u.is_active && u.id !== currentUserId)
+              .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email))
+              .map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name || u.email}
+                </option>
+              ))}
+          </select>
+        </div>
       )}
     </div>
   );
