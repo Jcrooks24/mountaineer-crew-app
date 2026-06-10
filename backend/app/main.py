@@ -121,6 +121,17 @@ def on_startup() -> None:
         print("[startup] WARNING — could not start auto-reconciler:")
         traceback.print_exc()
 
+    # Crew Resources daily-event loop. No-op unless CREW_RESOURCES_ENABLED
+    # is set on the worker — admin enables it after re-authorizing Google
+    # OAuth with the calendar.events scope (the read-only token doesn't
+    # have it). See app/integrations/crew_resources_calendar.py.
+    try:
+        from app.integrations.crew_resources_loop import start_crew_resources_loop
+        start_crew_resources_loop()
+    except Exception:
+        print("[startup] WARNING — could not start crew-resources loop:")
+        traceback.print_exc()
+
     # Auto-promote ADMIN_EMAIL to admin role on every startup.
     # Set this env var on Render to grant admin access without a shell.
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()

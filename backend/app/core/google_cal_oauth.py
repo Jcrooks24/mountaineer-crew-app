@@ -15,6 +15,12 @@ from zoneinfo import ZoneInfo
 # are only pulled into memory when a Google API call actually occurs.
 
 SCOPES = [
+    # calendar.events grants read+write on individual events without giving
+    # us calendar-management powers. Needed by the Crew Resources daily
+    # event generator. The old read-only token will NOT have this scope —
+    # admin must re-run the OAuth flow after this scope bump, and paste
+    # the resulting token.json into /api/admin/cal-token.
+    "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",

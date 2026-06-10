@@ -646,6 +646,27 @@ class ReconcileEventsRequest(BaseModel):
     max_events: Optional[int] = None
 
 
+@router.post("/crew-resources/refresh")
+def crew_resources_refresh_endpoint(
+    days_ahead: int = Query(default=14, ge=0, le=60),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Force a Crew Resources event refresh for today + days_ahead. Useful
+    right after admin enables CREW_RESOURCES_ENABLED or re-authorizes
+    Google OAuth — otherwise the next scheduled refresh is an hour away."""
+    from app.integrations.crew_resources_calendar import (
+        update_crew_resources_for_horizon,
+    )
+    results = update_crew_resources_for_horizon(db, days_ahead=days_ahead)
+    return {
+        "ok": True,
+        "days": len(results),
+        "succeeded": sum(1 for r in results if r.get("ok")),
+        "results": results,
+    }
+
+
 @router.post("/sheets/reconcile-events")
 def reconcile_events_endpoint(
     payload: ReconcileEventsRequest,
