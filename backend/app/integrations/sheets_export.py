@@ -1765,7 +1765,7 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
 AVAILABILITY_HEADERS = [
     "user_name", "window_start", "window_end",
     *[f"day_{i:02d}" for i in range(1, 15)],
-    "updated_at",
+    "updated_at", "user_email",
 ]
 
 
@@ -1827,11 +1827,13 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
             latest_updated_at = upd
 
     end_date = start_date.fromordinal(start_date.toordinal() + 13)
+    user_email = (entry.get("user_email") or "").strip()
     row: Dict[str, Any] = {
         "user_name": user_name,
         "window_start": window_start,
         "window_end": end_date.isoformat(),
         "updated_at": _iso(latest_updated_at),
+        "user_email": user_email,
     }
     for i in range(14):
         d = start_date.fromordinal(start_date.toordinal() + i)

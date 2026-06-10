@@ -61,7 +61,11 @@ def _state_for_user(db: Session, user_id: int) -> AvailabilityState:
 
 
 def _queue_window_export(
-    db: Session, user_id: int, user_name: str, window_start: str
+    db: Session,
+    user_id: int,
+    user_name: str,
+    user_email: str,
+    window_start: str,
 ) -> None:
     """Refresh the sheet row for one (user, window) by reading the current
     state out of the DB and pushing it to AvailabilityStaging. Kept here so
@@ -82,6 +86,7 @@ def _queue_window_export(
     payload = {
         "user_id": user_id,
         "user_name": user_name,
+        "user_email": user_email,
         "window_start": window_start,
         "days": [
             {
@@ -202,6 +207,12 @@ def submit_batch(
 
     db.commit()
 
-    _queue_window_export(db, current_user.id, user_name, touched_window)
+    _queue_window_export(
+        db,
+        current_user.id,
+        user_name,
+        current_user.email or "",
+        touched_window,
+    )
 
     return _state_for_user(db, current_user.id)
