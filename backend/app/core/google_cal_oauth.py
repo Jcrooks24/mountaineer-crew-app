@@ -15,12 +15,18 @@ from zoneinfo import ZoneInfo
 # are only pulled into memory when a Google API call actually occurs.
 
 SCOPES = [
-    # calendar.events grants read+write on individual events without giving
-    # us calendar-management powers. Needed by the Crew Resources daily
-    # event generator. The old read-only token will NOT have this scope —
-    # admin must re-run the OAuth flow after this scope bump, and paste
-    # the resulting token.json into /api/admin/cal-token.
-    "https://www.googleapis.com/auth/calendar.events",
+    # NOTE: do not add scopes here speculatively — google-auth sends the
+    # full list on every token refresh, and any scope not in the original
+    # grant trips Google's token endpoint with `invalid_scope`, breaking
+    # every background sheets export until the user re-authorizes.
+    #
+    # The Crew Resources feature needs calendar.events. To enable it:
+    #   1. Run scripts/refresh_google_token.py locally with the broader
+    #      SCOPES list set, complete the OAuth flow, and paste the new
+    #      token.json into /api/admin/cal-token.
+    #   2. Only AFTER the new token is live, add calendar.events back
+    #      to this list and redeploy. The refresh will then succeed
+    #      against the broader-scope grant.
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
