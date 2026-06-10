@@ -1754,3 +1754,166 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
 
     _ssl_retry(_append)
     return 1
+
+
+# ── Availability ─────────────────────────────────────────────────────────────
+
+# 14 day-cells per window — each cell carries the date + status (+ optional
+# note) inline so admins can read a window without cross-referencing column
+# indexes back to a date. Window key (user_name + window_start) gates the
+# replace-style upsert: re-submits overwrite the row in place.
+AVAILABILITY_HEADERS = [
+    "user_name", "window_start", "window_end",
+    *[f"day_{i:02d}" for i in range(1, 15)],
+    "updated_at",
+]
+
+
+def _format_availability_cell(day: str, status: str, note: str) -> str:
+    base = f"{day}: {status}"
+    if note:
+        return f"{base} — {note}"
+    return base
+
+
+def _sheet_numeric_id(svc: Any, spreadsheet_id: str, tab: str) -> Optional[int]:
+    """Resolve a tab name to its numeric sheetId — required for
+    deleteDimension batchUpdate requests."""
+    meta = _ssl_retry(
+        lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    )
+    for s in meta.get("sheets", []):
+        props = s.get("properties", {})
+        if props.get("title") == tab:
+            sid = props.get("sheetId")
+            return int(sid) if sid is not None else None
+    return None
+
+
+def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """One row per (user, window_start) in AvailabilityStaging / Availability.
+    Re-submissions for the same window overwrite in place (delete-by-key,
+    then append).
+
+    Worksheet name controlled by SHEETS_AVAILABILITY_TAB so staging and prod
+    land on separate tabs even though they share the same spreadsheet id.
+    """
+    tab = os.getenv("SHEETS_AVAILABILITY_TAB", "Availability").strip() or "Availability"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    user_name = (entry.get("user_name") or "").strip()
+    window_start = (entry.get("window_start") or "").strip()
+    days = entry.get("days") or []
+    if not user_name or not window_start or not days:
+        return 0
+
+    # Build day_1..day_14 by index off window_start. The submission's `days`
+    # list is keyed by date so we look up each window-day from there. Days
+    # the crew didn't submit (gap in the window) render as blank.
+    try:
+        start_date = datetime.strptime(window_start, "%Y-%m-%d").date()
+    except ValueError:
+        return 0
+
+    by_day: Dict[str, Dict[str, Any]] = {}
+    latest_updated_at = None
+    for d in days:
+        day_key = (d.get("day") or "").strip()
+        if not day_key:
+            continue
+        by_day[day_key] = d
+        upd = d.get("updated_at")
+        if upd and (latest_updated_at is None or upd > latest_updated_at):
+            latest_updated_at = upd
+
+    end_date = start_date.fromordinal(start_date.toordinal() + 13)
+    row: Dict[str, Any] = {
+        "user_name": user_name,
+        "window_start": window_start,
+        "window_end": end_date.isoformat(),
+        "updated_at": _iso(latest_updated_at),
+    }
+    for i in range(14):
+        d = start_date.fromordinal(start_date.toordinal() + i)
+        key = d.isoformat()
+        entry_for_day = by_day.get(key)
+        if entry_for_day:
+            row[f"day_{i+1:02d}"] = _format_availability_cell(
+                key,
+                str(entry_for_day.get("status") or ""),
+                str(entry_for_day.get("note") or ""),
+            )
+        else:
+            row[f"day_{i+1:02d}"] = ""
+
+    svc = _get_sheets_svc(db)
+    actual_headers = _ssl_retry(
+        lambda: _ensure_tab(svc, spreadsheet_id, tab, AVAILABILITY_HEADERS)
+    )
+
+    # Compound dedupe key — _delete_sheet_rows_by_value only takes one column
+    # so we walk the values manually and delete rows that match both
+    # user_name and window_start.
+    try:
+        user_col = actual_headers.index("user_name")
+        win_col = actual_headers.index("window_start")
+    except ValueError:
+        user_col = win_col = None  # Tab malformed — skip delete, just append.
+
+    if user_col is not None and win_col is not None:
+        result = _ssl_retry(
+            lambda: svc.spreadsheets()
+            .values()
+            .get(spreadsheetId=spreadsheet_id, range=f"{tab}!A:Z")
+            .execute()
+        )
+        values = result.get("values", []) or []
+        rows_to_delete: List[int] = []
+        for idx, existing_row in enumerate(values):
+            if idx == 0:
+                continue  # header row
+            if (
+                len(existing_row) > max(user_col, win_col)
+                and existing_row[user_col] == user_name
+                and existing_row[win_col] == window_start
+            ):
+                rows_to_delete.append(idx)
+        if rows_to_delete:
+            sheet_numeric_id = _sheet_numeric_id(svc, spreadsheet_id, tab)
+            if sheet_numeric_id is not None:
+                # Delete bottom-up so earlier indexes don't shift mid-batch.
+                requests = [
+                    {
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": sheet_numeric_id,
+                                "dimension": "ROWS",
+                                "startIndex": i,
+                                "endIndex": i + 1,
+                            }
+                        }
+                    }
+                    for i in sorted(rows_to_delete, reverse=True)
+                ]
+                _ssl_retry(
+                    lambda: svc.spreadsheets()
+                    .batchUpdate(
+                        spreadsheetId=spreadsheet_id,
+                        body={"requests": requests},
+                    )
+                    .execute()
+                )
+
+    rows_out = [_build_row(row, actual_headers)]
+
+    def _append_avail():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows_out},
+        ).execute()
+
+    _ssl_retry(_append_avail)
+    return 1

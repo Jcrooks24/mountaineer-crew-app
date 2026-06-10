@@ -10,6 +10,8 @@ import {
   checkForAppUpdate,
   type UpdateResult,
 } from "../lib/appUpdate";
+import { fetchState, isHorizonLow, loadCache } from "../lib/availabilityStore";
+import { BetaTag } from "../components/BetaTag";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
@@ -56,6 +58,32 @@ export default function Profile() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Availability horizon — cache on mount, then refresh from server so the
+  // "you need to submit" badge is current. We only need to know whether the
+  // horizon is below the 14-day threshold; the picker page itself owns the
+  // full state.
+  const [availabilityHorizonLow, setAvailabilityHorizonLow] = useState<boolean>(() => {
+    const cache = loadCache();
+    const today = new Date();
+    const y = today.getFullYear();
+    const m = String(today.getMonth() + 1).padStart(2, "0");
+    const d = String(today.getDate()).padStart(2, "0");
+    return isHorizonLow(cache.horizon, `${y}-${m}-${d}`);
+  });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const s = await fetchState();
+      if (!s || cancelled) return;
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth() + 1).padStart(2, "0");
+      const d = String(today.getDate()).padStart(2, "0");
+      setAvailabilityHorizonLow(isHorizonLow(s.horizon, `${y}-${m}-${d}`));
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   function handleSignOut() {
     logout();
@@ -266,6 +294,17 @@ export default function Profile() {
         <div className="sectionTitle">Tools & Resources</div>
         <div className="col" style={{ gap: 8 }}>
           <ProfileNavRow
+            label="Scheduling Availability"
+            hint={
+              availabilityHorizonLow
+                ? "Update needed — submit availability for the next 2 weeks"
+                : "Tap days to set available / unavailable / conditional"
+            }
+            betaFeature="schedulingAvailability"
+            badgeTone={availabilityHorizonLow ? "warn" : null}
+            onClick={() => nav("/availability")}
+          />
+          <ProfileNavRow
             label="Log Expense / Reimbursement"
             hint="Mileage, personal-card reimbursement, or company-card receipts"
             onClick={() => nav("/reimbursement")}
@@ -309,11 +348,19 @@ function ProfileNavRow({
   label,
   hint,
   onClick,
+  betaFeature,
+  badgeTone,
 }: {
   label: string;
   hint?: string;
   onClick: () => void;
+  /** Feature key to gate a "beta" subtext via the shared BetaTag component. */
+  betaFeature?: string;
+  /** Renders a small filled dot to the right of the label when set; "warn"
+   *  surfaces action-needed states (e.g. submit availability). */
+  badgeTone?: "warn" | null;
 }) {
+  const warn = badgeTone === "warn";
   return (
     <button
       onClick={onClick}
@@ -322,12 +369,31 @@ function ProfileNavRow({
         gap: 12, width: "100%", textAlign: "left",
         padding: "11px 14px", fontSize: 14, fontWeight: 600,
         background: "rgba(255,255,255,0.04)",
-        border: "1px solid var(--border)",
+        border: warn ? "1px solid #ffb02e" : "1px solid var(--border)",
       }}
     >
       <span className="col" style={{ gap: 2 }}>
-        <span>{label}</span>
-        {hint && <span className="small" style={{ color: "var(--muted)" }}>{hint}</span>}
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {label}
+          {warn && (
+            <span
+              aria-label="Action needed"
+              style={{
+                width: 8, height: 8, borderRadius: "50%",
+                background: "#ffb02e", flexShrink: 0,
+              }}
+            />
+          )}
+        </span>
+        {betaFeature && <BetaTag feature={betaFeature} />}
+        {hint && (
+          <span
+            className="small"
+            style={{ color: warn ? "#ffb02e" : "var(--muted)" }}
+          >
+            {hint}
+          </span>
+        )}
       </span>
       <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
     </button>

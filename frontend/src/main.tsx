@@ -23,6 +23,7 @@ import DVIRPage from "./pages/DVIR";
 import LongDistance from "./pages/LongDistance";
 import DocumentLibrary from "./pages/DocumentLibrary";
 import Reimbursement from "./pages/Reimbursement";
+import Availability from "./pages/Availability";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -48,6 +49,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/long-distance" element={<RequireAuth><LongDistance /></RequireAuth>} />
           <Route path="/documents" element={<RequireAuth><DocumentLibrary /></RequireAuth>} />
           <Route path="/reimbursement" element={<RequireAuth><Reimbursement /></RequireAuth>} />
+          <Route path="/availability" element={<RequireAuth><Availability /></RequireAuth>} />
 
           {/* Everything else requires auth */}
           <Route
