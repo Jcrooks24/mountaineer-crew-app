@@ -32,9 +32,18 @@ export type AvailabilityDay = {
   updated_at?: string;
 };
 
+export type AvailabilityUnlock = {
+  id: number;
+  window_start: string;
+  granted_by_name: string;
+  granted_at: string;
+  note: string | null;
+};
+
 export type AvailabilityState = {
   horizon: string | null;  // last day the user has submitted, or null
   days: AvailabilityDay[];
+  unlocks?: AvailabilityUnlock[];
 };
 
 export type AvailabilityDraftDay = {
@@ -93,17 +102,18 @@ export function isLocked(day: string, todayIso: string): boolean {
 export function loadCache(): AvailabilityState {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return { horizon: null, days: [] };
+    if (!raw) return { horizon: null, days: [], unlocks: [] };
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.days)) {
-      return { horizon: null, days: [] };
+      return { horizon: null, days: [], unlocks: [] };
     }
     return {
       horizon: typeof parsed.horizon === "string" ? parsed.horizon : null,
       days: parsed.days as AvailabilityDay[],
+      unlocks: Array.isArray(parsed.unlocks) ? (parsed.unlocks as AvailabilityUnlock[]) : [],
     };
   } catch {
-    return { horizon: null, days: [] };
+    return { horizon: null, days: [], unlocks: [] };
   }
 }
 

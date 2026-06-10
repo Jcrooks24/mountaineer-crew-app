@@ -188,6 +188,7 @@ function EmployeesTab() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const [editingTagsFor, setEditingTagsFor] = useState<AdminUser | null>(null);
+  const [editingUnlocksFor, setEditingUnlocksFor] = useState<AdminUser | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -345,6 +346,13 @@ function EmployeesTab() {
                     >
                       → {u.role === "admin" ? "User" : "Admin"}
                     </button>
+                    <button
+                      onClick={() => setEditingUnlocksFor(u)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
+                      title="Unlock an availability window for this user"
+                    >
+                      Unlocks
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -365,7 +373,206 @@ function EmployeesTab() {
           }}
         />
       )}
+      {editingUnlocksFor && (
+        <AvailabilityUnlocksPicker
+          user={editingUnlocksFor}
+          onClose={() => setEditingUnlocksFor(null)}
+        />
+      )}
     </>
+  );
+}
+
+// Admin modal for granting / revoking availability-window unlocks. Each
+// (user, window_start) pair can hold at most one unlock — the POST is
+// idempotent so re-granting just refreshes the note + granted_by stamp.
+type AdminAvailabilityUnlock = {
+  id: number;
+  window_start: string;
+  granted_by_name: string;
+  granted_at: string;
+  note: string | null;
+};
+
+function AvailabilityUnlocksPicker({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const [unlocks, setUnlocks] = useState<AdminAvailabilityUnlock[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [windowStart, setWindowStart] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function load() {
+    setLoading(true);
+    apiFetch<AdminAvailabilityUnlock[]>(`/api/admin/availability-unlocks?user_id=${user.id}`)
+      .then((rows) => setUnlocks(rows))
+      .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  async function grant() {
+    if (!windowStart) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const created = await apiFetch<AdminAvailabilityUnlock>("/api/admin/availability-unlocks", {
+        method: "POST",
+        body: JSON.stringify({ user_id: user.id, window_start: windowStart, note: note.trim() || null }),
+      });
+      // Replace any existing row for the same window_start so the
+      // displayed list stays unique on (user, window).
+      setUnlocks((prev) => [
+        created,
+        ...prev.filter((u) => u.window_start !== created.window_start),
+      ]);
+      setWindowStart("");
+      setNote("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to grant unlock");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(id: number) {
+    if (!confirm("Revoke this unlock? The crew member will no longer be able to edit that window.")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/availability-unlocks/${id}`, { method: "DELETE" });
+      setUnlocks((prev) => prev.filter((u) => u.id !== id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to revoke");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, padding: 16, zIndex: 1000,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--card)", borderRadius: 12,
+          border: "1px solid var(--border)",
+          maxWidth: 480, width: "100%",
+          padding: 18, display: "flex", flexDirection: "column", gap: 14,
+          maxHeight: "90vh", overflowY: "auto",
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 800 }}>
+          Availability unlocks for {user.name || user.email}
+        </div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+          Granting an unlock lets the crew member edit one locked 14-day
+          window starting on the date below. The unlock persists until you
+          revoke it — recommend revoking once the crew member submits.
+        </div>
+
+        <div className="col" style={{ gap: 8 }}>
+          <label className="label">Window start (first day of the 2-week block)</label>
+          <input
+            type="date"
+            value={windowStart}
+            onChange={(e) => setWindowStart(e.target.value)}
+          />
+          <label className="label">Reason (optional)</label>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder='e.g. "approved time-off rescheduling per phone call"'
+          />
+          <button
+            type="button"
+            className="btnPrimary"
+            disabled={busy || !windowStart}
+            onClick={grant}
+            style={{ alignSelf: "flex-start", padding: "8px 14px" }}
+          >
+            {busy ? "Granting…" : "Grant unlock"}
+          </button>
+        </div>
+
+        <div style={{ height: 1, background: "var(--border)" }} />
+
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Existing unlocks</div>
+        {loading ? (
+          <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+        ) : unlocks.length === 0 ? (
+          <div className="small" style={{ color: "var(--muted)" }}>None.</div>
+        ) : (
+          <div className="col" style={{ gap: 6 }}>
+            {unlocks.map((u) => (
+              <div
+                key={u.id}
+                className="row"
+                style={{
+                  gap: 8, alignItems: "flex-start", justifyContent: "space-between",
+                  padding: "8px 10px", borderRadius: 8,
+                  border: "1px solid var(--border)",
+                }}
+              >
+                <div className="col" style={{ gap: 2, flex: 1 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>{u.window_start}</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>
+                    Granted by {u.granted_by_name} on {new Date(u.granted_at).toLocaleString()}
+                  </span>
+                  {u.note && (
+                    <span className="small" style={{ color: "var(--muted)" }}>"{u.note}"</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => revoke(u.id)}
+                  disabled={busy}
+                  style={{
+                    fontSize: 12, padding: "4px 10px",
+                    background: "none", color: "var(--danger)",
+                    border: "1px solid var(--danger)",
+                  }}
+                >
+                  Revoke
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: "none",
+              color: "var(--muted)",
+              border: "1px solid var(--border)",
+              padding: "8px 14px", fontSize: 13,
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

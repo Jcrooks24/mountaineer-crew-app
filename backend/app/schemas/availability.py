@@ -62,6 +62,20 @@ class AvailabilityDayOut(BaseModel):
         from_attributes = True
 
 
+class AvailabilityUnlockOut(BaseModel):
+    """Admin-granted exception that lets the crew member edit a window
+    that's normally locked. Returned alongside the user's own days so
+    the device can surface a banner pointing them at the unlocked window."""
+    id: int
+    window_start: str
+    granted_by_name: str
+    granted_at: datetime
+    note: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class AvailabilityState(BaseModel):
     """Server view of a crew member's current availability.
 
@@ -71,3 +85,4 @@ class AvailabilityState(BaseModel):
     """
     horizon: Optional[str]
     days: List[AvailabilityDayOut]
+    unlocks: List[AvailabilityUnlockOut] = []

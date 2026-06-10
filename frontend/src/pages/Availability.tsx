@@ -18,6 +18,7 @@ import {
   type AvailabilityDraftDay,
   type AvailabilityState,
   type AvailabilityStatus,
+  type AvailabilityUnlock,
 } from "../lib/availabilityStore";
 
 function formatHuman(iso: string): string {
@@ -253,13 +254,14 @@ export default function Availability() {
       // setCache would flash empty cells.
       setDraft(null);
       clearDraft();
-      // Advance activeWindowStart to the next window so a returning crew
-      // member with too little horizon still sees a picker. The horizon
-      // check below the picker gates whether the picker renders — once
-      // horizon is past today + 14 the page flips to "caught up".
+      // Reset activeWindowStart to the natural next window — horizon+1 or
+      // today, whichever is later. This drops the user back into the
+      // standard flow after both normal submissions and admin-unlocked
+      // edits (so editing a past unlocked window doesn't leave them
+      // stranded on it).
       const submittedRange = `${formatHuman(activeWindowStart)} → ${formatHuman(addDaysIso(activeWindowStart, 13))}`;
-      const next = addDaysIso(activeWindowStart, 14);
-      setActiveWindowStart(next);
+      const naturalNext = s.horizon ? addDaysIso(s.horizon, 1) : today;
+      setActiveWindowStart(naturalNext >= today ? naturalNext : today);
       setPostSubmitMsg(`Submitted ${submittedRange}.`);
     } catch (e) {
       const msg =
@@ -281,6 +283,11 @@ export default function Availability() {
   }
 
   const horizonLow = isHorizonLow(cache.horizon, today);
+  const unlocks = cache.unlocks ?? [];
+  const unlockForActiveWindow = unlocks.find((u) => u.window_start === activeWindowStart) ?? null;
+  // Show the picker if the user has work to do (horizon low) OR they're
+  // viewing an admin-unlocked window for editing.
+  const showPicker = horizonLow || !!unlockForActiveWindow;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -326,8 +333,16 @@ export default function Availability() {
 
       {tab === "history" ? (
         <HistoryView state={cache} activeWindowStart={activeWindowStart} />
-      ) : !horizonLow ? (
-        <CaughtUpView horizon={cache.horizon} postSubmitMsg={postSubmitMsg} />
+      ) : !showPicker ? (
+        <CaughtUpView
+          horizon={cache.horizon}
+          postSubmitMsg={postSubmitMsg}
+          unlocks={unlocks}
+          onOpenUnlock={(ws) => {
+            setPostSubmitMsg(null);
+            setActiveWindowStart(ws);
+          }}
+        />
       ) : (
         <>
           <div className="card">
@@ -343,20 +358,42 @@ export default function Availability() {
               Once submitted, if you're scheduled on an available day you're
               expected to work it (exception: scheduled with 3 or fewer days' notice).
             </div>
-            <div
-              className="small"
-              style={{
-                marginTop: 10, padding: "8px 10px", borderRadius: 8,
-                background: "rgba(255,176,46,0.10)",
-                border: "1px solid rgba(255,176,46,0.4)",
-                color: "var(--text)",
-              }}
-            >
-              You're submitting availability for this window only. Once it's
-              in, you're set — the next window will open here when your
-              submitted horizon dips below 2 weeks. If you need to change a
-              window that's already locked, contact the office.
-            </div>
+            {unlockForActiveWindow ? (
+              <div
+                className="small"
+                style={{
+                  marginTop: 10, padding: "8px 10px", borderRadius: 8,
+                  background: "rgba(93,214,194,0.10)",
+                  border: "1px solid var(--brand)",
+                  color: "var(--text)",
+                }}
+              >
+                The office unlocked this window for changes
+                {unlockForActiveWindow.granted_by_name
+                  ? <> (granted by <strong>{unlockForActiveWindow.granted_by_name}</strong>)</>
+                  : null}
+                {unlockForActiveWindow.note
+                  ? <> — <em>"{unlockForActiveWindow.note}"</em></>
+                  : null}
+                . Edit and resubmit; the office will revoke the unlock once
+                they've confirmed your update.
+              </div>
+            ) : (
+              <div
+                className="small"
+                style={{
+                  marginTop: 10, padding: "8px 10px", borderRadius: 8,
+                  background: "rgba(255,176,46,0.10)",
+                  border: "1px solid rgba(255,176,46,0.4)",
+                  color: "var(--text)",
+                }}
+              >
+                You're submitting availability for this window only. Once it's
+                in, you're set — the next window will open here when your
+                submitted horizon dips below 2 weeks. If you need to change a
+                window that's already locked, contact the office.
+              </div>
+            )}
           </div>
 
           {/* Quick fill — full 7-day week, independent state per button. */}
@@ -659,9 +696,13 @@ export default function Availability() {
 function CaughtUpView({
   horizon,
   postSubmitMsg,
+  unlocks,
+  onOpenUnlock,
 }: {
   horizon: string | null;
   postSubmitMsg: string | null;
+  unlocks: AvailabilityUnlock[];
+  onOpenUnlock: (windowStart: string) => void;
 }) {
   return (
     <>
@@ -669,6 +710,56 @@ function CaughtUpView({
         <div className="card" style={{ background: "rgba(45,212,191,0.1)" }}>
           <div style={{ color: "var(--ok)", fontSize: 14, fontWeight: 700 }}>
             ✓ {postSubmitMsg}
+          </div>
+        </div>
+      )}
+      {unlocks.length > 0 && (
+        <div
+          className="card"
+          style={{
+            background: "rgba(93,214,194,0.08)",
+            border: "1px solid var(--brand)",
+          }}
+        >
+          <div className="sectionTitle" style={{ color: "var(--brand)" }}>
+            Unlocked by the office
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+            The office has reopened {unlocks.length === 1 ? "this window" : "these windows"} for you to edit.
+            Tap to open and submit your changes.
+          </div>
+          <div className="col" style={{ gap: 6 }}>
+            {unlocks.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => onOpenUnlock(u.window_start)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  width: "100%", padding: "10px 12px", borderRadius: 8,
+                  background: "var(--card)",
+                  border: "1px solid var(--brand)",
+                  color: "var(--text)", textAlign: "left", cursor: "pointer",
+                }}
+              >
+                <span className="col" style={{ gap: 2 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>
+                    {formatHuman(u.window_start)} → {formatHuman(addDaysIso(u.window_start, 13))}
+                  </span>
+                  {u.note && (
+                    <span className="small" style={{ color: "var(--muted)" }}>
+                      "{u.note}"
+                    </span>
+                  )}
+                  {u.granted_by_name && (
+                    <span className="small" style={{ color: "var(--muted)" }}>
+                      Granted by {u.granted_by_name}
+                    </span>
+                  )}
+                </span>
+                <span style={{ color: "var(--brand)", fontWeight: 700, fontSize: 13 }}>Edit ›</span>
+              </button>
+            ))}
           </div>
         </div>
       )}

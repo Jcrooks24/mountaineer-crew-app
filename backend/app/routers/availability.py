@@ -21,10 +21,12 @@ from typing import List, Optional
 LOCK_WINDOW_DAYS = 14
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db, require_admin
 from app.db.models.availability import AVAILABILITY_STATUSES, AvailabilityDay
+from app.db.models.availability_unlock import AvailabilityUnlock
 from app.db.models.user import User
 from app.integrations.sheets_export import (
     export_availability_window_to_sheets,
@@ -34,9 +36,34 @@ from app.schemas.availability import (
     AvailabilityBatchIn,
     AvailabilityDayOut,
     AvailabilityState,
+    AvailabilityUnlockOut,
 )
 
 router = APIRouter(prefix="/api/availability", tags=["availability"])
+unlocks_router = APIRouter(
+    prefix="/api/admin/availability-unlocks", tags=["availability"]
+)
+
+
+def _unlock_to_out(row: AvailabilityUnlock) -> AvailabilityUnlockOut:
+    return AvailabilityUnlockOut(
+        id=row.id,
+        window_start=row.window_start,
+        granted_by_name=row.granted_by_name,
+        granted_at=row.granted_at,
+        note=row.note,
+    )
+
+
+def _active_unlock_windows(db: Session, user_id: int) -> set[str]:
+    """The set of window_starts the caller has an active unlock for. Used
+    by the submit handler to bypass the locked-day reject for those windows."""
+    rows = (
+        db.query(AvailabilityUnlock.window_start)
+        .filter(AvailabilityUnlock.user_id == user_id)
+        .all()
+    )
+    return {r[0] for r in rows}
 
 
 def _to_out(row: AvailabilityDay) -> AvailabilityDayOut:
@@ -57,7 +84,17 @@ def _state_for_user(db: Session, user_id: int) -> AvailabilityState:
         .all()
     )
     horizon = rows[-1].day if rows else None
-    return AvailabilityState(horizon=horizon, days=[_to_out(r) for r in rows])
+    unlock_rows = (
+        db.query(AvailabilityUnlock)
+        .filter(AvailabilityUnlock.user_id == user_id)
+        .order_by(AvailabilityUnlock.window_start.asc())
+        .all()
+    )
+    return AvailabilityState(
+        horizon=horizon,
+        days=[_to_out(r) for r in rows],
+        unlocks=[_unlock_to_out(u) for u in unlock_rows],
+    )
 
 
 def _queue_window_export(
@@ -137,10 +174,22 @@ def submit_batch(
     user_name = current_user.name or current_user.email or ""
     today = date.today()
 
+    try:
+        window_start_date = date.fromisoformat(body.window_start)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail=f"Bad window_start: {body.window_start}"
+        )
+    window_end_date = date.fromordinal(window_start_date.toordinal() + 13)
+
+    unlocked_windows = _active_unlock_windows(db, current_user.id)
+    window_unlocked = body.window_start in unlocked_windows
+
     # Locked-day reject: any day that already exists on the server AND falls
-    # within LOCK_WINDOW_DAYS of today cannot be changed via this endpoint.
-    # Crew must contact admin. We reject the entire batch (not per-day) so
-    # the device never half-commits a window the user thought they submitted.
+    # within LOCK_WINDOW_DAYS of today cannot be changed via this endpoint —
+    # unless admin has granted an unlock for this specific window. We reject
+    # the entire batch (not per-day) so the device never half-commits a
+    # window the user thought they submitted.
     locked_changes: list[str] = []
     for entry in body.days:
         if entry.status not in AVAILABILITY_STATUSES:
@@ -151,6 +200,19 @@ def submit_batch(
             day_date = date.fromisoformat(entry.day)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Bad day: {entry.day}")
+
+        # Sanity: every day in the batch must fall within the declared
+        # window. Prevents a malicious client from laundering arbitrary
+        # days through an unlock for a different window.
+        if not (window_start_date <= day_date <= window_end_date):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Day {entry.day} is outside the declared window "
+                    f"({body.window_start} → {window_end_date.isoformat()})"
+                ),
+            )
+
         days_ahead = (day_date - today).days
         if days_ahead < LOCK_WINDOW_DAYS:
             existing = (
@@ -163,7 +225,7 @@ def submit_batch(
             )
             if existing:
                 locked_changes.append(entry.day)
-    if locked_changes:
+    if locked_changes and not window_unlocked:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -216,3 +278,98 @@ def submit_batch(
     )
 
     return _state_for_user(db, current_user.id)
+
+
+# ── Admin: unlock CRUD ──────────────────────────────────────────────────────
+
+
+class AvailabilityUnlockIn(BaseModel):
+    user_id: int
+    window_start: str       # YYYY-MM-DD
+    note: Optional[str] = None
+
+
+@unlocks_router.get("", response_model=List[AvailabilityUnlockOut])
+def list_unlocks(
+    user_id: Optional[int] = Query(default=None),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """All active unlocks, or just one user's if user_id is supplied. There's
+    no expiration in the data model — admin revokes manually when the
+    exception window has passed."""
+    q = db.query(AvailabilityUnlock)
+    if user_id is not None:
+        q = q.filter(AvailabilityUnlock.user_id == user_id)
+    rows = q.order_by(
+        AvailabilityUnlock.user_name.asc(),
+        AvailabilityUnlock.window_start.asc(),
+    ).all()
+    return [_unlock_to_out(r) for r in rows]
+
+
+@unlocks_router.post("", response_model=AvailabilityUnlockOut, status_code=201)
+def grant_unlock(
+    body: AvailabilityUnlockIn,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    try:
+        date.fromisoformat(body.window_start)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail=f"window_start must be YYYY-MM-DD: {body.window_start}"
+        )
+    user = db.query(User).filter(User.id == body.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Idempotent grant — if an unlock already exists for (user, window),
+    # patch the note + granted_by fields and return that row. Saves admins
+    # from having to revoke + re-grant when adjusting the note.
+    existing = (
+        db.query(AvailabilityUnlock)
+        .filter(
+            AvailabilityUnlock.user_id == body.user_id,
+            AvailabilityUnlock.window_start == body.window_start,
+        )
+        .first()
+    )
+    now = datetime.now(timezone.utc)
+    note = (body.note or "").strip() or None
+    if existing:
+        existing.granted_by_id = admin.id
+        existing.granted_by_name = admin.name or admin.email or ""
+        existing.granted_at = now
+        existing.note = note
+        db.commit()
+        db.refresh(existing)
+        return _unlock_to_out(existing)
+
+    row = AvailabilityUnlock(
+        user_id=body.user_id,
+        user_name=user.name or user.email or "",
+        window_start=body.window_start,
+        granted_by_id=admin.id,
+        granted_by_name=admin.name or admin.email or "",
+        granted_at=now,
+        note=note,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _unlock_to_out(row)
+
+
+@unlocks_router.delete("/{unlock_id}", status_code=204)
+def revoke_unlock(
+    unlock_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    row = db.query(AvailabilityUnlock).filter(AvailabilityUnlock.id == unlock_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Unlock not found")
+    db.delete(row)
+    db.commit()
+    return None
