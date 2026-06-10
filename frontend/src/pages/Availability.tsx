@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { BetaTag } from "../components/BetaTag";
-import { ApiError } from "../api/client";
+import { apiFetch, ApiError } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import {
   addDaysIso,
   clearDraft,
@@ -10,6 +11,7 @@ import {
   isLocked,
   loadCache,
   loadDraft,
+  saveCache,
   saveDraft,
   submitDraft,
   todayLocalIso,
@@ -20,6 +22,13 @@ import {
   type AvailabilityStatus,
   type AvailabilityUnlock,
 } from "../lib/availabilityStore";
+
+type AdminUserLite = {
+  id: number;
+  email: string;
+  name: string | null;
+  is_active: boolean;
+};
 
 function formatHuman(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
@@ -65,7 +74,24 @@ type Tab = "submit" | "history";
 
 export default function Availability() {
   const nav = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const today = useMemo(() => todayLocalIso(), []);
+
+  // viewingUserId: null = looking at your own data; otherwise an admin is
+  // viewing/editing another crew member. Drives both the data source and
+  // whether History cells become editable.
+  const [viewingUserId, setViewingUserId] = useState<number | null>(null);
+  const isViewingSelf = viewingUserId === null;
+
+  // Admin-only user list for the "View as" picker. Lazy-loaded once on mount.
+  const [adminUsers, setAdminUsers] = useState<AdminUserLite[]>([]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    apiFetch<AdminUserLite[]>("/api/admin/users")
+      .then(setAdminUsers)
+      .catch(() => { /* silently ignore — picker just stays empty */ });
+  }, [isAdmin]);
 
   const [cache, setCache] = useState<AvailabilityState>(() => loadCache());
   // Discard any draft whose window_start has already passed — otherwise a
@@ -113,15 +139,71 @@ export default function Availability() {
   const [expandedNote, setExpandedNote] = useState<string | null>(null);
   const [postSubmitMsg, setPostSubmitMsg] = useState<string | null>(null);
 
-  // Fetch server state on mount. Cache still drives the initial render.
+  // Fetch server state on mount or whenever the viewed user changes. For
+  // self the regular /api/availability path keeps the localStorage cache
+  // warm; for an admin viewing another user we hit /api/admin/availability/{id}
+  // and replace state in memory but don't persist (the admin shouldn't pollute
+  // their own cache with a teammate's data).
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const s = await fetchState();
-      if (!cancelled && s) setCache(s);
+      if (viewingUserId === null) {
+        const s = await fetchState();
+        if (!cancelled && s) setCache(s);
+        return;
+      }
+      try {
+        const s = await apiFetch<AvailabilityState>(`/api/admin/availability/${viewingUserId}`);
+        if (!cancelled) setCache(s);
+      } catch {
+        if (!cancelled) setCache({ horizon: null, days: [], unlocks: [] });
+      }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [viewingUserId]);
+
+  // Switching to another user — clear any active draft and reset the
+  // active window so admin starts fresh in the History tab.
+  useEffect(() => {
+    if (viewingUserId !== null) {
+      setDraft(null);
+      clearDraft();
+      setTab("history");
+    } else {
+      // Re-honor the cached self state when switching back to self.
+      const selfCache = loadCache();
+      setCache(selfCache);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewingUserId]);
+
+  // Admin click-cycle handler used by the History tab when isAdmin is true.
+  // Sends a single-day patch through the admin endpoint and optimistically
+  // updates local state on success. Bypasses the 14-day lock since this
+  // is the whole point of the override.
+  async function adminCycleHistoryDay(targetUserId: number, day: AvailabilityDay) {
+    const nextStat = nextStatus(day.status);
+    try {
+      const updated = await apiFetch<AvailabilityState>(
+        `/api/admin/availability/${targetUserId}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            window_start: day.window_start,
+            days: [{ day: day.day, status: nextStat, note: day.note ?? null }],
+          }),
+        },
+      );
+      setCache(updated);
+      if (viewingUserId === null) saveCache(updated);
+    } catch (e) {
+      alert(
+        e instanceof ApiError
+          ? `Edit failed: ${e.message}`
+          : "Edit failed — check connection and try again.",
+      );
+    }
+  }
 
   // The 14 ISO dates of the current window, in order.
   const windowDays = useMemo(
@@ -306,10 +388,48 @@ export default function Availability() {
         </button>
       </div>
 
-      {/* Tab switcher — Submit (active window) vs History (read-only past). */}
+      {/* Admin-only "View as" picker. Choosing another user fetches their
+          availability and makes History cells click-cycle editable. */}
+      {isAdmin && (
+        <div className="card">
+          <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div className="col" style={{ gap: 2, flex: "1 1 200px" }}>
+              <div className="sectionTitle" style={{ marginBottom: 0 }}>Admin view</div>
+              <div className="small" style={{ color: "var(--muted)" }}>
+                Tap a cell in History to cycle status. Edits bypass the 2-week lock.
+              </div>
+            </div>
+            <select
+              value={viewingUserId === null ? "" : String(viewingUserId)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setViewingUserId(v === "" ? null : Number(v));
+              }}
+              style={{
+                flex: "1 1 200px", padding: "8px 10px",
+                borderRadius: 8, border: "1px solid var(--border)",
+                background: "var(--bg)", color: "var(--text)", fontSize: 13,
+              }}
+            >
+              <option value="">Yourself (default)</option>
+              {adminUsers
+                .filter((u) => u.is_active && u.id !== user?.id)
+                .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email))
+                .map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name || u.email}
+                  </option>
+                ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* Tab switcher — Submit hidden when an admin is viewing another user
+          (Submit is for the crew member's own flow; admins edit via History). */}
       <div className="card" style={{ padding: 6 }}>
         <div className="row" style={{ gap: 6 }}>
-          {(["submit", "history"] as Tab[]).map((t) => {
+          {(isViewingSelf ? (["submit", "history"] as Tab[]) : (["history"] as Tab[])).map((t) => {
             const active = tab === t;
             return (
               <button
@@ -331,8 +451,15 @@ export default function Availability() {
         </div>
       </div>
 
-      {tab === "history" ? (
-        <HistoryView state={cache} activeWindowStart={activeWindowStart} />
+      {tab === "history" || !isViewingSelf ? (
+        <HistoryView
+          state={cache}
+          activeWindowStart={activeWindowStart}
+          editable={isAdmin}
+          onAdminCycle={isAdmin
+            ? (d) => adminCycleHistoryDay(viewingUserId ?? user!.id, d)
+            : undefined}
+        />
       ) : !showPicker ? (
         <CaughtUpView
           horizon={cache.horizon}
@@ -785,12 +912,20 @@ function CaughtUpView({
 function HistoryView({
   state,
   activeWindowStart,
+  editable,
+  onAdminCycle,
 }: {
   state: AvailabilityState;
   activeWindowStart: string;
+  /** When true (admin only), cells render as click-cycle buttons. */
+  editable?: boolean;
+  /** Click handler that advances the cell's status one step. Required when
+   *  editable is true; called with the original day record. */
+  onAdminCycle?: (day: AvailabilityDay) => void;
 }) {
-  // Group submitted days by window_start. Each group becomes a read-only
-  // 14-cell grid that mirrors the layout the user saw at submit time.
+  // Group submitted days by window_start. Each group becomes a 14-cell grid
+  // that mirrors the layout the user saw at submit time. Read-only by
+  // default; admins get click-cycle cells.
   const windows = useMemo(() => {
     const byWindow = new Map<string, AvailabilityDay[]>();
     for (const d of state.days) {
@@ -842,23 +977,8 @@ function HistoryView({
                 const colors = st ? STATUS_COLORS[st] : null;
                 const noteText = (d?.note || "").trim();
                 const hasNote = noteText.length > 0;
-                return (
-                  <div
-                    key={day}
-                    aria-label={`${day} ${st ?? "unset"}${hasNote ? ` — ${noteText}` : ""}`}
-                    title={hasNote ? noteText : undefined}
-                    style={{
-                      display: "flex", flexDirection: "column",
-                      alignItems: "center", justifyContent: "flex-start",
-                      gap: 2, minHeight: 76, padding: 6,
-                      borderRadius: 8,
-                      border: `1px solid ${colors ? colors.fg : "var(--border)"}`,
-                      background: colors ? colors.bg : "transparent",
-                      color: colors ? colors.fg : "var(--muted)",
-                      position: "relative",
-                      opacity: st ? 1 : 0.5,
-                    }}
-                  >
+                const cellContent = (
+                  <>
                     <div style={{ fontSize: 10, fontWeight: 600, opacity: 0.85 }}>
                       {dayOfWeekShort(day)}
                     </div>
@@ -880,6 +1000,41 @@ function HistoryView({
                         {noteText}
                       </div>
                     )}
+                  </>
+                );
+                const cellStyle: React.CSSProperties = {
+                  display: "flex", flexDirection: "column",
+                  alignItems: "center", justifyContent: "flex-start",
+                  gap: 2, minHeight: 76, padding: 6,
+                  borderRadius: 8,
+                  border: `1px solid ${colors ? colors.fg : "var(--border)"}`,
+                  background: colors ? colors.bg : "transparent",
+                  color: colors ? colors.fg : "var(--muted)",
+                  position: "relative",
+                  opacity: st ? 1 : 0.5,
+                };
+                if (editable && d && onAdminCycle) {
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => onAdminCycle(d)}
+                      aria-label={`${day} ${st ?? "unset"}${hasNote ? ` — ${noteText}` : ""} (admin click to cycle)`}
+                      title={hasNote ? noteText : "Click to cycle status"}
+                      style={{ ...cellStyle, cursor: "pointer" }}
+                    >
+                      {cellContent}
+                    </button>
+                  );
+                }
+                return (
+                  <div
+                    key={day}
+                    aria-label={`${day} ${st ?? "unset"}${hasNote ? ` — ${noteText}` : ""}`}
+                    title={hasNote ? noteText : undefined}
+                    style={cellStyle}
+                  >
+                    {cellContent}
                   </div>
                 );
               })}

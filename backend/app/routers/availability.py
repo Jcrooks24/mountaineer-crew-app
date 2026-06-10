@@ -373,3 +373,111 @@ def revoke_unlock(
     db.delete(row)
     db.commit()
     return None
+
+
+# ── Admin: per-user availability override ──────────────────────────────────
+
+
+admin_per_user_router = APIRouter(
+    prefix="/api/admin/availability", tags=["availability"]
+)
+
+
+@admin_per_user_router.get("/{user_id}", response_model=AvailabilityState)
+def admin_get_user_state(
+    user_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Read any crew member's full availability state. Used by the
+    admin-side editor on /availability so the office can manually correct
+    a past submission without asking the crew member to redo it."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _state_for_user(db, user_id)
+
+
+@admin_per_user_router.post("/{user_id}", response_model=AvailabilityState)
+def admin_upsert_user_state(
+    user_id: int,
+    body: AvailabilityBatchIn,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Bulk-upsert a crew member's availability days, bypassing the
+    lock-window rule. Same input shape as the crew-facing POST but with
+    no 14-day-lock or window-bounds check — the office is trusted to
+    enter correct data, and that's the whole point of the override.
+
+    Sheet export still groups by (user, window_start), so admin should
+    pass a sensible window_start that matches the days they're touching.
+    """
+    if not body.days:
+        raise HTTPException(status_code=400, detail="No days provided")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = datetime.now(timezone.utc)
+    user_name = user.name or user.email or ""
+
+    for entry in body.days:
+        if entry.status not in AVAILABILITY_STATUSES:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid status: {entry.status}"
+            )
+        try:
+            date.fromisoformat(entry.day)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Bad day: {entry.day}")
+
+    touched_window = body.window_start
+    for entry in body.days:
+        existing = (
+            db.query(AvailabilityDay)
+            .filter(
+                AvailabilityDay.user_id == user_id,
+                AvailabilityDay.day == entry.day,
+            )
+            .first()
+        )
+        note = (entry.note or "").strip() or None
+        if existing:
+            existing.status = entry.status
+            existing.note = note
+            existing.user_name = user_name
+            # Preserve original window_start so the sheet row admin sees
+            # stays grouped where it was — body.window_start is only used
+            # as a fallback if the row is brand new.
+            existing.updated_at = now
+        else:
+            db.add(
+                AvailabilityDay(
+                    user_id=user_id,
+                    user_name=user_name,
+                    day=entry.day,
+                    status=entry.status,
+                    note=note,
+                    window_start=body.window_start,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+    db.commit()
+
+    _queue_window_export(
+        db,
+        user_id,
+        user_name,
+        user.email or "",
+        touched_window,
+    )
+
+    print(
+        f"[availability] admin override: {admin.email or admin.id} edited "
+        f"{len(body.days)} day(s) for user {user_id}"
+    )
+
+    return _state_for_user(db, user_id)

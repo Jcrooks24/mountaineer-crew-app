@@ -47,6 +47,7 @@ from app.routers.reimbursement import router as reimbursement_router
 from app.routers.availability import (
     router as availability_router,
     unlocks_router as availability_unlocks_router,
+    admin_per_user_router as availability_admin_router,
 )
 from app.routers.employee_tags import (
     router as employee_tags_router,
@@ -178,5 +179,6 @@ app.include_router(office_hours_router)   # /api/office-hours (admin-only)
 app.include_router(reimbursement_router)  # /api/reimbursements
 app.include_router(availability_router)             # /api/availability
 app.include_router(availability_unlocks_router)     # /api/admin/availability-unlocks
+app.include_router(availability_admin_router)       # /api/admin/availability/{user_id}
 app.include_router(employee_tags_router)         # /api/admin/employee-tags
 app.include_router(employee_tags_users_router)   # /api/admin/users/{id}/employee-tags
