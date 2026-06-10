@@ -263,6 +263,7 @@ export async function renderedRows(): Promise<ReimbursementRow[]> {
       job_uuid: p.job_uuid || null,
       job_name: p.job_name || null,
       job_date: p.job_date || null,
+      expense_date: p.expense_date || null,
       odometer_start: null,
       odometer_end: null,
       odometer_start_photo_url: null,
