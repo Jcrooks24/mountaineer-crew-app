@@ -67,18 +67,33 @@ export default function Availability() {
   const today = useMemo(() => todayLocalIso(), []);
 
   const [cache, setCache] = useState<AvailabilityState>(() => loadCache());
-  const [draft, setDraft] = useState<AvailabilityDraft | null>(() => loadDraft());
+  // Discard any draft whose window_start has already passed — otherwise a
+  // returning user who tested months ago lands on a stale draft they can't
+  // realistically submit (the window's already in the past).
+  const [draft, setDraft] = useState<AvailabilityDraft | null>(() => {
+    const d = loadDraft();
+    if (d && d.window_start < todayLocalIso()) {
+      clearDraft();
+      return null;
+    }
+    return d;
+  });
   const [tab, setTab] = useState<Tab>("submit");
 
   // Sticky active window — initialized from draft / cache, then stays put.
   // Submitting the current window advances it explicitly to the next one
-  // rather than being recomputed from the new horizon.
+  // rather than being recomputed from the new horizon. Clamps to >= today
+  // so a stale cached horizon doesn't drop the user on a past window.
   const [activeWindowStart, setActiveWindowStart] = useState<string>(() => {
+    const today = todayLocalIso();
     const d = loadDraft();
-    if (d?.window_start) return d.window_start;
+    if (d?.window_start && d.window_start >= today) return d.window_start;
     const c = loadCache();
-    if (c.horizon) return addDaysIso(c.horizon, 1);
-    return todayLocalIso();
+    if (c.horizon) {
+      const candidate = addDaysIso(c.horizon, 1);
+      return candidate >= today ? candidate : today;
+    }
+    return today;
   });
 
   // Independent quick-fill status per day-of-week. Decoupled from the
