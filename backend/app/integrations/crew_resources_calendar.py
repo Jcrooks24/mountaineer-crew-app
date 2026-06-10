@@ -110,11 +110,12 @@ def _day_bounds(target: date) -> Tuple[datetime, datetime]:
 
 def _available_employees(db: Session, target: date) -> List[Dict[str, Any]]:
     """Crew available (or conditional) for the day, joined with each user's
-    tag IDs. Returns a list of {user_id, name, email, status, tag_ids}.
+    tag IDs. Returns a list of {user_id, name, email, status, note, tag_ids}.
 
     'unavailable' is excluded — they shouldn't appear in the Crew Resources
     roster. 'conditional' stays in with a flag so the description can mark
-    them clearly.
+    them clearly. The crew member's per-day note flows through so the
+    description can show context like "available after 1pm".
     """
     day_iso = target.isoformat()
     rows = (
@@ -123,6 +124,7 @@ def _available_employees(db: Session, target: date) -> List[Dict[str, Any]]:
             User.email,
             User.name,
             AvailabilityDay.status,
+            AvailabilityDay.note,
         )
         .join(AvailabilityDay, AvailabilityDay.user_id == User.id)
         .filter(
@@ -150,6 +152,7 @@ def _available_employees(db: Session, target: date) -> List[Dict[str, Any]]:
             "email": (r.email or "").strip().lower(),
             "name": r.name or r.email or "(no name)",
             "status": r.status,
+            "note": (r.note or "").strip(),
             "tag_ids": tags_by_user.get(r.id, []),
         }
         for r in rows
@@ -299,19 +302,23 @@ def build_description(
             for p in people:
                 lead_mark = "★ " if p["is_lead"] else "  "
                 cond = " (conditional)" if p["status"] == "conditional" else ""
-                lines.append(f"  {lead_mark}{p['name']}{cond}")
+                note = p.get("note") or ""
+                note_part = f' — "{note}"' if note else ""
+                lines.append(f"  {lead_mark}{p['name']}{cond}{note_part}")
             lines.append("")
 
     if scheduled_rows:
         lines.append("—— SCHEDULED ——")
         lines.append("")
-        # Scheduled section is flat: name (tier, role) — blocks
+        # Scheduled section is flat: name (tier, role) — blocks [+ note]
         scheduled_rows.sort(key=lambda x: (_tier_sort_key(x[0]), x[1]["name"].lower()))
         for tier, p, blocks_text in scheduled_rows:
             tier_text = tier or "Other"
             role = ", lead" if p["is_lead"] else ""
             cond = " ⚠ conditional" if p["status"] == "conditional" else ""
-            lines.append(f"{p['name']} ({tier_text}{role}){cond} — {blocks_text}")
+            note = p.get("note") or ""
+            note_part = f' — note: "{note}"' if note else ""
+            lines.append(f"{p['name']} ({tier_text}{role}){cond} — {blocks_text}{note_part}")
 
     return "\n".join(lines).rstrip() + "\n"
 

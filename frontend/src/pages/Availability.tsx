@@ -149,29 +149,6 @@ export default function Availability() {
     return m;
   }, [cache, draft, windowDays, activeWindowStart]);
 
-  // Run prior-window prefill once when the active window has no draft and
-  // no server data yet. Copies the matching DOW status (not notes) from the
-  // most recent 14-day stretch the user submitted.
-  useEffect(() => {
-    if (draft && draft.window_start === activeWindowStart && draft.days.length > 0) return;
-    const hasAnyServerData = windowDays.some((d) =>
-      cache.days.some((c) => c.day === d),
-    );
-    if (hasAnyServerData) return;
-
-    // Use addDaysIso(d, -14): each window day pulls from "same DOW, 14 days back".
-    const prefilled: AvailabilityDraftDay[] = [];
-    for (const wd of windowDays) {
-      const prior = cache.days.find((c) => c.day === addDaysIso(wd, -14));
-      if (prior) prefilled.push({ day: wd, status: prior.status, note: null });
-    }
-    if (prefilled.length === 0) return;
-    const next: AvailabilityDraft = { window_start: activeWindowStart, days: prefilled };
-    setDraft(next);
-    saveDraft(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWindowStart, cache]);
-
   // ── Mutations ─────────────────────────────────────────────────────────────
 
   // Helper: produce a new draft from the current one by patching a set of
@@ -276,13 +253,14 @@ export default function Availability() {
       // setCache would flash empty cells.
       setDraft(null);
       clearDraft();
-      // Advance to the next 14-day window so the user can keep going,
-      // and surface a confirmation so the screen doesn't feel inert.
+      // Advance activeWindowStart to the next window so a returning crew
+      // member with too little horizon still sees a picker. The horizon
+      // check below the picker gates whether the picker renders — once
+      // horizon is past today + 14 the page flips to "caught up".
+      const submittedRange = `${formatHuman(activeWindowStart)} → ${formatHuman(addDaysIso(activeWindowStart, 13))}`;
       const next = addDaysIso(activeWindowStart, 14);
       setActiveWindowStart(next);
-      setPostSubmitMsg(
-        `Submitted ${formatHuman(activeWindowStart)} → ${formatHuman(addDaysIso(activeWindowStart, 13))}. Next up: ${formatHuman(next)}.`,
-      );
+      setPostSubmitMsg(`Submitted ${submittedRange}.`);
     } catch (e) {
       const msg =
         e instanceof ApiError
@@ -348,6 +326,8 @@ export default function Availability() {
 
       {tab === "history" ? (
         <HistoryView state={cache} activeWindowStart={activeWindowStart} />
+      ) : !horizonLow ? (
+        <CaughtUpView horizon={cache.horizon} postSubmitMsg={postSubmitMsg} />
       ) : (
         <>
           <div className="card">
@@ -363,20 +343,20 @@ export default function Availability() {
               Once submitted, if you're scheduled on an available day you're
               expected to work it (exception: scheduled with 3 or fewer days' notice).
             </div>
-            {horizonLow && (
-              <div
-                className="small"
-                style={{
-                  marginTop: 10, padding: "8px 10px", borderRadius: 8,
-                  background: "rgba(255,176,46,0.10)",
-                  border: "1px solid rgba(255,176,46,0.4)",
-                  color: "var(--text)",
-                }}
-              >
-                Your submitted availability is less than 2 weeks out — please fill
-                in this window so the office can keep scheduling you confidently.
-              </div>
-            )}
+            <div
+              className="small"
+              style={{
+                marginTop: 10, padding: "8px 10px", borderRadius: 8,
+                background: "rgba(255,176,46,0.10)",
+                border: "1px solid rgba(255,176,46,0.4)",
+                color: "var(--text)",
+              }}
+            >
+              You're submitting availability for this window only. Once it's
+              in, you're set — the next window will open here when your
+              submitted horizon dips below 2 weeks. If you need to change a
+              window that's already locked, contact the office.
+            </div>
           </div>
 
           {/* Quick fill — full 7-day week, independent state per button. */}
@@ -429,20 +409,22 @@ export default function Availability() {
                 const colors = st ? STATUS_COLORS[st] : null;
                 const isTodayDay = day === today;
                 const locked = isLocked(day, today);
-                const hasNote = !!(current?.note && current.note.trim().length > 0);
+                const noteText = (current?.note || "").trim();
+                const hasNote = noteText.length > 0;
                 return (
                   <button
                     key={day}
                     type="button"
                     onClick={() => cycleDay(day)}
                     disabled={locked}
-                    aria-label={`${day} ${st ?? "unset"}${locked ? " (locked)" : ""}`}
+                    aria-label={`${day} ${st ?? "unset"}${locked ? " (locked)" : ""}${hasNote ? ` — ${noteText}` : ""}`}
+                    title={hasNote ? noteText : (locked ? "Locked — contact the office to change this day" : undefined)}
                     style={{
                       display: "flex", flexDirection: "column",
-                      alignItems: "center", justifyContent: "center",
+                      alignItems: "center", justifyContent: "flex-start",
                       gap: 2,
-                      aspectRatio: "1",
-                      padding: 4,
+                      minHeight: 76,
+                      padding: 6,
                       borderRadius: 8,
                       border: `1px solid ${colors ? colors.fg : "var(--border)"}`,
                       background: colors ? colors.bg : "transparent",
@@ -451,7 +433,6 @@ export default function Availability() {
                       cursor: locked ? "not-allowed" : "pointer",
                       opacity: locked ? 0.55 : 1,
                     }}
-                    title={locked ? "Locked — contact the office to change this day" : undefined}
                   >
                     <div style={{ fontSize: 10, fontWeight: 600, opacity: 0.85 }}>
                       {dayOfWeekShort(day)}
@@ -466,14 +447,19 @@ export default function Availability() {
                       <div style={{ fontSize: 9, fontWeight: 700, opacity: 0.7 }}>🔒</div>
                     )}
                     {hasNote && (
-                      <span
-                        title="Has note"
+                      <div
                         style={{
-                          position: "absolute", top: 4, right: 6,
-                          width: 6, height: 6, borderRadius: "50%",
-                          background: colors ? colors.fg : "var(--brand)",
+                          fontSize: 10, lineHeight: 1.2, fontStyle: "italic",
+                          marginTop: 2, padding: "0 2px",
+                          width: "100%", textAlign: "center",
+                          overflow: "hidden", display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          wordBreak: "break-word",
                         }}
-                      />
+                      >
+                        {noteText}
+                      </div>
                     )}
                   </button>
                 );
@@ -668,6 +654,41 @@ export default function Availability() {
   );
 }
 
+// ── Caught-up view ───────────────────────────────────────────────────────────
+
+function CaughtUpView({
+  horizon,
+  postSubmitMsg,
+}: {
+  horizon: string | null;
+  postSubmitMsg: string | null;
+}) {
+  return (
+    <>
+      {postSubmitMsg && (
+        <div className="card" style={{ background: "rgba(45,212,191,0.1)" }}>
+          <div style={{ color: "var(--ok)", fontSize: 14, fontWeight: 700 }}>
+            ✓ {postSubmitMsg}
+          </div>
+        </div>
+      )}
+      <div className="card">
+        <div className="sectionTitle">You're all caught up</div>
+        <BetaTag feature="schedulingAvailability" />
+        <div className="small" style={{ color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
+          {horizon
+            ? <>Your submitted availability extends through <strong style={{ color: "var(--text)" }}>{formatHuman(horizon)}</strong>. The next window opens here automatically once your horizon drops below 2 weeks.</>
+            : <>You haven't submitted any availability yet. Come back later — there's nothing to submit right now.</>}
+          {" "}If you need to change a window that's already locked, ask the office to unlock it for you.
+        </div>
+        <div className="small" style={{ marginTop: 12, color: "var(--muted)" }}>
+          Switch to the <strong style={{ color: "var(--text)" }}>History</strong> tab to review what you've already submitted.
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── History tab ──────────────────────────────────────────────────────────────
 
 function HistoryView({
@@ -728,15 +749,17 @@ function HistoryView({
                 const d = byDay.get(day);
                 const st = d?.status ?? null;
                 const colors = st ? STATUS_COLORS[st] : null;
-                const hasNote = !!(d?.note && d.note.trim().length > 0);
+                const noteText = (d?.note || "").trim();
+                const hasNote = noteText.length > 0;
                 return (
                   <div
                     key={day}
-                    aria-label={`${day} ${st ?? "unset"}`}
+                    aria-label={`${day} ${st ?? "unset"}${hasNote ? ` — ${noteText}` : ""}`}
+                    title={hasNote ? noteText : undefined}
                     style={{
                       display: "flex", flexDirection: "column",
-                      alignItems: "center", justifyContent: "center",
-                      gap: 2, aspectRatio: "1", padding: 4,
+                      alignItems: "center", justifyContent: "flex-start",
+                      gap: 2, minHeight: 76, padding: 6,
                       borderRadius: 8,
                       border: `1px solid ${colors ? colors.fg : "var(--border)"}`,
                       background: colors ? colors.bg : "transparent",
@@ -752,14 +775,19 @@ function HistoryView({
                       {dayOfMonth(day)}
                     </div>
                     {hasNote && (
-                      <span
-                        title={d!.note || ""}
+                      <div
                         style={{
-                          position: "absolute", top: 4, right: 6,
-                          width: 6, height: 6, borderRadius: "50%",
-                          background: colors ? colors.fg : "var(--brand)",
+                          fontSize: 10, lineHeight: 1.2, fontStyle: "italic",
+                          marginTop: 2, padding: "0 2px",
+                          width: "100%", textAlign: "center",
+                          overflow: "hidden", display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          wordBreak: "break-word",
                         }}
-                      />
+                      >
+                        {noteText}
+                      </div>
                     )}
                   </div>
                 );
