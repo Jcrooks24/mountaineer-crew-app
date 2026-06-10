@@ -46,6 +46,12 @@ class JobReport(Base):
     hours_match = Column(Boolean, nullable=False)
     hours_mismatch_reason = Column(Text, nullable=True)
 
+    # Optional crew feedback to the office about this job. Two columns so a
+    # "No" answer is distinct from "Yes with empty body" (the textarea only
+    # appears when has_crew_feedback is True).
+    has_crew_feedback = Column(Boolean, nullable=True)
+    crew_feedback = Column(Text, nullable=True)
+
     # JSON-encoded list of per-employee entries:
     #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float }]
     # Crew enters these on the Report tab using the time-math helper. Stored

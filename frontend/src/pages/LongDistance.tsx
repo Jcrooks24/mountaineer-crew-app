@@ -270,6 +270,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
               max={24}
               step={0.25}
               value={hoursLast24}
+              onFocus={(e) => e.currentTarget.select()}
               onChange={(e) => setHoursLast24(e.target.value)}
               style={{ width: 120 }}
             />

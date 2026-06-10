@@ -24,6 +24,9 @@ export type ReimbursementRow = {
   job_uuid: string | null;
   job_name: string | null;
   job_date: string | null;
+  // Crew-entered date of the actual expense/trip (YYYY-MM-DD). Distinct from
+  // created_at, which is when the submission was filed. Null on older rows.
+  expense_date: string | null;
   odometer_start: number | null;
   odometer_end: number | null;
   odometer_start_photo_url: string | null;
@@ -52,6 +55,7 @@ export type MileageQueueEntry = {
   job_uuid: string;
   job_name: string;
   job_date: string;
+  expense_date: string;
   notes: string;
   odo_start_blob: Blob | null;
   odo_end_blob: Blob | null;
@@ -70,6 +74,7 @@ export type ExpenseQueueEntry = {
   job_uuid: string;
   job_name: string;
   job_date: string;
+  expense_date: string;
   notes: string;
   receipt_blob: Blob | null;
   created_at: string;
@@ -232,6 +237,7 @@ export async function renderedRows(): Promise<ReimbursementRow[]> {
         job_uuid: p.job_uuid || null,
         job_name: p.job_name || null,
         job_date: p.job_date || null,
+        expense_date: p.expense_date || null,
         odometer_start: p.odometer_start,
         odometer_end: p.odometer_end,
         odometer_start_photo_url: null,
@@ -327,6 +333,7 @@ export async function syncQueue(): Promise<number> {
         form.append("job_uuid", entry.job_uuid || "");
         form.append("job_name", entry.job_name || "");
         form.append("job_date", entry.job_date || "");
+        form.append("expense_date", entry.expense_date || "");
         form.append("notes", entry.notes || "");
         if (entry.type === "mileage") {
           // Only append fields the crew actually provided — the backend

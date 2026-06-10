@@ -1207,6 +1207,7 @@ function AddItemDialog({
                   min={1}
                   inputMode="numeric"
                   value={qty}
+                  onFocus={(e) => e.currentTarget.select()}
                   onChange={(e) => setQty(e.target.value)}
                   onBlur={() => {
                     const n = Number(qty);

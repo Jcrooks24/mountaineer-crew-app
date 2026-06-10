@@ -44,6 +44,7 @@ class ReimbursementOut(BaseModel):
     job_uuid: Optional[str]
     job_name: Optional[str]
     job_date: Optional[str]
+    expense_date: Optional[str]
     odometer_start: Optional[int]
     odometer_end: Optional[int]
     odometer_start_photo_url: Optional[str]
@@ -79,6 +80,7 @@ def _to_out(row: Reimbursement) -> ReimbursementOut:
         job_uuid=row.job_uuid,
         job_name=row.job_name,
         job_date=row.job_date,
+        expense_date=row.expense_date,
         odometer_start=row.odometer_start,
         odometer_end=row.odometer_end,
         odometer_start_photo_url=row.odometer_start_photo_url,
@@ -106,6 +108,7 @@ def _row_to_export_dict(row: Reimbursement) -> dict:
         "type": row.type,
         "job_name": row.job_name or "",
         "job_date": row.job_date or "",
+        "expense_date": row.expense_date or "",
         "odometer_start": row.odometer_start,
         "odometer_end": row.odometer_end,
         "odometer_start_photo_url": row.odometer_start_photo_url or "",
@@ -158,6 +161,7 @@ def submit_mileage(
     job_uuid: str = Form(default=""),
     job_name: str = Form(default=""),
     job_date: str = Form(default=""),
+    expense_date: str = Form(default=""),
     notes: str = Form(default=""),
     odometer_start_photo: Optional[UploadFile] = File(default=None),
     odometer_end_photo: Optional[UploadFile] = File(default=None),
@@ -232,6 +236,7 @@ def submit_mileage(
         job_uuid=job_uuid or None,
         job_name=job_name or None,
         job_date=job_date or None,
+        expense_date=expense_date or None,
         odometer_start=odometer_start,
         odometer_end=odometer_end,
         odometer_start_photo_drive_id=start_upload["file_id"] if start_upload else None,
@@ -278,6 +283,7 @@ def submit_expense(
     job_uuid: str = Form(default=""),
     job_name: str = Form(default=""),
     job_date: str = Form(default=""),
+    expense_date: str = Form(default=""),
     notes: str = Form(default=""),
     receipt_photo: Optional[UploadFile] = File(default=None),
     db: Session = Depends(get_db),
@@ -330,6 +336,7 @@ def submit_expense(
         job_uuid=job_uuid or None,
         job_name=job_name or None,
         job_date=job_date or None,
+        expense_date=expense_date or None,
         amount=amount,
         category=category or None,
         vendor=vendor.strip() or None,

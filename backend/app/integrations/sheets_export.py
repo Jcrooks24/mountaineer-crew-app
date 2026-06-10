@@ -780,10 +780,22 @@ JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
+    "has_crew_feedback", "crew_feedback",
     "employee_hours", "has_non_billable_hours",
     "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
+
+
+def _yes_no_blank(value: Any) -> str:
+    """Tri-state Yes/No/blank for nullable boolean sheet columns: True → "Yes",
+    False → "No", None → "" (so unanswered older rows don't read as "No").
+    """
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    return ""
 
 
 def _has_non_billable(entries: Optional[list]) -> str:
@@ -900,6 +912,8 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "review_candidate": _review_candidate_label(report.get("review_candidate")),
         "hours_match": "Yes" if report.get("hours_match") else "No",
         "hours_mismatch_reason": report.get("hours_mismatch_reason", "") or "",
+        "has_crew_feedback": _yes_no_blank(report.get("has_crew_feedback")),
+        "crew_feedback": report.get("crew_feedback", "") or "",
         "employee_hours": _format_employee_hours(report.get("employee_hours")),
         "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
         "created_at": _iso(report.get("created_at")),
@@ -1667,7 +1681,7 @@ def export_office_hours_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
 
 REIMBURSEMENT_HEADERS = [
     "reimbursement_uuid", "user_name", "submitted_at", "type",
-    "job_name", "job_date",
+    "job_name", "job_date", "expense_date",
     "odometer_start", "odometer_end", "miles",
     "odometer_start_photo_url", "odometer_end_photo_url",
     "amount", "category", "vendor", "payment_method", "receipt_photo_url",
@@ -1703,6 +1717,7 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         "type": entry.get("type", "") or "",
         "job_name": entry.get("job_name", "") or "",
         "job_date": entry.get("job_date", "") or "",
+        "expense_date": entry.get("expense_date", "") or "",
         "odometer_start": entry.get("odometer_start", "") if entry.get("odometer_start") is not None else "",
         "odometer_end": entry.get("odometer_end", "") if entry.get("odometer_end") is not None else "",
         "miles": miles,

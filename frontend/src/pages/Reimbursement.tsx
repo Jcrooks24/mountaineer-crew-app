@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { BetaTag } from "../components/BetaTag";
 import {
   enqueueExpense,
   enqueueMileage,
@@ -12,6 +13,17 @@ import {
   type PaymentMethod,
   type ReimbursementRow,
 } from "../lib/reimbursementStore";
+
+function todayLocalIso(): string {
+  // Local-day "YYYY-MM-DD" — toISOString would shift past midnight UTC for
+  // crew on the western side of the country, putting "yesterday" in the
+  // picker when they open the form first thing in the morning.
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 type Mode = "mileage" | "expense";
 
@@ -40,6 +52,9 @@ export default function Reimbursement() {
 
   // Shared
   const [notes, setNotes] = useState("");
+  // Date the expense / mileage actually happened — defaults to today, but
+  // crew often log on a different day (e.g. submitting the next morning).
+  const [expenseDate, setExpenseDate] = useState<string>(todayLocalIso());
   const odoStartRef = useRef<HTMLInputElement>(null);
   const odoEndRef = useRef<HTMLInputElement>(null);
   const receiptRef = useRef<HTMLInputElement>(null);
@@ -120,6 +135,7 @@ export default function Reimbursement() {
           job_uuid: "",
           job_name: "",
           job_date: "",
+          expense_date: expenseDate,
           notes,
           odo_start_blob: odoStartFile,
           odo_end_blob: odoEndFile,
@@ -129,6 +145,7 @@ export default function Reimbursement() {
         setOk("Submission queued.");
         clearMileage();
         setNotes("");
+        setExpenseDate(todayLocalIso());
         // Fire-and-forget sync
         (async () => {
           await syncQueue();
@@ -166,6 +183,7 @@ export default function Reimbursement() {
         job_uuid: "",
         job_name: "",
         job_date: "",
+        expense_date: expenseDate,
         notes,
         receipt_blob: receiptFile,
         created_at: new Date().toISOString(),
@@ -174,6 +192,7 @@ export default function Reimbursement() {
       setOk("Submission queued.");
       clearExpense();
       setNotes("");
+      setExpenseDate(todayLocalIso());
       (async () => {
         await syncQueue();
         await fetchHistory();
@@ -237,6 +256,21 @@ export default function Reimbursement() {
           {mode === "mileage" ? "Mileage reimbursement" : "Business expense"}
         </div>
         <form onSubmit={handleSubmit} className="col" style={{ gap: 10 }}>
+          <div>
+            <div className="label">
+              Date of {mode === "mileage" ? "trip" : "expense"}
+            </div>
+            <BetaTag feature="reimbursementExpenseDate" />
+            <input
+              type="date"
+              value={expenseDate}
+              max={todayLocalIso()}
+              onChange={(e) => setExpenseDate(e.target.value)}
+            />
+            <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+              Defaults to today — change it if you're logging this for a different day.
+            </div>
+          </div>
           {mode === "mileage" ? (
             <>
               <div className="row" style={{ gap: 10 }}>
@@ -263,13 +297,16 @@ export default function Reimbursement() {
               </div>
               <div>
                 <div className="label">Start odometer photo</div>
+                <BetaTag feature="reimbursementPhotoLibrary" />
                 <input
                   ref={odoStartRef}
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   onChange={(e) => setOdoStartFile(e.target.files?.[0] ?? null)}
                 />
+                <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                  Take a new photo or choose one from your library.
+                </div>
               </div>
               <div>
                 <div className="label">End odometer photo</div>
@@ -277,9 +314,11 @@ export default function Reimbursement() {
                   ref={odoEndRef}
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   onChange={(e) => setOdoEndFile(e.target.files?.[0] ?? null)}
                 />
+                <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                  Take a new photo or choose one from your library.
+                </div>
               </div>
             </>
           ) : (
@@ -355,13 +394,16 @@ export default function Reimbursement() {
               </div>
               <div>
                 <div className="label">Receipt photo</div>
+                <BetaTag feature="reimbursementPhotoLibrary" />
                 <input
                   ref={receiptRef}
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
                 />
+                <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                  Take a new photo or choose one from your library.
+                </div>
               </div>
             </>
           )}

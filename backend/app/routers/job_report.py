@@ -42,6 +42,8 @@ def _to_response(r: JobReport) -> JobReportResponse:
         review_candidate=r.review_candidate,
         hours_match=r.hours_match,
         hours_mismatch_reason=r.hours_mismatch_reason,
+        has_crew_feedback=r.has_crew_feedback,
+        crew_feedback=r.crew_feedback,
         employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
         updated_at=r.updated_at,
@@ -75,6 +77,8 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "review_candidate": report.review_candidate,
         "hours_match": report.hours_match,
         "hours_mismatch_reason": report.hours_mismatch_reason,
+        "has_crew_feedback": report.has_crew_feedback,
+        "crew_feedback": report.crew_feedback,
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
         "updated_at": report.updated_at,
@@ -107,6 +111,8 @@ def upsert_job_report(
         existing.review_candidate = body.review_candidate
         existing.hours_match = body.hours_match
         existing.hours_mismatch_reason = body.hours_mismatch_reason
+        existing.has_crew_feedback = body.has_crew_feedback
+        existing.crew_feedback = body.crew_feedback
         existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
         db.commit()
@@ -125,6 +131,8 @@ def upsert_job_report(
         review_candidate=body.review_candidate,
         hours_match=body.hours_match,
         hours_mismatch_reason=body.hours_mismatch_reason,
+        has_crew_feedback=body.has_crew_feedback,
+        crew_feedback=body.crew_feedback,
         employee_hours_json=employee_hours_json,
         created_at=now,
         updated_at=now,
