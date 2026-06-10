@@ -1,23 +1,24 @@
 """
 Crew Resources daily calendar event.
 
-Each day generates a "Crew Resources" event on the Office calendar from
-5:00 to 6:00 AM Mountain Time. The event's description summarizes who's
-available that day — grouped by tier (Tier I → IV → Other) and calling out
-crew leads — and updates as employees get added to job events on the Jobs
-calendar.
+Each day generates a "Crew Resources" event on a dedicated Resources
+calendar from 5:00 to 6:00 AM Mountain Time. The event's description
+summarizes who's available that day — grouped by tier (Tier I → IV →
+Other) and calling out crew leads — and updates as employees get added
+as attendees to events on the Jobs calendar.
 
 Read-side: pulls availability_days for the date, joined with employee_tags
 to resolve tier + crew-lead status. Pulls attendees from every event on
-JOBS_CALENDAR_ID for that date so scheduled blocks show up next to names.
+the Jobs calendar for that date so scheduled blocks show up next to names.
 
 Write-side: looks up the existing Crew Resources event by querying the
-Office calendar for "Crew Resources" on the target date. If present, patch
-its description. If absent, create a fresh one.
+Resources calendar for "Crew Resources" on the target date. If present,
+patch its description. If absent, create a fresh one.
 
 Env vars:
-  WORKSPACE_CALENDAR_ID — Office calendar (read+write the Crew Resources event)
-  JOBS_CALENDAR_ID      — Jobs calendar (read attendees only)
+  RESOURCES_CALENDAR_ID  — Resources calendar (read+write the Crew Resources event)
+  WORKSPACE_CALENDAR_ID  — Jobs calendar (read attendees from here; default for jobs)
+  JOBS_CALENDAR_ID       — optional override if jobs ever move to a separate calendar
   CREW_RESOURCES_ENABLED — "true" to enable; default off
 
 OAuth: requires the calendar.events scope. Admin re-authorizes via
@@ -50,12 +51,22 @@ def _is_enabled() -> bool:
     return os.getenv("CREW_RESOURCES_ENABLED", "").strip().lower() == "true"
 
 
-def _office_calendar_id() -> str:
-    return (os.getenv("WORKSPACE_CALENDAR_ID") or "").strip()
+def _resources_calendar_id() -> str:
+    """The dedicated Resources calendar where the daily Crew Resources event
+    lives. Distinct from the Jobs calendar so admin can grant/revoke crew
+    access to it independently."""
+    return (os.getenv("RESOURCES_CALENDAR_ID") or "").strip()
 
 
 def _jobs_calendar_id() -> str:
-    return (os.getenv("JOBS_CALENDAR_ID") or "").strip()
+    """The calendar to scan for job-event attendees. Prefers JOBS_CALENDAR_ID
+    so admin can split jobs onto a separate calendar later without rewiring;
+    falls back to WORKSPACE_CALENDAR_ID which already points at the Jobs
+    calendar in the current deploy."""
+    explicit = (os.getenv("JOBS_CALENDAR_ID") or "").strip()
+    if explicit:
+        return explicit
+    return (os.getenv("WORKSPACE_CALENDAR_ID") or "").strip()
 
 
 def _format_time(dt_str: Optional[str]) -> str:
@@ -387,9 +398,9 @@ def update_crew_resources_for_day(db: Session, target: date) -> Dict[str, Any]:
     current description. Returns a status dict for the caller to log."""
     if not _is_enabled():
         return {"ok": False, "reason": "disabled"}
-    office_id = _office_calendar_id()
-    if not office_id:
-        return {"ok": False, "reason": "WORKSPACE_CALENDAR_ID missing"}
+    resources_id = _resources_calendar_id()
+    if not resources_id:
+        return {"ok": False, "reason": "RESOURCES_CALENDAR_ID missing"}
 
     available = _available_employees(db, target)
     tags = {t.id: t for t in db.query(EmployeeTag).all()}
@@ -400,12 +411,12 @@ def update_crew_resources_for_day(db: Session, target: date) -> Dict[str, Any]:
 
     description = build_description(target, available, tags, scheduled)
 
-    event_id = _find_crew_resources_event_id(svc, office_id, target)
+    event_id = _find_crew_resources_event_id(svc, resources_id, target)
     created = False
     if event_id:
-        _patch_crew_resources_event(svc, office_id, event_id, description)
+        _patch_crew_resources_event(svc, resources_id, event_id, description)
     else:
-        event_id = _create_crew_resources_event(svc, office_id, target, description)
+        event_id = _create_crew_resources_event(svc, resources_id, target, description)
         created = True
 
     return {
