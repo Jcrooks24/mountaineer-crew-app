@@ -1,18 +1,23 @@
 /**
- * Availability store — offline-capable per-day status + note for the
- * crew's forward-looking scheduling window.
+ * Availability store.
  *
- * Model: the crew touches one rolling window at a time, so the queue is a
- * single localStorage "dirty batch" rather than a list of independent ops.
+ * Crew submit forward-looking 14-day windows of availability. The data model
+ * splits into three concerns:
  *
- *   - cache (`crew_availability_cache_v1`): the server's latest known
- *     state — used for initial render and offline reads.
- *   - draft (`crew_availability_draft_v1`): in-progress edits for the
- *     active window. Persists across reloads so a tab close / phone
- *     lock doesn't lose the user's taps.
+ *   - cache (`crew_availability_cache_v1`): the server's latest known state.
+ *     Used for initial render and offline reads.
+ *   - draft (`crew_availability_draft_v1`): in-progress edits for the active
+ *     window. Persists across reloads so a tab close / phone lock doesn't
+ *     lose the user's taps. Cleared on a successful Submit.
+ *   - server (POST /api/availability): only written when the user explicitly
+ *     hits Submit. There is intentionally NO autosave on this module — testers
+ *     reported the autosave UX made it feel like selections vanished after
+ *     each save (the active window was auto-advancing).
  *
- * Render layer always reads draft ∪ cache so the UI reflects the user's
- * latest taps immediately, even if the POST hasn't drained yet.
+ * Day locking: any day within 14 days of today is locked once it has a server
+ * record. The lock is enforced on both the device (read-only cell, disabled
+ * Submit if any locked-day write is queued) and the backend (rejects the
+ * request). Crew must reach out to admin to change a locked day.
  */
 
 import { apiFetch } from "../api/client";
@@ -32,18 +37,58 @@ export type AvailabilityState = {
   days: AvailabilityDay[];
 };
 
-type AvailabilityDraft = {
+export type AvailabilityDraftDay = {
+  day: string;
+  status: AvailabilityStatus;
+  note?: string | null;
+};
+
+export type AvailabilityDraft = {
   window_start: string;
-  // Only days the user has actually touched in the current draft live here.
-  // Untouched days within the window inherit from cache (= keep the prior
-  // server value) until the user taps them.
-  days: AvailabilityDay[];
+  days: AvailabilityDraftDay[];
 };
 
 const CACHE_KEY = "crew_availability_cache_v1";
 const DRAFT_KEY = "crew_availability_draft_v1";
 
-// ── Cache helpers ────────────────────────────────────────────────────────────
+// ── Date helpers ────────────────────────────────────────────────────────────
+
+/** Local-day YYYY-MM-DD (not UTC) so the lock cutoff doesn't shift overnight
+ *  for crew on the western side of the country. */
+export function todayLocalIso(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function addDaysIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  dt.setDate(dt.getDate() + days);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+/** Whole-day difference `a - b` (positive when a is after b). */
+export function daysBetween(a: string, b: string): number {
+  const aMs = Date.parse(a + "T00:00:00");
+  const bMs = Date.parse(b + "T00:00:00");
+  if (Number.isNaN(aMs) || Number.isNaN(bMs)) return 0;
+  return Math.round((aMs - bMs) / 86_400_000);
+}
+
+/** A day is locked when it lands within the 14-day window starting from
+ *  `todayIso` (inclusive). Days past that window stay editable so the crew
+ *  can refine far-out availability up until they're committed. */
+export function isLocked(day: string, todayIso: string): boolean {
+  return daysBetween(day, todayIso) < 14;
+}
+
+// ── Cache ────────────────────────────────────────────────────────────────────
 
 export function loadCache(): AvailabilityState {
   try {
@@ -62,13 +107,13 @@ export function loadCache(): AvailabilityState {
   }
 }
 
-function saveCache(state: AvailabilityState): void {
+export function saveCache(state: AvailabilityState): void {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(state));
   } catch {}
 }
 
-// ── Draft helpers ────────────────────────────────────────────────────────────
+// ── Draft ────────────────────────────────────────────────────────────────────
 
 export function loadDraft(): AvailabilityDraft | null {
   try {
@@ -89,41 +134,16 @@ export function loadDraft(): AvailabilityDraft | null {
   }
 }
 
-function saveDraft(draft: AvailabilityDraft): void {
+export function saveDraft(draft: AvailabilityDraft): void {
   try {
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   } catch {}
 }
 
-function clearDraft(): void {
+export function clearDraft(): void {
   try {
     localStorage.removeItem(DRAFT_KEY);
   } catch {}
-}
-
-// ── Merge ────────────────────────────────────────────────────────────────────
-
-/** Apply the current draft on top of the cache. The draft wins for any day
- *  it has touched; days the draft hasn't touched are unchanged. */
-export function renderedDays(state: AvailabilityState, draft: AvailabilityDraft | null): AvailabilityDay[] {
-  if (!draft) return state.days;
-  const byDay = new Map<string, AvailabilityDay>();
-  for (const d of state.days) byDay.set(d.day, d);
-  for (const d of draft.days) byDay.set(d.day, d);
-  return Array.from(byDay.values()).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
-}
-
-/** Returns true when the user's submitted horizon is less than 14 days out
- *  from `today` — which is when the device-side prompt to submit the next
- *  window fires. Inclusive on both ends. */
-export function isHorizonLow(horizon: string | null, todayIso: string): boolean {
-  if (!horizon) return true;
-  const horizonMs = Date.parse(horizon + "T00:00:00");
-  const todayMs = Date.parse(todayIso + "T00:00:00");
-  if (Number.isNaN(horizonMs) || Number.isNaN(todayMs)) return true;
-  const oneDay = 86_400_000;
-  const daysAhead = Math.round((horizonMs - todayMs) / oneDay);
-  return daysAhead < 14;
 }
 
 // ── Server sync ──────────────────────────────────────────────────────────────
@@ -138,90 +158,33 @@ export async function fetchState(): Promise<AvailabilityState | null> {
   }
 }
 
-/** Update one day in the current draft. Creates a draft for `window_start`
- *  if none exists yet. Triggers a debounced flush; the caller may pass
- *  `immediate: true` to flush right away (e.g. on submit). */
-export function setDayInDraft(
-  window_start: string,
-  day: string,
-  status: AvailabilityStatus,
-  note: string | null,
-): AvailabilityDraft {
-  const existing = loadDraft();
-  const base: AvailabilityDraft =
-    existing && existing.window_start === window_start
-      ? existing
-      : { window_start, days: [] };
-  // If switching windows, the prior draft is discarded — it's already been
-  // either flushed or abandoned by the user navigating away.
-  const others = base.days.filter((d) => d.day !== day);
-  const next: AvailabilityDraft = {
-    window_start,
-    days: [
-      ...others,
-      { day, status, note: note || null, window_start },
-    ],
-  };
-  saveDraft(next);
-  return next;
-}
-
-let flushTimer: number | null = null;
-let inFlight: Promise<AvailabilityState | null> | null = null;
-
-export function scheduleFlush(delayMs = 900, onState?: (s: AvailabilityState) => void): void {
-  if (flushTimer !== null) {
-    window.clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  flushTimer = window.setTimeout(() => {
-    flushTimer = null;
-    void flushDraftNow(onState);
-  }, delayMs);
-}
-
-/** POST the current draft as a batch. On success, clears the draft and
- *  updates the cache from the server response. On failure, leaves draft
- *  in place for the next online attempt. Concurrent calls dedupe. */
-export async function flushDraftNow(
-  onState?: (s: AvailabilityState) => void,
-): Promise<AvailabilityState | null> {
-  if (inFlight) return inFlight;
-  const draft = loadDraft();
-  if (!draft || draft.days.length === 0) return null;
-  if (!navigator.onLine) return null;
-
-  inFlight = (async () => {
-    try {
-      const r = await apiFetch<AvailabilityState>("/api/availability", {
-        method: "POST",
-        body: JSON.stringify({
-          window_start: draft.window_start,
-          days: draft.days.map((d) => ({
-            day: d.day,
-            status: d.status,
-            note: d.note || null,
-          })),
-        }),
-      });
-      clearDraft();
-      saveCache(r);
-      onState?.(r);
-      return r;
-    } catch {
-      return null;
-    } finally {
-      inFlight = null;
-    }
-  })();
-  return inFlight;
-}
-
-// Drain on visibility/online so backgrounded edits get sent the moment
-// connectivity returns or the user comes back to the tab.
-if (typeof window !== "undefined") {
-  window.addEventListener("online", () => void flushDraftNow());
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void flushDraftNow();
+/** POST the supplied draft to the backend. On success, returns + persists
+ *  the new server state and clears the draft. Throws on network or
+ *  validation error so the caller can show the message — the autosave path
+ *  used to swallow these and the user lost the failure signal. */
+export async function submitDraft(draft: AvailabilityDraft): Promise<AvailabilityState> {
+  const r = await apiFetch<AvailabilityState>("/api/availability", {
+    method: "POST",
+    body: JSON.stringify({
+      window_start: draft.window_start,
+      days: draft.days.map((d) => ({
+        day: d.day,
+        status: d.status,
+        note: d.note || null,
+      })),
+    }),
   });
+  saveCache(r);
+  clearDraft();
+  return r;
+}
+
+// ── Horizon ────────────────────────────────────────────────────────────────
+
+/** True when the user's submitted horizon is less than 14 days out from
+ *  `today` — the threshold at which the "submit the next 2 weeks" prompt
+ *  fires on Profile and inside the picker. */
+export function isHorizonLow(horizon: string | null, todayIso: string): boolean {
+  if (!horizon) return true;
+  return daysBetween(horizon, todayIso) < 14;
 }

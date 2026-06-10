@@ -13,8 +13,12 @@ in place rather than stacking rows.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
+
+# Days within this window of today are immutable on the device. Mirrored on
+# the backend so a tampered client can't sneak in a change to a locked day.
+LOCK_WINDOW_DAYS = 14
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -126,15 +130,47 @@ def submit_batch(
 
     now = datetime.now(timezone.utc)
     user_name = current_user.name or current_user.email or ""
+    today = date.today()
 
-    # Per-day upsert keyed on (user_id, day). All days in this batch carry the
-    # same window_start so the sheet aggregator can re-group them later.
-    touched_window = body.window_start
+    # Locked-day reject: any day that already exists on the server AND falls
+    # within LOCK_WINDOW_DAYS of today cannot be changed via this endpoint.
+    # Crew must contact admin. We reject the entire batch (not per-day) so
+    # the device never half-commits a window the user thought they submitted.
+    locked_changes: list[str] = []
     for entry in body.days:
         if entry.status not in AVAILABILITY_STATUSES:
             raise HTTPException(
                 status_code=400, detail=f"Invalid status: {entry.status}"
             )
+        try:
+            day_date = date.fromisoformat(entry.day)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Bad day: {entry.day}")
+        days_ahead = (day_date - today).days
+        if days_ahead < LOCK_WINDOW_DAYS:
+            existing = (
+                db.query(AvailabilityDay)
+                .filter(
+                    AvailabilityDay.user_id == current_user.id,
+                    AvailabilityDay.day == entry.day,
+                )
+                .first()
+            )
+            if existing:
+                locked_changes.append(entry.day)
+    if locked_changes:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Days within the next 2 weeks are locked. "
+                "Contact the office to change: " + ", ".join(sorted(set(locked_changes)))
+            ),
+        )
+
+    # Per-day upsert keyed on (user_id, day). All days in this batch carry the
+    # same window_start so the sheet aggregator can re-group them later.
+    touched_window = body.window_start
+    for entry in body.days:
         existing = (
             db.query(AvailabilityDay)
             .filter(
