@@ -185,6 +185,78 @@ def _tier_and_lead(
 # ── Read: scheduled blocks from Jobs calendar ──────────────────────────────
 
 
+def _prior_week_hours(
+    svc: Any, jobs_calendar_id: str, target: date
+) -> Dict[str, float]:
+    """Sum scheduled hours per attendee email across all events on the Jobs
+    calendar in the 7 days *before* target (target itself excluded). Used
+    to show "X.Xh last 7d" next to each crew member in the description so
+    the office can see at a glance who's been heavily loaded.
+
+    All-day events are skipped — they don't have a defined duration the
+    way a moving-job event does. Declined attendees are skipped. Multi-day
+    events are clipped to the prior-7-day window, so a job that runs
+    into target day only contributes its pre-target portion.
+    """
+    if not jobs_calendar_id:
+        return {}
+
+    end_local = datetime.combine(target, time(0, 0, 0), tzinfo=LOCAL_TZ)
+    start_local = end_local - timedelta(days=7)
+
+    def _fetch():
+        return (
+            svc.events()
+            .list(
+                calendarId=jobs_calendar_id,
+                timeMin=start_local.isoformat(),
+                timeMax=end_local.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=500,
+            )
+            .execute()
+        )
+
+    resp = _ssl_retry(_fetch)
+    items = resp.get("items", [])
+    out: Dict[str, float] = defaultdict(float)
+    for it in items:
+        attendees = it.get("attendees") or []
+        if not attendees:
+            continue
+        start_str = it.get("start", {}).get("dateTime")
+        end_str = it.get("end", {}).get("dateTime")
+        if not start_str or not end_str:
+            continue  # all-day event — no measurable duration
+        try:
+            s = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            e = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        # Clip to the prior-7d window so a job overlapping target day
+        # doesn't inflate today's number.
+        clipped_start = max(s, start_local)
+        clipped_end = min(e, end_local)
+        hours = max(0.0, (clipped_end - clipped_start).total_seconds() / 3600.0)
+        if hours <= 0:
+            continue
+        for a in attendees:
+            email = (a.get("email") or "").strip().lower()
+            if not email:
+                continue
+            if a.get("responseStatus") == "declined":
+                continue
+            out[email] += hours
+    return dict(out)
+
+
+def _format_prior_hours(h: float) -> str:
+    """Pretty-print prior-week hours. One decimal so 32 hours stays compact
+    and a 5.5-hour week is still readable."""
+    return f"{h:.1f}h last 7d"
+
+
 def _scheduled_by_email(
     svc: Any, jobs_calendar_id: str, target: date
 ) -> Dict[str, List[Dict[str, str]]]:
@@ -268,26 +340,51 @@ def build_description(
     available: List[Dict[str, Any]],
     tags_by_id: Dict[int, EmployeeTag],
     scheduled: Dict[str, List[Dict[str, str]]],
+    prior_hours: Dict[str, float],
 ) -> str:
     """Compose the Crew Resources event description.
 
-    Unscheduled crew group first (by tier, leads called out), then
-    scheduled crew. Empty groups are omitted.
+    Sections, in order:
+      UNSCHEDULED — crew marked available who aren't on any job today
+                    (grouped by tier, leads first, then alphabetical).
+      CONDITIONAL — every conditional crew member regardless of whether
+                    they have a job today. Their per-day note + scheduled
+                    blocks (if any) appear with the row so the office can
+                    decide whether to lean on them.
+      SCHEDULED   — crew marked available who are on at least one job
+                    today (flat list sorted by tier then name).
+
+    Every row carries the crew member's total scheduled hours in the
+    seven days *before* target, so admin can see at a glance who's
+    overworked or underused.
     """
     header = target.strftime("CREW RESOURCES — %A, %B %-d") if os.name != "nt" else (
         target.strftime("CREW RESOURCES — %A, %B %d")
     )
 
     unscheduled_by_tier: Dict[Optional[str], List[Dict[str, Any]]] = defaultdict(list)
-    scheduled_rows: List[Tuple[Optional[str], Dict[str, Any], str]] = []
+    conditional_rows: List[Dict[str, Any]] = []
+    scheduled_rows: List[Dict[str, Any]] = []
 
     for emp in available:
         tier, is_lead = _tier_and_lead(emp["tag_ids"], tags_by_id)
         blocks = scheduled.get(emp["email"]) or []
-        if blocks:
-            scheduled_rows.append((tier, {**emp, "is_lead": is_lead, "tier": tier}, _format_blocks(blocks)))
+        hours = prior_hours.get(emp["email"], 0.0)
+        entry = {
+            **emp,
+            "is_lead": is_lead,
+            "tier": tier,
+            "prior_hours": hours,
+            "blocks_text": _format_blocks(blocks) if blocks else "",
+        }
+        if emp["status"] == "conditional":
+            # Conditional crew get their own section regardless of whether
+            # they're already on a job — the note matters in both cases.
+            conditional_rows.append(entry)
+        elif blocks:
+            scheduled_rows.append(entry)
         else:
-            unscheduled_by_tier[tier].append({**emp, "is_lead": is_lead})
+            unscheduled_by_tier[tier].append(entry)
 
     lines: List[str] = [header, ""]
 
@@ -296,29 +393,43 @@ def build_description(
         lines.append("")
         for tier in sorted(unscheduled_by_tier.keys(), key=_tier_sort_key):
             people = unscheduled_by_tier[tier]
-            # Crew leads first within each tier, then alphabetical by name.
             people.sort(key=lambda p: (not p["is_lead"], p["name"].lower()))
             lines.append(tier or "Other / Untagged")
             for p in people:
                 lead_mark = "★ " if p["is_lead"] else "  "
-                cond = " (conditional)" if p["status"] == "conditional" else ""
+                hours_part = f" — {_format_prior_hours(p['prior_hours'])}"
                 note = p.get("note") or ""
                 note_part = f' — "{note}"' if note else ""
-                lines.append(f"  {lead_mark}{p['name']}{cond}{note_part}")
+                lines.append(f"  {lead_mark}{p['name']}{hours_part}{note_part}")
             lines.append("")
+
+    if conditional_rows:
+        lines.append("—— CONDITIONAL ——")
+        lines.append("")
+        conditional_rows.sort(key=lambda x: (_tier_sort_key(x["tier"]), x["name"].lower()))
+        for p in conditional_rows:
+            tier_text = p["tier"] or "Other"
+            role = ", lead" if p["is_lead"] else ""
+            hours_part = f" — {_format_prior_hours(p['prior_hours'])}"
+            sched_part = f" — scheduled {p['blocks_text']}" if p["blocks_text"] else ""
+            note = p.get("note") or ""
+            note_part = f' — "{note}"' if note else ""
+            lines.append(f"  {p['name']} ({tier_text}{role}){hours_part}{sched_part}{note_part}")
+        lines.append("")
 
     if scheduled_rows:
         lines.append("—— SCHEDULED ——")
         lines.append("")
-        # Scheduled section is flat: name (tier, role) — blocks [+ note]
-        scheduled_rows.sort(key=lambda x: (_tier_sort_key(x[0]), x[1]["name"].lower()))
-        for tier, p, blocks_text in scheduled_rows:
-            tier_text = tier or "Other"
+        scheduled_rows.sort(key=lambda x: (_tier_sort_key(x["tier"]), x["name"].lower()))
+        for p in scheduled_rows:
+            tier_text = p["tier"] or "Other"
             role = ", lead" if p["is_lead"] else ""
-            cond = " ⚠ conditional" if p["status"] == "conditional" else ""
+            hours_part = f" — {_format_prior_hours(p['prior_hours'])}"
             note = p.get("note") or ""
             note_part = f' — note: "{note}"' if note else ""
-            lines.append(f"{p['name']} ({tier_text}{role}){cond} — {blocks_text}{note_part}")
+            lines.append(
+                f"{p['name']} ({tier_text}{role}){hours_part} — {p['blocks_text']}{note_part}"
+            )
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -415,8 +526,9 @@ def update_crew_resources_for_day(db: Session, target: date) -> Dict[str, Any]:
     svc = _get_calendar_svc(db)
     jobs_id = _jobs_calendar_id()
     scheduled = _scheduled_by_email(svc, jobs_id, target) if jobs_id else {}
+    prior_hours = _prior_week_hours(svc, jobs_id, target) if jobs_id else {}
 
-    description = build_description(target, available, tags, scheduled)
+    description = build_description(target, available, tags, scheduled, prior_hours)
 
     event_id = _find_crew_resources_event_id(svc, resources_id, target)
     created = False
