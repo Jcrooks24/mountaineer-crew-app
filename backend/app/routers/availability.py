@@ -482,15 +482,26 @@ def admin_get_range(
             end_local = datetime.combine(
                 date.fromisoformat(end), time(0, 0, 0), tzinfo=LOCAL_TZ
             ) + timedelta(days=1)
-            resp = svc.events().list(
-                calendarId=jobs_id,
-                timeMin=start_local.isoformat(),
-                timeMax=end_local.isoformat(),
-                singleEvents=True,
-                orderBy="startTime",
-                maxResults=2000,
-            ).execute()
-            for it in resp.get("items", []):
+            # Paginate via nextPageToken — a busy month can easily exceed
+            # 2500 (single page max). Without the loop, the tail of the
+            # month would silently disappear from the matrix.
+            items: List[dict] = []
+            page_token: Optional[str] = None
+            while True:
+                resp = svc.events().list(
+                    calendarId=jobs_id,
+                    timeMin=start_local.isoformat(),
+                    timeMax=end_local.isoformat(),
+                    singleEvents=True,
+                    orderBy="startTime",
+                    maxResults=2500,
+                    pageToken=page_token,
+                ).execute()
+                items.extend(resp.get("items", []))
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
+            for it in items:
                 attendees = it.get("attendees") or []
                 if not attendees:
                     continue
