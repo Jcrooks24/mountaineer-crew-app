@@ -626,7 +626,9 @@ def update_crew_resources_for_day(db: Session, target: date) -> Dict[str, Any]:
         "event_id": event_id,
         "created": created,
         "available_count": len(available),
-        "scheduled_count": sum(1 for a in available if scheduled.get(a["email"])),
+        # scheduled is keyed by user_id after the alias rewire; using
+        # a["email"] here previously made this metric always report 0.
+        "scheduled_count": sum(1 for a in available if scheduled.get(a["user_id"])),
     }
 
 

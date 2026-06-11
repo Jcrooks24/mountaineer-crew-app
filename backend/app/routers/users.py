@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_current_user, require_admin
 from app.core.security import hash_password
 from app.db.models.user import User
+from app.db.models.user_email_alias import UserEmailAlias
 from app.db.session import get_db
 from app.schemas.users import DirectoryEntry, UserCreate, UserResponse
 
@@ -28,12 +29,28 @@ def create_user(
     /api/auth/signup (pending-approval by default). This endpoint bypasses
     that approval — hence the admin gate.
     """
-    existing = db.query(User).filter(User.email == payload.email).first()
-    if existing:
+    # Normalize the email the same way the self-service signup path does
+    # (auth.py:58). Without this, an admin-created "Foo@Bar.com" lives
+    # alongside the lowercased aliases and Crew Resources matching breaks
+    # in subtle ways.
+    email = (payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    existing_primary = db.query(User.id).filter(User.email == email).first()
+    if existing_primary:
         raise HTTPException(status_code=400, detail="Email already registered")
+    # Also reject collisions with the alias table so admin can't create a
+    # primary that shadows someone else's alternate address.
+    existing_alias = db.query(UserEmailAlias.id).filter(UserEmailAlias.email == email).first()
+    if existing_alias:
+        raise HTTPException(
+            status_code=409,
+            detail="That email is already an alias for another crew member",
+        )
 
     user = User(
-        email=payload.email,
+        email=email,
         password_hash=hash_password(payload.password),
     )
 
