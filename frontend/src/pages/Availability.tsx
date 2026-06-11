@@ -232,6 +232,18 @@ export default function Availability() {
     return m;
   }, [cache, draft, windowDays, activeWindowStart]);
 
+  // Set of days that have an existing server-side record. The lock only
+  // applies to those — a brand-new user with no prior submissions has
+  // activeWindowStart = today, putting every day in the 14-day "lock"
+  // range; without this guard their first-ever window would be
+  // un-editable. Mirrors the backend rule (existing record AND within
+  // 14 days), and the admin-unlock check still overrides both.
+  const serverSideDays = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of cache.days) s.add(d.day);
+    return s;
+  }, [cache]);
+
   // ── Mutations ─────────────────────────────────────────────────────────────
 
   // Helper: produce a new draft from the current one by patching a set of
@@ -263,24 +275,37 @@ export default function Availability() {
     [draft, activeWindowStart],
   );
 
+  // The lock rule the user sees on screen: within 14 days of today AND the
+  // day already has a server-side record AND there's no admin unlock for
+  // this window. Without the server-record guard, a brand-new user can't
+  // touch any day of their first submission (their activeWindowStart is
+  // today, putting every cell in the 14-day range).
+  const isEffectivelyLocked = useCallback((day: string) => {
+    if (!isLocked(day, today)) return false;
+    if (!serverSideDays.has(day)) return false;
+    const unlocks = cache.unlocks ?? [];
+    if (unlocks.some((u) => u.window_start === activeWindowStart)) return false;
+    return true;
+  }, [today, serverSideDays, cache.unlocks, activeWindowStart]);
+
   const cycleDay = useCallback((day: string) => {
-    if (isLocked(day, today)) return;
+    if (isEffectivelyLocked(day)) return;
     const current = merged.get(day);
     patchDays([{
       day,
       status: nextStatus(current?.status ?? null),
       note: current?.note ?? null,
     }]);
-  }, [merged, patchDays, today]);
+  }, [merged, patchDays, isEffectivelyLocked]);
 
   const setNote = useCallback((day: string, note: string) => {
-    if (isLocked(day, today)) return;
+    if (isEffectivelyLocked(day)) return;
     const current = merged.get(day);
     // Letting note edits create the day defaults the status to available —
     // matches the "if you bothered to leave a note, you're probably available"
     // heuristic and avoids stranding the cell with a note but no status.
     patchDays([{ day, status: current?.status ?? "available", note }]);
-  }, [merged, patchDays, today]);
+  }, [merged, patchDays, isEffectivelyLocked]);
 
   // Quick-fill: 7 buttons (Sun–Sat). Each button owns an independent cycle
   // status (quickFillStatus[dow]) — calendar cell changes don't shift it,
@@ -288,7 +313,7 @@ export default function Availability() {
   // status to every matching unlocked day in the window IN ONE SHOT.
   const bulkFill = useCallback((targetDow: number) => {
     const matching = windowDays.filter(
-      (d) => dayOfWeekIndex(d) === targetDow && !isLocked(d, today),
+      (d) => dayOfWeekIndex(d) === targetDow && !isEffectivelyLocked(d),
     );
     if (matching.length === 0) return;
 
@@ -302,7 +327,7 @@ export default function Availability() {
         return { day: d, status: next, note: existing?.note ?? null };
       }),
     );
-  }, [windowDays, today, quickFillStatus, merged, patchDays]);
+  }, [windowDays, isEffectivelyLocked, quickFillStatus, merged, patchDays]);
 
   // ── Submit ────────────────────────────────────────────────────────────────
 
@@ -548,7 +573,7 @@ export default function Availability() {
                 const st = current?.status ?? null;
                 const colors = st ? STATUS_COLORS[st] : null;
                 const isTodayDay = day === today;
-                const locked = isLocked(day, today);
+                const locked = isEffectivelyLocked(day);
                 const noteText = (current?.note || "").trim();
                 const hasNote = noteText.length > 0;
                 return (
@@ -619,7 +644,7 @@ export default function Availability() {
                 const current = merged.get(day);
                 const hasNote = !!(current?.note && current.note.trim().length > 0);
                 const expanded = expandedNote === day;
-                const locked = isLocked(day, today);
+                const locked = isEffectivelyLocked(day);
                 const st = current?.status ?? null;
                 const colors = st ? STATUS_COLORS[st] : null;
 
