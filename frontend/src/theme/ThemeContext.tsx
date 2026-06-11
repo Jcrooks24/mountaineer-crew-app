@@ -21,6 +21,11 @@ export interface ThemeVars {
   // strings against the theme's actual --bg.
   "--warn": string;
   "--warn-bg": string;
+  // Pure yellow for the "scheduled to a job" cells in the admin month
+  // view. Intentionally distinct from --warn (amber/orange) so admin
+  // can tell at a glance whether yellow means scheduled vs conditional.
+  "--scheduled": string;
+  "--scheduled-bg": string;
 }
 
 export interface ThemePreset {
@@ -46,6 +51,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--ok": "#2dd4bf",
       "--warn": "#f59e0b",
       "--warn-bg": "rgba(245,158,11,0.18)",
+      "--scheduled": "#facc15",
+      "--scheduled-bg": "rgba(250,204,21,0.30)",
     },
   },
   "midnight-purple": {
@@ -64,6 +71,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--ok": "#4ade80",
       "--warn": "#f59e0b",
       "--warn-bg": "rgba(245,158,11,0.18)",
+      "--scheduled": "#facc15",
+      "--scheduled-bg": "rgba(250,204,21,0.30)",
     },
   },
   "forest": {
@@ -82,6 +91,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--ok": "#34d399",
       "--warn": "#f59e0b",
       "--warn-bg": "rgba(245,158,11,0.18)",
+      "--scheduled": "#facc15",
+      "--scheduled-bg": "rgba(250,204,21,0.30)",
     },
   },
   "sunset": {
@@ -102,6 +113,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       // distinguishable from --brand on this theme.
       "--warn": "#c2410c",
       "--warn-bg": "rgba(194,65,12,0.20)",
+      "--scheduled": "#facc15",
+      "--scheduled-bg": "rgba(250,204,21,0.30)",
     },
   },
   "steel": {
@@ -120,6 +133,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--ok": "#3fb950",
       "--warn": "#f59e0b",
       "--warn-bg": "rgba(245,158,11,0.18)",
+      "--scheduled": "#facc15",
+      "--scheduled-bg": "rgba(250,204,21,0.30)",
     },
   },
   "light": {
@@ -140,6 +155,10 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       // amber-500 used on dark themes washes out against a white card.
       "--warn": "#b45309",
       "--warn-bg": "rgba(180,83,9,0.12)",
+      // Light theme needs a darker yellow so the job title reads on a
+      // yellow background. yellow-700 with a 18% tint.
+      "--scheduled": "#a16207",
+      "--scheduled-bg": "rgba(161,98,7,0.18)",
     },
   },
 };

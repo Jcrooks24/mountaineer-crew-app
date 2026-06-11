@@ -138,6 +138,10 @@ export default function Availability() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [expandedNote, setExpandedNote] = useState<string | null>(null);
   const [postSubmitMsg, setPostSubmitMsg] = useState<string | null>(null);
+  // Future-period pre-submission ("Plan a future absence"). Lives outside
+  // the rolling-cadence picker because the range can be any window past
+  // today + 14, not just the next-after-horizon window.
+  const [showFutureModal, setShowFutureModal] = useState(false);
 
   // Fetch server state on mount or whenever the viewed user changes. For
   // self the regular /api/availability path keeps the localStorage cache
@@ -457,6 +461,36 @@ export default function Availability() {
           })}
         </div>
       </div>
+
+      {/* Plan a future absence — pre-submit a known stretch of dates
+          15+ days out (vacation, family event, etc). Lives outside the
+          rolling cadence so crew can lock in known absences early
+          without having to wait for the cadence to roll around. Hidden
+          when admin is viewing another user — the modal posts as the
+          current account, not the viewed crew member. */}
+      {isViewingSelf && (
+        <div className="card">
+          <button
+            type="button"
+            onClick={() => setShowFutureModal(true)}
+            style={{
+              width: "100%",
+              padding: "10px 14px",
+              background: "transparent",
+              border: "1px dashed var(--brand)",
+              borderRadius: 10,
+              color: "var(--brand)",
+              fontWeight: 700, fontSize: 13,
+              textAlign: "left", cursor: "pointer",
+            }}
+          >
+            + Plan a future absence
+            <span style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}>
+              · vacation, planned event, anything fixed in your calendar
+            </span>
+          </button>
+        </div>
+      )}
 
       {tab === "history" || !isViewingSelf ? (
         <HistoryView
@@ -819,6 +853,17 @@ export default function Availability() {
           windowStart={activeWindowStart}
           onCancel={() => setShowConfirm(false)}
           onConfirm={handleConfirmSubmit}
+        />
+      )}
+      {showFutureModal && (
+        <FuturePeriodModal
+          today={today}
+          onCancel={() => setShowFutureModal(false)}
+          onSubmitted={(newState, summary) => {
+            setCache(newState);
+            setShowFutureModal(false);
+            setPostSubmitMsg(summary);
+          }}
         />
       )}
     </div>
@@ -1216,6 +1261,267 @@ function ConfirmModal({
             style={{ padding: "8px 14px" }}
           >
             Yes — submit
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Future-period modal ─────────────────────────────────────────────────────
+
+function FuturePeriodModal({
+  today,
+  onCancel,
+  onSubmitted,
+}: {
+  today: string;
+  onCancel: () => void;
+  onSubmitted: (newState: AvailabilityState, summary: string) => void;
+}) {
+  // Earliest legal Start is today + 14: anything earlier is the rolling
+  // cadence's job and the backend's lock check would 409 anyway.
+  const minStart = useMemo(() => addDaysIso(today, 14), [today]);
+  // Soft cap of 1 year out — discourages typos that submit decades of
+  // unavailability. The backend's 100-day batch limit is a separate
+  // safety net.
+  const maxEnd = useMemo(() => addDaysIso(today, 365), [today]);
+
+  const [from, setFrom] = useState(minStart);
+  const [to, setTo] = useState(minStart);
+  const [status, setStatus] = useState<AvailabilityStatus>("unavailable");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string>("");
+
+  // Keep `to` >= `from` automatically when the user shifts From after To.
+  useEffect(() => {
+    if (to < from) setTo(from);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from]);
+
+  const totalDays = useMemo(() => {
+    if (to < from) return 0;
+    // daysBetween returns whole-day difference; +1 for inclusive count.
+    const diff = (Date.parse(to + "T00:00:00") - Date.parse(from + "T00:00:00")) / 86_400_000;
+    return Math.round(diff) + 1;
+  }, [from, to]);
+
+  async function handleSubmit() {
+    setErr(null);
+    if (from < minStart) {
+      setErr(
+        `Start date must be at least 14 days from today (${minStart} or later). For sooner dates, use your regular submission.`,
+      );
+      return;
+    }
+    if (to < from) {
+      setErr("End date must be on or after the start date.");
+      return;
+    }
+    if (to > maxEnd) {
+      setErr(`End date must be on or before ${maxEnd}.`);
+      return;
+    }
+    if (totalDays > 100) {
+      setErr("Range is too long — split into shorter submissions (max 100 days each).");
+      return;
+    }
+
+    // Chunk the range into 14-day pieces anchored at `from`. Each chunk
+    // becomes one POST that the existing submit_batch handler accepts:
+    // window_start = chunk_start, days = the in-range days within that
+    // 14-day window. Multi-chunk ranges therefore land as multiple sheet
+    // rows (one per 14-day chunk), same as if the user had submitted
+    // those windows via the normal cadence.
+    const chunks: { window_start: string; days: string[] }[] = [];
+    let cs = from;
+    while (cs <= to) {
+      const ce = addDaysIso(cs, 13);
+      const last = ce < to ? ce : to;
+      const days: string[] = [];
+      let d = cs;
+      while (d <= last) { days.push(d); d = addDaysIso(d, 1); }
+      chunks.push({ window_start: cs, days });
+      cs = addDaysIso(ce, 1);
+    }
+
+    setBusy(true);
+    let lastState: AvailabilityState | null = null;
+    try {
+      const trimmedNote = note.trim() || null;
+      for (let i = 0; i < chunks.length; i++) {
+        if (chunks.length > 1) setProgress(`Submitting ${i + 1} of ${chunks.length}…`);
+        const c = chunks[i];
+        lastState = await apiFetch<AvailabilityState>("/api/availability", {
+          method: "POST",
+          body: JSON.stringify({
+            window_start: c.window_start,
+            days: c.days.map((d) => ({ day: d, status, note: trimmedNote })),
+          }),
+        });
+      }
+      if (lastState) {
+        saveCache(lastState);
+        const fmt = (iso: string) => {
+          const [y, m, dd] = iso.split("-").map(Number);
+          return new Date(y, m - 1, dd).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        };
+        const summary =
+          totalDays === 1
+            ? `Marked ${fmt(from)} as ${status}.`
+            : `Marked ${fmt(from)} → ${fmt(to)} (${totalDays} days) as ${status}.`;
+        onSubmitted(lastState, summary);
+      }
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Submit failed — check connection and try again.");
+    } finally {
+      setBusy(false);
+      setProgress("");
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onCancel}
+      style={{
+        position: "fixed", inset: 0, padding: 16, zIndex: 1000,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--card)", borderRadius: 12,
+          border: "1px solid var(--border)",
+          maxWidth: 460, width: "100%",
+          padding: 18, display: "flex", flexDirection: "column", gap: 14,
+          maxHeight: "90vh", overflowY: "auto",
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 800 }}>Plan a future absence</div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+          Pre-submit availability for a known future period — vacation, family
+          event, anything fixed in your calendar. Start date must be at least
+          14 days out; closer dates go through your regular 2-week submission.
+        </div>
+
+        <div className="row" style={{ gap: 8 }}>
+          <label className="col" style={{ flex: 1, gap: 4 }}>
+            <span className="label">From</span>
+            <input
+              type="date"
+              value={from}
+              min={minStart}
+              max={maxEnd}
+              onChange={(e) => setFrom(e.target.value)}
+            />
+          </label>
+          <label className="col" style={{ flex: 1, gap: 4 }}>
+            <span className="label">To</span>
+            <input
+              type="date"
+              value={to}
+              min={from}
+              max={maxEnd}
+              onChange={(e) => setTo(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div>
+          <span className="label">Status for every day in the range</span>
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            {(["available", "unavailable", "conditional"] as const).map((s) => {
+              const colors = STATUS_COLORS[s];
+              const active = status === s;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStatus(s)}
+                  style={{
+                    flex: 1, padding: "10px 8px", borderRadius: 8,
+                    border: `1px solid ${active ? colors.fg : "var(--border)"}`,
+                    background: active ? colors.bg : "transparent",
+                    color: active ? colors.fg : "var(--text)",
+                    fontWeight: 700, fontSize: 13,
+                  }}
+                >
+                  {colors.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="col" style={{ gap: 4 }}>
+          <span className="label">Note (optional, applies to every day)</span>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder='e.g. "Hawaii vacation"'
+          />
+        </div>
+
+        {totalDays > 0 && (
+          <div
+            className="small"
+            style={{
+              color: "var(--muted)", padding: "8px 10px",
+              borderRadius: 8, border: "1px solid var(--border)",
+              background: "rgba(255,255,255,0.02)",
+            }}
+          >
+            Marking <strong style={{ color: "var(--text)" }}>{totalDays}</strong>
+            {" "}day{totalDays === 1 ? "" : "s"} as
+            {" "}<strong style={{ color: STATUS_COLORS[status].fg }}>{STATUS_COLORS[status].label.toLowerCase()}</strong>.
+            {" "}You'll see these in your History tab and the office will see them in your calendar today.
+          </div>
+        )}
+
+        {err && (
+          <div
+            className="small"
+            style={{
+              color: "var(--danger)", padding: "8px 12px",
+              background: "rgba(255,107,107,0.1)", borderRadius: 8,
+            }}
+          >
+            {err}
+          </div>
+        )}
+        {progress && (
+          <div className="small" style={{ color: "var(--muted)" }}>{progress}</div>
+        )}
+
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            style={{
+              background: "none",
+              color: "var(--muted)",
+              border: "1px solid var(--border)",
+              padding: "8px 14px", fontSize: 13,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btnPrimary"
+            onClick={handleSubmit}
+            disabled={busy || totalDays === 0}
+            style={{ padding: "8px 14px" }}
+          >
+            {busy ? "Submitting…" : "Submit"}
           </button>
         </div>
       </div>

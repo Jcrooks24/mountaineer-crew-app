@@ -70,6 +70,21 @@ def _jobs_calendar_id() -> str:
     return (os.getenv("WORKSPACE_CALENDAR_ID") or "").strip()
 
 
+def _ignored_invitee_emails() -> set[str]:
+    """Lowercased set of emails to skip when scanning Jobs-calendar
+    attendees — workspace / shared-mailbox addresses (e.g. the org's
+    management@ inbox) that admin invites for visibility but that don't
+    map to any crew member. Listed here so they don't show up in the
+    UNRECOGNIZED INVITEES section of the Crew Resources description
+    every day.
+
+    Set via the IGNORED_INVITEE_EMAILS env var as a comma-separated
+    list. Empty / unset means no addresses are skipped (legacy behavior).
+    """
+    raw = os.getenv("IGNORED_INVITEE_EMAILS", "") or ""
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
 def _format_time(dt_str: Optional[str]) -> str:
     """Format an ISO datetime (with tz) as 'h:mm AM/PM' in local TZ. Returns
     empty string on missing or unparseable input — caller decides whether
@@ -332,6 +347,7 @@ def _scheduled_by_user_id(
     items = resp.get("items", [])
     scheduled: Dict[int, List[Dict[str, str]]] = defaultdict(list)
     unrecognized: Dict[str, List[str]] = defaultdict(list)
+    ignored = _ignored_invitee_emails()
     for it in items:
         attendees = it.get("attendees") or []
         if not attendees:
@@ -348,6 +364,11 @@ def _scheduled_by_user_id(
                 continue
             # Skip declined attendees — they aren't actually working it.
             if a.get("responseStatus") == "declined":
+                continue
+            # Workspace / org-managed addresses (admin's shared inbox) get
+            # silently dropped instead of polluting the UNRECOGNIZED section
+            # every day. Configured via IGNORED_INVITEE_EMAILS.
+            if email in ignored:
                 continue
             uid = email_to_user_id.get(email)
             if uid is None:

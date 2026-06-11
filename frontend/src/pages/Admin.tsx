@@ -958,11 +958,24 @@ type AvailabilityRangeRow = {
   window_start: string;
 };
 
+type ScheduledJobRow = {
+  user_id: number;
+  day: string;
+  title: string;
+};
+
+type AvailabilityRangeResponse = {
+  days: AvailabilityRangeRow[];
+  scheduled: ScheduledJobRow[];
+};
+
 const MONTH_STATUS_COLORS: Record<AvailabilityRangeRow["status"], { bg: string; fg: string; label: string }> = {
   available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
   unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
   conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
 };
+
+const SCHEDULED_COLORS = { bg: "var(--scheduled-bg)", fg: "var(--scheduled)", label: "Scheduled" };
 
 function MonthScheduleView({
   users,
@@ -1002,6 +1015,7 @@ function MonthScheduleView({
   }, [year, month, lastDayOfMonth]);
 
   const [rows, setRows] = useState<AvailabilityRangeRow[]>([]);
+  const [scheduledRows, setScheduledRows] = useState<ScheduledJobRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -1009,8 +1023,12 @@ function MonthScheduleView({
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    apiFetch<AvailabilityRangeRow[]>(`/api/admin/availability/range?start=${monthStart}&end=${monthEnd}`)
-      .then((r) => { if (!cancelled) setRows(r); })
+    apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${monthStart}&end=${monthEnd}`)
+      .then((r) => {
+        if (cancelled) return;
+        setRows(r.days);
+        setScheduledRows(r.scheduled);
+      })
       .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -1040,6 +1058,25 @@ function MonthScheduleView({
     }
     return m;
   }, [rows]);
+
+  // (user_id, day) → list of job titles for the day. Built from scheduledRows.
+  // Multiple events for the same (user, day) accumulate into the list; the
+  // cell renders them as a numbered list. Yellow overrides the availability
+  // color since "scheduled to work" is the more actionable signal.
+  const scheduledMatrix = useMemo(() => {
+    const m = new Map<number, Map<string, string[]>>();
+    for (const s of scheduledRows) {
+      let inner = m.get(s.user_id);
+      if (!inner) { inner = new Map(); m.set(s.user_id, inner); }
+      const list = inner.get(s.day);
+      if (list) {
+        if (!list.includes(s.title)) list.push(s.title);
+      } else {
+        inner.set(s.day, [s.title]);
+      }
+    }
+    return m;
+  }, [scheduledRows]);
 
   function shiftMonth(delta: number) {
     let m = month + delta;
@@ -1206,11 +1243,27 @@ function MonthScheduleView({
                     </td>
                     {activeUsers.map((u) => {
                       const record = matrix.get(u.id)?.get(dIso) ?? null;
-                      const colors = record ? MONTH_STATUS_COLORS[record.status] : null;
+                      const jobs = scheduledMatrix.get(u.id)?.get(dIso);
+                      const isScheduled = !!(jobs && jobs.length > 0);
+                      const availColors = record ? MONTH_STATUS_COLORS[record.status] : null;
+
+                      // Scheduled takes precedence — it's the most actionable
+                      // signal. Availability still surfaces via the cell border
+                      // so admin can spot conflicts (e.g. scheduled but marked
+                      // unavailable would show a red border around a yellow
+                      // cell).
+                      const cellBg = isScheduled
+                        ? SCHEDULED_COLORS.bg
+                        : (availColors?.bg ?? "transparent");
+
                       const noteSuffix = record?.note ? ` — ${record.note}` : "";
-                      const title = record
-                        ? `${u.name || u.email} on ${dIso}: ${record.status}${noteSuffix}`
-                        : `${u.name || u.email} on ${dIso}: not submitted`;
+                      const availSummary = record
+                        ? `${record.status}${noteSuffix}`
+                        : "not submitted";
+                      const title = isScheduled
+                        ? `${u.name || u.email} on ${dIso}: scheduled — ${jobs!.join(", ")} | availability: ${availSummary}`
+                        : `${u.name || u.email} on ${dIso}: ${availSummary}`;
+
                       return (
                         <td
                           key={u.id}
@@ -1218,10 +1271,49 @@ function MonthScheduleView({
                           style={{
                             borderBottom: "1px solid var(--border)",
                             borderRight: "1px solid var(--border)",
-                            padding: 0, height: 26,
-                            background: colors?.bg ?? "transparent",
+                            padding: isScheduled ? "4px 6px" : 0,
+                            minHeight: 26,
+                            background: cellBg,
+                            // Highlight a conflict (scheduled cell on a
+                            // submitted-availability day) with the
+                            // availability color as a tinted outline.
+                            outline:
+                              isScheduled && availColors
+                                ? `2px solid ${availColors.fg}`
+                                : undefined,
+                            outlineOffset:
+                              isScheduled && availColors ? "-2px" : undefined,
+                            verticalAlign: "top",
                           }}
-                        />
+                        >
+                          {isScheduled && (
+                            <div
+                              style={{
+                                color: SCHEDULED_COLORS.fg,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                lineHeight: 1.25,
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {jobs!.length === 1 ? (
+                                jobs![0]
+                              ) : (
+                                <ol
+                                  style={{
+                                    margin: 0,
+                                    paddingLeft: 16,
+                                    listStylePosition: "outside",
+                                  }}
+                                >
+                                  {jobs!.map((t, i) => (
+                                    <li key={i}>{t}</li>
+                                  ))}
+                                </ol>
+                              )}
+                            </div>
+                          )}
+                        </td>
                       );
                     })}
                   </tr>
@@ -1260,6 +1352,16 @@ function MonthScheduleView({
             </span>
           );
         })}
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              width: 14, height: 14, borderRadius: 3,
+              background: SCHEDULED_COLORS.bg,
+              border: `1px solid ${SCHEDULED_COLORS.fg}`,
+            }}
+          />
+          <span>{SCHEDULED_COLORS.label}</span>
+        </span>
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span
             style={{

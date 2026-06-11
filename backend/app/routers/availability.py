@@ -169,6 +169,15 @@ def submit_batch(
 ):
     if not body.days:
         raise HTTPException(status_code=400, detail="No days provided")
+    # Defensive cap: the legitimate flows are a 14-day rolling submission
+    # or a chunk of a future-period pre-submission, neither of which ever
+    # comes close to 100. Hard-limit anything larger so a tampered client
+    # can't slip an unbounded range through.
+    if len(body.days) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Too many days in one submission (max 100).",
+        )
 
     now = datetime.now(timezone.utc)
     user_name = current_user.name or current_user.email or ""
@@ -396,18 +405,36 @@ class AvailabilityRangeRow(BaseModel):
     window_start: str
 
 
+class ScheduledJobRow(BaseModel):
+    """One row per (user_id, day, job_title) for events on the Jobs calendar
+    where the user appears as an undeclined attendee. Aliases are resolved
+    via the same email_to_user_id map Crew Resources uses, so a job
+    invitation sent to an alternate email still lands on the right crew
+    member in the month view."""
+    user_id: int
+    day: str
+    title: str
+
+
+class AvailabilityRangeResponse(BaseModel):
+    days: List[AvailabilityRangeRow]
+    scheduled: List[ScheduledJobRow]
+
+
 # Declared BEFORE the /{user_id} route below so FastAPI doesn't misroute
 # /range as user_id="range".
-@admin_per_user_router.get("/range", response_model=List[AvailabilityRangeRow])
+@admin_per_user_router.get("/range", response_model=AvailabilityRangeResponse)
 def admin_get_range(
     start: str = Query(..., description="Inclusive ISO date YYYY-MM-DD"),
     end: str = Query(..., description="Inclusive ISO date YYYY-MM-DD"),
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    """Every (user_id, day, status, note) record within [start, end]
-    inclusive, sorted by user_id then day. Powers the month-wide view
-    in the admin Employees tab so admin sees the whole crew at once."""
+    """Every (user_id, day, status, note) availability record + every
+    scheduled job (from the Jobs calendar) within [start, end] inclusive.
+    Powers the month-wide view in the admin Employees tab so admin sees
+    the whole crew at once — both their submitted availability and what
+    they're already on the hook for."""
     try:
         date.fromisoformat(start)
         date.fromisoformat(end)
@@ -422,7 +449,7 @@ def admin_get_range(
         .order_by(AvailabilityDay.user_id.asc(), AvailabilityDay.day.asc())
         .all()
     )
-    return [
+    days = [
         AvailabilityRangeRow(
             user_id=r.user_id,
             day=r.day,
@@ -432,6 +459,90 @@ def admin_get_range(
         )
         for r in rows
     ]
+
+    # Scheduled jobs from the Jobs calendar over the same range. Failures
+    # here (calendar down, scope missing, etc) MUST NOT block availability —
+    # admin still wants to see the matrix. Log + return empty list.
+    scheduled: List[ScheduledJobRow] = []
+    try:
+        from datetime import time, timedelta
+        from app.integrations.crew_resources_calendar import (
+            LOCAL_TZ,
+            _email_to_user_id,
+            _get_calendar_svc,
+            _jobs_calendar_id,
+        )
+        jobs_id = _jobs_calendar_id()
+        if jobs_id:
+            email_to_uid = _email_to_user_id(db)
+            svc = _get_calendar_svc(db)
+            start_local = datetime.combine(
+                date.fromisoformat(start), time(0, 0, 0), tzinfo=LOCAL_TZ
+            )
+            end_local = datetime.combine(
+                date.fromisoformat(end), time(0, 0, 0), tzinfo=LOCAL_TZ
+            ) + timedelta(days=1)
+            # Paginate via nextPageToken — a busy month can easily exceed
+            # 2500 (single page max). Without the loop, the tail of the
+            # month would silently disappear from the matrix.
+            items: List[dict] = []
+            page_token: Optional[str] = None
+            while True:
+                resp = svc.events().list(
+                    calendarId=jobs_id,
+                    timeMin=start_local.isoformat(),
+                    timeMax=end_local.isoformat(),
+                    singleEvents=True,
+                    orderBy="startTime",
+                    maxResults=2500,
+                    pageToken=page_token,
+                ).execute()
+                items.extend(resp.get("items", []))
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
+            for it in items:
+                attendees = it.get("attendees") or []
+                if not attendees:
+                    continue
+                title = (it.get("summary") or "(no title)").strip()
+                start_dt = it.get("start") or {}
+                # Resolve the calendar day this event belongs to. Prefer
+                # the local-time date of dateTime events so a 11pm event
+                # doesn't get bucketed under UTC tomorrow.
+                day_iso: Optional[str] = None
+                if start_dt.get("dateTime"):
+                    try:
+                        dt = datetime.fromisoformat(
+                            start_dt["dateTime"].replace("Z", "+00:00")
+                        )
+                        day_iso = dt.astimezone(LOCAL_TZ).date().isoformat()
+                    except ValueError:
+                        day_iso = None
+                elif start_dt.get("date"):
+                    day_iso = start_dt["date"]
+                if not day_iso:
+                    continue
+                if day_iso < start or day_iso > end:
+                    # Out-of-range edge case (multi-day event starting
+                    # before our window).
+                    continue
+                for a in attendees:
+                    email = (a.get("email") or "").strip().lower()
+                    if not email:
+                        continue
+                    if a.get("responseStatus") == "declined":
+                        continue
+                    uid = email_to_uid.get(email)
+                    if uid is None:
+                        continue
+                    scheduled.append(
+                        ScheduledJobRow(user_id=uid, day=day_iso, title=title)
+                    )
+    except Exception as exc:
+        print(f"[admin-range] scheduled jobs fetch failed: {exc}")
+
+    return AvailabilityRangeResponse(days=days, scheduled=scheduled)
 
 
 @admin_per_user_router.get("/{user_id}", response_model=AvailabilityState)
