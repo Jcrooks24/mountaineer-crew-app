@@ -313,7 +313,15 @@ function EmployeesTab() {
                         ))
                     )}
                     <button
-                      onClick={() => setEditingTagsFor(u)}
+                      onClick={() => {
+                        setEditingTagsFor(u);
+                        // Refetch the tag list — admin may have added or
+                        // renamed tags in Settings since this page mounted.
+                        // Failure is silent; we fall back to the cached list.
+                        apiFetch<EmployeeTag[]>("/api/admin/employee-tags")
+                          .then(setTags)
+                          .catch(() => {});
+                      }}
                       style={{
                         fontSize: 11, padding: "2px 8px", borderRadius: 999,
                         background: "none", color: "var(--muted)",

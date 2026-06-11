@@ -33,6 +33,12 @@ export default function UpdateBanner() {
     let reg: ServiceWorkerRegistration | null = null;
     let interval: number | undefined;
     let lastFocusCheck = Date.now();
+    let updatefoundHandler: (() => void) | null = null;
+    // Each ServiceWorker we attach a statechange listener to is tracked here
+    // so we can remove the listener on unmount. A long-lived PWA session
+    // can see many installing workers; without cleanup, each one's listener
+    // would stay attached until the worker was garbage-collected.
+    const statechangeAttachments: { worker: ServiceWorker; handler: () => void }[] = [];
 
     // A waiting worker counts as an *update* only if this page is already
     // controlled by a worker — otherwise it's just the first-ever install.
@@ -45,9 +51,11 @@ export default function UpdateBanner() {
     }
 
     function watchInstall(worker: ServiceWorker) {
-      worker.addEventListener("statechange", () => {
+      const handler = () => {
         if (worker.state === "installed") announce();
-      });
+      };
+      worker.addEventListener("statechange", handler);
+      statechangeAttachments.push({ worker, handler });
     }
 
     navigator.serviceWorker.getRegistration().then((r) => {
@@ -56,9 +64,10 @@ export default function UpdateBanner() {
 
       if (r.waiting) announce();
       if (r.installing) watchInstall(r.installing);
-      r.addEventListener("updatefound", () => {
+      updatefoundHandler = () => {
         if (r.installing) watchInstall(r.installing);
-      });
+      };
+      r.addEventListener("updatefound", updatefoundHandler);
 
       interval = window.setInterval(() => {
         r.update().catch(() => { /* offline / transient — retry next tick */ });
@@ -78,6 +87,13 @@ export default function UpdateBanner() {
       cancelled = true;
       if (interval) window.clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
+      if (reg && updatefoundHandler) {
+        reg.removeEventListener("updatefound", updatefoundHandler);
+      }
+      for (const { worker, handler } of statechangeAttachments) {
+        worker.removeEventListener("statechange", handler);
+      }
+      statechangeAttachments.length = 0;
     };
   }, []);
 

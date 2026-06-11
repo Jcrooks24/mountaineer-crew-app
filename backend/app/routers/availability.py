@@ -475,8 +475,9 @@ def admin_upsert_user_state(
         touched_window,
     )
 
+    # Log ids only — same PII-in-logs rule we apply to auth + dvir flows.
     print(
-        f"[availability] admin override: {admin.email or admin.id} edited "
+        f"[availability] admin override: admin {admin.id} edited "
         f"{len(body.days)} day(s) for user {user_id}"
     )
 

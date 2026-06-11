@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
 import { clearToken, getToken, setToken } from "./token";
+import { clearCrewState } from "./clearCrewState";
 
 export type User = {
   id: number;
@@ -92,6 +93,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       const me = await apiFetch<User>("/api/auth/me");
+      // If the user that the server identifies us as differs from whatever
+      // was cached on this device, wipe leftover per-user storage before
+      // we adopt the new identity. Covers the shared-phone case where
+      // crew A logs out and crew B logs in: crew A's queued materials,
+      // availability draft, and banner-dismiss flag would otherwise carry
+      // over and be submitted under crew B's identity.
+      const previous = loadCachedUser();
+      if (previous && previous.id !== me.id) {
+        clearCrewState();
+      }
       setUser(me);
     } catch (err) {
       // Only clear on a genuine auth rejection. Network errors (TypeError,
@@ -129,10 +140,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   function logout() {
     clearToken();
-    clearCachedUser();
-    sessionStorage.removeItem("crew_session_jobDate");
-    sessionStorage.removeItem("crew_session_calId");
-    sessionStorage.removeItem("crew_session_manualEntries");
+    // Wipe per-user storage so the next crew member to log in on this
+    // device starts clean: no leftover queues, drafts, or dismiss flags.
+    clearCrewState();
     setUserState(null);
   }
 
