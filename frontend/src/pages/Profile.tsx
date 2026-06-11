@@ -369,7 +369,7 @@ function ProfileNavRow({
         gap: 12, width: "100%", textAlign: "left",
         padding: "11px 14px", fontSize: 14, fontWeight: 600,
         background: "rgba(255,255,255,0.04)",
-        border: warn ? "1px solid #ffb02e" : "1px solid var(--border)",
+        border: warn ? "1px solid var(--warn)" : "1px solid var(--border)",
       }}
     >
       <span className="col" style={{ gap: 2 }}>
@@ -380,7 +380,7 @@ function ProfileNavRow({
               aria-label="Action needed"
               style={{
                 width: 8, height: 8, borderRadius: "50%",
-                background: "#ffb02e", flexShrink: 0,
+                background: "var(--warn)", flexShrink: 0,
               }}
             />
           )}
@@ -389,7 +389,7 @@ function ProfileNavRow({
         {hint && (
           <span
             className="small"
-            style={{ color: warn ? "#ffb02e" : "var(--muted)" }}
+            style={{ color: warn ? "var(--warn)" : "var(--muted)" }}
           >
             {hint}
           </span>

@@ -16,6 +16,11 @@ export interface ThemeVars {
   "--brand2": string;
   "--danger": string;
   "--ok": string;
+  // Amber/orange for "warn" or "conditional" states. --warn-bg is a
+  // pre-mixed tinted background so callers don't need to compose rgba
+  // strings against the theme's actual --bg.
+  "--warn": string;
+  "--warn-bg": string;
 }
 
 export interface ThemePreset {
@@ -39,6 +44,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--brand2": "#6aa7ff",
       "--danger": "#ff6b6b",
       "--ok": "#2dd4bf",
+      "--warn": "#f59e0b",
+      "--warn-bg": "rgba(245,158,11,0.18)",
     },
   },
   "midnight-purple": {
@@ -55,6 +62,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--brand2": "#c084fc",
       "--danger": "#f87171",
       "--ok": "#4ade80",
+      "--warn": "#f59e0b",
+      "--warn-bg": "rgba(245,158,11,0.18)",
     },
   },
   "forest": {
@@ -71,6 +80,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--brand2": "#6ee7b7",
       "--danger": "#f87171",
       "--ok": "#34d399",
+      "--warn": "#f59e0b",
+      "--warn-bg": "rgba(245,158,11,0.18)",
     },
   },
   "sunset": {
@@ -87,6 +98,10 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--brand2": "#fbbf24",
       "--danger": "#ef4444",
       "--ok": "#4ade80",
+      // Sunset's brand IS amber, so warn shifts to a deeper rust to stay
+      // distinguishable from --brand on this theme.
+      "--warn": "#c2410c",
+      "--warn-bg": "rgba(194,65,12,0.20)",
     },
   },
   "steel": {
@@ -103,6 +118,8 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--brand2": "#79c0ff",
       "--danger": "#f85149",
       "--ok": "#3fb950",
+      "--warn": "#f59e0b",
+      "--warn-bg": "rgba(245,158,11,0.18)",
     },
   },
   "light": {
@@ -119,6 +136,10 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--brand2": "#6366f1",
       "--danger": "#ef4444",
       "--ok": "#22c55e",
+      // Light theme needs a notably darker warn so the text reads — the
+      // amber-500 used on dark themes washes out against a white card.
+      "--warn": "#b45309",
+      "--warn-bg": "rgba(180,83,9,0.12)",
     },
   },
 };

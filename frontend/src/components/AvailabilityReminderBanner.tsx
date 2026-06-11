@@ -108,7 +108,7 @@ export default function AvailabilityReminderBanner() {
         alignItems: "center",
         gap: 12,
         background: "var(--card)",
-        borderBottom: "1px solid #ffb02e",
+        borderBottom: "1px solid var(--warn)",
         boxShadow: "0 6px 16px rgba(0,0,0,0.35)",
         // Slide-down reveal — simple translate-Y transition so the banner
         // doesn't pop suddenly when the user lands on a route that triggers it.
@@ -116,7 +116,7 @@ export default function AvailabilityReminderBanner() {
         transition: "transform 220ms ease-out",
       }}
     >
-      <span style={{ fontSize: 20, color: "#ffb02e", flexShrink: 0 }}>!</span>
+      <span style={{ fontSize: 20, color: "var(--warn)", flexShrink: 0 }}>!</span>
       <div className="col" style={{ gap: 1, flex: 1, minWidth: 0 }}>
         <span style={{ fontWeight: 800, fontSize: 14 }}>
           Submit your availability

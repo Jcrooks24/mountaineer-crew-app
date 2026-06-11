@@ -65,7 +65,7 @@ function nextStatus(current: AvailabilityStatus | null): AvailabilityStatus {
 const STATUS_COLORS: Record<AvailabilityStatus, { bg: string; fg: string; label: string }> = {
   available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
   unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
-  conditional: { bg: "rgba(255,176,46,0.18)",  fg: "#ffb02e",       label: "Conditional" },
+  conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
 };
 
 type Tab = "submit" | "history";
@@ -486,8 +486,8 @@ export default function Availability() {
                 className="small"
                 style={{
                   marginTop: 10, padding: "8px 10px", borderRadius: 8,
-                  background: "rgba(255,176,46,0.10)",
-                  border: "1px solid rgba(255,176,46,0.4)",
+                  background: "var(--warn-bg)",
+                  border: "1px solid var(--warn)",
                   color: "var(--text)",
                 }}
               >
