@@ -87,11 +87,25 @@ const TAB_TITLES: Record<Tab, string> = {
   appearance: "Theme & Appearance",
 };
 
+const DESKTOP_MODE_KEY = "crew_admin_desktop_mode_v1";
+
 export default function Admin() {
   const { user } = useAuth();
   const nav = useNavigate();
   // The Map is the dashboard home; every other tool opens as a sub-view.
   const [tab, setTab] = useState<Tab>("map");
+
+  // Desktop mode widens the outer container so tables, calendars, and
+  // wide tools stop being squeezed by the mobile-first 860px cap. Persists
+  // in localStorage so admin doesn't have to flip it every page load.
+  // crew_* prefix means clearCrewState() will reset it on logout — that's
+  // fine; re-toggling is one click on the next login.
+  const [desktopMode, setDesktopMode] = useState<boolean>(() => {
+    try { return localStorage.getItem(DESKTOP_MODE_KEY) === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(DESKTOP_MODE_KEY, desktopMode ? "1" : "0"); } catch {}
+  }, [desktopMode]);
 
   useEffect(() => {
     if (user && user.role !== "admin") nav("/", { replace: true });
@@ -109,16 +123,22 @@ export default function Admin() {
       : "← Dashboard";
 
   return (
-    <div className="container" style={{ maxWidth: 860 }}>
+    <div
+      className="container"
+      style={{ maxWidth: desktopMode ? 1500 : 860 }}
+    >
       {/* Header */}
       <div className="topbar" style={{ marginBottom: 12 }}>
         <span style={{ fontWeight: 700, fontSize: 16 }}>{TAB_TITLES[tab]}</span>
-        <button
-          onClick={() => (isHome ? nav(-1) : setTab(backTo))}
-          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
-        >
-          {backLabel}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <DesktopModeToggle on={desktopMode} onChange={setDesktopMode} />
+          <button
+            onClick={() => (isHome ? nav(-1) : setTab(backTo))}
+            style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
+          >
+            {backLabel}
+          </button>
+        </div>
       </div>
 
       {tab === "map" && (
@@ -142,6 +162,59 @@ export default function Admin() {
       {tab === "advanced" && <AdvancedSettingsPage />}
       {tab === "appearance" && <ThemeAppearancePage />}
     </div>
+  );
+}
+
+// Compact iOS-style slider that toggles the desktop-vs-mobile container
+// width. Sits in the admin topbar. Clicking anywhere on the pill flips
+// the state; the brand fill animates between the on/off positions.
+function DesktopModeToggle({
+  on,
+  onChange,
+}: {
+  on: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!on)}
+      role="switch"
+      aria-checked={on}
+      aria-label={on ? "Switch to mobile sizing" : "Switch to desktop sizing"}
+      title={on ? "Desktop sizing — click for mobile" : "Mobile sizing — click for desktop"}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 8,
+        background: "none", padding: "3px 8px",
+        border: "1px solid var(--border)", borderRadius: 999,
+        cursor: "pointer", fontSize: 11, lineHeight: 1,
+        color: "var(--muted)",
+      }}
+    >
+      <span style={{ fontWeight: 600 }}>{on ? "Desktop" : "Mobile"}</span>
+      <span
+        aria-hidden="true"
+        style={{
+          position: "relative", display: "inline-block",
+          width: 26, height: 14,
+          background: on ? "var(--brand)" : "var(--border)",
+          borderRadius: 999,
+          transition: "background 150ms ease",
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 1, left: on ? 13 : 1,
+            width: 12, height: 12, borderRadius: "50%",
+            background: "var(--text)",
+            transition: "left 150ms ease",
+            boxShadow: "0 1px 2px rgba(0,0,0,0.35)",
+          }}
+        />
+      </span>
+    </button>
   );
 }
 
