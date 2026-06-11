@@ -169,6 +169,15 @@ def submit_batch(
 ):
     if not body.days:
         raise HTTPException(status_code=400, detail="No days provided")
+    # Defensive cap: the legitimate flows are a 14-day rolling submission
+    # or a chunk of a future-period pre-submission, neither of which ever
+    # comes close to 100. Hard-limit anything larger so a tampered client
+    # can't slip an unbounded range through.
+    if len(body.days) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Too many days in one submission (max 100).",
+        )
 
     now = datetime.now(timezone.utc)
     user_name = current_user.name or current_user.email or ""
