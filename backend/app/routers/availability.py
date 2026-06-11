@@ -383,6 +383,57 @@ admin_per_user_router = APIRouter(
 )
 
 
+class AvailabilityRangeRow(BaseModel):
+    """Compact (user, day, status) record returned by /range so the admin
+    month view can build its matrix without an N+1 per-user fetch.
+    `note` is included because the month grid is read-only — anyone editing
+    individual days drops back into the per-user editor on the Availability
+    page."""
+    user_id: int
+    day: str
+    status: str
+    note: Optional[str] = None
+    window_start: str
+
+
+# Declared BEFORE the /{user_id} route below so FastAPI doesn't misroute
+# /range as user_id="range".
+@admin_per_user_router.get("/range", response_model=List[AvailabilityRangeRow])
+def admin_get_range(
+    start: str = Query(..., description="Inclusive ISO date YYYY-MM-DD"),
+    end: str = Query(..., description="Inclusive ISO date YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Every (user_id, day, status, note) record within [start, end]
+    inclusive, sorted by user_id then day. Powers the month-wide view
+    in the admin Employees tab so admin sees the whole crew at once."""
+    try:
+        date.fromisoformat(start)
+        date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Bad start/end date")
+    if end < start:
+        raise HTTPException(status_code=400, detail="end must be >= start")
+
+    rows = (
+        db.query(AvailabilityDay)
+        .filter(AvailabilityDay.day >= start, AvailabilityDay.day <= end)
+        .order_by(AvailabilityDay.user_id.asc(), AvailabilityDay.day.asc())
+        .all()
+    )
+    return [
+        AvailabilityRangeRow(
+            user_id=r.user_id,
+            day=r.day,
+            status=r.status,
+            note=r.note,
+            window_start=r.window_start,
+        )
+        for r in rows
+    ]
+
+
 @admin_per_user_router.get("/{user_id}", response_model=AvailabilityState)
 def admin_get_user_state(
     user_id: int,

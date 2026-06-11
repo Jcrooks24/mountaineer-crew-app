@@ -197,6 +197,7 @@ function EmployeesTab() {
   const [editingTagsFor, setEditingTagsFor] = useState<AdminUser | null>(null);
   const [editingUnlocksFor, setEditingUnlocksFor] = useState<AdminUser | null>(null);
   const [editingAliasesFor, setEditingAliasesFor] = useState<AdminUser | null>(null);
+  const [subview, setSubview] = useState<"roster" | "month">("roster");
 
   useEffect(() => {
     let cancelled = false;
@@ -265,6 +266,35 @@ function EmployeesTab() {
 
   return (
     <>
+      {/* Roster vs. month-wide schedule view. The roster is the default
+          since most admin tasks (tags, unlocks, aliases, role/access)
+          live there; the month view is a wholistic read-only grid. */}
+      <div className="card" style={{ padding: 6 }}>
+        <div className="row" style={{ gap: 6 }}>
+          {(["roster", "month"] as const).map((v) => {
+            const active = subview === v;
+            return (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setSubview(v)}
+                style={{
+                  flex: 1, padding: "8px 10px", borderRadius: 8,
+                  background: active ? "var(--brand)" : "transparent",
+                  color: active ? "var(--on-brand)" : "var(--text)",
+                  border: active ? "1px solid var(--brand)" : "1px solid var(--border)",
+                  fontWeight: 700, fontSize: 13,
+                }}
+              >
+                {v === "roster" ? "Roster" : "Month view"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {subview === "month" && <MonthScheduleView users={users} tags={tags} />}
+      {subview === "roster" && (
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
@@ -384,6 +414,7 @@ function EmployeesTab() {
         </table>
         </div>
       </div>
+      )}
 
       {editingTagsFor && (
         <EmployeeTagsPicker
@@ -838,6 +869,335 @@ function AvailabilityUnlocksPicker({
         </div>
       </div>
     </div>
+  );
+}
+
+// Read-only month-wide availability matrix nested under the Employees tab.
+// Days down, active employees across, status-colored cells. Month navigation
+// arrows mirror Google Calendar's month picker. Employees with no submitted
+// record for a given day render as a blank cell so admin can spot gaps.
+
+type AvailabilityRangeRow = {
+  user_id: number;
+  day: string;
+  status: "available" | "unavailable" | "conditional";
+  note: string | null;
+  window_start: string;
+};
+
+const MONTH_STATUS_COLORS: Record<AvailabilityRangeRow["status"], { bg: string; fg: string; label: string }> = {
+  available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
+  unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
+  conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
+};
+
+function MonthScheduleView({
+  users,
+  tags,
+}: {
+  users: AdminUser[];
+  tags: EmployeeTag[];
+}) {
+  const today = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }, []);
+
+  // year + 0-indexed month, defaulting to today's month.
+  const [year, setYear] = useState<number>(() => new Date().getFullYear());
+  const [month, setMonth] = useState<number>(() => new Date().getMonth());
+
+  const monthLabel = useMemo(
+    () => new Date(year, month, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+    [year, month],
+  );
+
+  // Bounds for the API range query.
+  const lastDayOfMonth = useMemo(() => new Date(year, month + 1, 0).getDate(), [year, month]);
+  const monthStart = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+  const monthEnd = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDayOfMonth).padStart(2, "0")}`;
+
+  const dayList = useMemo(() => {
+    const out: string[] = [];
+    for (let d = 1; d <= lastDayOfMonth; d++) {
+      out.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+    }
+    return out;
+  }, [year, month, lastDayOfMonth]);
+
+  const [rows, setRows] = useState<AvailabilityRangeRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    apiFetch<AvailabilityRangeRow[]>(`/api/admin/availability/range?start=${monthStart}&end=${monthEnd}`)
+      .then((r) => { if (!cancelled) setRows(r); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [monthStart, monthEnd]);
+
+  // Active employees only, sorted by display name.
+  const activeUsers = useMemo(
+    () => users
+      .filter((u) => u.is_active)
+      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email)),
+    [users],
+  );
+
+  const tagsById = useMemo(() => {
+    const m = new Map<number, EmployeeTag>();
+    for (const t of tags) m.set(t.id, t);
+    return m;
+  }, [tags]);
+
+  // (user_id, day) → record map for O(1) cell lookup.
+  const matrix = useMemo(() => {
+    const m = new Map<number, Map<string, AvailabilityRangeRow>>();
+    for (const r of rows) {
+      let inner = m.get(r.user_id);
+      if (!inner) { inner = new Map(); m.set(r.user_id, inner); }
+      inner.set(r.day, r);
+    }
+    return m;
+  }, [rows]);
+
+  function shiftMonth(delta: number) {
+    let m = month + delta;
+    let y = year;
+    while (m < 0) { m += 12; y -= 1; }
+    while (m > 11) { m -= 12; y += 1; }
+    setMonth(m);
+    setYear(y);
+  }
+
+  function jumpToToday() {
+    const now = new Date();
+    setYear(now.getFullYear());
+    setMonth(now.getMonth());
+  }
+
+  return (
+    <>
+      <div
+        className="card"
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => shiftMonth(-1)}
+          style={{ padding: "6px 14px", fontSize: 16, fontWeight: 700 }}
+          aria-label="Previous month"
+        >
+          ‹
+        </button>
+        <div className="col" style={{ alignItems: "center", gap: 2 }}>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>{monthLabel}</div>
+          <button
+            type="button"
+            onClick={jumpToToday}
+            style={{
+              fontSize: 11, padding: "2px 8px",
+              background: "none", color: "var(--muted)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            Today
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => shiftMonth(1)}
+          style={{ padding: "6px 14px", fontSize: 16, fontWeight: 700 }}
+          aria-label="Next month"
+        >
+          ›
+        </button>
+      </div>
+
+      {err && (
+        <div className="card" style={{ color: "var(--danger)" }}>
+          {err}
+        </div>
+      )}
+
+      {activeUsers.length === 0 ? (
+        <div className="card" style={{ color: "var(--muted)", textAlign: "center", padding: 28 }}>
+          No active employees.
+        </div>
+      ) : (
+        <div
+          className="card"
+          style={{ padding: 0, overflow: "auto", maxHeight: "75vh" }}
+        >
+          <table style={{
+            borderCollapse: "separate", borderSpacing: 0,
+            fontSize: 12, minWidth: "100%",
+          }}>
+            <thead>
+              <tr>
+                <th
+                  style={{
+                    position: "sticky", top: 0, left: 0, zIndex: 3,
+                    background: "var(--card)",
+                    borderBottom: "1px solid var(--border)",
+                    borderRight: "1px solid var(--border)",
+                    padding: "8px 10px", textAlign: "left",
+                    minWidth: 70,
+                  }}
+                >
+                  <span className="small" style={{ color: "var(--muted)" }}>Day</span>
+                </th>
+                {activeUsers.map((u) => {
+                  const userTags = u.tag_ids
+                    .map((tid) => tagsById.get(tid))
+                    .filter((t): t is EmployeeTag => !!t)
+                    .sort((a, b) => a.sort_order - b.sort_order);
+                  return (
+                    <th
+                      key={u.id}
+                      style={{
+                        position: "sticky", top: 0, zIndex: 2,
+                        background: "var(--card)",
+                        borderBottom: "1px solid var(--border)",
+                        borderRight: "1px solid var(--border)",
+                        padding: "8px 10px", textAlign: "left",
+                        verticalAlign: "top",
+                        minWidth: 110,
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, fontSize: 12 }}>
+                        {u.name || u.email}
+                      </div>
+                      {userTags.length > 0 && (
+                        <div
+                          style={{
+                            display: "flex", flexWrap: "wrap",
+                            gap: 3, marginTop: 4,
+                          }}
+                        >
+                          {userTags.map((t) => (
+                            <span
+                              key={t.id}
+                              style={{
+                                fontSize: 9, fontWeight: 600,
+                                padding: "1px 5px", borderRadius: 3,
+                                background: "rgba(93,214,194,0.12)",
+                                color: "var(--brand)",
+                                border: "1px solid rgba(93,214,194,0.35)",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {t.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {dayList.map((dIso) => {
+                const dNum = parseInt(dIso.slice(8), 10);
+                const dt = new Date(year, month, dNum);
+                const dow = dt.toLocaleDateString("en-US", { weekday: "short" });
+                const isToday = dIso === today;
+                const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+                return (
+                  <tr key={dIso}>
+                    <td
+                      style={{
+                        position: "sticky", left: 0, zIndex: 1,
+                        background: isToday ? "rgba(93,214,194,0.10)" : "var(--card)",
+                        borderBottom: "1px solid var(--border)",
+                        borderRight: "1px solid var(--border)",
+                        padding: "6px 10px", fontSize: 12,
+                        fontWeight: isToday ? 800 : 600,
+                        color: isToday ? "var(--brand)" : (isWeekend ? "var(--muted)" : "var(--text)"),
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {dNum}{" "}
+                      <span style={{ color: "var(--muted)", fontWeight: 400 }}>{dow}</span>
+                    </td>
+                    {activeUsers.map((u) => {
+                      const record = matrix.get(u.id)?.get(dIso) ?? null;
+                      const colors = record ? MONTH_STATUS_COLORS[record.status] : null;
+                      const noteSuffix = record?.note ? ` — ${record.note}` : "";
+                      const title = record
+                        ? `${u.name || u.email} on ${dIso}: ${record.status}${noteSuffix}`
+                        : `${u.name || u.email} on ${dIso}: not submitted`;
+                      return (
+                        <td
+                          key={u.id}
+                          title={title}
+                          style={{
+                            borderBottom: "1px solid var(--border)",
+                            borderRight: "1px solid var(--border)",
+                            padding: 0, height: 26,
+                            background: colors?.bg ?? "transparent",
+                          }}
+                        />
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {loading && (
+            <div className="small" style={{ color: "var(--muted)", padding: 10 }}>
+              Loading…
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div
+        className="card"
+        style={{
+          display: "flex", flexWrap: "wrap",
+          alignItems: "center", gap: 12, fontSize: 12,
+        }}
+      >
+        <span className="small" style={{ color: "var(--muted)" }}>Legend:</span>
+        {(["available", "unavailable", "conditional"] as const).map((st) => {
+          const c = MONTH_STATUS_COLORS[st];
+          return (
+            <span key={st} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span
+                style={{
+                  width: 14, height: 14, borderRadius: 3,
+                  background: c.bg, border: `1px solid ${c.fg}`,
+                }}
+              />
+              <span>{c.label}</span>
+            </span>
+          );
+        })}
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              width: 14, height: 14, borderRadius: 3,
+              border: "1px dashed var(--border)",
+            }}
+          />
+          <span>Not submitted</span>
+        </span>
+      </div>
+    </>
   );
 }
 
