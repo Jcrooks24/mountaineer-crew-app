@@ -337,8 +337,14 @@ export default function Availability() {
   );
   const lockedDirtyDays = useMemo(() => {
     if (!draft || draft.window_start !== activeWindowStart) return [];
-    return draft.days.filter((d) => isLocked(d.day, today)).map((d) => d.day);
-  }, [draft, activeWindowStart, today]);
+    // Same effective-lock rule as the calendar cells (existing record
+    // AND within 14 days AND no admin unlock). Without this guard a
+    // brand-new user who just cycled all 14 cells would see every one
+    // of them flagged as "locked-and-dirty" and Submit would stay
+    // disabled, since the old isLocked-only test fired on every day
+    // in the today→today+13 range regardless of server state.
+    return draft.days.filter((d) => isEffectivelyLocked(d.day)).map((d) => d.day);
+  }, [draft, activeWindowStart, isEffectivelyLocked]);
 
   const canSubmit =
     unsetDays.length === 0 &&
