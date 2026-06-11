@@ -29,6 +29,7 @@ from app.db.models.photo import Photo
 from app.db.models.system_config import SystemConfig
 from app.db.models.employee_tag import user_employee_tags
 from app.db.models.user import User
+from app.db.models.user_email_alias import UserEmailAlias
 from app.db.session import get_db
 from app.integrations.sheets_export import update_entry_status_in_sheets
 
@@ -51,6 +52,7 @@ class UserAdminResponse(BaseModel):
     role: str
     is_active: bool
     tag_ids: List[int] = []
+    alias_count: int = 0
 
     class Config:
         from_attributes = True
@@ -72,7 +74,19 @@ def _tag_ids_by_user(db: Session) -> Dict[int, List[int]]:
     return out
 
 
-def _user_with_tags(user: User, tag_ids: List[int]) -> UserAdminResponse:
+def _alias_counts_by_user(db: Session) -> Dict[int, int]:
+    """One query for the alias-count per user. Lets the Employees tab show
+    'N aliases' inline without an N+1 fetch."""
+    rows = db.query(UserEmailAlias.user_id).all()
+    counts: Dict[int, int] = {}
+    for (uid,) in rows:
+        counts[uid] = counts.get(uid, 0) + 1
+    return counts
+
+
+def _user_with_tags(
+    user: User, tag_ids: List[int], alias_count: int = 0
+) -> UserAdminResponse:
     return UserAdminResponse(
         id=user.id,
         email=user.email,
@@ -80,6 +94,7 @@ def _user_with_tags(user: User, tag_ids: List[int]) -> UserAdminResponse:
         role=user.role,
         is_active=user.is_active,
         tag_ids=tag_ids,
+        alias_count=alias_count,
     )
 
 
@@ -93,7 +108,11 @@ def list_users(
 ):
     users = db.query(User).order_by(User.id).all()
     tags_by_user = _tag_ids_by_user(db)
-    return [_user_with_tags(u, tags_by_user.get(u.id, [])) for u in users]
+    alias_counts = _alias_counts_by_user(db)
+    return [
+        _user_with_tags(u, tags_by_user.get(u.id, []), alias_counts.get(u.id, 0))
+        for u in users
+    ]
 
 
 # ---------------------------
@@ -121,7 +140,8 @@ def update_user(
     db.commit()
     db.refresh(user)
     tag_ids = _tag_ids_by_user(db).get(user.id, [])
-    return _user_with_tags(user, tag_ids)
+    alias_count = _alias_counts_by_user(db).get(user.id, 0)
+    return _user_with_tags(user, tag_ids, alias_count)
 
 
 # ---------------------------

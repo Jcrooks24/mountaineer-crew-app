@@ -39,6 +39,7 @@ from app.core.google_cal_oauth import LOCAL_TZ, _build_authorized_http, _get_cre
 from app.db.models.availability import AvailabilityDay
 from app.db.models.employee_tag import EmployeeTag, user_employee_tags
 from app.db.models.user import User
+from app.db.models.user_email_alias import UserEmailAlias
 
 
 CREW_RESOURCES_TITLE = "Crew Resources"
@@ -185,18 +186,50 @@ def _tier_and_lead(
 # ── Read: scheduled blocks from Jobs calendar ──────────────────────────────
 
 
+def _email_to_user_id(db: Session) -> Dict[str, int]:
+    """Map every known email — primary and alias — to its owning user_id,
+    all lowercased + stripped. Used to resolve a Google Calendar attendee
+    back to a crew member regardless of which of their addresses the
+    office invited. Inactive users are excluded so we don't accidentally
+    surface a former employee's old job invites in today's roster."""
+    out: Dict[str, int] = {}
+    user_rows = db.query(User.id, User.email).filter(User.is_active.is_(True)).all()
+    for uid, email in user_rows:
+        key = (email or "").strip().lower()
+        if key:
+            out[key] = uid
+    # Aliases. Restrict to aliases owned by active users so we don't link a
+    # Calendar invite to someone admin already deactivated.
+    alias_rows = (
+        db.query(UserEmailAlias.user_id, UserEmailAlias.email)
+        .join(User, User.id == UserEmailAlias.user_id)
+        .filter(User.is_active.is_(True))
+        .all()
+    )
+    for uid, email in alias_rows:
+        key = (email or "").strip().lower()
+        if key:
+            out[key] = uid
+    return out
+
+
 def _prior_week_hours(
-    svc: Any, jobs_calendar_id: str, target: date
-) -> Dict[str, float]:
-    """Sum scheduled hours per attendee email across all events on the Jobs
-    calendar in the 7 days *before* target (target itself excluded). Used
-    to show "X.Xh last 7d" next to each crew member in the description so
-    the office can see at a glance who's been heavily loaded.
+    svc: Any,
+    jobs_calendar_id: str,
+    target: date,
+    email_to_user_id: Dict[str, int],
+) -> Dict[int, float]:
+    """Sum scheduled hours per user_id across all events on the Jobs
+    calendar in the 7 days *before* target (target itself excluded).
+    Attendees keyed by user_id so a crew member invited via an alias
+    is still credited to the right person.
 
     All-day events are skipped — they don't have a defined duration the
     way a moving-job event does. Declined attendees are skipped. Multi-day
     events are clipped to the prior-7-day window, so a job that runs
-    into target day only contributes its pre-target portion.
+    into target day only contributes its pre-target portion. Attendees
+    we can't resolve to a user are silently dropped here; the today's-day
+    scan is the canonical place to surface unrecognized addresses.
     """
     if not jobs_calendar_id:
         return {}
@@ -220,7 +253,7 @@ def _prior_week_hours(
 
     resp = _ssl_retry(_fetch)
     items = resp.get("items", [])
-    out: Dict[str, float] = defaultdict(float)
+    out: Dict[int, float] = defaultdict(float)
     for it in items:
         attendees = it.get("attendees") or []
         if not attendees:
@@ -247,7 +280,10 @@ def _prior_week_hours(
                 continue
             if a.get("responseStatus") == "declined":
                 continue
-            out[email] += hours
+            uid = email_to_user_id.get(email)
+            if uid is None:
+                continue  # unrecognized: surfaced only in today's-day scan
+            out[uid] += hours
     return dict(out)
 
 
@@ -257,14 +293,24 @@ def _format_prior_hours(h: float) -> str:
     return f"{h:.1f}h last 7d"
 
 
-def _scheduled_by_email(
-    svc: Any, jobs_calendar_id: str, target: date
-) -> Dict[str, List[Dict[str, str]]]:
-    """For each attendee email on jobs events that day, collect a list of
-    {start, end, title} blocks. start/end are pre-formatted local-time strings.
-    All-day events appear as start='All day', end=''."""
+def _scheduled_by_user_id(
+    svc: Any,
+    jobs_calendar_id: str,
+    target: date,
+    email_to_user_id: Dict[str, int],
+) -> Tuple[Dict[int, List[Dict[str, str]]], Dict[str, List[str]]]:
+    """Walk every event on the Jobs calendar for `target` and produce two maps:
+
+      scheduled_by_user_id: user_id -> list of {start, end, title} blocks.
+        Aliases route to the right user via email_to_user_id.
+
+      unrecognized_by_email: lowercase email -> list of job titles they
+        were invited to today. Surfaces to admin in the UNRECOGNIZED
+        INVITEES section of the description so typos / un-aliased
+        addresses don't silently vanish from the roster.
+    """
     if not jobs_calendar_id:
-        return {}
+        return {}, {}
 
     start_local, end_local = _day_bounds(target)
 
@@ -284,7 +330,8 @@ def _scheduled_by_email(
 
     resp = _ssl_retry(_fetch)
     items = resp.get("items", [])
-    out: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    scheduled: Dict[int, List[Dict[str, str]]] = defaultdict(list)
+    unrecognized: Dict[str, List[str]] = defaultdict(list)
     for it in items:
         attendees = it.get("attendees") or []
         if not attendees:
@@ -302,8 +349,16 @@ def _scheduled_by_email(
             # Skip declined attendees — they aren't actually working it.
             if a.get("responseStatus") == "declined":
                 continue
-            out[email].append(block)
-    return out
+            uid = email_to_user_id.get(email)
+            if uid is None:
+                # Track which event title(s) the unrecognized address was on
+                # so admin can correct the typo or add the alias without
+                # hunting back through the calendar.
+                if title not in unrecognized[email]:
+                    unrecognized[email].append(title)
+                continue
+            scheduled[uid].append(block)
+    return dict(scheduled), dict(unrecognized)
 
 
 # ── Description builder ────────────────────────────────────────────────────
@@ -339,8 +394,9 @@ def build_description(
     target: date,
     available: List[Dict[str, Any]],
     tags_by_id: Dict[int, EmployeeTag],
-    scheduled: Dict[str, List[Dict[str, str]]],
-    prior_hours: Dict[str, float],
+    scheduled: Dict[int, List[Dict[str, str]]],
+    prior_hours: Dict[int, float],
+    unrecognized_invitees: Dict[str, List[str]],
 ) -> str:
     """Compose the Crew Resources event description.
 
@@ -368,8 +424,10 @@ def build_description(
 
     for emp in available:
         tier, is_lead = _tier_and_lead(emp["tag_ids"], tags_by_id)
-        blocks = scheduled.get(emp["email"]) or []
-        hours = prior_hours.get(emp["email"], 0.0)
+        # Scheduling + hours map are keyed by user_id so an attendee
+        # invited via an alias still resolves to the right crew member.
+        blocks = scheduled.get(emp["user_id"]) or []
+        hours = prior_hours.get(emp["user_id"], 0.0)
         entry = {
             **emp,
             "is_lead": is_lead,
@@ -430,6 +488,18 @@ def build_description(
             lines.append(
                 f"{p['name']} ({tier_text}{role}){hours_part} — {p['blocks_text']}{note_part}"
             )
+
+    if unrecognized_invitees:
+        lines.append("")
+        lines.append("—— UNRECOGNIZED INVITEES ——")
+        lines.append("")
+        # Sorted by email so admin can read alphabetically. Each line lists
+        # the job titles the address was invited to today, so a typo is
+        # easy to map back to which event needs correcting.
+        for email in sorted(unrecognized_invitees.keys()):
+            jobs = unrecognized_invitees[email]
+            jobs_text = ", ".join(jobs) if jobs else ""
+            lines.append(f"  {email} — invited to {jobs_text}" if jobs_text else f"  {email}")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -525,10 +595,22 @@ def update_crew_resources_for_day(db: Session, target: date) -> Dict[str, Any]:
 
     svc = _get_calendar_svc(db)
     jobs_id = _jobs_calendar_id()
-    scheduled = _scheduled_by_email(svc, jobs_id, target) if jobs_id else {}
-    prior_hours = _prior_week_hours(svc, jobs_id, target) if jobs_id else {}
+    # Alias-aware lookup: every primary email + every UserEmailAlias.email
+    # maps to its owning user_id. Calendar attendees route to crew members
+    # via this dict, so an alias-addressed invite still lands on the
+    # right row of the description.
+    email_to_user_id = _email_to_user_id(db)
+    if jobs_id:
+        scheduled, unrecognized = _scheduled_by_user_id(
+            svc, jobs_id, target, email_to_user_id
+        )
+        prior_hours = _prior_week_hours(svc, jobs_id, target, email_to_user_id)
+    else:
+        scheduled, unrecognized, prior_hours = {}, {}, {}
 
-    description = build_description(target, available, tags, scheduled, prior_hours)
+    description = build_description(
+        target, available, tags, scheduled, prior_hours, unrecognized
+    )
 
     event_id = _find_crew_resources_event_id(svc, resources_id, target)
     created = False

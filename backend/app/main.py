@@ -23,6 +23,7 @@ import app.db.models.reimbursement  # noqa: F401 — register reimbursements tab
 import app.db.models.availability  # noqa: F401 — register availability_days table
 import app.db.models.availability_unlock  # noqa: F401 — register availability_unlocks
 import app.db.models.employee_tag  # noqa: F401 — register employee_tags + user_employee_tags
+import app.db.models.user_email_alias  # noqa: F401 — register user_email_aliases
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -53,6 +54,7 @@ from app.routers.employee_tags import (
     router as employee_tags_router,
     users_router as employee_tags_users_router,
 )
+from app.routers.user_email_aliases import router as user_email_aliases_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -182,3 +184,4 @@ app.include_router(availability_unlocks_router)     # /api/admin/availability-un
 app.include_router(availability_admin_router)       # /api/admin/availability/{user_id}
 app.include_router(employee_tags_router)         # /api/admin/employee-tags
 app.include_router(employee_tags_users_router)   # /api/admin/users/{id}/employee-tags
+app.include_router(user_email_aliases_router)    # /api/admin/users/{id}/email-aliases

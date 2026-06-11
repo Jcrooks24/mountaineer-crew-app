@@ -37,12 +37,19 @@ type AdminUser = {
   role: string;
   is_active: boolean;
   tag_ids: number[];
+  alias_count: number;
 };
 
 type EmployeeTag = {
   id: number;
   name: string;
   sort_order: number;
+};
+
+type EmailAlias = {
+  id: number;
+  email: string;
+  created_at: string;
 };
 
 type GeoEvent = {
@@ -189,6 +196,7 @@ function EmployeesTab() {
   const [busy, setBusy] = useState<number | null>(null);
   const [editingTagsFor, setEditingTagsFor] = useState<AdminUser | null>(null);
   const [editingUnlocksFor, setEditingUnlocksFor] = useState<AdminUser | null>(null);
+  const [editingAliasesFor, setEditingAliasesFor] = useState<AdminUser | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -361,6 +369,13 @@ function EmployeesTab() {
                     >
                       Unlocks
                     </button>
+                    <button
+                      onClick={() => setEditingAliasesFor(u)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
+                      title="Manage alternate email addresses for Crew Resources matching"
+                    >
+                      Emails{u.alias_count > 0 ? ` (${u.alias_count})` : ""}
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -387,7 +402,249 @@ function EmployeesTab() {
           onClose={() => setEditingUnlocksFor(null)}
         />
       )}
+      {editingAliasesFor && (
+        <EmailAliasesPicker
+          user={editingAliasesFor}
+          onClose={() => {
+            setEditingAliasesFor(null);
+            // Re-fetch the user list — primary email may have changed via
+            // promote-to-primary, and alias_count almost certainly did.
+            apiFetch<AdminUser[]>("/api/admin/users")
+              .then(setUsers)
+              .catch(() => {});
+          }}
+        />
+      )}
     </>
+  );
+}
+
+// Admin modal for managing a crew member's email addresses. Primary lives
+// on users.email; aliases live in user_email_aliases. Promote-to-primary
+// swaps an alias with the current primary in a single backend transaction.
+function EmailAliasesPicker({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const [aliases, setAliases] = useState<EmailAlias[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newEmail, setNewEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // Local mutable copy of the primary email so we can update the badge
+  // immediately after a promote without waiting for the parent re-fetch.
+  const [primaryEmail, setPrimaryEmail] = useState(user.email);
+
+  function load() {
+    setLoading(true);
+    apiFetch<EmailAlias[]>(`/api/admin/users/${user.id}/email-aliases`)
+      .then(setAliases)
+      .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load aliases"))
+      .finally(() => setLoading(false));
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  async function addAlias() {
+    const email = newEmail.trim().toLowerCase();
+    if (!email) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const created = await apiFetch<EmailAlias>(
+        `/api/admin/users/${user.id}/email-aliases`,
+        { method: "POST", body: JSON.stringify({ email }) },
+      );
+      setAliases((prev) => [...prev, created]);
+      setNewEmail("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to add alias");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeAlias(id: number) {
+    if (!confirm("Remove this alias? Crew Resources will no longer match invites sent to it.")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/users/${user.id}/email-aliases/${id}`, { method: "DELETE" });
+      setAliases((prev) => prev.filter((a) => a.id !== id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to remove");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function promote(alias: EmailAlias) {
+    if (!confirm(
+      `Make "${alias.email}" the primary email for ${user.name || user.email}? `
+      + "Their current primary will become an alias. This affects login and password-reset emails."
+    )) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const newAliasForOldPrimary = await apiFetch<EmailAlias>(
+        `/api/admin/users/${user.id}/email-aliases/${alias.id}/promote`,
+        { method: "POST" },
+      );
+      // Reflect locally: the promoted alias is gone from the list (it's
+      // now the primary), and the old primary appears as a new alias.
+      const promotedEmail = alias.email;
+      setAliases((prev) => [
+        ...prev.filter((a) => a.id !== alias.id),
+        newAliasForOldPrimary,
+      ]);
+      setPrimaryEmail(promotedEmail);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to promote");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, padding: 16, zIndex: 1000,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--card)", borderRadius: 12,
+          border: "1px solid var(--border)",
+          maxWidth: 480, width: "100%",
+          padding: 18, display: "flex", flexDirection: "column", gap: 14,
+          maxHeight: "90vh", overflowY: "auto",
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 800 }}>
+          Email addresses for {user.name || primaryEmail}
+        </div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+          Crew Resources matches Google Calendar invitees by email. Add an
+          alias here so a job event invited to a personal address still
+          maps back to this crew member.
+        </div>
+
+        <div className="col" style={{ gap: 6 }}>
+          <div
+            className="row"
+            style={{
+              alignItems: "center", gap: 8,
+              padding: "8px 10px", borderRadius: 8,
+              border: "1px solid var(--brand)",
+              background: "rgba(93,214,194,0.08)",
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{primaryEmail}</span>
+            <span
+              className="small"
+              style={{
+                padding: "2px 8px", borderRadius: 999,
+                background: "var(--brand)", color: "var(--on-brand)",
+                fontWeight: 700,
+              }}
+            >
+              Primary
+            </span>
+          </div>
+
+          {loading ? (
+            <div className="small" style={{ color: "var(--muted)" }}>Loading aliases…</div>
+          ) : aliases.length === 0 ? (
+            <div className="small" style={{ color: "var(--muted)", padding: "4px 2px" }}>
+              No aliases yet.
+            </div>
+          ) : (
+            aliases.map((a) => (
+              <div
+                key={a.id}
+                className="row"
+                style={{
+                  alignItems: "center", gap: 8,
+                  padding: "8px 10px", borderRadius: 8,
+                  border: "1px solid var(--border)",
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{a.email}</span>
+                <button
+                  type="button"
+                  onClick={() => promote(a)}
+                  disabled={busy}
+                  style={{ fontSize: 12, padding: "4px 10px" }}
+                  title="Make this the user's primary email; the current primary becomes an alias."
+                >
+                  Make primary
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeAlias(a.id)}
+                  disabled={busy}
+                  style={{
+                    fontSize: 12, padding: "4px 10px",
+                    background: "none", color: "var(--danger)",
+                    border: "1px solid var(--danger)",
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="col" style={{ gap: 8 }}>
+          <label className="label">Add alias</label>
+          <div className="row" style={{ gap: 8 }}>
+            <input
+              type="email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addAlias(); }}
+              placeholder="e.g. personal@gmail.com"
+              style={{ flex: 1, padding: "6px 10px", fontSize: 13 }}
+            />
+            <button
+              type="button"
+              onClick={addAlias}
+              disabled={busy || !newEmail.trim()}
+              className="btnPrimary"
+              style={{ padding: "6px 14px", fontSize: 13 }}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+
+        {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: "none",
+              color: "var(--muted)",
+              border: "1px solid var(--border)",
+              padding: "8px 14px", fontSize: 13,
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
