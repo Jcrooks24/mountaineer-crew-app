@@ -291,9 +291,11 @@ def request_mechanic_signature(
                 f"Once you sign, the vehicle is automatically cleared for service."
             ),
         )
-        print(f"[mechanic-sign] email sent OK to {mechanic_email}")
+        # Log the dvir id rather than the mechanic's email — Render logs are
+        # not the right place to record third-party contact information.
+        print(f"[mechanic-sign] email sent OK for dvir {dvir.id}")
     except Exception as exc:
-        print(f"[mechanic-sign] email send FAILED for {mechanic_email}: {exc}")
+        print(f"[mechanic-sign] email send FAILED for dvir {dvir.id}: {exc}")
         raise HTTPException(
             status_code=502,
             detail="Could not send the signature request email. Try again.",

@@ -36,6 +36,20 @@ type AdminUser = {
   name: string | null;
   role: string;
   is_active: boolean;
+  tag_ids: number[];
+  alias_count: number;
+};
+
+type EmployeeTag = {
+  id: number;
+  name: string;
+  sort_order: number;
+};
+
+type EmailAlias = {
+  id: number;
+  email: string;
+  created_at: string;
 };
 
 type GeoEvent = {
@@ -73,11 +87,25 @@ const TAB_TITLES: Record<Tab, string> = {
   appearance: "Theme & Appearance",
 };
 
+const DESKTOP_MODE_KEY = "crew_admin_desktop_mode_v1";
+
 export default function Admin() {
   const { user } = useAuth();
   const nav = useNavigate();
   // The Map is the dashboard home; every other tool opens as a sub-view.
   const [tab, setTab] = useState<Tab>("map");
+
+  // Desktop mode widens the outer container so tables, calendars, and
+  // wide tools stop being squeezed by the mobile-first 860px cap. Persists
+  // in localStorage so admin doesn't have to flip it every page load.
+  // crew_* prefix means clearCrewState() will reset it on logout — that's
+  // fine; re-toggling is one click on the next login.
+  const [desktopMode, setDesktopMode] = useState<boolean>(() => {
+    try { return localStorage.getItem(DESKTOP_MODE_KEY) === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(DESKTOP_MODE_KEY, desktopMode ? "1" : "0"); } catch {}
+  }, [desktopMode]);
 
   useEffect(() => {
     if (user && user.role !== "admin") nav("/", { replace: true });
@@ -95,16 +123,22 @@ export default function Admin() {
       : "← Dashboard";
 
   return (
-    <div className="container" style={{ maxWidth: 860 }}>
+    <div
+      className="container"
+      style={{ maxWidth: desktopMode ? 1500 : 860 }}
+    >
       {/* Header */}
       <div className="topbar" style={{ marginBottom: 12 }}>
         <span style={{ fontWeight: 700, fontSize: 16 }}>{TAB_TITLES[tab]}</span>
-        <button
-          onClick={() => (isHome ? nav(-1) : setTab(backTo))}
-          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
-        >
-          {backLabel}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <DesktopModeToggle on={desktopMode} onChange={setDesktopMode} />
+          <button
+            onClick={() => (isHome ? nav(-1) : setTab(backTo))}
+            style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
+          >
+            {backLabel}
+          </button>
+        </div>
       </div>
 
       {tab === "map" && (
@@ -128,6 +162,59 @@ export default function Admin() {
       {tab === "advanced" && <AdvancedSettingsPage />}
       {tab === "appearance" && <ThemeAppearancePage />}
     </div>
+  );
+}
+
+// Compact iOS-style slider that toggles the desktop-vs-mobile container
+// width. Sits in the admin topbar. Clicking anywhere on the pill flips
+// the state; the brand fill animates between the on/off positions.
+function DesktopModeToggle({
+  on,
+  onChange,
+}: {
+  on: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!on)}
+      role="switch"
+      aria-checked={on}
+      aria-label={on ? "Switch to mobile sizing" : "Switch to desktop sizing"}
+      title={on ? "Desktop sizing — click for mobile" : "Mobile sizing — click for desktop"}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 8,
+        background: "none", padding: "3px 8px",
+        border: "1px solid var(--border)", borderRadius: 999,
+        cursor: "pointer", fontSize: 11, lineHeight: 1,
+        color: "var(--muted)",
+      }}
+    >
+      <span style={{ fontWeight: 600 }}>{on ? "Desktop" : "Mobile"}</span>
+      <span
+        aria-hidden="true"
+        style={{
+          position: "relative", display: "inline-block",
+          width: 26, height: 14,
+          background: on ? "var(--brand)" : "var(--border)",
+          borderRadius: 999,
+          transition: "background 150ms ease",
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 1, left: on ? 13 : 1,
+            width: 12, height: 12, borderRadius: "50%",
+            background: "var(--text)",
+            transition: "left 150ms ease",
+            boxShadow: "0 1px 2px rgba(0,0,0,0.35)",
+          }}
+        />
+      </span>
+    </button>
   );
 }
 
@@ -176,15 +263,29 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
 // ─────────────────────────────────────────
 function EmployeesTab() {
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [tags, setTags] = useState<EmployeeTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  const [editingTagsFor, setEditingTagsFor] = useState<AdminUser | null>(null);
+  const [editingUnlocksFor, setEditingUnlocksFor] = useState<AdminUser | null>(null);
+  const [editingAliasesFor, setEditingAliasesFor] = useState<AdminUser | null>(null);
+  const [subview, setSubview] = useState<"roster" | "month">("roster");
 
   useEffect(() => {
-    apiFetch<AdminUser[]>("/api/admin/users")
-      .then(setUsers)
-      .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    Promise.all([
+      apiFetch<AdminUser[]>("/api/admin/users"),
+      apiFetch<EmployeeTag[]>("/api/admin/employee-tags"),
+    ])
+      .then(([u, t]) => {
+        if (cancelled) return;
+        setUsers(u);
+        setTags(t);
+      })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
   async function toggleAccess(u: AdminUser) {
@@ -219,69 +320,1071 @@ function EmployeesTab() {
     }
   }
 
+  async function saveUserTags(userId: number, tagIds: number[]) {
+    const updated = await apiFetch<number[]>(`/api/admin/users/${userId}/employee-tags`, {
+      method: "PUT",
+      body: JSON.stringify({ tag_ids: tagIds }),
+    });
+    setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, tag_ids: updated } : u)));
+  }
+
+  const tagsById = useMemo(() => {
+    const m = new Map<number, EmployeeTag>();
+    for (const t of tags) m.set(t.id, t);
+    return m;
+  }, [tags]);
+
   if (loading) return <div className="card small">Loading...</div>;
   if (err) return <div className="card" style={{ color: "var(--danger)" }}>{err}</div>;
 
   return (
-    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 540 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
-            {["Name", "Email", "Role", "Status", "Actions"].map((h) => (
-              <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
+    <>
+      {/* Roster vs. month-wide schedule view. The roster is the default
+          since most admin tasks (tags, unlocks, aliases, role/access)
+          live there; the month view is a wholistic read-only grid. */}
+      <div className="card" style={{ padding: 6 }}>
+        <div className="row" style={{ gap: 6 }}>
+          {(["roster", "month"] as const).map((v) => {
+            const active = subview === v;
+            return (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setSubview(v)}
+                style={{
+                  flex: 1, padding: "8px 10px", borderRadius: 8,
+                  background: active ? "var(--brand)" : "transparent",
+                  color: active ? "var(--on-brand)" : "var(--text)",
+                  border: active ? "1px solid var(--brand)" : "1px solid var(--border)",
+                  fontWeight: 700, fontSize: 13,
+                }}
+              >
+                {v === "roster" ? "Roster" : "Month view"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {subview === "month" && <MonthScheduleView users={users} tags={tags} />}
+      {subview === "roster" && (
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+              {["Name", "Email", "Role", "Status", "Tags", "Actions"].map((h) => (
+                <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((u, i) => (
+              <tr
+                key={u.id}
+                style={{
+                  borderBottom: i < users.length - 1 ? "1px solid var(--border)" : "none",
+                  opacity: u.is_active ? 1 : 0.45,
+                }}
+              >
+                <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>—</span>}</td>
+                <td style={{ padding: "10px 14px", color: "var(--muted)" }}>{u.email}</td>
+                <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role}</td>
+                <td style={{ padding: "10px 14px" }}>
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
+                    background: u.is_active ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+                    color: u.is_active ? "var(--ok)" : "var(--danger)",
+                  }}>
+                    {u.is_active ? "Active" : "Disabled"}
+                  </span>
+                </td>
+                <td style={{ padding: "10px 14px" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+                    {u.tag_ids.length === 0 ? (
+                      <span className="small" style={{ color: "var(--muted)" }}>—</span>
+                    ) : (
+                      u.tag_ids
+                        .map((tid) => tagsById.get(tid))
+                        .filter((t): t is EmployeeTag => !!t)
+                        .sort((a, b) => a.sort_order - b.sort_order)
+                        .map((t) => (
+                          <span
+                            key={t.id}
+                            style={{
+                              fontSize: 11, fontWeight: 600,
+                              padding: "2px 8px", borderRadius: 999,
+                              background: "rgba(93,214,194,0.12)",
+                              color: "var(--brand)",
+                              border: "1px solid rgba(93,214,194,0.4)",
+                            }}
+                          >
+                            {t.name}
+                          </span>
+                        ))
+                    )}
+                    <button
+                      onClick={() => {
+                        setEditingTagsFor(u);
+                        // Refetch the tag list — admin may have added or
+                        // renamed tags in Settings since this page mounted.
+                        // Failure is silent; we fall back to the cached list.
+                        apiFetch<EmployeeTag[]>("/api/admin/employee-tags")
+                          .then(setTags)
+                          .catch(() => {});
+                      }}
+                      style={{
+                        fontSize: 11, padding: "2px 8px", borderRadius: 999,
+                        background: "none", color: "var(--muted)",
+                        border: "1px dashed var(--border)", cursor: "pointer",
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </td>
+                <td style={{ padding: "10px 14px" }}>
+                  <div className="row" style={{ gap: 6 }}>
+                    <button
+                      disabled={busy === u.id}
+                      onClick={() => toggleAccess(u)}
+                      style={{
+                        fontSize: 12, padding: "4px 10px",
+                        background: u.is_active ? "rgba(255,107,107,0.2)" : "rgba(45,212,191,0.2)",
+                        border: `1px solid ${u.is_active ? "var(--danger)" : "var(--ok)"}`,
+                        color: u.is_active ? "var(--danger)" : "var(--ok)",
+                        borderRadius: 8,
+                      }}
+                    >
+                      {u.is_active ? "Revoke" : "Restore"}
+                    </button>
+                    <button
+                      disabled={busy === u.id}
+                      onClick={() => toggleRole(u)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
+                    >
+                      → {u.role === "admin" ? "User" : "Admin"}
+                    </button>
+                    <button
+                      onClick={() => setEditingUnlocksFor(u)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
+                      title="Unlock an availability window for this user"
+                    >
+                      Unlocks
+                    </button>
+                    <button
+                      onClick={() => setEditingAliasesFor(u)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
+                      title="Manage alternate email addresses for Crew Resources matching"
+                    >
+                      Emails{u.alias_count > 0 ? ` (${u.alias_count})` : ""}
+                    </button>
+                  </div>
+                </td>
+              </tr>
             ))}
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((u, i) => (
-            <tr
-              key={u.id}
+          </tbody>
+        </table>
+        </div>
+      </div>
+      )}
+
+      {editingTagsFor && (
+        <EmployeeTagsPicker
+          user={editingTagsFor}
+          allTags={tags}
+          onCancel={() => setEditingTagsFor(null)}
+          onSave={async (tagIds) => {
+            await saveUserTags(editingTagsFor.id, tagIds);
+            setEditingTagsFor(null);
+          }}
+        />
+      )}
+      {editingUnlocksFor && (
+        <AvailabilityUnlocksPicker
+          user={editingUnlocksFor}
+          onClose={() => setEditingUnlocksFor(null)}
+        />
+      )}
+      {editingAliasesFor && (
+        <EmailAliasesPicker
+          user={editingAliasesFor}
+          onClose={() => {
+            setEditingAliasesFor(null);
+            // Re-fetch the user list — primary email may have changed via
+            // promote-to-primary, and alias_count almost certainly did.
+            apiFetch<AdminUser[]>("/api/admin/users")
+              .then(setUsers)
+              .catch(() => {});
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// Admin modal for managing a crew member's email addresses. Primary lives
+// on users.email; aliases live in user_email_aliases. Promote-to-primary
+// swaps an alias with the current primary in a single backend transaction.
+function EmailAliasesPicker({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const [aliases, setAliases] = useState<EmailAlias[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newEmail, setNewEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // Local mutable copy of the primary email so we can update the badge
+  // immediately after a promote without waiting for the parent re-fetch.
+  const [primaryEmail, setPrimaryEmail] = useState(user.email);
+
+  function load() {
+    setLoading(true);
+    apiFetch<EmailAlias[]>(`/api/admin/users/${user.id}/email-aliases`)
+      .then(setAliases)
+      .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load aliases"))
+      .finally(() => setLoading(false));
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  async function addAlias() {
+    const email = newEmail.trim().toLowerCase();
+    if (!email) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const created = await apiFetch<EmailAlias>(
+        `/api/admin/users/${user.id}/email-aliases`,
+        { method: "POST", body: JSON.stringify({ email }) },
+      );
+      setAliases((prev) => [...prev, created]);
+      setNewEmail("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to add alias");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeAlias(id: number) {
+    if (!confirm("Remove this alias? Crew Resources will no longer match invites sent to it.")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/users/${user.id}/email-aliases/${id}`, { method: "DELETE" });
+      setAliases((prev) => prev.filter((a) => a.id !== id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to remove");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function promote(alias: EmailAlias) {
+    if (!confirm(
+      `Make "${alias.email}" the primary email for ${user.name || user.email}? `
+      + "Their current primary will become an alias. This affects login and password-reset emails."
+    )) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const newAliasForOldPrimary = await apiFetch<EmailAlias>(
+        `/api/admin/users/${user.id}/email-aliases/${alias.id}/promote`,
+        { method: "POST" },
+      );
+      // Reflect locally: the promoted alias is gone from the list (it's
+      // now the primary), and the old primary appears as a new alias.
+      const promotedEmail = alias.email;
+      setAliases((prev) => [
+        ...prev.filter((a) => a.id !== alias.id),
+        newAliasForOldPrimary,
+      ]);
+      setPrimaryEmail(promotedEmail);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to promote");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, padding: 16, zIndex: 1000,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--card)", borderRadius: 12,
+          border: "1px solid var(--border)",
+          maxWidth: 480, width: "100%",
+          padding: 18, display: "flex", flexDirection: "column", gap: 14,
+          maxHeight: "90vh", overflowY: "auto",
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 800 }}>
+          Email addresses for {user.name || primaryEmail}
+        </div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+          Crew Resources matches Google Calendar invitees by email. Add an
+          alias here so a job event invited to a personal address still
+          maps back to this crew member.
+        </div>
+
+        <div className="col" style={{ gap: 6 }}>
+          <div
+            className="row"
+            style={{
+              alignItems: "center", gap: 8,
+              padding: "8px 10px", borderRadius: 8,
+              border: "1px solid var(--brand)",
+              background: "rgba(93,214,194,0.08)",
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{primaryEmail}</span>
+            <span
+              className="small"
               style={{
-                borderBottom: i < users.length - 1 ? "1px solid var(--border)" : "none",
-                opacity: u.is_active ? 1 : 0.45,
+                padding: "2px 8px", borderRadius: 999,
+                background: "var(--brand)", color: "var(--on-brand)",
+                fontWeight: 700,
               }}
             >
-              <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>—</span>}</td>
-              <td style={{ padding: "10px 14px", color: "var(--muted)" }}>{u.email}</td>
-              <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role}</td>
-              <td style={{ padding: "10px 14px" }}>
-                <span style={{
-                  fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
-                  background: u.is_active ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
-                  color: u.is_active ? "var(--ok)" : "var(--danger)",
-                }}>
-                  {u.is_active ? "Active" : "Disabled"}
-                </span>
-              </td>
-              <td style={{ padding: "10px 14px" }}>
-                <div className="row" style={{ gap: 6 }}>
-                  <button
-                    disabled={busy === u.id}
-                    onClick={() => toggleAccess(u)}
-                    style={{
-                      fontSize: 12, padding: "4px 10px",
-                      background: u.is_active ? "rgba(255,107,107,0.2)" : "rgba(45,212,191,0.2)",
-                      border: `1px solid ${u.is_active ? "var(--danger)" : "var(--ok)"}`,
-                      color: u.is_active ? "var(--danger)" : "var(--ok)",
-                      borderRadius: 8,
-                    }}
-                  >
-                    {u.is_active ? "Revoke" : "Restore"}
-                  </button>
-                  <button
-                    disabled={busy === u.id}
-                    onClick={() => toggleRole(u)}
-                    style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
-                  >
-                    → {u.role === "admin" ? "User" : "Admin"}
-                  </button>
+              Primary
+            </span>
+          </div>
+
+          {loading ? (
+            <div className="small" style={{ color: "var(--muted)" }}>Loading aliases…</div>
+          ) : aliases.length === 0 ? (
+            <div className="small" style={{ color: "var(--muted)", padding: "4px 2px" }}>
+              No aliases yet.
+            </div>
+          ) : (
+            aliases.map((a) => (
+              <div
+                key={a.id}
+                className="row"
+                style={{
+                  alignItems: "center", gap: 8,
+                  padding: "8px 10px", borderRadius: 8,
+                  border: "1px solid var(--border)",
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{a.email}</span>
+                <button
+                  type="button"
+                  onClick={() => promote(a)}
+                  disabled={busy}
+                  style={{ fontSize: 12, padding: "4px 10px" }}
+                  title="Make this the user's primary email; the current primary becomes an alias."
+                >
+                  Make primary
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeAlias(a.id)}
+                  disabled={busy}
+                  style={{
+                    fontSize: 12, padding: "4px 10px",
+                    background: "none", color: "var(--danger)",
+                    border: "1px solid var(--danger)",
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="col" style={{ gap: 8 }}>
+          <label className="label">Add alias</label>
+          <div className="row" style={{ gap: 8 }}>
+            <input
+              type="email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addAlias(); }}
+              placeholder="e.g. personal@gmail.com"
+              style={{ flex: 1, padding: "6px 10px", fontSize: 13 }}
+            />
+            <button
+              type="button"
+              onClick={addAlias}
+              disabled={busy || !newEmail.trim()}
+              className="btnPrimary"
+              style={{ padding: "6px 14px", fontSize: 13 }}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+
+        {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: "none",
+              color: "var(--muted)",
+              border: "1px solid var(--border)",
+              padding: "8px 14px", fontSize: 13,
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Admin modal for granting / revoking availability-window unlocks. Each
+// (user, window_start) pair can hold at most one unlock — the POST is
+// idempotent so re-granting just refreshes the note + granted_by stamp.
+type AdminAvailabilityUnlock = {
+  id: number;
+  window_start: string;
+  granted_by_name: string;
+  granted_at: string;
+  note: string | null;
+};
+
+function AvailabilityUnlocksPicker({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const [unlocks, setUnlocks] = useState<AdminAvailabilityUnlock[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [windowStart, setWindowStart] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function load() {
+    setLoading(true);
+    apiFetch<AdminAvailabilityUnlock[]>(`/api/admin/availability-unlocks?user_id=${user.id}`)
+      .then((rows) => setUnlocks(rows))
+      .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  async function grant() {
+    if (!windowStart) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const created = await apiFetch<AdminAvailabilityUnlock>("/api/admin/availability-unlocks", {
+        method: "POST",
+        body: JSON.stringify({ user_id: user.id, window_start: windowStart, note: note.trim() || null }),
+      });
+      // Replace any existing row for the same window_start so the
+      // displayed list stays unique on (user, window).
+      setUnlocks((prev) => [
+        created,
+        ...prev.filter((u) => u.window_start !== created.window_start),
+      ]);
+      setWindowStart("");
+      setNote("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to grant unlock");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(id: number) {
+    if (!confirm("Revoke this unlock? The crew member will no longer be able to edit that window.")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/availability-unlocks/${id}`, { method: "DELETE" });
+      setUnlocks((prev) => prev.filter((u) => u.id !== id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to revoke");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, padding: 16, zIndex: 1000,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--card)", borderRadius: 12,
+          border: "1px solid var(--border)",
+          maxWidth: 480, width: "100%",
+          padding: 18, display: "flex", flexDirection: "column", gap: 14,
+          maxHeight: "90vh", overflowY: "auto",
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 800 }}>
+          Availability unlocks for {user.name || user.email}
+        </div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+          Granting an unlock lets the crew member edit one locked 14-day
+          window starting on the date below. The unlock persists until you
+          revoke it — recommend revoking once the crew member submits.
+        </div>
+
+        <div className="col" style={{ gap: 8 }}>
+          <label className="label">Window start (first day of the 2-week block)</label>
+          <input
+            type="date"
+            value={windowStart}
+            onChange={(e) => setWindowStart(e.target.value)}
+          />
+          <label className="label">Reason (optional)</label>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder='e.g. "approved time-off rescheduling per phone call"'
+          />
+          <button
+            type="button"
+            className="btnPrimary"
+            disabled={busy || !windowStart}
+            onClick={grant}
+            style={{ alignSelf: "flex-start", padding: "8px 14px" }}
+          >
+            {busy ? "Granting…" : "Grant unlock"}
+          </button>
+        </div>
+
+        <div style={{ height: 1, background: "var(--border)" }} />
+
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Existing unlocks</div>
+        {loading ? (
+          <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+        ) : unlocks.length === 0 ? (
+          <div className="small" style={{ color: "var(--muted)" }}>None.</div>
+        ) : (
+          <div className="col" style={{ gap: 6 }}>
+            {unlocks.map((u) => (
+              <div
+                key={u.id}
+                className="row"
+                style={{
+                  gap: 8, alignItems: "flex-start", justifyContent: "space-between",
+                  padding: "8px 10px", borderRadius: 8,
+                  border: "1px solid var(--border)",
+                }}
+              >
+                <div className="col" style={{ gap: 2, flex: 1 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>{u.window_start}</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>
+                    Granted by {u.granted_by_name} on {new Date(u.granted_at).toLocaleString()}
+                  </span>
+                  {u.note && (
+                    <span className="small" style={{ color: "var(--muted)" }}>"{u.note}"</span>
+                  )}
                 </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                <button
+                  type="button"
+                  onClick={() => revoke(u.id)}
+                  disabled={busy}
+                  style={{
+                    fontSize: 12, padding: "4px 10px",
+                    background: "none", color: "var(--danger)",
+                    border: "1px solid var(--danger)",
+                  }}
+                >
+                  Revoke
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: "none",
+              color: "var(--muted)",
+              border: "1px solid var(--border)",
+              padding: "8px 14px", fontSize: 13,
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Read-only month-wide availability matrix nested under the Employees tab.
+// Days down, active employees across, status-colored cells. Month navigation
+// arrows mirror Google Calendar's month picker. Employees with no submitted
+// record for a given day render as a blank cell so admin can spot gaps.
+
+type AvailabilityRangeRow = {
+  user_id: number;
+  day: string;
+  status: "available" | "unavailable" | "conditional";
+  note: string | null;
+  window_start: string;
+};
+
+const MONTH_STATUS_COLORS: Record<AvailabilityRangeRow["status"], { bg: string; fg: string; label: string }> = {
+  available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
+  unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
+  conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
+};
+
+function MonthScheduleView({
+  users,
+  tags,
+}: {
+  users: AdminUser[];
+  tags: EmployeeTag[];
+}) {
+  const today = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }, []);
+
+  // year + 0-indexed month, defaulting to today's month.
+  const [year, setYear] = useState<number>(() => new Date().getFullYear());
+  const [month, setMonth] = useState<number>(() => new Date().getMonth());
+
+  const monthLabel = useMemo(
+    () => new Date(year, month, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+    [year, month],
+  );
+
+  // Bounds for the API range query.
+  const lastDayOfMonth = useMemo(() => new Date(year, month + 1, 0).getDate(), [year, month]);
+  const monthStart = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+  const monthEnd = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDayOfMonth).padStart(2, "0")}`;
+
+  const dayList = useMemo(() => {
+    const out: string[] = [];
+    for (let d = 1; d <= lastDayOfMonth; d++) {
+      out.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+    }
+    return out;
+  }, [year, month, lastDayOfMonth]);
+
+  const [rows, setRows] = useState<AvailabilityRangeRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    apiFetch<AvailabilityRangeRow[]>(`/api/admin/availability/range?start=${monthStart}&end=${monthEnd}`)
+      .then((r) => { if (!cancelled) setRows(r); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [monthStart, monthEnd]);
+
+  // Active employees only, sorted by display name.
+  const activeUsers = useMemo(
+    () => users
+      .filter((u) => u.is_active)
+      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email)),
+    [users],
+  );
+
+  const tagsById = useMemo(() => {
+    const m = new Map<number, EmployeeTag>();
+    for (const t of tags) m.set(t.id, t);
+    return m;
+  }, [tags]);
+
+  // (user_id, day) → record map for O(1) cell lookup.
+  const matrix = useMemo(() => {
+    const m = new Map<number, Map<string, AvailabilityRangeRow>>();
+    for (const r of rows) {
+      let inner = m.get(r.user_id);
+      if (!inner) { inner = new Map(); m.set(r.user_id, inner); }
+      inner.set(r.day, r);
+    }
+    return m;
+  }, [rows]);
+
+  function shiftMonth(delta: number) {
+    let m = month + delta;
+    let y = year;
+    while (m < 0) { m += 12; y -= 1; }
+    while (m > 11) { m -= 12; y += 1; }
+    setMonth(m);
+    setYear(y);
+  }
+
+  function jumpToToday() {
+    const now = new Date();
+    setYear(now.getFullYear());
+    setMonth(now.getMonth());
+  }
+
+  return (
+    <>
+      <div
+        className="card"
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => shiftMonth(-1)}
+          style={{ padding: "6px 14px", fontSize: 16, fontWeight: 700 }}
+          aria-label="Previous month"
+        >
+          ‹
+        </button>
+        <div className="col" style={{ alignItems: "center", gap: 2 }}>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>{monthLabel}</div>
+          <button
+            type="button"
+            onClick={jumpToToday}
+            style={{
+              fontSize: 11, padding: "2px 8px",
+              background: "none", color: "var(--muted)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            Today
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => shiftMonth(1)}
+          style={{ padding: "6px 14px", fontSize: 16, fontWeight: 700 }}
+          aria-label="Next month"
+        >
+          ›
+        </button>
+      </div>
+
+      {err && (
+        <div className="card" style={{ color: "var(--danger)" }}>
+          {err}
+        </div>
+      )}
+
+      {activeUsers.length === 0 ? (
+        <div className="card" style={{ color: "var(--muted)", textAlign: "center", padding: 28 }}>
+          No active employees.
+        </div>
+      ) : (
+        <div
+          className="card"
+          style={{ padding: 0, overflow: "auto", maxHeight: "75vh" }}
+        >
+          <table style={{
+            borderCollapse: "separate", borderSpacing: 0,
+            fontSize: 12, minWidth: "100%",
+          }}>
+            <thead>
+              <tr>
+                <th
+                  style={{
+                    position: "sticky", top: 0, left: 0, zIndex: 3,
+                    background: "var(--card)",
+                    borderBottom: "1px solid var(--border)",
+                    borderRight: "1px solid var(--border)",
+                    padding: "8px 10px", textAlign: "left",
+                    minWidth: 70,
+                  }}
+                >
+                  <span className="small" style={{ color: "var(--muted)" }}>Day</span>
+                </th>
+                {activeUsers.map((u) => {
+                  const userTags = u.tag_ids
+                    .map((tid) => tagsById.get(tid))
+                    .filter((t): t is EmployeeTag => !!t)
+                    .sort((a, b) => a.sort_order - b.sort_order);
+                  return (
+                    <th
+                      key={u.id}
+                      style={{
+                        position: "sticky", top: 0, zIndex: 2,
+                        background: "var(--card)",
+                        borderBottom: "1px solid var(--border)",
+                        borderRight: "1px solid var(--border)",
+                        padding: "8px 10px", textAlign: "left",
+                        verticalAlign: "top",
+                        minWidth: 110,
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, fontSize: 12 }}>
+                        {u.name || u.email}
+                      </div>
+                      {userTags.length > 0 && (
+                        <div
+                          style={{
+                            display: "flex", flexWrap: "wrap",
+                            gap: 3, marginTop: 4,
+                          }}
+                        >
+                          {userTags.map((t) => (
+                            <span
+                              key={t.id}
+                              style={{
+                                fontSize: 9, fontWeight: 600,
+                                padding: "1px 5px", borderRadius: 3,
+                                background: "rgba(93,214,194,0.12)",
+                                color: "var(--brand)",
+                                border: "1px solid rgba(93,214,194,0.35)",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {t.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {dayList.map((dIso) => {
+                const dNum = parseInt(dIso.slice(8), 10);
+                const dt = new Date(year, month, dNum);
+                const dow = dt.toLocaleDateString("en-US", { weekday: "short" });
+                const isToday = dIso === today;
+                const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+                return (
+                  <tr key={dIso}>
+                    <td
+                      style={{
+                        position: "sticky", left: 0, zIndex: 1,
+                        background: isToday ? "rgba(93,214,194,0.10)" : "var(--card)",
+                        borderBottom: "1px solid var(--border)",
+                        borderRight: "1px solid var(--border)",
+                        padding: "6px 10px", fontSize: 12,
+                        fontWeight: isToday ? 800 : 600,
+                        color: isToday ? "var(--brand)" : (isWeekend ? "var(--muted)" : "var(--text)"),
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {dNum}{" "}
+                      <span style={{ color: "var(--muted)", fontWeight: 400 }}>{dow}</span>
+                    </td>
+                    {activeUsers.map((u) => {
+                      const record = matrix.get(u.id)?.get(dIso) ?? null;
+                      const colors = record ? MONTH_STATUS_COLORS[record.status] : null;
+                      const noteSuffix = record?.note ? ` — ${record.note}` : "";
+                      const title = record
+                        ? `${u.name || u.email} on ${dIso}: ${record.status}${noteSuffix}`
+                        : `${u.name || u.email} on ${dIso}: not submitted`;
+                      return (
+                        <td
+                          key={u.id}
+                          title={title}
+                          style={{
+                            borderBottom: "1px solid var(--border)",
+                            borderRight: "1px solid var(--border)",
+                            padding: 0, height: 26,
+                            background: colors?.bg ?? "transparent",
+                          }}
+                        />
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {loading && (
+            <div className="small" style={{ color: "var(--muted)", padding: 10 }}>
+              Loading…
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div
+        className="card"
+        style={{
+          display: "flex", flexWrap: "wrap",
+          alignItems: "center", gap: 12, fontSize: 12,
+        }}
+      >
+        <span className="small" style={{ color: "var(--muted)" }}>Legend:</span>
+        {(["available", "unavailable", "conditional"] as const).map((st) => {
+          const c = MONTH_STATUS_COLORS[st];
+          return (
+            <span key={st} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span
+                style={{
+                  width: 14, height: 14, borderRadius: 3,
+                  background: c.bg, border: `1px solid ${c.fg}`,
+                }}
+              />
+              <span>{c.label}</span>
+            </span>
+          );
+        })}
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              width: 14, height: 14, borderRadius: 3,
+              border: "1px dashed var(--border)",
+            }}
+          />
+          <span>Not submitted</span>
+        </span>
+      </div>
+    </>
+  );
+}
+
+// Tag picker modal — checkbox grid keyed off the admin-managed tag list.
+function EmployeeTagsPicker({
+  user,
+  allTags,
+  onCancel,
+  onSave,
+}: {
+  user: AdminUser;
+  allTags: EmployeeTag[];
+  onCancel: () => void;
+  onSave: (tagIds: number[]) => Promise<void> | void;
+}) {
+  const [selected, setSelected] = useState<Set<number>>(() => new Set(user.tag_ids));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function toggle(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setErr(null);
+    try {
+      await onSave(Array.from(selected));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onCancel}
+      style={{
+        position: "fixed", inset: 0, padding: 16, zIndex: 1000,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--card)", borderRadius: 12,
+          border: "1px solid var(--border)",
+          maxWidth: 420, width: "100%",
+          padding: 18, display: "flex", flexDirection: "column", gap: 12,
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 800 }}>
+          Tags for {user.name || user.email}
+        </div>
+        {allTags.length === 0 ? (
+          <div className="small" style={{ color: "var(--muted)" }}>
+            No tags defined yet. Create some in Settings → Employee Tags.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {[...allTags].sort((a, b) => a.sort_order - b.sort_order).map((t) => {
+              const on = selected.has(t.id);
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => toggle(t.id)}
+                  style={{
+                    fontSize: 13, padding: "6px 12px", borderRadius: 999,
+                    background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                    color: on ? "var(--brand)" : "var(--text)",
+                    border: `1px solid ${on ? "var(--brand)" : "var(--border)"}`,
+                    fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  {t.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            style={{
+              background: "none",
+              color: "var(--muted)",
+              border: "1px solid var(--border)",
+              padding: "8px 14px", fontSize: 13,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btnPrimary"
+            onClick={handleSave}
+            disabled={saving}
+            style={{ padding: "8px 14px" }}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -618,9 +1721,180 @@ function SettingsTab({
         onClick={onOpenAdvanced}
       />
       <DVIRUnitsCard />
+      <EmployeeTagsManagerCard />
       <HelpTextCard />
       <SheetSyncCard />
       <AppHealthCard />
+    </div>
+  );
+}
+
+// Admin CRUD for the employee tag list. Inline add / rename / delete —
+// admin can also drag-style reorder via the sort-order input, but most
+// reordering is rare enough not to warrant a fancier UI.
+function EmployeeTagsManagerCard() {
+  const [tags, setTags] = useState<EmployeeTag[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<EmployeeTag[]>("/api/admin/employee-tags")
+      .then((t) => { if (!cancelled) setTags(t); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function createTag() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const created = await apiFetch<EmployeeTag>("/api/admin/employee-tags", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      setTags((prev) => [...prev, created].sort((a, b) => a.sort_order - b.sort_order));
+      setNewName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to create tag");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function renameTag(id: number) {
+    const name = editName.trim();
+    if (!name) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const updated = await apiFetch<EmployeeTag>(`/api/admin/employee-tags/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      });
+      setTags((prev) => prev.map((t) => (t.id === id ? updated : t)));
+      setEditing(null);
+      setEditName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to rename");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteTag(t: EmployeeTag) {
+    if (!confirm(`Delete tag "${t.name}"? This removes it from any employee who has it.`)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/employee-tags/${t.id}`, { method: "DELETE" });
+      setTags((prev) => prev.filter((x) => x.id !== t.id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to delete");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Employee Tags</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Tag list shown when assigning tags on the Employees tab (e.g. Driver,
+        Has CC, Tier I). Renaming a tag updates it everywhere it's already
+        assigned. Deleting a tag removes it from all employees.
+      </div>
+
+      {loading ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div className="col" style={{ gap: 6 }}>
+          {tags.map((t) => {
+            const isEditing = editing === t.id;
+            return (
+              <div
+                key={t.id}
+                className="row"
+                style={{
+                  gap: 8, alignItems: "center", justifyContent: "space-between",
+                  padding: "6px 0", borderBottom: "1px solid var(--border)",
+                }}
+              >
+                {isEditing ? (
+                  <input
+                    autoFocus
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") renameTag(t.id); if (e.key === "Escape") setEditing(null); }}
+                    style={{ flex: 1, padding: "4px 8px", fontSize: 13 }}
+                  />
+                ) : (
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{t.name}</span>
+                )}
+                <div className="row" style={{ gap: 6 }}>
+                  {isEditing ? (
+                    <>
+                      <button onClick={() => renameTag(t.id)} disabled={busy} style={{ fontSize: 12, padding: "4px 10px" }}>
+                        Save
+                      </button>
+                      <button onClick={() => { setEditing(null); setEditName(""); }} style={{ fontSize: 12, padding: "4px 10px", background: "none", border: "1px solid var(--border)", color: "var(--muted)" }}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => { setEditing(t.id); setEditName(t.name); }}
+                        style={{ fontSize: 12, padding: "4px 10px" }}
+                      >
+                        Rename
+                      </button>
+                      <button
+                        onClick={() => deleteTag(t)}
+                        disabled={busy}
+                        style={{
+                          fontSize: 12, padding: "4px 10px",
+                          background: "none", color: "var(--danger)",
+                          border: "1px solid var(--danger)",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") createTag(); }}
+          placeholder="New tag name"
+          style={{ flex: 1, padding: "6px 10px", fontSize: 13 }}
+        />
+        <button
+          onClick={createTag}
+          disabled={busy || !newName.trim()}
+          className="btnPrimary"
+          style={{ padding: "6px 14px", fontSize: 13 }}
+        >
+          Add
+        </button>
+      </div>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
     </div>
   );
 }
@@ -1511,7 +2785,133 @@ function AdvancedSettingsPage() {
         <CalendarTab />
       </div>
 
+      <CrewResourcesCard />
+
       <DataManagementCard />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Crew Resources event refresh
+// ─────────────────────────────────────────
+function CrewResourcesCard() {
+  const [busy, setBusy] = useState(false);
+  const [daysAhead, setDaysAhead] = useState<number>(14);
+  type ResultRow = {
+    ok: boolean;
+    date: string;
+    created?: boolean;
+    available_count?: number;
+    scheduled_count?: number;
+    reason?: string;
+    error?: string;
+  };
+  type Summary = {
+    ok: boolean;
+    days: number;
+    succeeded: number;
+    results: ResultRow[];
+  };
+  const [result, setResult] = useState<Summary | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function generate() {
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const r = await apiFetch<Summary>(
+        `/api/admin/crew-resources/refresh?days_ahead=${encodeURIComponent(daysAhead)}`,
+        { method: "POST" },
+      );
+      setResult(r);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to refresh");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const failedSample = result?.results.filter((r) => !r.ok).slice(0, 3) ?? [];
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Crew Resources events</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+        Force a refresh of the daily 5–6 AM "Crew Resources" events on the
+        Resources calendar. Events for today through today + N are created
+        if missing and otherwise patched with the latest description (crew
+        availability + scheduled blocks from the Jobs calendar). The hourly
+        background loop does the same thing automatically; this button is
+        for verifying the wiring or seeding the next batch immediately.
+      </div>
+
+      <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <label className="small" style={{ color: "var(--muted)" }}>
+          Days ahead
+        </label>
+        <input
+          type="number"
+          min={0}
+          max={60}
+          value={daysAhead}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (Number.isFinite(n)) setDaysAhead(Math.max(0, Math.min(60, Math.floor(n))));
+          }}
+          style={{
+            width: 80, padding: "6px 10px", borderRadius: 8,
+            border: "1px solid var(--border)", background: "var(--bg)",
+            color: "var(--text)", fontSize: 13, textAlign: "right",
+          }}
+        />
+        <button
+          onClick={generate}
+          disabled={busy}
+          className="btnPrimary"
+          style={{ padding: "8px 14px", fontSize: 13 }}
+        >
+          {busy ? "Refreshing…" : "Generate / refresh"}
+        </button>
+      </div>
+
+      {err && (
+        <div className="small" style={{ color: "var(--danger)", marginTop: 10 }}>
+          {err}
+        </div>
+      )}
+      {result && (
+        <div style={{ marginTop: 10 }}>
+          <div
+            className="small"
+            style={{
+              color: result.succeeded === result.days ? "var(--ok)" : "var(--muted)",
+              fontWeight: 700,
+            }}
+          >
+            {result.succeeded} of {result.days} day(s) refreshed.
+          </div>
+          {failedSample.length > 0 && (
+            <div className="small" style={{ color: "var(--danger)", marginTop: 6 }}>
+              First few failures:
+              <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                {failedSample.map((r) => (
+                  <li key={r.date} style={{ marginBottom: 2 }}>
+                    {r.date}: {r.error || r.reason || "unknown error"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {result.succeeded === result.days && result.days > 0 && (
+            <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+              Open the Resources calendar in Google Calendar — events should
+              be present for the next {result.days} day(s) at 5–6 AM.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -20,6 +20,10 @@ import app.db.models.patch_note  # noqa: F401 — register patch_notes table
 import app.db.models.admin_note  # noqa: F401 — register admin_notes table
 import app.db.models.office_hours  # noqa: F401 — register office_hours_entries table
 import app.db.models.reimbursement  # noqa: F401 — register reimbursements table
+import app.db.models.availability  # noqa: F401 — register availability_days table
+import app.db.models.availability_unlock  # noqa: F401 — register availability_unlocks
+import app.db.models.employee_tag  # noqa: F401 — register employee_tags + user_employee_tags
+import app.db.models.user_email_alias  # noqa: F401 — register user_email_aliases
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -41,6 +45,16 @@ from app.routers.patch_notes import router as patch_notes_router
 from app.routers.admin_notes import router as admin_notes_router
 from app.routers.office_hours import router as office_hours_router
 from app.routers.reimbursement import router as reimbursement_router
+from app.routers.availability import (
+    router as availability_router,
+    unlocks_router as availability_unlocks_router,
+    admin_per_user_router as availability_admin_router,
+)
+from app.routers.employee_tags import (
+    router as employee_tags_router,
+    users_router as employee_tags_users_router,
+)
+from app.routers.user_email_aliases import router as user_email_aliases_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -103,6 +117,28 @@ def on_startup() -> None:
         print("[startup] WARNING — could not ensure sheet export tables:")
         traceback.print_exc()
 
+    # Auto-reconciler — periodically catches events that landed in Postgres
+    # but never made it to the Events sheet (e.g. background export thread
+    # killed by worker recycling or OOM). Without this, admin had to click
+    # Refresh manually whenever App Health flagged drift.
+    try:
+        from app.integrations.auto_reconciler import start_auto_reconciler
+        start_auto_reconciler()
+    except Exception:
+        print("[startup] WARNING — could not start auto-reconciler:")
+        traceback.print_exc()
+
+    # Crew Resources daily-event loop. No-op unless CREW_RESOURCES_ENABLED
+    # is set on the worker — admin enables it after re-authorizing Google
+    # OAuth with the calendar.events scope (the read-only token doesn't
+    # have it). See app/integrations/crew_resources_calendar.py.
+    try:
+        from app.integrations.crew_resources_loop import start_crew_resources_loop
+        start_crew_resources_loop()
+    except Exception:
+        print("[startup] WARNING — could not start crew-resources loop:")
+        traceback.print_exc()
+
     # Auto-promote ADMIN_EMAIL to admin role on every startup.
     # Set this env var on Render to grant admin access without a shell.
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
@@ -143,3 +179,9 @@ app.include_router(patch_notes_router)    # /api/patch-notes
 app.include_router(admin_notes_router)    # /api/admin-notes
 app.include_router(office_hours_router)   # /api/office-hours (admin-only)
 app.include_router(reimbursement_router)  # /api/reimbursements
+app.include_router(availability_router)             # /api/availability
+app.include_router(availability_unlocks_router)     # /api/admin/availability-unlocks
+app.include_router(availability_admin_router)       # /api/admin/availability/{user_id}
+app.include_router(employee_tags_router)         # /api/admin/employee-tags
+app.include_router(employee_tags_users_router)   # /api/admin/users/{id}/employee-tags
+app.include_router(user_email_aliases_router)    # /api/admin/users/{id}/email-aliases

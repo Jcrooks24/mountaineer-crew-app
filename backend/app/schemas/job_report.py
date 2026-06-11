@@ -43,6 +43,8 @@ class JobReportUpsert(BaseModel):
     review_candidate: ReviewCandidate
     hours_match: bool
     hours_mismatch_reason: Optional[str] = None
+    has_crew_feedback: Optional[bool] = None
+    crew_feedback: Optional[str] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
 
     @field_validator("personal_vehicles")
@@ -79,6 +81,8 @@ class JobReportResponse(BaseModel):
     review_candidate: ReviewCandidate
     hours_match: bool
     hours_mismatch_reason: Optional[str]
+    has_crew_feedback: Optional[bool] = None
+    crew_feedback: Optional[str] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime

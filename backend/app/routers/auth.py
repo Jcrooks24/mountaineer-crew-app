@@ -154,10 +154,13 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == email).first()
 
+    # Log only the user id + a coarse status — emails in Render logs are PII
+    # and the id is enough to grep for context if a crew member calls about
+    # a failed reset. The actual link surfaces in Postmark's audit trail.
     if not user:
-        print(f"[forgot-password] no user found for email: {email}")
+        print("[forgot-password] no matching active account")
     elif not user.is_active:
-        print(f"[forgot-password] user found but inactive: {email}")
+        print(f"[forgot-password] user {user.id} found but inactive")
 
     if user and user.is_active:
         token, expiry = create_reset_token()
@@ -168,8 +171,10 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
         frontend_url = os.getenv("FRONTEND_URL", "https://mountaineer-crew-app.vercel.app").rstrip("/")
         reset_link = f"{frontend_url}/reset-password?token={token}"
 
-        # Log the link so it's visible in Render logs even if email fails
-        print(f"[forgot-password] reset link for {user.email}: {reset_link}")
+        # Log the existence of a generated link without the link itself or
+        # the user email — leaking either to Render logs gives anyone with
+        # log access a working reset path.
+        print(f"[forgot-password] reset link generated for user {user.id}")
 
         try:
             send_email(
@@ -182,10 +187,10 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
                     f"If you didn't request this, you can ignore this email."
                 ),
             )
-            print(f"[forgot-password] email sent OK to {user.email}")
+            print(f"[forgot-password] email sent OK for user {user.id}")
         except Exception as exc:
-            # Log so it shows in Render logs, but don't leak the error to the client
-            print(f"[forgot-password] email send FAILED for {user.email}: {exc}")
+            # Log so it shows in Render logs, but don't leak the error to the client.
+            print(f"[forgot-password] email send FAILED for user {user.id}: {exc}")
 
 
 # -----------------------------

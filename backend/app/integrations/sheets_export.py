@@ -780,10 +780,22 @@ JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
+    "has_crew_feedback", "crew_feedback",
     "employee_hours", "has_non_billable_hours",
     "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
+
+
+def _yes_no_blank(value: Any) -> str:
+    """Tri-state Yes/No/blank for nullable boolean sheet columns: True → "Yes",
+    False → "No", None → "" (so unanswered older rows don't read as "No").
+    """
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    return ""
 
 
 def _has_non_billable(entries: Optional[list]) -> str:
@@ -900,6 +912,8 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "review_candidate": _review_candidate_label(report.get("review_candidate")),
         "hours_match": "Yes" if report.get("hours_match") else "No",
         "hours_mismatch_reason": report.get("hours_mismatch_reason", "") or "",
+        "has_crew_feedback": _yes_no_blank(report.get("has_crew_feedback")),
+        "crew_feedback": report.get("crew_feedback", "") or "",
         "employee_hours": _format_employee_hours(report.get("employee_hours")),
         "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
         "created_at": _iso(report.get("created_at")),
@@ -1667,7 +1681,7 @@ def export_office_hours_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
 
 REIMBURSEMENT_HEADERS = [
     "reimbursement_uuid", "user_name", "submitted_at", "type",
-    "job_name", "job_date",
+    "job_name", "job_date", "expense_date",
     "odometer_start", "odometer_end", "miles",
     "odometer_start_photo_url", "odometer_end_photo_url",
     "amount", "category", "vendor", "payment_method", "receipt_photo_url",
@@ -1703,6 +1717,7 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         "type": entry.get("type", "") or "",
         "job_name": entry.get("job_name", "") or "",
         "job_date": entry.get("job_date", "") or "",
+        "expense_date": entry.get("expense_date", "") or "",
         "odometer_start": entry.get("odometer_start", "") if entry.get("odometer_start") is not None else "",
         "odometer_end": entry.get("odometer_end", "") if entry.get("odometer_end") is not None else "",
         "miles": miles,
@@ -1738,4 +1753,169 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         ).execute()
 
     _ssl_retry(_append)
+    return 1
+
+
+# ── Availability ─────────────────────────────────────────────────────────────
+
+# 14 day-cells per window — each cell carries the date + status (+ optional
+# note) inline so admins can read a window without cross-referencing column
+# indexes back to a date. Window key (user_name + window_start) gates the
+# replace-style upsert: re-submits overwrite the row in place.
+AVAILABILITY_HEADERS = [
+    "user_name", "window_start", "window_end",
+    *[f"day_{i:02d}" for i in range(1, 15)],
+    "updated_at", "user_email",
+]
+
+
+def _format_availability_cell(day: str, status: str, note: str) -> str:
+    base = f"{day}: {status}"
+    if note:
+        return f"{base} — {note}"
+    return base
+
+
+def _sheet_numeric_id(svc: Any, spreadsheet_id: str, tab: str) -> Optional[int]:
+    """Resolve a tab name to its numeric sheetId — required for
+    deleteDimension batchUpdate requests."""
+    meta = _ssl_retry(
+        lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    )
+    for s in meta.get("sheets", []):
+        props = s.get("properties", {})
+        if props.get("title") == tab:
+            sid = props.get("sheetId")
+            return int(sid) if sid is not None else None
+    return None
+
+
+def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """One row per (user, window_start) in AvailabilityStaging / Availability.
+    Re-submissions for the same window overwrite in place (delete-by-key,
+    then append).
+
+    Worksheet name controlled by SHEETS_AVAILABILITY_TAB so staging and prod
+    land on separate tabs even though they share the same spreadsheet id.
+    """
+    tab = os.getenv("SHEETS_AVAILABILITY_TAB", "Availability").strip() or "Availability"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    user_name = (entry.get("user_name") or "").strip()
+    window_start = (entry.get("window_start") or "").strip()
+    days = entry.get("days") or []
+    if not user_name or not window_start or not days:
+        return 0
+
+    # Build day_1..day_14 by index off window_start. The submission's `days`
+    # list is keyed by date so we look up each window-day from there. Days
+    # the crew didn't submit (gap in the window) render as blank.
+    try:
+        start_date = datetime.strptime(window_start, "%Y-%m-%d").date()
+    except ValueError:
+        return 0
+
+    by_day: Dict[str, Dict[str, Any]] = {}
+    latest_updated_at = None
+    for d in days:
+        day_key = (d.get("day") or "").strip()
+        if not day_key:
+            continue
+        by_day[day_key] = d
+        upd = d.get("updated_at")
+        if upd and (latest_updated_at is None or upd > latest_updated_at):
+            latest_updated_at = upd
+
+    end_date = start_date.fromordinal(start_date.toordinal() + 13)
+    user_email = (entry.get("user_email") or "").strip()
+    row: Dict[str, Any] = {
+        "user_name": user_name,
+        "window_start": window_start,
+        "window_end": end_date.isoformat(),
+        "updated_at": _iso(latest_updated_at),
+        "user_email": user_email,
+    }
+    for i in range(14):
+        d = start_date.fromordinal(start_date.toordinal() + i)
+        key = d.isoformat()
+        entry_for_day = by_day.get(key)
+        if entry_for_day:
+            row[f"day_{i+1:02d}"] = _format_availability_cell(
+                key,
+                str(entry_for_day.get("status") or ""),
+                str(entry_for_day.get("note") or ""),
+            )
+        else:
+            row[f"day_{i+1:02d}"] = ""
+
+    svc = _get_sheets_svc(db)
+    actual_headers = _ssl_retry(
+        lambda: _ensure_tab(svc, spreadsheet_id, tab, AVAILABILITY_HEADERS)
+    )
+
+    # Compound dedupe key — _delete_sheet_rows_by_value only takes one column
+    # so we walk the values manually and delete rows that match both
+    # user_name and window_start.
+    try:
+        user_col = actual_headers.index("user_name")
+        win_col = actual_headers.index("window_start")
+    except ValueError:
+        user_col = win_col = None  # Tab malformed — skip delete, just append.
+
+    if user_col is not None and win_col is not None:
+        result = _ssl_retry(
+            lambda: svc.spreadsheets()
+            .values()
+            .get(spreadsheetId=spreadsheet_id, range=f"{tab}!A:Z")
+            .execute()
+        )
+        values = result.get("values", []) or []
+        rows_to_delete: List[int] = []
+        for idx, existing_row in enumerate(values):
+            if idx == 0:
+                continue  # header row
+            if (
+                len(existing_row) > max(user_col, win_col)
+                and existing_row[user_col] == user_name
+                and existing_row[win_col] == window_start
+            ):
+                rows_to_delete.append(idx)
+        if rows_to_delete:
+            sheet_numeric_id = _sheet_numeric_id(svc, spreadsheet_id, tab)
+            if sheet_numeric_id is not None:
+                # Delete bottom-up so earlier indexes don't shift mid-batch.
+                requests = [
+                    {
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": sheet_numeric_id,
+                                "dimension": "ROWS",
+                                "startIndex": i,
+                                "endIndex": i + 1,
+                            }
+                        }
+                    }
+                    for i in sorted(rows_to_delete, reverse=True)
+                ]
+                _ssl_retry(
+                    lambda: svc.spreadsheets()
+                    .batchUpdate(
+                        spreadsheetId=spreadsheet_id,
+                        body={"requests": requests},
+                    )
+                    .execute()
+                )
+
+    rows_out = [_build_row(row, actual_headers)]
+
+    def _append_avail():
+        svc.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows_out},
+        ).execute()
+
+    _ssl_retry(_append_avail)
     return 1

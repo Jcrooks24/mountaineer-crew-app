@@ -646,6 +646,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   <option value="__custom__">Custom item…</option>
                 </select>
                 <input type="number" min={1} step={1} inputMode="numeric" value={matQty}
+                  onFocus={(e) => e.currentTarget.select()}
                   onChange={(e) => setMatQty(e.target.value)}
                   onBlur={() => {
                     const n = Number(matQty);
@@ -723,6 +724,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <label style={{ fontSize: 13, color: "var(--muted)" }}>Global discount (%)</label>
           <input type="number" min={0} max={100} step={1} value={bill.globalDiscount}
+            onFocus={(e) => e.currentTarget.select()}
             onChange={(e) => setBill((prev) => ({ ...prev, globalDiscount: Math.min(100, Math.max(0, Number(e.target.value) || 0)) }))}
             style={{ ...numInputStyle, width: 80 }} />
         </div>
@@ -785,6 +787,7 @@ function LineItemRow({ item, onChange, onRemove }: {
       <input value={item.label} onChange={(e) => onChange({ label: e.target.value })} placeholder="Description" style={{ ...cellInputStyle, fontSize: 13 }} />
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <input type="number" min={0} step={0.25} value={item.qty}
+          onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => onChange({ qty: Math.max(0, Number(e.target.value) || 0) })} style={numInputStyle} />
         <select value={item.unit} onChange={(e) => onChange({ unit: e.target.value as Unit })} style={{ ...selectStyle, fontSize: 10 }}>
           <option value="hr">hr</option>
@@ -797,8 +800,10 @@ function LineItemRow({ item, onChange, onRemove }: {
         </select>
       </div>
       <input type="number" min={0} step={0.01} value={item.rate}
+        onFocus={(e) => e.currentTarget.select()}
         onChange={(e) => onChange({ rate: Math.max(0, Number(e.target.value) || 0) })} placeholder="0.00" style={numInputStyle} />
       <input type="number" min={0} max={100} step={1} value={item.discount}
+        onFocus={(e) => e.currentTarget.select()}
         onChange={(e) => onChange({ discount: Math.min(100, Math.max(0, Number(e.target.value) || 0)) })} style={numInputStyle} />
       <div style={{ textAlign: "right", fontSize: 13, fontWeight: 600, color: subtotal > 0 ? "var(--text)" : "var(--muted)" }}>
         {fmt(subtotal)}

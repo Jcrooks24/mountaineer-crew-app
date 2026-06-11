@@ -27,7 +27,9 @@ from app.db.models.job_report import JobReport
 from app.db.models.materials import MaterialsSubmission
 from app.db.models.photo import Photo
 from app.db.models.system_config import SystemConfig
+from app.db.models.employee_tag import user_employee_tags
 from app.db.models.user import User
+from app.db.models.user_email_alias import UserEmailAlias
 from app.db.session import get_db
 from app.integrations.sheets_export import update_entry_status_in_sheets
 
@@ -49,6 +51,8 @@ class UserAdminResponse(BaseModel):
     name: Optional[str] = None
     role: str
     is_active: bool
+    tag_ids: List[int] = []
+    alias_count: int = 0
 
     class Config:
         from_attributes = True
@@ -59,6 +63,41 @@ class UpdateUserRequest(BaseModel):
     role: Optional[str] = None
 
 
+def _tag_ids_by_user(db: Session) -> Dict[int, List[int]]:
+    """One query for every (user_id, tag_id) pair → dict per user."""
+    rows = db.execute(
+        user_employee_tags.select()
+    ).all()
+    out: Dict[int, List[int]] = {}
+    for r in rows:
+        out.setdefault(r.user_id, []).append(r.tag_id)
+    return out
+
+
+def _alias_counts_by_user(db: Session) -> Dict[int, int]:
+    """One query for the alias-count per user. Lets the Employees tab show
+    'N aliases' inline without an N+1 fetch."""
+    rows = db.query(UserEmailAlias.user_id).all()
+    counts: Dict[int, int] = {}
+    for (uid,) in rows:
+        counts[uid] = counts.get(uid, 0) + 1
+    return counts
+
+
+def _user_with_tags(
+    user: User, tag_ids: List[int], alias_count: int = 0
+) -> UserAdminResponse:
+    return UserAdminResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        is_active=user.is_active,
+        tag_ids=tag_ids,
+        alias_count=alias_count,
+    )
+
+
 # ---------------------------
 # List all users
 # ---------------------------
@@ -67,7 +106,13 @@ def list_users(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    return db.query(User).order_by(User.id).all()
+    users = db.query(User).order_by(User.id).all()
+    tags_by_user = _tag_ids_by_user(db)
+    alias_counts = _alias_counts_by_user(db)
+    return [
+        _user_with_tags(u, tags_by_user.get(u.id, []), alias_counts.get(u.id, 0))
+        for u in users
+    ]
 
 
 # ---------------------------
@@ -94,7 +139,9 @@ def update_user(
 
     db.commit()
     db.refresh(user)
-    return user
+    tag_ids = _tag_ids_by_user(db).get(user.id, [])
+    alias_count = _alias_counts_by_user(db).get(user.id, 0)
+    return _user_with_tags(user, tag_ids, alias_count)
 
 
 # ---------------------------
@@ -617,6 +664,27 @@ def upsert_entry_status(
 class ReconcileEventsRequest(BaseModel):
     batch_size: Optional[int] = None
     max_events: Optional[int] = None
+
+
+@router.post("/crew-resources/refresh")
+def crew_resources_refresh_endpoint(
+    days_ahead: int = Query(default=14, ge=0, le=60),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Force a Crew Resources event refresh for today + days_ahead. Useful
+    right after admin enables CREW_RESOURCES_ENABLED or re-authorizes
+    Google OAuth — otherwise the next scheduled refresh is an hour away."""
+    from app.integrations.crew_resources_calendar import (
+        update_crew_resources_for_horizon,
+    )
+    results = update_crew_resources_for_horizon(db, days_ahead=days_ahead)
+    return {
+        "ok": True,
+        "days": len(results),
+        "succeeded": sum(1 for r in results if r.get("ok")),
+        "results": results,
+    }
 
 
 @router.post("/sheets/reconcile-events")

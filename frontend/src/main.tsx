@@ -11,6 +11,7 @@ import { ThemeProvider } from "./theme/ThemeContext";
 import RequireAuth from "./auth/RequireAuth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateBanner from "./components/UpdateBanner";
+import AvailabilityReminderBanner from "./components/AvailabilityReminderBanner";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -23,6 +24,7 @@ import DVIRPage from "./pages/DVIR";
 import LongDistance from "./pages/LongDistance";
 import DocumentLibrary from "./pages/DocumentLibrary";
 import Reimbursement from "./pages/Reimbursement";
+import Availability from "./pages/Availability";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -32,6 +34,7 @@ createRoot(document.getElementById("root")!).render(
         <ErrorBoundary>
         {/* App-wide; fixed-position, renders over whatever route is active */}
         <UpdateBanner />
+        <AvailabilityReminderBanner />
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
@@ -48,6 +51,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/long-distance" element={<RequireAuth><LongDistance /></RequireAuth>} />
           <Route path="/documents" element={<RequireAuth><DocumentLibrary /></RequireAuth>} />
           <Route path="/reimbursement" element={<RequireAuth><Reimbursement /></RequireAuth>} />
+          <Route path="/availability" element={<RequireAuth><Availability /></RequireAuth>} />
 
           {/* Everything else requires auth */}
           <Route

@@ -5,6 +5,7 @@ import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
+import { BetaTag } from "./BetaTag";
 
 // Mirrors backend EmployeeHoursEntry. `hours` is the actual worked time;
 // the company billable total rounds quarter-by-quarter (≥5 min → up, else
@@ -77,6 +78,8 @@ type ReportData = {
   review_candidate: ReviewCandidate | null;
   hours_match: boolean | null;
   hours_mismatch_reason: string;
+  has_crew_feedback: boolean | null;
+  crew_feedback: string;
   employee_hours: EmployeeHoursEntry[];
 };
 
@@ -145,6 +148,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     review_candidate: null,
     hours_match: null,
     hours_mismatch_reason: "",
+    has_crew_feedback: null,
+    crew_feedback: "",
     employee_hours: [],
   });
 
@@ -190,6 +195,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           review_candidate: coerceReviewCandidate(r.review_candidate),
           hours_match: r.hours_match,
           hours_mismatch_reason: r.hours_mismatch_reason ?? "",
+          has_crew_feedback: r.has_crew_feedback ?? null,
+          crew_feedback: r.crew_feedback ?? "",
           employee_hours: r.employee_hours ?? [],
         });
         setSaved(true);
@@ -212,6 +219,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
             review_candidate: null,
             hours_match: null,
             hours_mismatch_reason: "",
+            has_crew_feedback: null,
+            crew_feedback: "",
             employee_hours: [],
           });
         }
@@ -630,6 +639,9 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           review_candidate: data.review_candidate,
           hours_match: data.hours_match,
           hours_mismatch_reason: data.hours_mismatch_reason.trim() || null,
+          has_crew_feedback: data.has_crew_feedback,
+          // "No" answer keeps a null body; "Yes" sends the trimmed text.
+          crew_feedback: data.has_crew_feedback ? (data.crew_feedback.trim() || null) : null,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
           employee_hours: data.employee_hours
@@ -696,6 +708,10 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
     if (!data.hours_match && !data.hours_mismatch_reason.trim())
       return setErr("Please explain why the hours don't match.");
+    if (data.has_crew_feedback === null)
+      return setErr("Indicate whether you have any feedback for the office.");
+    if (data.has_crew_feedback && !data.crew_feedback.trim())
+      return setErr("Please share your feedback or change your answer to No.");
 
     // Show DVIR reminder before saving
     pendingSaveRef.current = doSave;
@@ -1235,6 +1251,42 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               onChange={(e) => set("hours_mismatch_reason", e.target.value)}
               placeholder={ht.hoursMismatchPlaceholder}
               rows={3}
+              style={textareaStyle}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* ── Crew feedback ── */}
+      <div className="card">
+        <div className="sectionTitle">Crew Feedback *</div>
+        <BetaTag feature="crewFeedback" />
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+          Would you like to submit any general feedback or feedback about this job in particular to the office?
+        </div>
+        <YesNo
+          value={data.has_crew_feedback}
+          onChange={(v) => {
+            setData((prev) => ({
+              ...prev,
+              has_crew_feedback: v,
+              crew_feedback: v ? prev.crew_feedback : "",
+            }));
+            setSaved(false);
+          }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_crew_feedback && (
+          <div style={{ marginTop: 12 }}>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
+              Share your feedback * — the more detail, the better we can address it
+            </div>
+            <textarea
+              value={data.crew_feedback}
+              onChange={(e) => set("crew_feedback", e.target.value)}
+              placeholder="What happened, what the client said, what we should know — be as specific as you can."
+              rows={4}
               style={textareaStyle}
             />
           </div>

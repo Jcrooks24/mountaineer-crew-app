@@ -53,6 +53,11 @@ class Reimbursement(Base):
     job_name = Column(String, nullable=True)
     job_date = Column(String, nullable=True)
 
+    # Crew-entered date the expense / trip actually occurred (YYYY-MM-DD).
+    # Distinct from created_at, which is the submission timestamp — crew often
+    # log on a different day from the actual event.
+    expense_date = Column(String, nullable=True)
+
     # Mileage fields — both null for expense rows.
     odometer_start = Column(Integer, nullable=True)
     odometer_end = Column(Integer, nullable=True)
