@@ -1542,17 +1542,51 @@ function FuturePeriodModal({
 //
 // Surfaced to admin via a hover tooltip on the monthly availability view.
 
-type NotesStatus = "idle" | "saving" | "saved" | "offline";
+type NotesStatus = "idle" | "saving" | "saved" | "offline" | "error";
+
+// Per-user local draft so an offline edit survives an app reload before the
+// next online save flushes. Keyed by user id so a shared device doesn't
+// surface crew member A's unsaved draft to crew member B after a logout.
+// Cleared once the server confirms a successful save.
+const SCHED_NOTES_DRAFT_PREFIX = "mm_scheduling_notes_draft_v1:";
+function schedNotesDraftKey(userId: number | undefined): string | null {
+  return typeof userId === "number" ? `${SCHED_NOTES_DRAFT_PREFIX}${userId}` : null;
+}
 
 function SchedulingNotesCard() {
   const { user, setUser } = useAuth();
-  const initial = user?.scheduling_notes ?? "";
+  const userId = user?.id;
+  const initial = useMemo(() => {
+    // Prefer a locally saved draft over the server-side value on mount —
+    // if the user typed something while offline and reloaded, we want to
+    // resume their unsaved edit, not silently drop it. Empty draft falls
+    // back to whatever /me carried in.
+    const key = schedNotesDraftKey(userId);
+    if (key) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw !== null) return raw;
+      } catch {}
+    }
+    return user?.scheduling_notes ?? "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
   const [value, setValue] = useState<string>(initial);
   const [expanded, setExpanded] = useState<boolean>(false);
   const [status, setStatus] = useState<NotesStatus>("idle");
-  const lastSavedRef = useRef<string>(initial);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const lastSavedRef = useRef<string>(user?.scheduling_notes ?? "");
   const timerRef = useRef<number | null>(null);
   const savedFlashRef = useRef<number | null>(null);
+
+  // Persist every keystroke to a local draft so an offline edit doesn't
+  // vanish on reload. The successful-save path below clears the draft so
+  // we don't keep a stale copy lying around once the server has the value.
+  useEffect(() => {
+    const key = schedNotesDraftKey(userId);
+    if (!key) return;
+    try { localStorage.setItem(key, value); } catch {}
+  }, [userId, value]);
 
   // Resync from the user object when it changes underneath us (another tab
   // saved, or AuthContext refetched /me). Guard against clobbering an in-flight
@@ -1577,6 +1611,7 @@ function SchedulingNotesCard() {
       timerRef.current = null;
     }
     setStatus("saving");
+    setErrorMsg(null);
     timerRef.current = window.setTimeout(async () => {
       timerRef.current = null;
       try {
@@ -1587,6 +1622,10 @@ function SchedulingNotesCard() {
         lastSavedRef.current = updated.scheduling_notes ?? "";
         setUser(updated);
         setStatus("saved");
+        setErrorMsg(null);
+        // Local draft can go now — server has the canonical value.
+        const key = schedNotesDraftKey(userId);
+        if (key) { try { localStorage.removeItem(key); } catch {} }
         // Flash "Saved" briefly then return to idle so the pill doesn't
         // permanently shout SAVED at the user.
         if (savedFlashRef.current !== null) window.clearTimeout(savedFlashRef.current);
@@ -1594,9 +1633,21 @@ function SchedulingNotesCard() {
           setStatus((s) => (s === "saved" ? "idle" : s));
           savedFlashRef.current = null;
         }, 1800);
-      } catch {
+      } catch (e: any) {
         const offline = typeof navigator !== "undefined" && navigator.onLine === false;
-        setStatus(offline ? "offline" : "idle");
+        if (offline) {
+          setStatus("offline");
+          setErrorMsg(null);
+        } else {
+          // Real server/network failure while online — surface it instead of
+          // pretending the save succeeded. The local draft persists either
+          // way so the user's text isn't lost.
+          setStatus("error");
+          const msg = e instanceof ApiError
+            ? `Save failed: ${e.message}`
+            : "Save failed — try again";
+          setErrorMsg(msg);
+        }
       }
     }, 1200);
     return () => {
@@ -1626,6 +1677,7 @@ function SchedulingNotesCard() {
     if (status === "saving") return { text: "Saving…", color: "var(--muted)" };
     if (status === "saved") return { text: "Saved", color: "var(--ok)" };
     if (status === "offline") return { text: "Offline — saves when back online", color: "var(--warn)" };
+    if (status === "error") return { text: errorMsg || "Save failed", color: "var(--danger)" };
     return null;
   })();
 
