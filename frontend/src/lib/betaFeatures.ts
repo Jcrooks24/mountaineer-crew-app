@@ -15,15 +15,13 @@
 //   1. Add its key to BETA_FEATURES.
 //   2. Drop <BetaTag feature="<key>" /> next to the feature's section header.
 
-export const APP_VERSION = "1.5";
+export const APP_VERSION = "1.6";
 
-export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
-  "crewFeedback",
-  "reimbursementPhotoLibrary",
-  "reimbursementExpenseDate",
-  "schedulingAvailability",
-  "schedulingNotes",
-]);
+// All v1.5 betas graduated at the v1.6 bump:
+//   crewFeedback, reimbursementPhotoLibrary, reimbursementExpenseDate,
+//   schedulingAvailability, schedulingNotes.
+// Add the next round of beta keys here as new features ship.
+export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([]);
 
 export function isBeta(feature: string): boolean {
   return BETA_FEATURES.has(feature);

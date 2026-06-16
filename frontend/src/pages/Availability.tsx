@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { BetaTag } from "../components/BetaTag";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
+import { useTheme } from "../theme/ThemeContext";
 import {
   addDaysIso,
   clearDraft,
@@ -75,6 +76,8 @@ type Tab = "submit" | "history";
 export default function Availability() {
   const nav = useNavigate();
   const { user } = useAuth();
+  const { settings: themeSettings } = useTheme();
+  const ht = themeSettings.helpTexts;
   const isAdmin = user?.role === "admin";
   const today = useMemo(() => todayLocalIso(), []);
 
@@ -769,7 +772,7 @@ export default function Availability() {
                     <input
                       type="text"
                       value={current?.note ?? ""}
-                      placeholder='e.g. "available after 1pm"'
+                      placeholder={ht.availabilityDayNotePlaceholder}
                       onChange={(e) => setNote(day, e.target.value)}
                       disabled={locked}
                       style={{
@@ -1284,6 +1287,8 @@ function FuturePeriodModal({
   onCancel: () => void;
   onSubmitted: (newState: AvailabilityState, summary: string) => void;
 }) {
+  const { settings: themeSettings } = useTheme();
+  const ht = themeSettings.helpTexts;
   // Earliest legal Start is today + 14: anything earlier is the rolling
   // cadence's job and the backend's lock check would 409 anyway.
   const minStart = useMemo(() => addDaysIso(today, 14), [today]);
@@ -1470,7 +1475,7 @@ function FuturePeriodModal({
             type="text"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder='e.g. "Hawaii vacation"'
+            placeholder={ht.futureAbsenceNotePlaceholder}
           />
         </div>
 
@@ -1555,6 +1560,8 @@ function schedNotesDraftKey(userId: number | undefined): string | null {
 
 function SchedulingNotesCard() {
   const { user, setUser } = useAuth();
+  const { settings: themeSettings } = useTheme();
+  const ht = themeSettings.helpTexts;
   const userId = user?.id;
   const initial = useMemo(() => {
     // Prefer a locally saved draft over the server-side value on mount —
@@ -1728,7 +1735,7 @@ function SchedulingNotesCard() {
             onChange={(e) => setValue(e.target.value)}
             rows={4}
             maxLength={2000}
-            placeholder="e.g. Mornings only until July 1. No Saturdays. Back to full availability after the 15th."
+            placeholder={ht.schedulingNotesPlaceholder}
             style={{ width: "100%", boxSizing: "border-box", resize: "vertical" }}
           />
           <div
