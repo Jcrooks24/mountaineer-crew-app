@@ -38,6 +38,7 @@ type AdminUser = {
   is_active: boolean;
   tag_ids: number[];
   alias_count: number;
+  scheduling_notes: string;
 };
 
 type EmployeeTag = {
@@ -1172,9 +1173,16 @@ function MonthScheduleView({
                     .map((tid) => tagsById.get(tid))
                     .filter((t): t is EmployeeTag => !!t)
                     .sort((a, b) => a.sort_order - b.sort_order);
+                  const notes = (u.scheduling_notes ?? "").trim();
                   return (
                     <th
                       key={u.id}
+                      // Surface the crew member's persistent scheduling notes
+                      // as a native tooltip on hover. The native `title=` is
+                      // intentional (vs a custom popover) — it works on the
+                      // wide-desktop admin views where this view shines and
+                      // doesn't fight the sticky-header z-index layering.
+                      title={notes || undefined}
                       style={{
                         position: "sticky", top: 0, zIndex: 2,
                         background: "var(--card)",
@@ -1183,10 +1191,35 @@ function MonthScheduleView({
                         padding: "8px 10px", textAlign: "left",
                         verticalAlign: "top",
                         minWidth: 110,
+                        cursor: notes ? "help" : "default",
                       }}
                     >
-                      <div style={{ fontWeight: 700, fontSize: 12 }}>
-                        {u.name || u.email}
+                      <div
+                        style={{
+                          fontWeight: 700, fontSize: 12,
+                          display: "flex", alignItems: "center", gap: 4,
+                        }}
+                      >
+                        <span>{u.name || u.email}</span>
+                        {notes && (
+                          // Tiny visual cue so the admin knows a note exists.
+                          // The actual content shows in the hover tooltip.
+                          <span
+                            aria-label="Has scheduling notes"
+                            style={{
+                              fontSize: 9,
+                              color: "var(--brand)",
+                              border: "1px solid rgba(93,214,194,0.35)",
+                              background: "rgba(93,214,194,0.12)",
+                              borderRadius: 3,
+                              padding: "0 4px",
+                              lineHeight: "13px",
+                              fontWeight: 700,
+                            }}
+                          >
+                            note
+                          </span>
+                        )}
                       </div>
                       {userTags.length > 0 && (
                         <div

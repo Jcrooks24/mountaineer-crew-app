@@ -27,3 +27,9 @@ class User(Base):
 
     # Profile photo — resized ~256px data URL (image/jpeg), shared across devices
     profile_photo = Column(Text, nullable=True)
+
+    # Free-form scheduling notes the crew maintains on their availability page.
+    # One note per user, persists across windows. Surfaced as a hover tooltip
+    # on the admin monthly availability view. NOT NULL with empty default so
+    # the read path doesn't need to handle Optional[str].
+    scheduling_notes = Column(Text, nullable=False, server_default="", default="")

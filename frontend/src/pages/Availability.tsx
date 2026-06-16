@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { BetaTag } from "../components/BetaTag";
 import { apiFetch, ApiError } from "../api/client";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth, type User } from "../auth/AuthContext";
 import {
   addDaysIso,
   clearDraft,
@@ -491,6 +491,11 @@ export default function Availability() {
           </button>
         </div>
       )}
+
+      {/* Scheduling notes — persistent ongoing constraints. Self-only;
+          admins viewing another user can read the note via the monthly
+          schedule view's hover tooltip. Collapsed by default. */}
+      {isViewingSelf && <SchedulingNotesCard />}
 
       {tab === "history" || !isViewingSelf ? (
         <HistoryView
@@ -1525,6 +1530,175 @@ function FuturePeriodModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SchedulingNotesCard — persistent per-user text field for ongoing scheduling
+// constraints ("no Saturdays until July", "back to full availability after the
+// 15th"). One note per user, independent of any window. Collapsed by default so
+// it stays out of the way; expanded shows a textarea with debounced autosave.
+//
+// Surfaced to admin via a hover tooltip on the monthly availability view.
+
+type NotesStatus = "idle" | "saving" | "saved" | "offline";
+
+function SchedulingNotesCard() {
+  const { user, setUser } = useAuth();
+  const initial = user?.scheduling_notes ?? "";
+  const [value, setValue] = useState<string>(initial);
+  const [expanded, setExpanded] = useState<boolean>(false);
+  const [status, setStatus] = useState<NotesStatus>("idle");
+  const lastSavedRef = useRef<string>(initial);
+  const timerRef = useRef<number | null>(null);
+  const savedFlashRef = useRef<number | null>(null);
+
+  // Resync from the user object when it changes underneath us (another tab
+  // saved, or AuthContext refetched /me). Guard against clobbering an in-flight
+  // edit: only adopt the incoming value if it differs from the one we last
+  // wrote AND from the value the user is currently typing.
+  useEffect(() => {
+    const incoming = user?.scheduling_notes ?? "";
+    if (incoming !== lastSavedRef.current && incoming !== value) {
+      setValue(incoming);
+      lastSavedRef.current = incoming;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.scheduling_notes]);
+
+  // Debounced autosave. 1.2s after the last keystroke we flush the PATCH.
+  // No explicit submit button — matches the autosave pattern already used
+  // elsewhere in the app for free-form text fields.
+  useEffect(() => {
+    if (value === lastSavedRef.current) return;
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setStatus("saving");
+    timerRef.current = window.setTimeout(async () => {
+      timerRef.current = null;
+      try {
+        const updated = await apiFetch<User>("/api/auth/me", {
+          method: "PATCH",
+          body: JSON.stringify({ scheduling_notes: value }),
+        });
+        lastSavedRef.current = updated.scheduling_notes ?? "";
+        setUser(updated);
+        setStatus("saved");
+        // Flash "Saved" briefly then return to idle so the pill doesn't
+        // permanently shout SAVED at the user.
+        if (savedFlashRef.current !== null) window.clearTimeout(savedFlashRef.current);
+        savedFlashRef.current = window.setTimeout(() => {
+          setStatus((s) => (s === "saved" ? "idle" : s));
+          savedFlashRef.current = null;
+        }, 1800);
+      } catch {
+        const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+        setStatus(offline ? "offline" : "idle");
+      }
+    }, 1200);
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  // Clean up the saved-flash timer on unmount.
+  useEffect(() => () => {
+    if (savedFlashRef.current !== null) window.clearTimeout(savedFlashRef.current);
+  }, []);
+
+  // First 1-2 non-empty lines, cropped to ~120 chars for the collapsed preview.
+  const preview = useMemo(() => {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
+    const head = lines.slice(0, 2).join(" · ");
+    return head.length > 120 ? head.slice(0, 117) + "…" : head;
+  }, [value]);
+
+  const pill = (() => {
+    if (status === "saving") return { text: "Saving…", color: "var(--muted)" };
+    if (status === "saved") return { text: "Saved", color: "var(--ok)" };
+    if (status === "offline") return { text: "Offline — saves when back online", color: "var(--warn)" };
+    return null;
+  })();
+
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        style={{
+          width: "100%",
+          background: "transparent",
+          border: "none",
+          padding: "12px 14px",
+          textAlign: "left",
+          cursor: "pointer",
+          color: "var(--text)",
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="sectionTitle" style={{ marginBottom: 0 }}>Scheduling notes</div>
+          <BetaTag feature="schedulingNotes" />
+          {!expanded && (
+            <div
+              className="small"
+              style={{
+                color: "var(--muted)",
+                marginTop: 4,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {preview || "Ongoing scheduling constraints (e.g. \"no Saturdays until July\")"}
+            </div>
+          )}
+        </div>
+        <div style={{ color: "var(--muted)", fontSize: 14, flexShrink: 0 }}>
+          {expanded ? "▾" : "▸"}
+        </div>
+      </button>
+      {expanded && (
+        <div style={{ padding: "0 14px 14px 14px" }}>
+          <textarea
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            rows={4}
+            maxLength={2000}
+            placeholder="e.g. Mornings only until July 1. No Saturdays. Back to full availability after the 15th."
+            style={{ width: "100%", boxSizing: "border-box", resize: "vertical" }}
+          />
+          <div
+            className="row"
+            style={{
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginTop: 6,
+              fontSize: 11,
+            }}
+          >
+            <span style={{ color: "var(--muted)" }}>
+              These notes are visible to admin alongside your availability.
+            </span>
+            {pill ? (
+              <span style={{ color: pill.color, fontWeight: 600 }}>{pill.text}</span>
+            ) : (
+              <span />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

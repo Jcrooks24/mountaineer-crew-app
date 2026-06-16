@@ -53,6 +53,9 @@ class UserAdminResponse(BaseModel):
     is_active: bool
     tag_ids: List[int] = []
     alias_count: int = 0
+    # Free-form text the crew maintains on their availability page. Surfaced
+    # as a hover tooltip on the admin Month schedule view's employee column.
+    scheduling_notes: str = ""
 
     class Config:
         from_attributes = True
@@ -95,6 +98,7 @@ def _user_with_tags(
         is_active=user.is_active,
         tag_ids=tag_ids,
         alias_count=alias_count,
+        scheduling_notes=user.scheduling_notes or "",
     )
 
 
