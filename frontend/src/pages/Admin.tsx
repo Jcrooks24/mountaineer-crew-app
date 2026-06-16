@@ -1888,8 +1888,6 @@ function SettingsTab({
       <DVIRUnitsCard />
       <EmployeeTagsManagerCard />
       <HelpTextCard />
-      <SheetSyncCard />
-      <AppHealthCard />
     </div>
   );
 }
@@ -2954,6 +2952,13 @@ function AdvancedSettingsPage() {
 
       <DataManagementCard />
 
+      {/* Sheet Sync and App Health moved here from the Settings tab — both
+          are admin-troubleshooting tools that don't need to surface on
+          every visit to Settings. Order: action card (Sheet Sync) before
+          read-only health snapshot, then collapsible Diagnostics. */}
+      <SheetSyncCard />
+      <AppHealthCard />
+
       {/* Diagnostics last and collapsed by default — admin only goes here
           when something looks off. Keeps the operational cards above it
           uncluttered. */}
@@ -3260,12 +3265,15 @@ function HelpTextCard() {
   }
 
   const fields: { key: keyof HelpTexts; label: string }[] = [
-    { key: "photoCaptionPlaceholder",   label: "Photo caption placeholder" },
-    { key: "jobNotesPlaceholder",       label: "Job notes placeholder" },
-    { key: "billNotesPlaceholder",      label: "Bill notes placeholder" },
-    { key: "hoursMismatchPlaceholder",  label: "Hours mismatch reason placeholder" },
-    { key: "jobDescriptionPlaceholder", label: "Manual job description placeholder" },
-    { key: "photosHint",                label: "Photos tab instructions" },
+    { key: "photoCaptionPlaceholder",        label: "Photo caption placeholder" },
+    { key: "jobNotesPlaceholder",            label: "Job notes placeholder" },
+    { key: "billNotesPlaceholder",           label: "Bill notes placeholder" },
+    { key: "hoursMismatchPlaceholder",       label: "Hours mismatch reason placeholder" },
+    { key: "jobDescriptionPlaceholder",      label: "Manual job description placeholder" },
+    { key: "photosHint",                     label: "Photos tab instructions" },
+    { key: "schedulingNotesPlaceholder",     label: "Scheduling notes placeholder" },
+    { key: "availabilityDayNotePlaceholder", label: "Availability day note placeholder" },
+    { key: "futureAbsenceNotePlaceholder",   label: "Future absence note placeholder" },
   ];
 
   return (

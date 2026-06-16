@@ -241,6 +241,12 @@ export interface HelpTexts {
   hoursMismatchPlaceholder: string;
   jobDescriptionPlaceholder: string;
   photosHint: string;
+  // Scheduling-related — added after the Scheduling Availability + future
+  // absence + persistent notes features landed. Admin can swap the wording
+  // for org-specific phrasing without a redeploy.
+  schedulingNotesPlaceholder: string;
+  availabilityDayNotePlaceholder: string;
+  futureAbsenceNotePlaceholder: string;
 }
 
 export const DEFAULT_HELP_TEXTS: HelpTexts = {
@@ -250,6 +256,9 @@ export const DEFAULT_HELP_TEXTS: HelpTexts = {
   hoursMismatchPlaceholder: "e.g. Travel time not billed, job ran over estimate, early finish…",
   jobDescriptionPlaceholder: "Describe the job…",
   photosHint: "Submit before-and-after photos, damage photos, and any other photos relevant to this job.",
+  schedulingNotesPlaceholder: "e.g. Mornings only until July 1. No Saturdays. Back to full availability after the 15th.",
+  availabilityDayNotePlaceholder: 'e.g. "available after 1pm"',
+  futureAbsenceNotePlaceholder: 'e.g. "Hawaii vacation"',
 };
 
 // ─── Settings shape ───────────────────────────────────────────────────────────
