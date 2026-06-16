@@ -2978,8 +2978,25 @@ function CrewResourcesCard() {
     succeeded: number;
     results: ResultRow[];
   };
+  type Diagnostic = {
+    enabled: boolean;
+    resources_calendar_id_set: boolean;
+    jobs_calendar_id_set: boolean;
+    oauth: {
+      ok: boolean;
+      valid?: boolean;
+      expired?: boolean;
+      has_refresh_token?: boolean;
+      scopes?: string[];
+      has_calendar_read?: boolean;
+      has_calendar_write?: boolean;
+      error?: string;
+    };
+  };
   const [result, setResult] = useState<Summary | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [diag, setDiag] = useState<Diagnostic | null>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
 
   async function generate() {
     setBusy(true);
@@ -2995,6 +3012,18 @@ function CrewResourcesCard() {
       setErr(e instanceof ApiError ? e.message : "Failed to refresh");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadDiagnostics() {
+    setDiagBusy(true);
+    try {
+      const d = await apiFetch<Diagnostic>("/api/admin/crew-resources/status");
+      setDiag(d);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to load diagnostics");
+    } finally {
+      setDiagBusy(false);
     }
   }
 
@@ -3077,6 +3106,79 @@ function CrewResourcesCard() {
           )}
         </div>
       )}
+
+      {/* Diagnostics — single button that surfaces the four things most
+          likely to break this feature: feature flag, calendar IDs, OAuth
+          token scope. Read-only; click it before clicking Refresh to know
+          in advance whether a refresh has any chance of succeeding. */}
+      <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+        <div className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between" }}>
+          <div className="small" style={{ color: "var(--muted)", fontWeight: 600 }}>
+            Diagnostics
+          </div>
+          <button
+            type="button"
+            onClick={loadDiagnostics}
+            disabled={diagBusy}
+            style={{ fontSize: 12, padding: "4px 10px" }}
+          >
+            {diagBusy ? "Checking…" : "Check status"}
+          </button>
+        </div>
+        {diag && (
+          <div className="small" style={{ marginTop: 8, lineHeight: 1.6 }}>
+            <DiagLine ok={diag.enabled}
+              label={`CREW_RESOURCES_ENABLED ${diag.enabled ? "true" : "not set / false"}`}
+            />
+            <DiagLine ok={diag.resources_calendar_id_set}
+              label={`RESOURCES_CALENDAR_ID ${diag.resources_calendar_id_set ? "set" : "missing"}`}
+            />
+            <DiagLine ok={diag.jobs_calendar_id_set}
+              label={`JOBS_CALENDAR_ID / WORKSPACE_CALENDAR_ID ${diag.jobs_calendar_id_set ? "set" : "missing"}`}
+            />
+            <DiagLine ok={!!diag.oauth.ok && !!diag.oauth.valid}
+              label={`OAuth token ${
+                diag.oauth.ok
+                  ? (diag.oauth.valid ? "valid" : (diag.oauth.expired ? "expired" : "invalid"))
+                  : `error: ${diag.oauth.error || "unknown"}`
+              }`}
+            />
+            <DiagLine ok={!!diag.oauth.has_calendar_write}
+              label={`calendar.events write scope ${diag.oauth.has_calendar_write ? "present" : "MISSING — re-authorize OAuth"}`}
+            />
+            {diag.oauth.scopes && diag.oauth.scopes.length > 0 && (
+              <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11, wordBreak: "break-all" }}>
+                Scopes: {diag.oauth.scopes.join(", ")}
+              </div>
+            )}
+            {!diag.oauth.has_calendar_write && diag.oauth.ok && (
+              <div style={{ marginTop: 8, color: "var(--warn)", fontSize: 12 }}>
+                The stored token doesn't include <code>calendar.events</code>.
+                Run <code>scripts/refresh_google_token_with_writes.py</code> locally,
+                complete the OAuth flow, and paste the new token.json via Calendar OAuth above.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Tiny presentational helper for the diagnostic rows. Pulled out so the
+// CrewResourcesCard JSX stays readable.
+function DiagLine({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span
+        aria-hidden
+        style={{
+          width: 10, height: 10, borderRadius: "50%",
+          background: ok ? "var(--ok)" : "var(--danger)",
+          flexShrink: 0,
+        }}
+      />
+      <span style={{ color: ok ? "var(--text)" : "var(--danger)" }}>{label}</span>
     </div>
   );
 }

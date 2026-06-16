@@ -691,6 +691,39 @@ def crew_resources_refresh_endpoint(
     }
 
 
+@router.get("/crew-resources/status")
+def crew_resources_status_endpoint(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Read-only diagnostic for the Crew Resources feature. Tells admin in
+    one place whether the env vars are wired, the OAuth token has the
+    write scope, and which calendar IDs are in effect — so debugging
+    "events aren't showing up" doesn't require Render-log spelunking."""
+    from app.core.google_cal_oauth import get_cal_status
+    from app.integrations.crew_resources_calendar import (
+        _is_enabled,
+        _resources_calendar_id,
+        _jobs_calendar_id,
+    )
+    cal = get_cal_status(db)
+    return {
+        "enabled": _is_enabled(),
+        "resources_calendar_id_set": bool(_resources_calendar_id()),
+        "jobs_calendar_id_set": bool(_jobs_calendar_id()),
+        "oauth": {
+            "ok": cal.get("ok", False),
+            "valid": cal.get("valid"),
+            "expired": cal.get("expired"),
+            "has_refresh_token": cal.get("has_refresh_token"),
+            "scopes": cal.get("scopes", []),
+            "has_calendar_read": cal.get("has_calendar_read", False),
+            "has_calendar_write": cal.get("has_calendar_write", False),
+            "error": cal.get("error"),
+        },
+    }
+
+
 @router.post("/sheets/reconcile-events")
 def reconcile_events_endpoint(
     payload: ReconcileEventsRequest,
