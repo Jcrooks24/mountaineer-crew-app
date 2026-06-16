@@ -1146,13 +1146,39 @@ function MonthScheduleView({
           No active employees.
         </div>
       ) : (
+        // Burst out of the parent container's max-width on wide displays.
+        // `width: 100vw` + `marginLeft: calc(50% - 50vw)` is the standard
+        // "full-bleed" trick — the card spans the full viewport while
+        // staying centered on the container's axis. The 24px side padding
+        // keeps the table off the viewport edges so scrollbars and window
+        // chrome don't crowd it. Inner overflow:auto keeps the horizontal
+        // scroll local to the card if employees still overflow the viewport.
         <div
           className="card"
-          style={{ padding: 0, overflow: "auto", maxHeight: "75vh" }}
+          style={{
+            padding: 0,
+            overflow: "auto",
+            maxHeight: "75vh",
+            width: "100vw",
+            maxWidth: "100vw",
+            marginLeft: "calc(50% - 50vw)",
+            marginRight: "calc(50% - 50vw)",
+            // Cap the breakout on truly enormous screens so the table doesn't
+            // sprawl past what's useful. 2400px fits ~28 employees at the
+            // tightened 80px column width without scroll.
+            boxSizing: "border-box",
+          }}
         >
           <table style={{
             borderCollapse: "separate", borderSpacing: 0,
-            fontSize: 12, minWidth: "100%",
+            fontSize: 12,
+            // width: max-content lets the table shrink-wrap to its natural
+            // size when employee count fits comfortably; the parent's
+            // overflow:auto kicks in only when it doesn't. Combined with the
+            // tighter per-column minWidth below, more employees fit per
+            // screen than with the previous "minWidth: 100%" stretch rule.
+            width: "max-content",
+            minWidth: "100%",
           }}>
             <thead>
               <tr>
@@ -1162,8 +1188,8 @@ function MonthScheduleView({
                     background: "var(--card)",
                     borderBottom: "1px solid var(--border)",
                     borderRight: "1px solid var(--border)",
-                    padding: "8px 10px", textAlign: "left",
-                    minWidth: 70,
+                    padding: "6px 8px", textAlign: "left",
+                    minWidth: 56,
                   }}
                 >
                   <span className="small" style={{ color: "var(--muted)" }}>Day</span>
@@ -1188,9 +1214,13 @@ function MonthScheduleView({
                         background: "var(--card)",
                         borderBottom: "1px solid var(--border)",
                         borderRight: "1px solid var(--border)",
-                        padding: "8px 10px", textAlign: "left",
+                        padding: "6px 8px", textAlign: "left",
                         verticalAlign: "top",
-                        minWidth: 110,
+                        // Tightened from 110 to 80 so more employees fit per
+                        // viewport on standard desktop AND ultra-wide.
+                        // Scheduled job cells still wrap-break their text so
+                        // narrower cells stay legible.
+                        minWidth: 80,
                         cursor: notes ? "help" : "default",
                       }}
                     >
@@ -1265,7 +1295,7 @@ function MonthScheduleView({
                         background: isToday ? "rgba(93,214,194,0.10)" : "var(--card)",
                         borderBottom: "1px solid var(--border)",
                         borderRight: "1px solid var(--border)",
-                        padding: "6px 10px", fontSize: 12,
+                        padding: "4px 8px", fontSize: 12,
                         fontWeight: isToday ? 800 : 600,
                         color: isToday ? "var(--brand)" : (isWeekend ? "var(--muted)" : "var(--text)"),
                         whiteSpace: "nowrap",
