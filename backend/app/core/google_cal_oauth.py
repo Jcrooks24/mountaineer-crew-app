@@ -196,12 +196,27 @@ def get_cal_status(db=None) -> dict:
     try:
         creds = _get_creds(db)
         expiry = creds.expiry.isoformat() if creds.expiry else None
+        # Surface the token's effective scopes so admin can tell at a glance
+        # whether a scope-sensitive feature (Crew Resources write, future
+        # event creators) will actually work. Without this we had to walk
+        # through Render logs to confirm a missing scope.
+        scopes = list(getattr(creds, "scopes", None) or [])
+        has_calendar_write = any(
+            s.endswith("/auth/calendar") or s.endswith("/auth/calendar.events")
+            for s in scopes
+        )
+        has_calendar_read = has_calendar_write or any(
+            s.endswith("/auth/calendar.readonly") for s in scopes
+        )
         return {
             "ok": True,
             "valid": creds.valid,
             "expired": creds.expired,
             "expiry": expiry,
             "has_refresh_token": bool(creds.refresh_token),
+            "scopes": scopes,
+            "has_calendar_read": has_calendar_read,
+            "has_calendar_write": has_calendar_write,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}

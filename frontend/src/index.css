@@ -32,7 +32,11 @@
 }
 
 *{ box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
+/* overflow-x: clip prevents a sub-page-pixel horizontal scrollbar from
+   appearing when a full-bleed element (e.g. the admin Month schedule view)
+   uses 100vw and the viewport has a vertical scrollbar. Vertical scrolling
+   still works as normal because the body's natural overflow is auto. */
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font); overflow-x: clip; }
 
 .container{ max-width: 720px; margin: 0 auto; padding: 14px; }
 

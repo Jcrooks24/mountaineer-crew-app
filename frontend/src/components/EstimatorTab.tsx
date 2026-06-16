@@ -69,21 +69,44 @@ function newUUID() {
 }
 
 async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Promise<Blob> {
+  // Always resolves — never rejects, never hangs. Falls back to the original
+  // file on any failure (decode error, canvas OOM, unsupported MIME). The
+  // 30s safety timer is load-bearing: a synchronous throw inside `onload`
+  // (e.g. `getContext("2d")` is null on a low-RAM phone) would otherwise
+  // leave the promise pending forever and the photo button stuck.
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
-      canvas.toBlob((blob) => resolve(blob ?? file), "image/jpeg", quality);
+    let settled = false;
+    const finish = (out: Blob) => {
+      if (settled) return;
+      settled = true;
+      try { URL.revokeObjectURL(url); } catch { /* already revoked */ }
+      resolve(out);
     };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    const timeout = window.setTimeout(() => {
+      console.warn("[estimator-photo] resize timed out — uploading original");
+      finish(file);
+    }, 30_000);
+    img.onload = () => {
+      window.clearTimeout(timeout);
+      try {
+        const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { finish(file); return; }
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => finish(blob ?? file), "image/jpeg", quality);
+      } catch (e) {
+        console.warn("[estimator-photo] resize failed — uploading original", e);
+        finish(file);
+      }
+    };
+    img.onerror = () => { window.clearTimeout(timeout); finish(file); };
     img.src = url;
   });
 }

@@ -38,6 +38,7 @@ type AdminUser = {
   is_active: boolean;
   tag_ids: number[];
   alias_count: number;
+  scheduling_notes: string;
 };
 
 type EmployeeTag = {
@@ -1145,13 +1146,39 @@ function MonthScheduleView({
           No active employees.
         </div>
       ) : (
+        // Burst out of the parent container's max-width on wide displays.
+        // `width: 100vw` + `marginLeft: calc(50% - 50vw)` is the standard
+        // "full-bleed" trick — the card spans the full viewport while
+        // staying centered on the container's axis. The 24px side padding
+        // keeps the table off the viewport edges so scrollbars and window
+        // chrome don't crowd it. Inner overflow:auto keeps the horizontal
+        // scroll local to the card if employees still overflow the viewport.
         <div
           className="card"
-          style={{ padding: 0, overflow: "auto", maxHeight: "75vh" }}
+          style={{
+            padding: 0,
+            overflow: "auto",
+            maxHeight: "75vh",
+            width: "100vw",
+            maxWidth: "100vw",
+            marginLeft: "calc(50% - 50vw)",
+            marginRight: "calc(50% - 50vw)",
+            // Cap the breakout on truly enormous screens so the table doesn't
+            // sprawl past what's useful. 2400px fits ~28 employees at the
+            // tightened 80px column width without scroll.
+            boxSizing: "border-box",
+          }}
         >
           <table style={{
             borderCollapse: "separate", borderSpacing: 0,
-            fontSize: 12, minWidth: "100%",
+            fontSize: 12,
+            // width: max-content lets the table shrink-wrap to its natural
+            // size when employee count fits comfortably; the parent's
+            // overflow:auto kicks in only when it doesn't. Combined with the
+            // tighter per-column minWidth below, more employees fit per
+            // screen than with the previous "minWidth: 100%" stretch rule.
+            width: "max-content",
+            minWidth: "100%",
           }}>
             <thead>
               <tr>
@@ -1161,8 +1188,8 @@ function MonthScheduleView({
                     background: "var(--card)",
                     borderBottom: "1px solid var(--border)",
                     borderRight: "1px solid var(--border)",
-                    padding: "8px 10px", textAlign: "left",
-                    minWidth: 70,
+                    padding: "6px 8px", textAlign: "left",
+                    minWidth: 56,
                   }}
                 >
                   <span className="small" style={{ color: "var(--muted)" }}>Day</span>
@@ -1172,21 +1199,57 @@ function MonthScheduleView({
                     .map((tid) => tagsById.get(tid))
                     .filter((t): t is EmployeeTag => !!t)
                     .sort((a, b) => a.sort_order - b.sort_order);
+                  const notes = (u.scheduling_notes ?? "").trim();
                   return (
                     <th
                       key={u.id}
+                      // Surface the crew member's persistent scheduling notes
+                      // as a native tooltip on hover. The native `title=` is
+                      // intentional (vs a custom popover) — it works on the
+                      // wide-desktop admin views where this view shines and
+                      // doesn't fight the sticky-header z-index layering.
+                      title={notes || undefined}
                       style={{
                         position: "sticky", top: 0, zIndex: 2,
                         background: "var(--card)",
                         borderBottom: "1px solid var(--border)",
                         borderRight: "1px solid var(--border)",
-                        padding: "8px 10px", textAlign: "left",
+                        padding: "6px 8px", textAlign: "left",
                         verticalAlign: "top",
-                        minWidth: 110,
+                        // Tightened from 110 to 80 so more employees fit per
+                        // viewport on standard desktop AND ultra-wide.
+                        // Scheduled job cells still wrap-break their text so
+                        // narrower cells stay legible.
+                        minWidth: 80,
+                        cursor: notes ? "help" : "default",
                       }}
                     >
-                      <div style={{ fontWeight: 700, fontSize: 12 }}>
-                        {u.name || u.email}
+                      <div
+                        style={{
+                          fontWeight: 700, fontSize: 12,
+                          display: "flex", alignItems: "center", gap: 4,
+                        }}
+                      >
+                        <span>{u.name || u.email}</span>
+                        {notes && (
+                          // Tiny visual cue so the admin knows a note exists.
+                          // The actual content shows in the hover tooltip.
+                          <span
+                            aria-label="Has scheduling notes"
+                            style={{
+                              fontSize: 9,
+                              color: "var(--brand)",
+                              border: "1px solid rgba(93,214,194,0.35)",
+                              background: "rgba(93,214,194,0.12)",
+                              borderRadius: 3,
+                              padding: "0 4px",
+                              lineHeight: "13px",
+                              fontWeight: 700,
+                            }}
+                          >
+                            note
+                          </span>
+                        )}
                       </div>
                       {userTags.length > 0 && (
                         <div
@@ -1232,7 +1295,7 @@ function MonthScheduleView({
                         background: isToday ? "rgba(93,214,194,0.10)" : "var(--card)",
                         borderBottom: "1px solid var(--border)",
                         borderRight: "1px solid var(--border)",
-                        padding: "6px 10px", fontSize: 12,
+                        padding: "4px 8px", fontSize: 12,
                         fontWeight: isToday ? 800 : 600,
                         color: isToday ? "var(--brand)" : (isWeekend ? "var(--muted)" : "var(--text)"),
                         whiteSpace: "nowrap",
@@ -2890,6 +2953,11 @@ function AdvancedSettingsPage() {
       <CrewResourcesCard />
 
       <DataManagementCard />
+
+      {/* Diagnostics last and collapsed by default — admin only goes here
+          when something looks off. Keeps the operational cards above it
+          uncluttered. */}
+      <DiagnosticsCard />
     </div>
   );
 }
@@ -3014,6 +3082,168 @@ function CrewResourcesCard() {
           )}
         </div>
       )}
+
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Diagnostics — collapsible nested card under Advanced Settings. One home
+// for every read-only "is this feature wired correctly?" check. Sits below
+// the operational cards so admin doesn't see it unless they go looking
+// for it.
+// ─────────────────────────────────────────
+function DiagnosticsCard() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="card">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          width: "100%",
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          textAlign: "left",
+          cursor: "pointer",
+          color: "var(--text)",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <div style={{ flex: 1 }}>
+          <div className="sectionTitle" style={{ marginBottom: 0 }}>Diagnostics</div>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+            Read-only checks of integrations wired through env vars or OAuth.
+            Useful when a feature looks "set up" but isn't behaving.
+          </div>
+        </div>
+        <div style={{ color: "var(--muted)", fontSize: 14, flexShrink: 0 }}>
+          {open ? "▾" : "▸"}
+        </div>
+      </button>
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <CrewResourcesDiagnostic />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One row of the Diagnostics card. Each sub-feature gets its own component
+// so adding a new probe later is a one-line addition to DiagnosticsCard.
+function CrewResourcesDiagnostic() {
+  type Diagnostic = {
+    enabled: boolean;
+    resources_calendar_id_set: boolean;
+    jobs_calendar_id_set: boolean;
+    oauth: {
+      ok: boolean;
+      valid?: boolean;
+      expired?: boolean;
+      has_refresh_token?: boolean;
+      scopes?: string[];
+      has_calendar_read?: boolean;
+      has_calendar_write?: boolean;
+      error?: string;
+    };
+  };
+  const [diag, setDiag] = useState<Diagnostic | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const d = await apiFetch<Diagnostic>("/api/admin/crew-resources/status");
+      setDiag(d);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to load diagnostics");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        padding: 12,
+        border: "1px solid var(--border)",
+        borderRadius: 10,
+        background: "rgba(255,255,255,0.02)",
+      }}
+    >
+      <div className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>Crew Resources calendar</div>
+        <button
+          type="button"
+          onClick={load}
+          disabled={busy}
+          style={{ fontSize: 12, padding: "4px 10px" }}
+        >
+          {busy ? "Checking…" : "Check status"}
+        </button>
+      </div>
+      {err && (
+        <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>
+      )}
+      {diag && (
+        <div className="small" style={{ marginTop: 10, lineHeight: 1.6 }}>
+          <DiagLine ok={diag.enabled}
+            label={`CREW_RESOURCES_ENABLED ${diag.enabled ? "true" : "not set / false"}`}
+          />
+          <DiagLine ok={diag.resources_calendar_id_set}
+            label={`RESOURCES_CALENDAR_ID ${diag.resources_calendar_id_set ? "set" : "missing"}`}
+          />
+          <DiagLine ok={diag.jobs_calendar_id_set}
+            label={`JOBS_CALENDAR_ID / WORKSPACE_CALENDAR_ID ${diag.jobs_calendar_id_set ? "set" : "missing"}`}
+          />
+          <DiagLine ok={!!diag.oauth.ok && !!diag.oauth.valid}
+            label={`OAuth token ${
+              diag.oauth.ok
+                ? (diag.oauth.valid ? "valid" : (diag.oauth.expired ? "expired" : "invalid"))
+                : `error: ${diag.oauth.error || "unknown"}`
+            }`}
+          />
+          <DiagLine ok={!!diag.oauth.has_calendar_write}
+            label={`calendar.events write scope ${diag.oauth.has_calendar_write ? "present" : "MISSING — re-authorize OAuth"}`}
+          />
+          {diag.oauth.scopes && diag.oauth.scopes.length > 0 && (
+            <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11, wordBreak: "break-all" }}>
+              Scopes: {diag.oauth.scopes.join(", ")}
+            </div>
+          )}
+          {!diag.oauth.has_calendar_write && diag.oauth.ok && (
+            <div style={{ marginTop: 8, color: "var(--warn)", fontSize: 12 }}>
+              The stored token doesn't include <code>calendar.events</code>.
+              Run <code>scripts/refresh_google_token_with_writes.py</code> locally,
+              complete the OAuth flow, and paste the new token.json via Google Calendar above.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tiny presentational helper for the diagnostic rows.
+function DiagLine({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span
+        aria-hidden
+        style={{
+          width: 10, height: 10, borderRadius: "50%",
+          background: ok ? "var(--ok)" : "var(--danger)",
+          flexShrink: 0,
+        }}
+      />
+      <span style={{ color: ok ? "var(--text)" : "var(--danger)" }}>{label}</span>
     </div>
   );
 }

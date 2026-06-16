@@ -17,7 +17,7 @@ import {
   mountainDateYYYYMMDD,
 } from "./lib/time";
 import AdminNotesBanner from "./components/AdminNotesBanner";
-import { getToken } from "./auth/token";
+import { getToken, clearToken } from "./auth/token";
 import {
   renderedForJob as materialsRenderedForJob,
   syncQueue as syncMaterialsQueue,
@@ -31,21 +31,45 @@ const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 // Caps the longest side at 1920px and encodes as JPEG at 80% quality.
 // Typical mobile photo: 8MB → ~600KB after this.
 async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Promise<Blob> {
+  // Always resolves — never rejects, never hangs. Falls back to the original
+  // file on any failure (decode error, OOM on canvas, unsupported MIME).
+  // The 30s safety timer is the load-bearing piece: without it, an `onload`
+  // that throws synchronously (e.g. `getContext("2d")` returns null on a
+  // low-RAM phone) leaves the promise pending forever and the Save button
+  // stuck on "Saving…".
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
-      canvas.toBlob((blob) => resolve(blob ?? file), "image/jpeg", quality);
+    let settled = false;
+    const finish = (out: Blob) => {
+      if (settled) return;
+      settled = true;
+      try { URL.revokeObjectURL(url); } catch { /* already revoked */ }
+      resolve(out);
     };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    const timeout = window.setTimeout(() => {
+      console.warn("[photo] resize timed out — uploading original");
+      finish(file);
+    }, 30_000);
+    img.onload = () => {
+      window.clearTimeout(timeout);
+      try {
+        const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { finish(file); return; }
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => finish(blob ?? file), "image/jpeg", quality);
+      } catch (e) {
+        console.warn("[photo] resize failed — uploading original", e);
+        finish(file);
+      }
+    };
+    img.onerror = () => { window.clearTimeout(timeout); finish(file); };
     img.src = url;
   });
 }
@@ -1156,6 +1180,43 @@ export default function App() {
   // -----------------------
   // Photos
   // -----------------------
+
+  // Parse the upload response into either an error string or a usable body.
+  // Used by both the initial-save and retry paths so the wording stays consistent
+  // and so the response body is only consumed once.
+  async function readPhotoUploadResponse(res: Response): Promise<{ error: string | null; body: any }> {
+    if (res.status === 401) {
+      // Token expired or revoked. Wipe it so the next render kicks the user
+      // back to the login screen — otherwise they keep tapping Retry and seeing
+      // "HTTP 401" without any explanation of what to do.
+      clearToken();
+      return { error: "Session expired — log out and sign in again to upload photos", body: null };
+    }
+    if (res.status === 413) {
+      return { error: "Photo too large to upload (server limit is 100 MB)", body: null };
+    }
+    if (res.status === 403) {
+      return { error: "Server rejected the upload (not authorized)", body: null };
+    }
+    if (res.status >= 500) {
+      return { error: `Server error (HTTP ${res.status}) — try again in a moment`, body: null };
+    }
+    let body: any = null;
+    try { body = await res.json(); }
+    catch { return { error: "Upload failed — server returned an unreadable response", body: null }; }
+    if (body && body.ok === false) {
+      const msg = body.error ? `Drive upload failed: ${body.error}` : "Drive upload failed";
+      return { error: msg, body };
+    }
+    if (!res.ok) {
+      return { error: `Upload failed (HTTP ${res.status})`, body };
+    }
+    if (!body || !body.drive_url) {
+      return { error: "Drive upload didn't complete — please retry", body };
+    }
+    return { error: null, body };
+  }
+
   async function refreshPhotos() {
     try {
       setPhotoError("");
@@ -1222,19 +1283,25 @@ export default function App() {
         headers: makeAuthHeaders(token),
         body: form,
       });
-      const json = await res.json();
-      if (res.ok && json.drive_url) {
-        await updatePhoto(photoId, { drive_status: "uploaded", drive_url: json.drive_url });
+      const { error, body } = await readPhotoUploadResponse(res);
+      if (!error && body?.drive_url) {
+        await updatePhoto(photoId, { drive_status: "uploaded", drive_url: body.drive_url });
         await refreshPhotos();
         setStatus("Photo saved to Drive");
       } else {
-        const errMsg = json?.error ? String(json.error) : `HTTP ${res.status}`;
+        const errMsg = error ?? "Drive upload failed";
         await updatePhoto(photoId, { drive_status: "failed", drive_error: errMsg });
         await refreshPhotos();
+        setPhotoError(errMsg);
       }
     } catch (uploadErr: any) {
-      await updatePhoto(photoId, { drive_status: "failed", drive_error: uploadErr?.message ?? "Network error" });
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+      const msg = offline
+        ? "Offline — photo will retry when you're back online"
+        : (uploadErr?.message ?? "Network error — tap Retry");
+      await updatePhoto(photoId, { drive_status: "failed", drive_error: msg });
       await refreshPhotos();
+      setPhotoError(msg);
     }
 
     setPhotoBusy(false);
@@ -1261,16 +1328,22 @@ export default function App() {
         headers: makeAuthHeaders(token),
         body: form,
       });
-      const json = await res.json();
-      if (res.ok && json.drive_url) {
-        await updatePhoto(photo.id, { drive_status: "uploaded", drive_url: json.drive_url });
+      const { error, body } = await readPhotoUploadResponse(res);
+      if (!error && body?.drive_url) {
+        await updatePhoto(photo.id, { drive_status: "uploaded", drive_url: body.drive_url });
         setStatus("Photo uploaded to Drive");
       } else {
-        const errMsg = json?.error ? String(json.error) : `HTTP ${res.status}`;
+        const errMsg = error ?? "Drive upload failed";
         await updatePhoto(photo.id, { drive_status: "failed", drive_error: errMsg });
+        setPhotoError(errMsg);
       }
     } catch (uploadErr: any) {
-      await updatePhoto(photo.id, { drive_status: "failed", drive_error: uploadErr?.message ?? "Network error" });
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+      const msg = offline
+        ? "Offline — photo will retry when you're back online"
+        : (uploadErr?.message ?? "Network error — tap Retry");
+      await updatePhoto(photo.id, { drive_status: "failed", drive_error: msg });
+      setPhotoError(msg);
     }
     await refreshPhotos();
     setPhotoBusy(false);

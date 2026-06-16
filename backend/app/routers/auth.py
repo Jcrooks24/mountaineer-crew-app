@@ -137,6 +137,10 @@ def update_me(
         current_user.name = payload.name.strip() or None
     if payload.profile_photo is not None:
         current_user.profile_photo = payload.profile_photo.strip() or None
+    if payload.scheduling_notes is not None:
+        # Cap to a sane length — the field is rendered as a tooltip in admin
+        # and a collapsible card in crew UI; 2000 chars is well past either use.
+        current_user.scheduling_notes = payload.scheduling_notes[:2000]
     db.commit()
     db.refresh(current_user)
     return current_user

@@ -10,6 +10,7 @@ export type User = {
   role?: string;
   is_active?: boolean;
   profile_photo?: string | null;
+  scheduling_notes?: string;
 };
 
 export type DirectoryEntry = {
