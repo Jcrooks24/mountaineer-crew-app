@@ -20,14 +20,14 @@ SCOPES = [
     # grant trips Google's token endpoint with `invalid_scope`, breaking
     # every background sheets export until the user re-authorizes.
     #
-    # The Crew Resources feature needs calendar.events. To enable it:
-    #   1. Run scripts/refresh_google_token.py locally with the broader
-    #      SCOPES list set, complete the OAuth flow, and paste the new
-    #      token.json into /api/admin/cal-token.
-    #   2. Only AFTER the new token is live, add calendar.events back
-    #      to this list and redeploy. The refresh will then succeed
-    #      against the broader-scope grant.
+    # calendar.events was added once the prod admin had re-authorized
+    # locally with scripts/refresh_google_token_with_writes.py and pasted
+    # the broader-scope token via /api/admin/cal-token. Without this entry,
+    # every access-token refresh quietly dropped the events scope and PATCH
+    # calls to Crew Resources events 403'd with insufficientPermissions an
+    # hour after each paste.
     "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
 ]
