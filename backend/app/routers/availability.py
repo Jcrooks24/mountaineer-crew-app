@@ -76,6 +76,31 @@ def _to_out(row: AvailabilityDay) -> AvailabilityDayOut:
     )
 
 
+def _contiguous_horizon(day_strs: set[str], today: date) -> Optional[str]:
+    """The last day H such that every day in [today, H] has a submitted
+    record (contiguous, starting at today). Returns None when today itself
+    has no record.
+
+    This is deliberately NOT max(submitted day): a far-future one-off
+    absence (e.g. a vacation pre-submitted months out via "Plan a future
+    absence") must not inflate the horizon past the near-term gap. If it
+    did, isHorizonLow() would read false and the rolling 2-week submission
+    picker would stay hidden until that distant date entered the window —
+    the crew member couldn't submit their next two weeks. Anchoring on
+    contiguous coverage from today keeps the rolling cadence prompting
+    while still letting isolated future absences sit untouched in the data.
+    """
+    if today.isoformat() not in day_strs:
+        return None
+    cur = today
+    while True:
+        nxt = date.fromordinal(cur.toordinal() + 1)
+        if nxt.isoformat() in day_strs:
+            cur = nxt
+        else:
+            return cur.isoformat()
+
+
 def _state_for_user(db: Session, user_id: int) -> AvailabilityState:
     rows = (
         db.query(AvailabilityDay)
@@ -83,7 +108,7 @@ def _state_for_user(db: Session, user_id: int) -> AvailabilityState:
         .order_by(AvailabilityDay.day.asc())
         .all()
     )
-    horizon = rows[-1].day if rows else None
+    horizon = _contiguous_horizon({r.day for r in rows}, date.today())
     unlock_rows = (
         db.query(AvailabilityUnlock)
         .filter(AvailabilityUnlock.user_id == user_id)
