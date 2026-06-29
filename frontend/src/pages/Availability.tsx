@@ -136,6 +136,25 @@ export default function Availability() {
     setQuickFillStatus({});
   }, [activeWindowStart]);
 
+  // Re-align the active window to the server-derived next window
+  // (horizon + 1, clamped to today) whenever fresh server state arrives and
+  // the user isn't mid-edit. activeWindowStart is otherwise only seeded once
+  // (from the cached horizon) and advanced explicitly on submit, so a stale
+  // cache — e.g. one whose horizon was inflated by an old far-future absence
+  // before the contiguous-horizon backend fix — would leave the picker stuck
+  // on the wrong window even after correct state loads. An in-progress draft
+  // for this window, or an intentionally-opened admin-unlocked window, is
+  // preserved so this never yanks the user out of an active edit.
+  useEffect(() => {
+    if (!isViewingSelf) return;
+    if (draft && draft.window_start === activeWindowStart) return;
+    const wUnlocks = cache.unlocks ?? [];
+    if (wUnlocks.some((u) => u.window_start === activeWindowStart)) return;
+    const next = cache.horizon ? addDaysIso(cache.horizon, 1) : today;
+    const clamped = next >= today ? next : today;
+    setActiveWindowStart((cur) => (cur === clamped ? cur : clamped));
+  }, [cache.horizon, cache.unlocks, isViewingSelf, draft, activeWindowStart, today]);
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
