@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
@@ -126,14 +126,49 @@ def _rods_to_response(r: RodsLog) -> RodsResponse:
     )
 
 
-@router.post("/rods", response_model=RodsResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/rods", response_model=RodsResponse)
 def create_rods(
     body: RodsCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    existing = db.query(RodsLog).filter(RodsLog.rods_id == body.rods_id).first()
-    if existing:
+    """Create or UPDATE this driver's Record of Duty Status for a day.
+
+    RODS is now a resumable, tap-recorded daily log: the recorder appends duty
+    changes through the day and re-submits, and the driver may reopen a day to
+    finalize/sign. So this upserts by (driver_id, log_date) — one row per driver
+    per day — updating the duty changes, totals, and signature in place. The
+    original rods_id + created_at are preserved so the Sheet row (replace-style
+    export) tracks the same entity across the day.
+    """
+    existing = (
+        db.query(RodsLog)
+        .filter(RodsLog.driver_id == current_user.id, RodsLog.log_date == body.log_date)
+        .first()
+    )
+
+    if existing is not None:
+        existing.driver_name = body.driver_name.strip()
+        existing.co_driver_name = (body.co_driver_name or "").strip() or None
+        existing.vehicle_number = (body.vehicle_number or "").strip() or None
+        existing.trailer_number = (body.trailer_number or "").strip() or None
+        existing.origin = (body.origin or "").strip() or None
+        existing.destination = (body.destination or "").strip() or None
+        existing.total_miles = (body.total_miles or "").strip() or None
+        existing.shipping_docs = (body.shipping_docs or "").strip() or None
+        existing.carrier = (body.carrier or "").strip() or None
+        existing.main_office_address = (body.main_office_address or "").strip() or None
+        existing.duty_changes_json = json.dumps([d.model_dump() for d in body.duty_changes])
+        existing.remarks = (body.remarks or "").strip() or None
+        existing.total_off_duty = body.total_off_duty
+        existing.total_sleeper = body.total_sleeper
+        existing.total_driving = body.total_driving
+        existing.total_on_duty = body.total_on_duty
+        existing.signature = body.signature
+        existing.signed_at = body.signed_at
+        db.commit()
+        db.refresh(existing)
+        run_export_in_background(export_rods_to_sheets, _rods_to_response(existing).model_dump())
         return _rods_to_response(existing)
 
     row = RodsLog(
@@ -171,14 +206,14 @@ def create_rods(
 
 @router.get("/rods", response_model=List[RodsResponse])
 def list_my_rods(
+    log_date: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    rows = (
-        db.query(RodsLog)
-        .filter(RodsLog.driver_id == current_user.id)
-        .order_by(RodsLog.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    """List this driver's RODS logs (newest first). If log_date is given, return
+    just that day (used by the recorder to resume a day across devices)."""
+    q = db.query(RodsLog).filter(RodsLog.driver_id == current_user.id)
+    if log_date:
+        q = q.filter(RodsLog.log_date == log_date)
+    rows = q.order_by(RodsLog.created_at.desc()).limit(50).all()
     return [_rods_to_response(r) for r in rows]

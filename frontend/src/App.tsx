@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
+import RodsRecorder from "./components/RodsRecorder";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
@@ -1918,6 +1919,9 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* Long-distance: tap-to-timestamp duty recorder (RODS) */}
+          {longDistance && <RodsRecorder />}
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>

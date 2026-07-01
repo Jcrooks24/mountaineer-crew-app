@@ -1206,8 +1206,9 @@ RODS_HEADERS = [
 
 def export_rods_to_sheets(db: Session, rods: Dict[str, Any]) -> int:
     tab = os.getenv("SHEETS_RODS_TAB", "RODS").strip() or "RODS"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
     key = rods.get("rods_id", "")
-    if not key or _generic_already_exported(db, "rods", key):
+    if not key:
         return 0
 
     changes = rods.get("duty_changes") or []
@@ -1240,10 +1241,22 @@ def export_rods_to_sheets(db: Session, rods: Dict[str, Any]) -> int:
         "signed_at": _iso(rods.get("signed_at")),
         "created_at": _iso(rods.get("created_at")),
     }
-    written = _append_rows(db, tab, RODS_HEADERS, [row])
-    if written:
-        _generic_mark_exported(db, "rods", [key])
-    return written
+
+    # Replace strategy: a RODS day is upserted (the recorder appends changes and
+    # re-submits through the day), so delete any existing row for this rods_id
+    # and write the current state, guaranteeing exactly one row per day.
+    svc = _get_sheets_svc(db)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "rods_id", key)
+    db.execute(
+        text("DELETE FROM sheet_generic_exports WHERE kind = 'rods' AND export_key = :k"),
+        {"k": key},
+    )
+    db.commit()
+
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, RODS_HEADERS))
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, actual_headers)])
+    _generic_mark_exported(db, "rods", [key])
+    return 1
 
 
 # ── Estimates ────────────────────────────────────────────────────────────────
