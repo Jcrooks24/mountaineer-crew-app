@@ -6,7 +6,7 @@ records their on-duty hours for the seven consecutive days before starting
 an interstate trip. Required for crews operating across state lines.
 """
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from app.db.session import Base
 
 
@@ -72,3 +72,34 @@ class RodsLog(Base):
     signature = Column(Text, nullable=False)  # base64 PNG data URL
     signed_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, nullable=False)
+
+
+class LdDay(Base):
+    """One row per driver per day on a long-distance trip, for payroll.
+
+    The driver marks whether a given day was spent out of town (drives $50/day
+    per-diem, incorporated into the client's long-distance fee) and/or a drive
+    day (drive time is paid a fixed amount off-app). This exists so admin can
+    tally per-diem owed and drive days per employee from the sheet — the app
+    doesn't compute the fixed drive-pay dollar figure. Upserted by (driver, date).
+    """
+
+    __tablename__ = "long_distance_days"
+
+    id = Column(Integer, primary_key=True, index=True)
+    day_id = Column(String, unique=True, index=True, nullable=False)  # device UUID
+
+    driver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    driver_name = Column(String, nullable=False)
+
+    # Optional link to the job the trip is for.
+    job_uuid = Column(String, index=True, nullable=True)
+    job_name = Column(String, nullable=True)
+
+    date = Column(String, nullable=False, index=True)  # YYYY-MM-DD
+
+    out_of_town = Column(Boolean, nullable=False, default=False)
+    drive_day = Column(Boolean, nullable=False, default=False)
+
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)

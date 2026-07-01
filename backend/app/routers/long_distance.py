@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
-from app.db.models.long_distance import PriorOnDutyStatement, RodsLog
+from app.db.models.long_distance import LdDay, PriorOnDutyStatement, RodsLog
 from app.db.models.user import User
 from app.integrations.sheets_export import (
+    export_ld_day_to_sheets,
     export_prior_hours_to_sheets,
     export_rods_to_sheets,
     run_export_in_background,
@@ -217,3 +219,90 @@ def list_my_rods(
         q = q.filter(RodsLog.log_date == log_date)
     rows = q.order_by(RodsLog.created_at.desc()).limit(50).all()
     return [_rods_to_response(r) for r in rows]
+
+
+# ── Per-diem / drive-day (payroll) ────────────────────────────────────────
+
+
+class LdDayIn(BaseModel):
+    day_id: str
+    date: str                       # YYYY-MM-DD
+    job_uuid: str | None = ""
+    job_name: str | None = ""
+    out_of_town: bool = False
+    drive_day: bool = False
+
+
+def _ld_to_dict(r: LdDay) -> dict:
+    return {
+        "day_id": r.day_id,
+        "date": r.date,
+        "job_uuid": r.job_uuid or "",
+        "job_name": r.job_name or "",
+        "driver_name": r.driver_name,
+        "out_of_town": bool(r.out_of_town),
+        "drive_day": bool(r.drive_day),
+        "per_diem": 50.0 if r.out_of_town else 0.0,
+        "created_at": r.created_at.isoformat() if r.created_at else "",
+        "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+    }
+
+
+@router.post("/day")
+def upsert_ld_day(
+    body: LdDayIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mark whether a day was out of town / a drive day. Upsert by (driver, date)."""
+    now = datetime.now(timezone.utc)
+    row = (
+        db.query(LdDay)
+        .filter(LdDay.driver_id == current_user.id, LdDay.date == body.date)
+        .first()
+    )
+    if row is not None:
+        row.out_of_town = body.out_of_town
+        row.drive_day = body.drive_day
+        if body.job_uuid:
+            row.job_uuid = body.job_uuid
+        if body.job_name:
+            row.job_name = body.job_name
+        row.updated_at = now
+    else:
+        row = LdDay(
+            day_id=body.day_id,
+            driver_id=current_user.id,
+            driver_name=current_user.name or current_user.email or "",
+            job_uuid=body.job_uuid or None,
+            job_name=body.job_name or None,
+            date=body.date,
+            out_of_town=body.out_of_town,
+            drive_day=body.drive_day,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    run_export_in_background(export_ld_day_to_sheets, _ld_to_dict(row))
+    return {"ok": True, "day": _ld_to_dict(row)}
+
+
+@router.get("/day")
+def list_ld_days(
+    job_uuid: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List day records. Filtered by job_uuid it returns every crew member's
+    days for that trip (for the Report per-diem tally); otherwise the current
+    driver's own days."""
+    q = db.query(LdDay)
+    if job_uuid:
+        q = q.filter(LdDay.job_uuid == job_uuid)
+    else:
+        q = q.filter(LdDay.driver_id == current_user.id)
+    rows = q.order_by(LdDay.date.desc()).limit(200).all()
+    return {"ok": True, "days": [_ld_to_dict(r) for r in rows]}

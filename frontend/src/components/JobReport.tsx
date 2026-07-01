@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
+import { type LdDay, fetchTripDays } from "../lib/ldDayStore";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime } from "../lib/time";
@@ -137,6 +138,26 @@ type Props = {
 export default function JobReport({ jobUuid, jobName, events = [], longDistance = false }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
+
+  // Long-distance per-diem / drive-day tally for this trip (payroll reminder).
+  const [ldDays, setLdDays] = useState<LdDay[]>([]);
+  useEffect(() => {
+    if (!longDistance || !jobUuid) return;
+    let cancelled = false;
+    fetchTripDays(jobUuid).then((d) => { if (!cancelled) setLdDays(d); });
+    return () => { cancelled = true; };
+  }, [longDistance, jobUuid]);
+  const ldPay = useMemo(() => {
+    const by = new Map<string, { out: number; drive: number }>();
+    for (const d of ldDays) {
+      const name = d.driver_name || "Unknown";
+      const cur = by.get(name) || { out: 0, drive: 0 };
+      if (d.out_of_town) cur.out += 1;
+      if (d.drive_day) cur.drive += 1;
+      by.set(name, cur);
+    }
+    return [...by.entries()].map(([name, v]) => ({ name, ...v, perDiem: v.out * 50 })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [ldDays]);
   const { settings: themeSettings } = useTheme();
   const ht = themeSettings.helpTexts;
 
@@ -776,6 +797,26 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               <div style={{ fontWeight: 700 }}>Bill(s) of Lading</div>
               <div className="small" style={{ color: "var(--muted)" }}>Build + sign the declared inventory for this job.</div>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Long-distance pay tally (payroll reminder for admin). */}
+      {longDistance && ldPay.length > 0 && (
+        <div className="card">
+          <div className="sectionTitle">Long-distance pay — this trip</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+            $50 per-diem per day out of town. Drive days are logged for the fixed drive pay (paid separately).
+          </div>
+          <div className="col" style={{ gap: 6 }}>
+            {ldPay.map((p) => (
+              <div key={p.name} className="row" style={{ justifyContent: "space-between", gap: 8, fontSize: 14, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                <span style={{ fontWeight: 700 }}>{p.name}</span>
+                <span className="small" style={{ color: "var(--muted)" }}>
+                  {p.out} day{p.out === 1 ? "" : "s"} out → ${p.perDiem} · {p.drive} drive day{p.drive === 1 ? "" : "s"}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       )}

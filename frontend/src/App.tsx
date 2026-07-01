@@ -4,6 +4,7 @@ import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
 import RodsRecorder from "./components/RodsRecorder";
+import LdDayCard from "./components/LdDayCard";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
@@ -1920,7 +1921,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* Long-distance: tap-to-timestamp duty recorder (RODS) */}
+          {/* Long-distance: per-diem/drive-day marker + tap duty recorder (RODS) */}
+          {longDistance && <LdDayCard />}
           {longDistance && <RodsRecorder />}
 
           <div className="card">

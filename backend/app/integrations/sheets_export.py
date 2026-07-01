@@ -1259,6 +1259,49 @@ def export_rods_to_sheets(db: Session, rods: Dict[str, Any]) -> int:
     return 1
 
 
+# ── Long-distance per-diem / drive-day (payroll) ─────────────────────────────
+
+LD_DAY_HEADERS = [
+    "day_id", "date", "driver_name", "job_name", "job_uuid",
+    "out_of_town", "drive_day", "per_diem", "updated_at",
+]
+
+
+def export_ld_day_to_sheets(db: Session, day: Dict[str, Any]) -> int:
+    """One row per driver/day (replace-style, upserted). Admin tallies per-diem
+    ($50 × out-of-town days) and drive days per employee from this tab."""
+    tab = os.getenv("SHEETS_LD_PAY_TAB", "LongDistancePay").strip() or "LongDistancePay"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    key = day.get("day_id", "")
+    if not key:
+        return 0
+
+    row = {
+        "day_id": key,
+        "date": day.get("date", ""),
+        "driver_name": day.get("driver_name", ""),
+        "job_name": day.get("job_name", "") or "",
+        "job_uuid": day.get("job_uuid", "") or "",
+        "out_of_town": "Yes" if day.get("out_of_town") else "No",
+        "drive_day": "Yes" if day.get("drive_day") else "No",
+        "per_diem": day.get("per_diem", 0),
+        "updated_at": _iso(day.get("updated_at")),
+    }
+
+    svc = _get_sheets_svc(db)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "day_id", key)
+    db.execute(
+        text("DELETE FROM sheet_generic_exports WHERE kind = 'ld_day' AND export_key = :k"),
+        {"k": key},
+    )
+    db.commit()
+
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, LD_DAY_HEADERS))
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, actual_headers)])
+    _generic_mark_exported(db, "ld_day", [key])
+    return 1
+
+
 # ── Estimates ────────────────────────────────────────────────────────────────
 
 ESTIMATE_HEADERS = [
