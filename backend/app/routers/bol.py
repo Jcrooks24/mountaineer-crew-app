@@ -14,10 +14,11 @@ on the bounded background pool so a slow Google call never blocks the request.
 """
 
 import json
+import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models.bol import DigitalBOL
 from app.integrations.sheets_export import export_bol_to_sheets, run_export_in_background
+from app.integrations.drive_upload import upload_bol_pdf_to_drive
 from app.core.deps import get_current_user
 from app.db.models.user import User
 
@@ -57,11 +59,17 @@ class BOLIn(BaseModel):
 
 def _to_dict(row: DigitalBOL) -> Dict[str, Any]:
     """Serialize a BOL row for the API response and the sheets export.
-    items_json is spliced through as parsed JSON."""
+    items_json is spliced through as parsed JSON. Raw signature data URLs are
+    NOT returned (bandwidth) — only booleans + timestamps so a second device
+    reopening at destination can see that origin was already signed."""
     try:
         items = json.loads(row.items_json or "[]")
     except Exception:
         items = []
+    try:
+        shipment = json.loads(row.shipment_json) if row.shipment_json else {}
+    except Exception:
+        shipment = {}
     return {
         "id": row.bol_id,
         "bol_id": row.bol_id,
@@ -71,6 +79,14 @@ def _to_dict(row: DigitalBOL) -> Dict[str, Any]:
         "job_date": row.job_date or "",
         "status": row.status or "draft",
         "items": items,
+        "shipment": shipment,
+        "origin_signed": bool(row.origin_shipper_sig or row.origin_carrier_sig),
+        "destination_signed": bool(row.dest_shipper_sig or row.dest_carrier_sig),
+        "origin_signed_at": row.origin_signed_at.isoformat() if row.origin_signed_at else "",
+        "dest_signed_at": row.dest_signed_at.isoformat() if row.dest_signed_at else "",
+        "walkthrough_notes": row.walkthrough_notes or "",
+        "final_charges": float(row.final_charges) if row.final_charges is not None else None,
+        "signed_pdf_url": row.signed_pdf_url or "",
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else "",
     }
@@ -158,3 +174,116 @@ def get_bols(
         q = q.filter(DigitalBOL.job_uuid == job_uuid)
     rows = q.order_by(DigitalBOL.created_at.desc()).limit(limit).all()
     return {"ok": True, "bols": [_to_dict(r) for r in rows]}
+
+
+class BOLSignIn(BaseModel):
+    phase: str                               # "origin" | "destination"
+    shipper_sig: str                         # base64 PNG data URL
+    carrier_sig: str                         # base64 PNG data URL
+    signed_at: Optional[str] = None
+    # origin extras (stored in shipment_json)
+    actual_pickup_date: Optional[str] = None
+    vehicle: Optional[str] = None
+    # destination extras
+    walkthrough_notes: Optional[str] = None
+    final_charges: Optional[float] = None
+
+
+@router.patch("/{bol_id}/sign")
+def sign_bol(
+    bol_id: str,
+    payload: BOLSignIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Apply a signing session (origin or destination) to a BOL. Mirrors DVIR's
+    two-signatory flow: origin (shipper + carrier rep before loading), then
+    destination (shipper + carrier rep on delivery). Signatures are base64 PNG
+    data URLs, stored alongside the record."""
+    row = db.query(DigitalBOL).filter(DigitalBOL.bol_id == bol_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="BOL not found")
+
+    try:
+        ts = datetime.fromisoformat((payload.signed_at or "").replace("Z", "+00:00")) if payload.signed_at else datetime.now(timezone.utc)
+    except Exception:
+        ts = datetime.now(timezone.utc)
+
+    if payload.phase == "origin":
+        row.origin_shipper_sig = payload.shipper_sig
+        row.origin_carrier_sig = payload.carrier_sig
+        row.origin_signed_at = ts
+        row.status = "origin_signed"
+        try:
+            shipment = json.loads(row.shipment_json) if row.shipment_json else {}
+        except Exception:
+            shipment = {}
+        if payload.actual_pickup_date:
+            shipment["actual_pickup_date"] = payload.actual_pickup_date
+        if payload.vehicle:
+            shipment["vehicle"] = payload.vehicle
+        row.shipment_json = json.dumps(shipment)
+    elif payload.phase == "destination":
+        row.dest_shipper_sig = payload.shipper_sig
+        row.dest_carrier_sig = payload.carrier_sig
+        row.dest_signed_at = ts
+        if payload.walkthrough_notes is not None:
+            row.walkthrough_notes = payload.walkthrough_notes
+        if payload.final_charges is not None:
+            row.final_charges = payload.final_charges
+        row.status = "delivered"
+    else:
+        raise HTTPException(status_code=400, detail="phase must be 'origin' or 'destination'")
+
+    row.updated_at = datetime.now(timezone.utc)
+    try:
+        db.commit()
+        db.refresh(row)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save signatures")
+
+    bol_dict = _to_dict(row)
+    run_export_in_background(export_bol_to_sheets, bol_dict)
+    print(f"[bol] signed bol_id={row.bol_id} phase={payload.phase} status={row.status}")
+    return {"ok": True, "bol": bol_dict}
+
+
+@router.post("/{bol_id}/pdf")
+def upload_bol_pdf(
+    bol_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Store the on-device-generated signed BOL PDF in its own Drive folder
+    (named "<date> - <Job Name>.pdf") and record the link. Idempotent-ish: a
+    re-upload just points signed_pdf_url at the newest file."""
+    row = db.query(DigitalBOL).filter(DigitalBOL.bol_id == bol_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="BOL not found")
+
+    try:
+        result = upload_bol_pdf_to_drive(
+            db=db,
+            file_obj=file.file,
+            job_name=row.job_name or "",
+            job_date=row.job_date or "",
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+    row.signed_pdf_drive_id = result["file_id"]
+    row.signed_pdf_url = result["url"]
+    row.updated_at = datetime.now(timezone.utc)
+    try:
+        db.commit()
+        db.refresh(row)
+    except SQLAlchemyError:
+        db.rollback()
+        return {"ok": False, "error": "Failed to save PDF link"}
+
+    run_export_in_background(export_bol_to_sheets, _to_dict(row))
+    print(f"[bol] pdf uploaded bol_id={row.bol_id} url={row.signed_pdf_url}")
+    return {"ok": True, "drive_url": result["url"]}

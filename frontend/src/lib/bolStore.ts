@@ -60,6 +60,32 @@ export type BOLDraft = {
   status: BOLStatus;
   items: BOLItem[];
   updated_at: string;       // ISO
+  // Crew rep (informational; server records the authenticated user).
+  crew_rep?: string;
+  // ── Signing (Push 2) — base64 PNG data URLs kept in the local draft so the
+  // PDF can be (re)generated on-device, even offline. ──
+  origin_shipper_sig?: string;
+  origin_carrier_sig?: string;
+  origin_signed_at?: string;
+  actual_pickup_date?: string;
+  vehicle?: string;
+  dest_shipper_sig?: string;
+  dest_carrier_sig?: string;
+  dest_signed_at?: string;
+  walkthrough_notes?: string;
+  final_charges?: number | null;
+  signed_pdf_url?: string;
+};
+
+export type SignInput = {
+  phase: "origin" | "destination";
+  shipper_sig: string;
+  carrier_sig: string;
+  signed_at: string;
+  actual_pickup_date?: string;
+  vehicle?: string;
+  walkthrough_notes?: string;
+  final_charges?: number | null;
 };
 
 // ── Active-job autofill (written by the main timeline app) ────────────────────
@@ -175,20 +201,27 @@ export function newDraft(job: { job_uuid: string; job_name: string; job_date: st
 
 const QUEUE_KEY = "crew_bol_queue_v1";
 
-type QueuedBOL = { bol_id: string; payload: Record<string, unknown> };
+// Heterogeneous op queue: inventory upsert, a signing session, or a
+// (re)generate-and-upload of the signed PDF. Drained in order on reconnect.
+type QueueOp =
+  | { op: "submit"; bol_id: string; payload: Record<string, unknown> }
+  | { op: "sign"; bol_id: string; payload: Record<string, unknown> }
+  | { op: "pdf"; bol_id: string; job_uuid: string };
 
-function loadQueue(): QueuedBOL[] {
+function loadQueue(): QueueOp[] {
   try {
     const raw = localStorage.getItem(QUEUE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as QueuedBOL[];
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = JSON.parse(raw) as QueueOp[];
+    if (!Array.isArray(parsed)) return [];
+    // Back-compat: Push-1 entries had no `op` field (were plain submits).
+    return parsed.map((o) => (o && (o as any).op ? o : ({ op: "submit", ...(o as any) } as QueueOp)));
   } catch {
     return [];
   }
 }
 
-function saveQueue(q: QueuedBOL[]): void {
+function saveQueue(q: QueueOp[]): void {
   try {
     localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
   } catch {}
@@ -217,12 +250,28 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
   };
 }
 
-/** Queue the current draft as an upsert. A re-save replaces any queued payload
- * for the same bol_id (upsert — no point sending stale intermediate states). */
+/** Queue the current draft as an upsert. A re-save replaces any queued SUBMIT
+ * for the same bol_id (upsert — no point sending stale intermediate states);
+ * queued sign/pdf ops are preserved. */
 export function enqueueSubmit(d: BOLDraft): void {
   const payload = draftToPayload(d);
-  const q = loadQueue().filter((x) => x.bol_id !== d.bol_id);
-  q.push({ bol_id: d.bol_id, payload });
+  const q = loadQueue().filter((x) => !(x.op === "submit" && x.bol_id === d.bol_id));
+  q.push({ op: "submit", bol_id: d.bol_id, payload });
+  saveQueue(q);
+}
+
+/** Queue a signing session (origin/destination). */
+function enqueueSign(bolId: string, payload: Record<string, unknown>): void {
+  const q = loadQueue();
+  q.push({ op: "sign", bol_id: bolId, payload });
+  saveQueue(q);
+}
+
+/** Queue a (re)generate-and-upload of the signed PDF. A later pdf op replaces
+ * an earlier queued one for the same bol_id (only the latest state matters). */
+function enqueuePdf(bolId: string, jobUuid: string): void {
+  const q = loadQueue().filter((x) => !(x.op === "pdf" && x.bol_id === bolId));
+  q.push({ op: "pdf", bol_id: bolId, job_uuid: jobUuid });
   saveQueue(q);
 }
 
@@ -230,23 +279,55 @@ export function pendingSubmitCount(): number {
   return loadQueue().length;
 }
 
+async function uploadBolPdfBlob(bolId: string, blob: Blob): Promise<void> {
+  const form = new FormData();
+  form.append("file", blob, "bol.pdf");
+  const token = getToken() || "";
+  const res = await fetch(`${API}/api/bol/${encodeURIComponent(bolId)}/pdf`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    const err = new ApiError(res.status, json);
+    throw err;
+  }
+}
+
 // Guard against overlapping drains (online + mount can fire together).
 let syncing = false;
 
-/** Drain the submit queue. Transient failures (offline / 5xx / 408 / auth) stay
- * queued for retry; permanent 4xx are dropped so one bad payload can't wedge
- * the queue. Returns how many were confirmed this run. */
+/** Drain the op queue in order: inventory upserts, signing sessions, and PDF
+ * (re)generation+upload. Transient failures (offline / 5xx / 408 / auth) stay
+ * queued for retry; permanent 4xx are dropped so one bad op can't wedge the
+ * queue. Returns how many ops were confirmed this run. */
 export async function syncQueue(): Promise<number> {
   if (!navigator.onLine || syncing) return 0;
   syncing = true;
   try {
     const q = loadQueue();
     if (q.length === 0) return 0;
-    const remaining: QueuedBOL[] = [];
+    const remaining: QueueOp[] = [];
     let synced = 0;
     for (const op of q) {
       try {
-        await apiFetch("/api/bol", { method: "POST", body: JSON.stringify(op.payload) });
+        if (op.op === "submit") {
+          await apiFetch("/api/bol", { method: "POST", body: JSON.stringify(op.payload) });
+        } else if (op.op === "sign") {
+          await apiFetch(`/api/bol/${encodeURIComponent(op.bol_id)}/sign`, {
+            method: "PATCH",
+            body: JSON.stringify(op.payload),
+          });
+        } else {
+          // pdf: regenerate from the persisted draft, then upload. Skip (drop)
+          // if the draft is gone or no longer matches this bol_id.
+          const d = loadDraft(op.job_uuid);
+          if (!d || d.bol_id !== op.bol_id) { synced++; continue; }
+          const { generateBolPdf } = await import("./bolPdf");
+          const blob = await generateBolPdf(d);
+          await uploadBolPdfBlob(op.bol_id, blob);
+        }
         synced++;
       } catch (e) {
         const isPermanent =
@@ -257,7 +338,7 @@ export async function syncQueue(): Promise<number> {
           e.status !== 401 &&
           e.status !== 403;
         if (isPermanent) {
-          console.warn(`[bol] dropping poison-pill submit (${op.bol_id}): ${e instanceof Error ? e.message : e}`);
+          console.warn(`[bol] dropping poison-pill ${op.op} (${op.bol_id}): ${e instanceof Error ? e.message : e}`);
         } else {
           remaining.push(op);
         }
@@ -268,6 +349,59 @@ export async function syncQueue(): Promise<number> {
   } finally {
     syncing = false;
   }
+}
+
+/** Apply a signing session to the draft: store the signatures/extras + advance
+ * status, persist, and queue the sign PATCH + a PDF (re)generation. Returns the
+ * updated draft. The caller separately generates the on-device PDF to hand the
+ * client a copy at signing time (works offline). */
+export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
+  const now = new Date().toISOString();
+  let updated: BOLDraft;
+  if (input.phase === "origin") {
+    updated = {
+      ...draft,
+      origin_shipper_sig: input.shipper_sig,
+      origin_carrier_sig: input.carrier_sig,
+      origin_signed_at: input.signed_at,
+      actual_pickup_date: input.actual_pickup_date || draft.actual_pickup_date,
+      vehicle: input.vehicle || draft.vehicle,
+      status: "origin_signed",
+      updated_at: now,
+    };
+  } else {
+    updated = {
+      ...draft,
+      dest_shipper_sig: input.shipper_sig,
+      dest_carrier_sig: input.carrier_sig,
+      dest_signed_at: input.signed_at,
+      walkthrough_notes: input.walkthrough_notes ?? draft.walkthrough_notes,
+      final_charges: input.final_charges ?? draft.final_charges,
+      status: "delivered",
+      updated_at: now,
+    };
+  }
+  saveDraft(updated);
+
+  const signPayload: Record<string, unknown> = {
+    phase: input.phase,
+    shipper_sig: input.shipper_sig,
+    carrier_sig: input.carrier_sig,
+    signed_at: input.signed_at,
+  };
+  if (input.phase === "origin") {
+    signPayload.actual_pickup_date = input.actual_pickup_date || "";
+    signPayload.vehicle = input.vehicle || "";
+  } else {
+    signPayload.walkthrough_notes = input.walkthrough_notes || "";
+    if (input.final_charges != null) signPayload.final_charges = input.final_charges;
+  }
+  // Make sure the latest inventory is on the server before the signature, then
+  // queue the sign, then the PDF (regenerated from the now-signed draft).
+  enqueueSubmit(updated);
+  enqueueSign(updated.bol_id, signPayload);
+  enqueuePdf(updated.bol_id, updated.job_uuid);
+  return updated;
 }
 
 // ── Photos ───────────────────────────────────────────────────────────────────

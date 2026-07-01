@@ -369,6 +369,84 @@ def upload_file_to_drive(
     }
 
 
+# ── Signed Bill of Lading PDF uploader ───────────────────────────────────────
+
+BOL_FOLDER_KEY = "drive_bol_folder_id"
+DEFAULT_BOL_FOLDER_NAME = "Signed Bills of Lading"
+
+
+def _get_bol_folder_id(svc, db: Optional[Session]) -> str:
+    """Resolve (and cache) the dedicated top-level folder for signed BOL PDFs.
+    Overridable via DRIVE_BOL_FOLDER_NAME."""
+    folder_name = os.getenv("DRIVE_BOL_FOLDER_NAME", DEFAULT_BOL_FOLDER_NAME).strip() or DEFAULT_BOL_FOLDER_NAME
+
+    if db:
+        row = db.execute(
+            text("SELECT value FROM system_config WHERE key = :key"),
+            {"key": BOL_FOLDER_KEY},
+        ).fetchone()
+        if row and row[0]:
+            return row[0]
+
+    folder_id = _get_or_create_folder(svc, folder_name)
+
+    if db:
+        db.execute(
+            text(
+                "INSERT INTO system_config(key, value) VALUES(:key, :val) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            ),
+            {"key": BOL_FOLDER_KEY, "val": folder_id},
+        )
+        db.commit()
+
+    return folder_id
+
+
+def upload_bol_pdf_to_drive(
+    db: Session,
+    file_obj: BinaryIO,
+    job_name: str,
+    job_date: str,
+) -> dict:
+    """Upload a signed Bill of Lading PDF to its own top-level Drive folder,
+    named "<job_date> - <job_name>.pdf" (date first, per the spec). Publicly
+    readable so the office can open it from the Sheet link without a login.
+    Returns {"file_id": "...", "url": "..."}."""
+    svc = _get_drive_service(db)
+    parent_id = _get_bol_folder_id(svc, db)
+
+    safe_name = _safe(job_name or "Unknown Job")
+    safe_date = (job_date or "").strip()
+    base = f"{safe_date} - {safe_name}" if safe_date else safe_name
+    drive_filename = (base[:150] or "Bill of Lading") + ".pdf"
+
+    print(f"[drive] uploading signed BOL '{drive_filename}'")
+
+    file_obj.seek(0)
+    media = MediaIoBaseUpload(
+        file_obj,
+        mimetype="application/pdf",
+        resumable=True,
+        chunksize=DRIVE_UPLOAD_CHUNK_SIZE,
+    )
+    request = svc.files().create(
+        body={"name": drive_filename, "parents": [parent_id]},
+        media_body=media,
+        fields="id, webViewLink",
+    )
+    result = _execute_resumable(request)
+    file_id = result["id"]
+
+    svc.permissions().create(
+        fileId=file_id,
+        body={"type": "anyone", "role": "reader"},
+        fields="id",
+    ).execute()
+
+    return {"file_id": file_id, "url": result.get("webViewLink", "")}
+
+
 def delete_drive_file(db: Session, file_id: str) -> None:
     svc = _get_drive_service(db)
     svc.files().delete(fileId=file_id).execute()

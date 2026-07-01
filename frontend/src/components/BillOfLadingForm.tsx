@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { BetaTag } from "./BetaTag";
+import SignaturePad, { type SignaturePadHandle } from "./SignaturePad";
 import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
 import {
+  applySignature,
   type BOLDraft,
   type BOLItem,
+  type SignInput,
   captureItemPhoto,
   enqueueSubmit,
   loadDraft,
@@ -17,6 +20,29 @@ import {
   saveDraft,
   syncQueue,
 } from "../lib/bolStore";
+
+/** Hand the shipper their dated copy: Web Share (with file) if available,
+ * otherwise a download. Works offline. */
+async function deliverPdfToClient(blob: Blob, filename: string): Promise<void> {
+  try {
+    const file = new File([blob], filename, { type: "application/pdf" });
+    const navAny = navigator as any;
+    if (navAny.canShare && navAny.canShare({ files: [file] }) && navAny.share) {
+      await navAny.share({ files: [file], title: filename });
+      return;
+    }
+  } catch {
+    /* share cancelled / unsupported — fall through to download */
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
 
 // Static carrier block — from the Mountaineer Moving Bill of Lading template.
 // Autofilled onto every BOL (federal law requires it to appear; §375.505(b)(1)).
@@ -71,6 +97,17 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [busyPhotoItem, setBusyPhotoItem] = useState<number | null>(null);
+
+  // Signing state
+  const shipperSigRef = useRef<SignaturePadHandle>(null);
+  const carrierSigRef = useRef<SignaturePadHandle>(null);
+  const [pickupDate, setPickupDate] = useState(draft.actual_pickup_date || todayLocal());
+  const [vehicle, setVehicle] = useState(draft.vehicle || "");
+  const [walkNotes, setWalkNotes] = useState(draft.walkthrough_notes || "");
+  const [finalCharges, setFinalCharges] = useState(draft.final_charges != null ? String(draft.final_charges) : "");
+  const [consent, setConsent] = useState(false);
+  const [signBusy, setSignBusy] = useState(false);
+  const [signErr, setSignErr] = useState<string | null>(null);
 
   // Autosave the draft on every change.
   useEffect(() => {
@@ -173,6 +210,62 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
         : "Saved on this device — will sync when back online.",
     );
     window.setTimeout(() => setSavedNote(null), 4000);
+  }
+
+  function pdfFilename(d: BOLDraft): string {
+    const date = (d.job_date || todayLocal()).slice(0, 10);
+    const name = (d.job_name || "Bill of Lading").replace(/[\\/:*?"<>|]/g, "-").trim();
+    return `${date} - ${name}.pdf`;
+  }
+
+  async function signSession(phase: "origin" | "destination") {
+    setSignErr(null);
+    if (draft.items.length === 0) return setSignErr("Add at least one item before signing.");
+    if (shipperSigRef.current?.isEmpty()) return setSignErr("Shipper signature is required.");
+    if (carrierSigRef.current?.isEmpty()) return setSignErr("Carrier representative signature is required.");
+    if (!consent) return setSignErr("Both parties must accept the electronic signature consent.");
+    if (phase === "destination") {
+      if (finalCharges.trim() && !Number.isFinite(Number(finalCharges))) return setSignErr("Final charges must be a number.");
+    }
+
+    setSignBusy(true);
+    try {
+      const input: SignInput = {
+        phase,
+        shipper_sig: shipperSigRef.current!.toDataURL(),
+        carrier_sig: carrierSigRef.current!.toDataURL(),
+        signed_at: new Date().toISOString(),
+        ...(phase === "origin"
+          ? { actual_pickup_date: pickupDate || undefined, vehicle: vehicle.trim() || undefined }
+          : { walkthrough_notes: walkNotes.trim() || undefined, final_charges: finalCharges.trim() ? Number(finalCharges) : null }),
+      };
+      // Persist signatures + status, queue the sign PATCH + PDF upload.
+      const updated = applySignature({ ...draft, crew_rep: crewRep }, input);
+      setDraft(updated);
+
+      // Generate the PDF on-device and hand the client a dated copy (works offline).
+      const { generateBolPdf } = await import("../lib/bolPdf");
+      const blob = await generateBolPdf(updated);
+      await deliverPdfToClient(blob, pdfFilename(updated));
+
+      // Reset pads + consent for any subsequent session.
+      shipperSigRef.current?.clear();
+      carrierSigRef.current?.clear();
+      setConsent(false);
+
+      // Push to the server (or leave queued if offline).
+      const synced = await syncQueue();
+      setSavedNote(
+        synced > 0 && pendingSubmitCount() === 0
+          ? `${phase === "origin" ? "Origin" : "Delivery"} signing complete — copy delivered and synced.`
+          : `${phase === "origin" ? "Origin" : "Delivery"} signing saved — copy delivered; will sync when back online.`,
+      );
+      window.setTimeout(() => setSavedNote(null), 5000);
+    } catch {
+      setSignErr("Could not complete signing. Your data is saved — try again.");
+    } finally {
+      setSignBusy(false);
+    }
   }
 
   const totalPieces = draft.items.reduce((s, it) => s + it.qty, 0);
@@ -355,10 +448,10 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
         )}
       </div>
 
-      {/* Save */}
+      {/* Save inventory */}
       <div className="card">
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
-          Signing and the printable PDF are coming in the next update. For now, save the inventory — it syncs to the office sheet and works offline.
+          Save the inventory as you build it — it syncs to the office sheet and works offline. Signing is below.
         </div>
         {savedNote && (
           <div className="small" style={{ color: "var(--ok)", marginBottom: 10 }}>{savedNote}</div>
@@ -368,9 +461,113 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
           <button className="btnPrimary" onClick={save}>Save Inventory</button>
         </div>
       </div>
+
+      {/* Signing */}
+      {draft.status === "delivered" ? (
+        <div className="card">
+          <div className="sectionTitle">Signing Complete</div>
+          <div className="small" style={{ color: "var(--ok)", marginBottom: 10 }}>
+            ✓ Origin and destination signed. The signed Bill of Lading has been delivered to the shipper and stored.
+          </div>
+          {draft.signed_pdf_url && (
+            <a href={draft.signed_pdf_url} target="_blank" rel="noreferrer" className="small" style={{ color: "var(--brand)" }}>
+              Open signed PDF in Drive →
+            </a>
+          )}
+          <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+            <button
+              onClick={async () => {
+                const { generateBolPdf } = await import("../lib/bolPdf");
+                await deliverPdfToClient(await generateBolPdf(draft), pdfFilename(draft));
+              }}
+            >
+              Download a copy
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="card">
+          <div className="sectionTitle">
+            {draft.status === "origin_signed" ? "Destination Signing — upon delivery" : "Origin Signing — before loading"}
+          </div>
+
+          {draft.status === "origin_signed" ? (
+            <>
+              <div className="small" style={{ color: "var(--ok)", marginBottom: 10 }}>
+                ✓ Origin signed{draft.origin_signed_at ? ` on ${new Date(draft.origin_signed_at).toLocaleDateString()}` : ""}. Complete the final walk-through, then sign at delivery.
+              </div>
+              <label className="col" style={{ gap: 4, marginBottom: 10 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Walk-through notes / damage noted (write NONE if applicable)</span>
+                <textarea rows={2} value={walkNotes} onChange={(e) => setWalkNotes(e.target.value)} />
+              </label>
+              <label className="col" style={{ gap: 4, marginBottom: 12, maxWidth: 200 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Final actual charges ($)</span>
+                <input value={finalCharges} onChange={(e) => setFinalCharges(e.target.value)} inputMode="decimal" placeholder="0.00" />
+              </label>
+            </>
+          ) : (
+            <div className="row wrap" style={{ gap: 10, marginBottom: 12 }}>
+              <label className="col" style={{ gap: 4, flex: "1 1 150px" }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Actual pickup date</span>
+                <input type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} />
+              </label>
+              <label className="col" style={{ gap: 4, flex: "1 1 150px" }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Vehicle (unit / plate)</span>
+                <input value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="Truck 1 / ABC-123" />
+              </label>
+            </div>
+          )}
+
+          <div className="col" style={{ gap: 4, marginBottom: 12 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Shipper signature *</span>
+            <SignaturePad ref={shipperSigRef} height={130} />
+            <button type="button" onClick={() => shipperSigRef.current?.clear()} style={clearSigStyle}>Clear</button>
+          </div>
+
+          <div className="col" style={{ gap: 4, marginBottom: 12 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Carrier representative signature * ({crewRep || "you"})</span>
+            <SignaturePad ref={carrierSigRef} height={130} />
+            <button type="button" onClick={() => carrierSigRef.current?.clear()} style={clearSigStyle}>Clear</button>
+          </div>
+
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 13, marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+              style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+            />
+            <span style={{ lineHeight: 1.5, color: "var(--text)" }}>
+              Both parties agree their electronic signature is legally binding and equivalent to a handwritten signature for this Bill of Lading, and the shipper affirms the certifications in Section 16.
+            </span>
+          </label>
+
+          {signErr && (
+            <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 10 }}>{signErr}</div>
+          )}
+
+          <button className="btnPrimary" disabled={signBusy} onClick={() => signSession(draft.status === "origin_signed" ? "destination" : "origin")}>
+            {signBusy
+              ? "Signing…"
+              : draft.status === "origin_signed"
+                ? "Sign at delivery & give copy"
+                : "Sign at origin & give copy"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
+
+const clearSigStyle: React.CSSProperties = {
+  alignSelf: "flex-start",
+  background: "none",
+  border: "none",
+  color: "var(--muted)",
+  fontSize: 12,
+  cursor: "pointer",
+  padding: 0,
+};
 
 function PhotoButton({ busy, onPick }: { busy: boolean; onPick: (file: File | undefined) => void }) {
   const ref = useRef<HTMLInputElement>(null);

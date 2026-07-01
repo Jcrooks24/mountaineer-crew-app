@@ -1267,7 +1267,10 @@ ESTIMATE_ITEM_HEADERS = [
 # strategy (delete-before-write by bol_id), same as estimates.
 BOL_HEADERS = [
     "bol_id", "created_by", "job_uuid", "job_name", "job_date",
-    "status", "item_count", "created_at", "updated_at",
+    "status", "item_count",
+    "origin_signed_at", "dest_signed_at", "final_charges",
+    "walkthrough_notes", "signed_pdf_url",
+    "created_at", "updated_at",
 ]
 
 BOL_ITEM_HEADERS = [
@@ -1486,6 +1489,11 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
         "job_date": bol.get("job_date", "") or "",
         "status": bol.get("status", "") or "",
         "item_count": sum(int(it.get("qty", 1) or 1) for it in items),
+        "origin_signed_at": _iso(bol.get("origin_signed_at")) if bol.get("origin_signed_at") else "",
+        "dest_signed_at": _iso(bol.get("dest_signed_at")) if bol.get("dest_signed_at") else "",
+        "final_charges": bol.get("final_charges") if bol.get("final_charges") is not None else "",
+        "walkthrough_notes": bol.get("walkthrough_notes", "") or "",
+        "signed_pdf_url": bol.get("signed_pdf_url", "") or "",
         "created_at": _iso(bol.get("created_at")),
         "updated_at": updated_at,
     }
