@@ -283,6 +283,8 @@ def upload_bol_pdf(
             file_obj=file.file,
             job_name=row.job_name or "",
             job_date=row.job_date or "",
+            # Replace the pre-delivery copy in place instead of adding a 2nd file.
+            existing_file_id=row.signed_pdf_drive_id or None,
         )
     except Exception as e:
         traceback.print_exc()

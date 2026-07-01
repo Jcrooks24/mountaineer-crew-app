@@ -403,36 +403,62 @@ def _get_bol_folder_id(svc, db: Optional[Session]) -> str:
     return folder_id
 
 
+def _pdf_media(file_obj: BinaryIO) -> MediaIoBaseUpload:
+    file_obj.seek(0)
+    return MediaIoBaseUpload(
+        file_obj,
+        mimetype="application/pdf",
+        resumable=True,
+        chunksize=DRIVE_UPLOAD_CHUNK_SIZE,
+    )
+
+
 def upload_bol_pdf_to_drive(
     db: Session,
     file_obj: BinaryIO,
     job_name: str,
     job_date: str,
+    existing_file_id: Optional[str] = None,
 ) -> dict:
     """Upload a signed Bill of Lading PDF to its own top-level Drive folder,
     named "<job_date> - <job_name>.pdf" (date first, per the spec). Publicly
     readable so the office can open it from the Sheet link without a login.
+
+    If `existing_file_id` is given (the BOL already has a stored PDF — e.g. the
+    origin/pre-delivery copy), the file's CONTENT is replaced in place so the
+    completed document supersedes the earlier one instead of leaving two files.
+    The Drive file id and link stay stable. Falls back to creating a new file
+    if the existing one is gone (deleted/trashed).
+
     Returns {"file_id": "...", "url": "..."}."""
     svc = _get_drive_service(db)
-    parent_id = _get_bol_folder_id(svc, db)
 
     safe_name = _safe(job_name or "Unknown Job")
     safe_date = (job_date or "").strip()
     base = f"{safe_date} - {safe_name}" if safe_date else safe_name
     drive_filename = (base[:150] or "Bill of Lading") + ".pdf"
 
-    print(f"[drive] uploading signed BOL '{drive_filename}'")
+    # Replace the existing file's content in place when we have one.
+    if existing_file_id:
+        try:
+            print(f"[drive] replacing signed BOL '{drive_filename}' (file {existing_file_id})")
+            request = svc.files().update(
+                fileId=existing_file_id,
+                body={"name": drive_filename},
+                media_body=_pdf_media(file_obj),
+                fields="id, webViewLink",
+            )
+            result = _execute_resumable(request)
+            return {"file_id": result["id"], "url": result.get("webViewLink", "")}
+        except Exception as e:
+            # Old file gone/untouchable — create a fresh one below.
+            print(f"[drive] BOL pdf replace failed ({existing_file_id}); creating new: {e}")
 
-    file_obj.seek(0)
-    media = MediaIoBaseUpload(
-        file_obj,
-        mimetype="application/pdf",
-        resumable=True,
-        chunksize=DRIVE_UPLOAD_CHUNK_SIZE,
-    )
+    parent_id = _get_bol_folder_id(svc, db)
+    print(f"[drive] uploading signed BOL '{drive_filename}'")
     request = svc.files().create(
         body={"name": drive_filename, "parents": [parent_id]},
-        media_body=media,
+        media_body=_pdf_media(file_obj),
         fields="id, webViewLink",
     )
     result = _execute_resumable(request)
