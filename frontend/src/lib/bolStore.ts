@@ -200,6 +200,129 @@ export function newDraft(job: { job_uuid: string; job_name: string; job_date: st
   };
 }
 
+// ── Job selection (mirrors the Timeline tab) ──────────────────────────────────
+
+export type CalEvent = { id: string; summary: string };
+
+/** Deterministic UUID from a Google Calendar event id — identical to the
+ * Timeline's calEventToJobUuid so a job selected here shares the same job_uuid
+ * as clock-in events, materials, photos, etc. */
+export function calEventToJobUuid(calId: string): string {
+  const fnv = (s: string, seed: number): number => {
+    let h = seed >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  };
+  const a = fnv(calId, 2166136261);
+  const b = fnv(calId + "\x00", 2166136261);
+  const c = fnv(calId + "\x01", 2166136261);
+  const d = fnv(calId + "\x02", 2166136261);
+  const hex = [a, b, c, d].map((n) => n.toString(16).padStart(8, "0")).join("");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    "4" + hex.slice(13, 16),
+    ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0") + hex.slice(18, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
+/** Resolve a calendar event to its canonical job_uuid (server), falling back to
+ * the deterministic local hash offline — same as the Timeline. */
+export async function resolveJobUuid(calId: string): Promise<string> {
+  if (navigator.onLine) {
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j?.job_uuid) return j.job_uuid;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return calEventToJobUuid(calId);
+}
+
+/** Fetch the day's calendar jobs (same endpoint the Timeline uses). */
+export async function fetchCalendarDay(date: string): Promise<CalEvent[]> {
+  if (!navigator.onLine) return [];
+  const token = getToken();
+  const res = await fetch(`${API}/api/calendar/day?date=${encodeURIComponent(date)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json?.ok !== true) throw new Error(json?.detail || `Calendar HTTP ${res.status}`);
+  return (json.events || []).map((e: any) => ({ id: String(e.id), summary: String(e.summary || e.title || "Untitled job") }));
+}
+
+/** Persist a selected job's name/date so it resolves consistently (shares the
+ * Timeline's per-uuid keys). Does not change the Timeline's active job. */
+export function rememberJob(job: { job_uuid: string; job_name: string; job_date: string }): void {
+  if (!job.job_uuid) return;
+  try {
+    localStorage.setItem(JOB_NAME_PREFIX + job.job_uuid, job.job_name || "");
+    localStorage.setItem(JOB_DATE_PREFIX + job.job_uuid, job.job_date || "");
+    localStorage.setItem(
+      JOB_META_PREFIX + job.job_uuid,
+      JSON.stringify({ job_uuid: job.job_uuid, jobName: job.job_name, jobDate: job.job_date, source: "bol", updated_at: new Date().toISOString() }),
+    );
+  } catch {}
+}
+
+// ── Open-BOL chooser ──────────────────────────────────────────────────────────
+
+export type OpenBol = {
+  bol_id: string;
+  job_uuid: string;
+  job_name: string;
+  job_date: string;
+  status: BOLStatus;
+  updated_at: string;
+  source: "server" | "local";
+};
+
+/** List BOLs that are still open (not delivered) for the "continue a BOL"
+ * chooser — server BOLs merged with any local drafts, newest first. */
+export async function listOpenBols(): Promise<OpenBol[]> {
+  const map = new Map<string, OpenBol>();
+  // Local drafts (covers offline-built BOLs not yet synced).
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(DRAFT_PREFIX)) continue;
+      const d = JSON.parse(localStorage.getItem(k) || "null") as BOLDraft | null;
+      if (!d || !d.bol_id || d.status === "delivered") continue;
+      map.set(d.bol_id, {
+        bol_id: d.bol_id, job_uuid: d.job_uuid, job_name: d.job_name, job_date: d.job_date,
+        status: d.status, updated_at: d.updated_at, source: "local",
+      });
+    }
+  } catch {}
+  // Server BOLs (authoritative — overrides a local dup by bol_id).
+  if (navigator.onLine) {
+    try {
+      const r = await apiFetch<{ ok: boolean; bols: any[] }>(`/api/bol?limit=100`);
+      for (const b of r.bols || []) {
+        const status = (b.status as BOLStatus) || "draft";
+        if (status === "delivered") continue;
+        const id = b.bol_id || b.id;
+        map.set(id, {
+          bol_id: id, job_uuid: b.job_uuid || "", job_name: b.job_name || "", job_date: b.job_date || "",
+          status, updated_at: b.updated_at || "", source: "server",
+        });
+      }
+    } catch {}
+  }
+  return [...map.values()].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+}
+
 // ── Cross-rep / cross-device loading ──────────────────────────────────────────
 
 function normalizeServerItem(it: any, i: number): BOLItem {

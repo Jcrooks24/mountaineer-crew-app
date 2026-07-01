@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { BetaTag } from "./BetaTag";
@@ -8,15 +8,20 @@ import {
   applySignature,
   type BOLDraft,
   type BOLItem,
+  type CalEvent,
+  type OpenBol,
   type SignInput,
   captureItemPhoto,
   enqueueSubmit,
+  fetchCalendarDay,
+  listOpenBols,
   loadDraft,
   loadForJob,
   newDraft,
   newUUID,
   pendingSubmitCount,
-  readActiveJob,
+  rememberJob,
+  resolveJobUuid,
   retryPendingPhotos,
   saveDraft,
   syncQueue,
@@ -69,25 +74,207 @@ const backBtnStyle: React.CSSProperties = {
   fontSize: 13,
 };
 
+const STATUS_LABEL: Record<string, string> = {
+  draft: "Draft",
+  origin_signed: "Origin signed",
+  delivered: "Delivered",
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Hub — choose an open BOL to continue, or start a new one (job selector).
+// ─────────────────────────────────────────────────────────────────────────
 export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
+  const [editing, setEditing] = useState<BOLDraft | null>(null);
+  const [openBols, setOpenBols] = useState<OpenBol[]>([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  // New-job selector (mirrors the Timeline tab).
+  const [selDate, setSelDate] = useState(todayLocal());
+  const [calEvents, setCalEvents] = useState<CalEvent[]>([]);
+  const [calLoading, setCalLoading] = useState(false);
+  const [calLoaded, setCalLoaded] = useState(false);
+  const [calErr, setCalErr] = useState("");
+  const [selValue, setSelValue] = useState("");
+  const [manualName, setManualName] = useState("");
+
+  // Refresh the open-BOL list on mount and whenever we return from the editor.
+  useEffect(() => {
+    if (editing) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingList(true);
+      const list = await listOpenBols();
+      if (!cancelled) { setOpenBols(list); setLoadingList(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [editing]);
+
+  // Load the day's calendar jobs when the date changes (and on mount).
+  useEffect(() => {
+    if (editing) return;
+    let cancelled = false;
+    (async () => {
+      setCalErr(""); setCalLoading(true); setCalLoaded(false); setCalEvents([]); setSelValue("");
+      try {
+        const evs = await fetchCalendarDay(selDate);
+        if (!cancelled) setCalEvents(evs);
+      } catch (e: any) {
+        if (!cancelled) setCalErr(e?.message || "Could not load calendar");
+      } finally {
+        if (!cancelled) { setCalLoading(false); setCalLoaded(true); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selDate, editing]);
+
+  async function openExisting(o: OpenBol) {
+    setBusy(true);
+    try {
+      const job = { job_uuid: o.job_uuid, job_name: o.job_name, job_date: o.job_date };
+      const draft = o.job_uuid ? await loadForJob(job) : loadDraft(o.job_uuid) || newDraft(job);
+      setEditing(draft);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSelectEvent(value: string) {
+    setSelValue(value);
+    if (!value || value === "__other__") return;
+    const ev = calEvents.find((e) => e.id === value);
+    if (!ev) return;
+    setBusy(true);
+    try {
+      const job_uuid = await resolveJobUuid(value);
+      const job = { job_uuid, job_name: ev.summary, job_date: selDate };
+      rememberJob(job);
+      const draft = await loadForJob(job); // continue existing, or start fresh
+      setEditing(draft);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startManual() {
+    const name = manualName.trim();
+    if (!name) return;
+    const job = { job_uuid: newUUID(), job_name: name, job_date: selDate };
+    rememberJob(job);
+    const draft = newDraft(job);
+    saveDraft(draft);
+    setEditing(draft);
+  }
+
+  if (editing) {
+    return <BolEditor initialDraft={editing} onBack={() => { setManualName(""); setEditing(null); }} />;
+  }
+
+  return (
+    <div className="container">
+      <div className="topbar" style={{ marginBottom: 16 }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Bill of Lading</div>
+          <BetaTag feature="digitalBOL" />
+          <div className="small" style={{ color: "var(--muted)" }}>Long-distance declared inventory + signing</div>
+        </div>
+        <button onClick={onBack} style={backBtnStyle}>← Menu</button>
+      </div>
+
+      {/* Continue an open BOL */}
+      <div className="card">
+        <div className="sectionTitle">Continue an open BOL</div>
+        {loadingList ? (
+          <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+        ) : openBols.length === 0 ? (
+          <div className="small" style={{ color: "var(--muted)" }}>No open BOLs. Start a new one below.</div>
+        ) : (
+          <div className="col" style={{ gap: 8 }}>
+            {openBols.map((o) => (
+              <button
+                key={o.bol_id}
+                onClick={() => openExisting(o)}
+                disabled={busy}
+                style={{ textAlign: "left" }}
+              >
+                <div className="row" style={{ justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 700 }}>{o.job_name || "Untitled job"}</span>
+                  <span
+                    className="small"
+                    style={{
+                      color: o.status === "origin_signed" ? "var(--brand)" : "var(--muted)",
+                      border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px", fontSize: 11,
+                    }}
+                  >
+                    {STATUS_LABEL[o.status] || o.status}
+                  </span>
+                </div>
+                <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                  {o.job_date || "no date"}
+                  {o.source === "local" ? "  ·  not synced" : ""}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Start a new BOL */}
+      <div className="card">
+        <div className="sectionTitle">Start a new BOL</div>
+        <div className="col" style={{ gap: 12 }}>
+          <label className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Date</span>
+            <input type="date" value={selDate} onChange={(e) => setSelDate(e.target.value)} />
+          </label>
+
+          <label className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>
+              Select job{" "}
+              <span className="small" style={{ marginLeft: 6 }}>
+                {calLoading ? "(loading…)" : calEvents.length > 0 ? `(${calEvents.length} found)` : calLoaded ? "(none found)" : ""}
+              </span>
+            </span>
+            <select value={selValue} onChange={(e) => onSelectEvent(e.target.value)} disabled={calLoading || busy}>
+              <option value="">Select a job…</option>
+              {calEvents.map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.summary}</option>
+              ))}
+              <option value="__other__">Other (enter manually)</option>
+            </select>
+          </label>
+
+          {calErr && <div className="small" style={{ color: "var(--danger)" }}>{calErr}</div>}
+
+          {selValue === "__other__" && (
+            <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
+              <label className="col" style={{ gap: 4, flex: "1 1 200px" }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Job name</span>
+                <input
+                  value={manualName}
+                  onChange={(e) => setManualName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); startManual(); } }}
+                  placeholder="Customer / job name"
+                />
+              </label>
+              <button className="btnPrimary" onClick={startManual} disabled={!manualName.trim()}>
+                Start
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: () => void }) {
   const { user } = useAuth();
   const nav = useNavigate();
 
-  // Crew rep — autofilled from the logged-in user. Informational: the server
-  // records the authenticated user as created_by regardless of this value.
-  const [crewRep, setCrewRep] = useState(user?.name || user?.email || "");
-
-  // Load (or start) the BOL draft for the crew's currently-active job.
-  const [draft, setDraft] = useState<BOLDraft>(() => {
-    const job = readActiveJob();
-    const existing = loadDraft(job.job_uuid);
-    if (existing) return existing;
-    const d = newDraft(job);
-    if (!d.job_date) d.job_date = todayLocal();
-    return d;
-  });
-
-  const hadActiveJob = useMemo(() => !!readActiveJob().job_uuid, []);
+  // Crew rep — carries over from the BOL if set, otherwise the logged-in user.
+  const [crewRep, setCrewRep] = useState(initialDraft.crew_rep || user?.name || user?.email || "");
+  const [draft, setDraft] = useState<BOLDraft>(initialDraft);
 
   // Add-item form state
   const [itemName, setItemName] = useState("");
@@ -120,25 +307,14 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
     saveDraft(draft);
   }, [draft]);
 
-  // On mount: adopt the server BOL for this job if one exists (so a different
-  // company rep / device can pick up the same job's BOL at any stage — e.g.
-  // one rep builds + signs at origin, another signs at destination). Then
-  // finish any offline photo uploads and drain the queue. Re-drain on reconnect.
+  // On mount + reconnect: finish any offline photo uploads and drain the queue
+  // so queued BOLs, signatures, and PDFs reach the server. (The server copy was
+  // already adopted by the hub before this editor opened.)
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const job = readActiveJob();
-      const loaded = await loadForJob(
-        job.job_uuid ? job : { job_uuid: draft.job_uuid, job_name: draft.job_name, job_date: draft.job_date },
-      );
-      if (cancelled) return;
-      setDraft(loaded);
-      setPickupDate(loaded.actual_pickup_date || todayLocal());
-      setVehicle(loaded.vehicle || "");
-      setWalkNotes(loaded.walkthrough_notes || "");
-      setFinalCharges(loaded.final_charges != null ? String(loaded.final_charges) : "");
-      const after = await retryPendingPhotos(loaded);
-      if (!cancelled && after !== loaded) setDraft(after);
+      const after = await retryPendingPhotos(draft);
+      if (!cancelled && after !== draft) setDraft(after);
       await syncQueue();
     })();
     const onOnline = () => {
@@ -149,10 +325,6 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
     return () => { cancelled = true; window.removeEventListener("online", onOnline); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  function patchDraft(patch: Partial<BOLDraft>) {
-    setDraft((prev) => ({ ...prev, ...patch, updated_at: new Date().toISOString() }));
-  }
 
   function updateItem(itemNo: number, patch: Partial<BOLItem>) {
     setDraft((prev) => ({
@@ -314,33 +486,21 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
           <BetaTag feature="digitalBOL" />
           <div className="small" style={{ color: "var(--muted)" }}>Declared inventory — interstate move</div>
         </div>
-        <button onClick={onBack} style={backBtnStyle}>← Menu</button>
+        <button onClick={onBack} style={backBtnStyle}>← BOLs</button>
       </div>
 
-      {/* Job + crew rep (autofilled from the active job) */}
+      {/* Job (selected in the chooser) + crew rep */}
       <div className="card">
         <div className="sectionTitle">Job</div>
-        {!hadActiveJob && (
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
-            No active job detected — select a job on the Timeline first for autofill, or enter it below.
-          </div>
-        )}
-        <div className="col" style={{ gap: 10 }}>
-          <div className="row wrap" style={{ gap: 10 }}>
-            <label className="col" style={{ gap: 4, flex: "2 1 220px" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Job name *</span>
-              <input value={draft.job_name} onChange={(e) => patchDraft({ job_name: e.target.value })} placeholder="Customer / job name" />
-            </label>
-            <label className="col" style={{ gap: 4, flex: "1 1 140px" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Date</span>
-              <input type="date" value={draft.job_date} onChange={(e) => patchDraft({ job_date: e.target.value })} />
-            </label>
-          </div>
-          <label className="col" style={{ gap: 4 }}>
-            <span className="small" style={{ color: "var(--muted)" }}>Crew rep</span>
-            <input value={crewRep} onChange={(e) => setCrewRep(e.target.value)} placeholder="Your name" />
-          </label>
+        <div style={{ fontWeight: 700 }}>{draft.job_name || "Untitled job"}</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          {draft.job_date || "no date"}
+          {draft.status !== "draft" ? `  ·  ${draft.status === "origin_signed" ? "origin signed" : "delivered"}` : ""}
         </div>
+        <label className="col" style={{ gap: 4 }}>
+          <span className="small" style={{ color: "var(--muted)" }}>Crew rep</span>
+          <input value={crewRep} onChange={(e) => setCrewRep(e.target.value)} placeholder="Your name" />
+        </label>
       </div>
 
       {/* Static carrier block */}

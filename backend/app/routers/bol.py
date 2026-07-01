@@ -179,8 +179,19 @@ def get_bols(
     q = db.query(DigitalBOL)
     if job_uuid:
         q = q.filter(DigitalBOL.job_uuid == job_uuid)
-    rows = q.order_by(DigitalBOL.created_at.desc()).limit(limit).all()
-    return {"ok": True, "bols": [_to_dict(r) for r in rows]}
+    rows = q.order_by(DigitalBOL.updated_at.desc()).limit(limit).all()
+    bols = [_to_dict(r) for r in rows]
+    # Unfiltered list (the "open BOLs" chooser) only needs metadata — strip the
+    # heavy signature blobs and item arrays so a 100-row list stays small. The
+    # full record (with signatures, for continuing/printing) is returned when
+    # filtered by job_uuid.
+    if not job_uuid:
+        heavy = ("origin_shipper_sig", "origin_carrier_sig", "dest_shipper_sig", "dest_carrier_sig")
+        for b in bols:
+            for k in heavy:
+                b[k] = ""
+            b["items"] = []
+    return {"ok": True, "bols": bols}
 
 
 class BOLSignIn(BaseModel):
