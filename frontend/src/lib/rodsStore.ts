@@ -42,6 +42,14 @@ export const STATUS_COLORS: Record<DutyStatus, string> = {
   on_duty: "#fbbf24",
 };
 
+// Plain-language explanation of each status and when it applies.
+export const STATUS_HELP: Record<DutyStatus, string> = {
+  off_duty: "Not working and free of all duty — meals, personal time, or done for the day. Also use when riding along and NOT required to do anything.",
+  sleeper: "Resting or napping while riding as a passenger (not driving). Use instead of Off Duty when you're catching rest on the road.",
+  driving: "Actually driving the truck — behind the wheel with the vehicle moving or stopped in traffic.",
+  on_duty: "Working but not driving — loading, unloading, packing, fueling, inspections, paperwork, or waiting to load.",
+};
+
 export type RodsDay = {
   rods_id: string;
   log_date: string; // YYYY-MM-DD

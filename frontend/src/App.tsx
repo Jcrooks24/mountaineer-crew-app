@@ -307,7 +307,6 @@ export default function App() {
     driving: ldDriving,
     laborSelected: ldLabor,
     toggleActivity: ldToggleActivity,
-    toggleOutOfTown: ldToggleOutOfTown,
   } = useLdPlan(todayLocalYYYYMMDD());
 
   const [status, setStatus] = useState<string>("");
@@ -1854,7 +1853,7 @@ export default function App() {
 
           {/* Long-distance: the day plan drives which tools show below */}
           {longDistance && (
-            <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} onToggleOutOfTown={ldToggleOutOfTown} />
+            <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
           )}
 
           {/* Actions: shown for local jobs and for LD labor days. On a pure LD

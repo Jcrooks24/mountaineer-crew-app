@@ -1,9 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
-import { type LdDay, fetchTripDays } from "../lib/ldDayStore";
-import { fetchRemoteBol } from "../lib/bolStore";
+import { type LdDay, fetchTripDays, hydrateDay, loadLdDay, setLdDay, todayLocal as ldToday } from "../lib/ldDayStore";
+import { fetchRemoteBol, listOpenBols, type OpenBol } from "../lib/bolStore";
 import RodsSignoff from "./RodsSignoff";
+
+// Multi-day LD trips: each day is its own calendar event / job_uuid, so the
+// driver can link a day to the trip's in-progress BOL. The link is the trip's
+// anchor job; PODS + BOL + BOL# resolve against it.
+const TRIP_LINK_PREFIX = "crew_ld_trip_link_v1:";
+type TripLink = { trip_job_uuid: string; bol_id: string; label: string };
+function loadTripLink(jobUuid: string): TripLink | null {
+  try {
+    const raw = localStorage.getItem(TRIP_LINK_PREFIX + jobUuid);
+    return raw ? (JSON.parse(raw) as TripLink) : null;
+  } catch {
+    return null;
+  }
+}
+function saveTripLink(jobUuid: string, link: TripLink | null) {
+  try {
+    if (link) localStorage.setItem(TRIP_LINK_PREFIX + jobUuid, JSON.stringify(link));
+    else localStorage.removeItem(TRIP_LINK_PREFIX + jobUuid);
+  } catch {}
+}
+function bolRefOf(bol: { bol_id?: string; id?: string } | null): string {
+  const id = bol?.bol_id || bol?.id || "";
+  return id ? `BOL-${id.slice(0, 8)}` : "";
+}
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime } from "../lib/time";
@@ -186,24 +210,66 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     fetchTripDays(jobUuid).then((d) => { if (!cancelled) setLdDays(d); });
     return () => { cancelled = true; };
   }, [longDistance, jobUuid]);
-  // Long-distance checklist status: PODS (prior on-duty) + BOL origin/destination sign.
+  // Long-distance checklist + trip linking.
   const [bolStatus, setBolStatus] = useState<string>("");
+  const [bolRef, setBolRef] = useState<string>("");
   const [priorDone, setPriorDone] = useState<boolean>(false);
+  const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
+  const [openBols, setOpenBols] = useState<OpenBol[]>([]);
+  const [ootToday, setOotToday] = useState<boolean>(false);
+
+  useEffect(() => { setTripLink(jobUuid ? loadTripLink(jobUuid) : null); }, [jobUuid]);
+
+  // The trip's anchor job: the linked in-progress BOL's job, or this job.
+  const tripJob = tripLink?.trip_job_uuid || jobUuid;
+
   useEffect(() => {
     if (!longDistance || !jobUuid) return;
     let cancelled = false;
     (async () => {
-      const bol = await fetchRemoteBol(jobUuid);
-      if (!cancelled) setBolStatus(bol?.status || "");
+      const bol = await fetchRemoteBol(tripJob);
+      if (!cancelled) { setBolStatus(bol?.status || ""); setBolRef(bolRefOf(bol)); }
       try {
-        const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(jobUuid)}`);
-        if (!cancelled) setPriorDone(Array.isArray(prior) && prior.length > 0);
+        const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(tripJob)}`);
+        // Robust: only count statements that EXACTLY match the trip job, so a
+        // statement from another trip (or an unfiltered response) can't
+        // false-positive the "done" state.
+        const forJob = (Array.isArray(prior) ? prior : []).filter((p) => (p?.job_uuid || "") === tripJob);
+        if (!cancelled) setPriorDone(forJob.length > 0);
       } catch {
         if (!cancelled) setPriorDone(false);
       }
+      const open = await listOpenBols();
+      if (!cancelled) setOpenBols(open);
     })();
     return () => { cancelled = true; };
-  }, [longDistance, jobUuid]);
+  }, [longDistance, jobUuid, tripJob]);
+
+  // Out-of-town per-diem is PER PERSON: each crew member marks their own day.
+  useEffect(() => {
+    if (!longDistance) return;
+    const local = loadLdDay(ldToday());
+    if (local) setOotToday(!!local.out_of_town);
+    let cancelled = false;
+    hydrateDay(ldToday()).then((d) => { if (!cancelled && d) setOotToday(!!d.out_of_town); });
+    return () => { cancelled = true; };
+  }, [longDistance]);
+
+  function toggleOot() {
+    const next = !ootToday;
+    setOotToday(next);
+    setLdDay(ldToday(), { out_of_town: next });
+  }
+  function linkTrip(o: OpenBol | null) {
+    if (o) {
+      const link: TripLink = { trip_job_uuid: o.job_uuid, bol_id: o.bol_id, label: `${o.job_name || "Untitled"}${o.job_date ? " · " + o.job_date : ""}` };
+      saveTripLink(jobUuid, link);
+      setTripLink(link);
+    } else {
+      saveTripLink(jobUuid, null);
+      setTripLink(null);
+    }
+  }
 
   const ldPay = useMemo(() => {
     const by = new Map<string, { out: number; drive: number }>();
@@ -879,15 +945,71 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
+      {/* Trip documents — link a multi-day trip's days together via its BOL. */}
+      {longDistance && (
+        <div className="card">
+          <div className="sectionTitle">Trip documents</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
+            Multi-day trips: each day is its own calendar job. Link this day to the trip's Bill of Lading so the trip's documents (BOL, Prior On-Duty) stay together.
+          </div>
+          {tripLink ? (
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>Part of trip: {tripLink.label}</div>
+                {bolRef && <div className="small" style={{ color: "var(--muted)" }}>{bolRef}</div>}
+              </div>
+              <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12 }}>Unlink</button>
+            </div>
+          ) : (
+            <>
+              {bolRef ? (
+                <div className="small" style={{ marginBottom: 8 }}>This job's BOL: <strong>{bolRef}</strong></div>
+              ) : (
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>No BOL started on this job's calendar day yet.</div>
+              )}
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Link this day to an in-progress trip BOL</span>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const o = openBols.find((b) => b.bol_id === e.target.value);
+                    if (o) linkTrip(o);
+                  }}
+                >
+                  <option value="">Select a trip BOL…</option>
+                  {openBols.filter((b) => b.job_uuid !== jobUuid).map((b) => (
+                    <option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " · " + b.job_date : ""}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Per-diem — per person, marked by each crew member for their own day. */}
+      {longDistance && (
+        <div className="card">
+          <div className="sectionTitle">Per-diem</div>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14 }}>
+            <input type="checkbox" checked={ootToday} onChange={toggleOot} style={{ accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
+            <span>I was <strong>out of town</strong> today</span>
+          </label>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+            $50 per person, per day out of town. Each crew member marks their own days.
+          </div>
+        </div>
+      )}
+
       {/* Driver RODS sign-off (self-hides when no driving was logged today). */}
-      {longDistance && <RodsSignoff />}
+      {longDistance && <RodsSignoff bolRef={bolRef} />}
 
       {/* Long-distance pay tally (payroll reminder for admin). */}
       {longDistance && ldPay.length > 0 && (
         <div className="card">
           <div className="sectionTitle">Long-distance pay — this trip</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-            $50 per-diem per day out of town. Drive days are logged for the fixed drive pay (paid separately).
+            $50 per person, per day out of town. Drive days are logged for the fixed drive pay (paid separately).
           </div>
           <div className="col" style={{ gap: 6 }}>
             {ldPay.map((p) => (

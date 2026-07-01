@@ -12,6 +12,7 @@ import {
   enqueueDay,
   listLocalDays,
   loadDay,
+  STATUS_HELP,
   loadOrResumeDay,
   minutesOfDay,
   minutesToHHMM,
@@ -61,6 +62,7 @@ export default function RodsRecorder({
   const driverName = user?.name || user?.email || "";
   const date = todayLocal();
   const [day, setDay] = useState<RodsDay>(() => loadDay(date) || newDay(date, driverName, listLocalDays()[0] || null));
+  const [showHelp, setShowHelp] = useState(false);
 
   const totals = useMemo(() => computeTotals(day.changes), [day.changes]);
   const cur = currentStatus(day.changes);
@@ -120,6 +122,19 @@ export default function RodsRecorder({
           This is the log for the person <strong>driving the truck</strong>. Tap your status as it changes.
           Passengers and non-driving crew do not keep a RODS. Sign the day on the <strong>Report</strong> tab.
         </div>
+        <button type="button" onClick={() => setShowHelp((s) => !s)} style={{ background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontSize: 13, padding: 0, marginTop: 8 }}>
+          {showHelp ? "Hide status guide" : "What do the statuses mean?"}
+        </button>
+        {showHelp && (
+          <div className="col" style={{ gap: 6, marginTop: 8 }}>
+            {DUTY_STATUSES.map((s) => (
+              <div key={s} className="small" style={{ lineHeight: 1.4 }}>
+                <span style={{ fontWeight: 700, color: STATUS_COLORS[s] }}>{STATUS_LABELS[s]}:</span>{" "}
+                <span style={{ color: "var(--muted)" }}>{STATUS_HELP[s]}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Current status + tap buttons */}
