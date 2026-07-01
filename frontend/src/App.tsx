@@ -3,8 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
-import RodsRecorder from "./components/RodsRecorder";
-import LdDayCard from "./components/LdDayCard";
+import LdWorkday from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
@@ -1851,6 +1850,11 @@ export default function App() {
             </div>
           </div>
 
+          {/* Long-distance: the day plan drives which tools show (labor clock / RODS) */}
+          {longDistance && (
+            <LdWorkday recordEvent={recordEvent} canSend={canSend} sendingType={sendingType} />
+          )}
+
           <div className="card">
             <div className="sectionTitle">Actions</div>
 
@@ -1884,25 +1888,6 @@ export default function App() {
                 </button>
               </div>
 
-              {longDistance && (
-                <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                  <div className="small" style={{ width: "100%", color: "var(--muted)", marginBottom: 2 }}>
-                    Hourly labor — clock the load and unload (drive time is paid separately)
-                  </div>
-                  <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("LOAD_START")}>
-                    {sendingType === "LOAD_START" ? "..." : "Load Start"}
-                  </button>
-                  <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("LOAD_FINISH")}>
-                    {sendingType === "LOAD_FINISH" ? "..." : "Load Finish"}
-                  </button>
-                  <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("UNLOAD_START")}>
-                    {sendingType === "UNLOAD_START" ? "..." : "Unload Start"}
-                  </button>
-                  <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("UNLOAD_FINISH")}>
-                    {sendingType === "UNLOAD_FINISH" ? "..." : "Unload Finish"}
-                  </button>
-                </div>
-              )}
 
               <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
                 <button disabled={queueLen === 0} onClick={syncQueueNow}>
@@ -1920,10 +1905,6 @@ export default function App() {
               </div>
             </div>
           </div>
-
-          {/* Long-distance: per-diem/drive-day marker + tap duty recorder (RODS) */}
-          {longDistance && <LdDayCard />}
-          {longDistance && <RodsRecorder />}
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>

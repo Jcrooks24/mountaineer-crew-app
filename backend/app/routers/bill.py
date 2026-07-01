@@ -127,8 +127,10 @@ def get_bill_seed(
                 out.append({"created_by": person, "label": label, "hours": hrs})
         return out
 
+    hours_lines += _span_lines("pack_start", "pack_finish", "Packing labor (per hour)")
     hours_lines += _span_lines("load_start", "load_finish", "Load labor (per hour)")
     hours_lines += _span_lines("unload_start", "unload_finish", "Unload labor (per hour)")
+    hours_lines += _span_lines("unpack_start", "unpack_finish", "Unpacking labor (per hour)")
 
     # Materials are no longer seeded into the bill's line items — they live
     # in a dedicated live-shared panel inside the bill helper (see
