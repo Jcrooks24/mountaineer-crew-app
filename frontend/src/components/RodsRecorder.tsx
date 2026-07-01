@@ -6,13 +6,13 @@ import {
   type RodsDay,
   DUTY_STATUSES,
   STATUS_COLORS,
+  STATUS_HELP,
   STATUS_LABELS,
   computeTotals,
   currentStatus,
   enqueueDay,
   listLocalDays,
   loadDay,
-  STATUS_HELP,
   loadOrResumeDay,
   minutesOfDay,
   minutesToHHMM,
@@ -25,9 +25,9 @@ import {
 
 /**
  * Timeline RODS surface for a drive day. The DRIVER taps their duty status as
- * it changes; each tap (and note) is logged to the job activity timeline via
- * onLogEvent, so there is a single activity log (no separate RODS change list).
- * The day is signed on the Report tab (see RodsSignoff).
+ * it changes (each tap + note is mirrored to the job activity timeline via
+ * onLogEvent), and can edit any time / add a retroactive change here so the
+ * totals stay accurate. The day is signed on the Report tab (RodsSignoff).
  */
 
 function DutyStrip({ changes }: { changes: DutyChange[] }) {
@@ -66,8 +66,11 @@ export default function RodsRecorder({
 
   const totals = useMemo(() => computeTotals(day.changes), [day.changes]);
   const cur = currentStatus(day.changes);
+  const sorted = useMemo(
+    () => day.changes.map((c, i) => ({ c, i })).sort((a, b) => minutesOfDay(a.c.time) - minutesOfDay(b.c.time)),
+    [day.changes],
+  );
 
-  // Resume today's day (adopt a server copy that's ahead) + drain the queue.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -81,7 +84,6 @@ export default function RodsRecorder({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Autosave + back up in-progress days to the server (continuity).
   useEffect(() => {
     saveDay(day);
     if (day.changes.length <= 1 && !day.signature) return;
@@ -106,12 +108,27 @@ export default function RodsRecorder({
     onLogEvent?.("NOTE", t);
     setDay((prev) => {
       if (prev.changes.length === 0) return prev;
-      const sorted = [...prev.changes].sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time));
-      const idx = prev.changes.indexOf(sorted[sorted.length - 1]);
+      const s = [...prev.changes].sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time));
+      const idx = prev.changes.indexOf(s[s.length - 1]);
       const changes = prev.changes.slice();
       changes[idx] = { ...changes[idx], remarks: t };
       return { ...prev, changes, updated_at: new Date().toISOString() };
     });
+  }
+
+  function updateChange(idx: number, p: Partial<DutyChange>) {
+    setDay((prev) => ({ ...prev, changes: prev.changes.map((c, i) => (i === idx ? { ...c, ...p } : c)), updated_at: new Date().toISOString() }));
+  }
+  function removeChange(idx: number) {
+    setDay((prev) => ({ ...prev, changes: prev.changes.filter((_, i) => i !== idx), updated_at: new Date().toISOString() }));
+  }
+  function addChange() {
+    let t = "08:00";
+    if (sorted.length > 0) {
+      const mins = Math.min(23 * 60 + 59, minutesOfDay(sorted[sorted.length - 1].c.time) + 60);
+      t = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+    }
+    setDay((prev) => ({ ...prev, changes: [...prev.changes, { time: t, status: "on_duty", location: "", remarks: "" }], updated_at: new Date().toISOString() }));
   }
 
   return (
@@ -137,11 +154,22 @@ export default function RodsRecorder({
         )}
       </div>
 
-      {/* Current status + tap buttons */}
+      {/* Current-status banner (not a button) + tap buttons */}
       <div className="card">
-        <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Current status{cur ? "" : " — none yet"}</div>
-        <div style={{ padding: "10px 12px", borderRadius: 8, marginBottom: 12, background: cur ? STATUS_COLORS[cur] : "var(--border)", color: cur ? "#10222b" : "var(--muted)", fontWeight: 800, fontSize: 16, textAlign: "center" }}>
-          {cur ? STATUS_LABELS[cur] : "Off Duty (day start)"}
+        <div
+          style={{
+            display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", marginBottom: 12,
+            borderRadius: 8, borderLeft: `5px solid ${cur ? STATUS_COLORS[cur] : "var(--border)"}`,
+            background: "rgba(255,255,255,0.04)",
+          }}
+        >
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: cur ? STATUS_COLORS[cur] : "var(--muted)", flexShrink: 0 }} />
+          <div>
+            <div className="small" style={{ color: "var(--muted)" }}>Current status</div>
+            <div style={{ fontWeight: 800, fontSize: 16, color: cur ? STATUS_COLORS[cur] : "var(--muted)" }}>
+              {cur ? STATUS_LABELS[cur] : "Off Duty (day start)"}
+            </div>
+          </div>
         </div>
         <div className="row wrap" style={{ gap: 8 }}>
           {DUTY_STATUSES.map((s) => (
@@ -151,6 +179,25 @@ export default function RodsRecorder({
           ))}
         </div>
         <button type="button" onClick={addNote} style={{ width: "100%", marginTop: 8 }}>+ Add note</button>
+      </div>
+
+      {/* Editable duty changes — edit a time / status, remove, or add a retroactive change */}
+      <div className="card">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div className="sectionTitle" style={{ marginBottom: 0 }}>Duty changes</div>
+          <button type="button" onClick={addChange} style={{ fontSize: 12 }}>+ Add</button>
+        </div>
+        <div className="col" style={{ gap: 8 }}>
+          {sorted.map(({ c, i }) => (
+            <div key={i} className="row wrap" style={{ gap: 8, alignItems: "center" }}>
+              <input type="time" value={c.time} onChange={(e) => updateChange(i, { time: e.target.value })} style={{ width: 110 }} />
+              <select value={c.status} onChange={(e) => updateChange(i, { status: e.target.value as DutyStatus })} style={{ flex: "1 1 150px" }}>
+                {DUTY_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+              </select>
+              <button type="button" onClick={() => removeChange(i)} disabled={day.changes.length <= 1} style={{ fontSize: 12, padding: "6px 10px", color: "var(--danger)", borderColor: "var(--danger)" }}>Remove</button>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* 24h strip + totals */}

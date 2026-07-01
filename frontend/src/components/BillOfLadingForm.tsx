@@ -677,6 +677,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         )}
         <div className="row wrap" style={{ justifyContent: "flex-end", gap: 10 }}>
           <button onClick={() => nav("/")}>Back to Jobs</button>
+          <button onClick={async () => { if (draft.items.length > 0) await save(); onBack(); }}>Save &amp; finish later</button>
           <button className="btnPrimary" onClick={save}>Save Inventory</button>
         </div>
       </div>

@@ -32,6 +32,7 @@ class EmployeeHoursEntry(BaseModel):
     break_hours: float = 0.0  # base-10 hours subtracted from worked time
     hours: float = 0.0        # actual worked hours, base-10
     non_billable: bool = False  # excluded from total man-hours when true
+    out_of_town: bool = False  # long-distance: $50 per-diem owed to this employee
 
 
 class JobReportUpsert(BaseModel):

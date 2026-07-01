@@ -44,9 +44,9 @@ export const STATUS_COLORS: Record<DutyStatus, string> = {
 
 // Plain-language explanation of each status and when it applies.
 export const STATUS_HELP: Record<DutyStatus, string> = {
-  off_duty: "Not working and free of all duty — meals, personal time, or done for the day. Also use when riding along and NOT required to do anything.",
-  sleeper: "Resting or napping while riding as a passenger (not driving). Use instead of Off Duty when you're catching rest on the road.",
-  driving: "Actually driving the truck — behind the wheel with the vehicle moving or stopped in traffic.",
+  off_duty: "Truck is PARKED and you're on your own time — meal or rest stop, overnight, or done for the day. Not driving and not traveling.",
+  sleeper: "Riding in the truck while someone else drives (in transit, not driving) — travel time as a passenger, resting or just along for the ride.",
+  driving: "Behind the wheel with the truck moving or stopped in traffic.",
   on_duty: "Working but not driving — loading, unloading, packing, fueling, inspections, paperwork, or waiting to load.",
 };
 

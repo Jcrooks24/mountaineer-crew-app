@@ -781,7 +781,7 @@ JOB_REPORT_HEADERS = [
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
     "has_crew_feedback", "crew_feedback",
-    "employee_hours", "has_non_billable_hours",
+    "employee_hours", "has_non_billable_hours", "per_diem_total",
     "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
@@ -809,6 +809,15 @@ def _has_non_billable(entries: Optional[list]) -> str:
         if isinstance(e, dict) and e.get("non_billable"):
             return "Yes"
     return "No"
+
+
+def _per_diem_total(entries: Optional[list]) -> Any:
+    """Total per-diem owed for this report: $50 per employee marked out of town.
+    Surfaced as its own column so admin can tally payroll at a glance."""
+    if not entries:
+        return 0
+    n = sum(1 for e in entries if isinstance(e, dict) and e.get("out_of_town"))
+    return n * 50
 
 
 def _round_billable_quarter(hours: float) -> float:
@@ -875,6 +884,8 @@ def _format_employee_hours(entries: Optional[list]) -> str:
             pieces.append(f"→ non-billable {tail}")
         else:
             pieces.append(f"→ {tail}")
+        if bool(e.get("out_of_town") or False):
+            pieces.append("[per-diem $50]")
         lines.append(" ".join(pieces))
     if lines:
         total_billable = _round_billable_quarter(total_actual)
@@ -916,6 +927,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "crew_feedback": report.get("crew_feedback", "") or "",
         "employee_hours": _format_employee_hours(report.get("employee_hours")),
         "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
+        "per_diem_total": _per_diem_total(report.get("employee_hours")),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,

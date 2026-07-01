@@ -3,18 +3,14 @@ import { useAuth } from "../auth/AuthContext";
 import { apiFetch } from "../api/client";
 import SignaturePad, { type SignaturePadHandle } from "./SignaturePad";
 import {
-  type DutyChange,
-  type DutyStatus,
   type RodsDay,
   DUTY_STATUSES,
   STATUS_COLORS,
-  STATUS_HELP,
   STATUS_LABELS,
   computeTotals,
   enqueueDay,
   loadDay,
   loadOrResumeDay,
-  minutesOfDay,
   minutesToHHMM,
   newDay,
   saveDay,
@@ -23,10 +19,9 @@ import {
 } from "../lib/rodsStore";
 
 /**
- * Driver RODS sign-off, shown on the Report tab. Duty status is recorded on the
- * Timeline (RodsRecorder); here the DRIVER reviews + corrects the log (edit any
- * time / add a retroactive change - totals recompute), fills the trip details,
- * and signs. Self-hides when there's no RODS to sign.
+ * Driver RODS sign-off, shown on the Report tab. Duty status is recorded AND
+ * edited on the Timeline (RodsRecorder); here the DRIVER reviews the day's
+ * totals, fills the trip details, and signs. Self-hides when there's no RODS.
  */
 export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
   const { user } = useAuth();
@@ -38,15 +33,10 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
   const [units, setUnits] = useState<string[]>([]);
   const sigRef = useRef<SignaturePadHandle>(null);
 
   const totals = useMemo(() => computeTotals(day.changes), [day.changes]);
-  const sorted = useMemo(
-    () => day.changes.map((c, i) => ({ c, i })).sort((a, b) => minutesOfDay(a.c.time) - minutesOfDay(b.c.time)),
-    [day.changes],
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -54,14 +44,13 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
       const d = await loadOrResumeDay(date, driverName);
       if (!cancelled) setDay(d);
     })();
-    // Vehicle unit list (same source as the DVIR module).
     apiFetch<{ units: string[] }>("/api/dvir/units").then((r) => { if (!cancelled) setUnits(r.units || []); }).catch(() => {});
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { saveDay(day); }, [day]);
 
-  // Autofill the shipping-docs (BOL/manifest #) from the trip's BOL once known.
+  // Autofill shipping-docs (BOL/manifest #) from the trip's BOL once known.
   useEffect(() => {
     if (bolRef && !(day.shipping_docs || "").trim()) {
       setDay((prev) => ({ ...prev, shipping_docs: bolRef, updated_at: new Date().toISOString() }));
@@ -72,24 +61,9 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
   function patch(p: Partial<RodsDay>) {
     setDay((prev) => ({ ...prev, ...p, updated_at: new Date().toISOString() }));
   }
-  function updateChange(idx: number, p: Partial<DutyChange>) {
-    setDay((prev) => ({ ...prev, changes: prev.changes.map((c, i) => (i === idx ? { ...c, ...p } : c)), updated_at: new Date().toISOString() }));
-  }
-  function removeChange(idx: number) {
-    setDay((prev) => ({ ...prev, changes: prev.changes.filter((_, i) => i !== idx), updated_at: new Date().toISOString() }));
-  }
-  function addChange() {
-    let t = "08:00";
-    if (sorted.length > 0) {
-      const mins = Math.min(23 * 60 + 59, minutesOfDay(sorted[sorted.length - 1].c.time) + 60);
-      t = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
-    }
-    setDay((prev) => ({ ...prev, changes: [...prev.changes, { time: t, status: "on_duty", location: "", remarks: "" }], updated_at: new Date().toISOString() }));
-  }
 
   async function sign() {
     setErr(null);
-    for (const { c } of sorted) if (!/^\d{2}:\d{2}$/.test(c.time)) return setErr(`Invalid time: ${c.time}`);
     if (sigRef.current?.isEmpty()) return setErr("Driver signature is required.");
     if (!consent) return setErr("Accept the electronic signature consent to submit.");
     setBusy(true);
@@ -121,24 +95,10 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
   return (
     <div className="card" style={{ borderColor: "var(--brand)" }}>
       <div className="sectionTitle">Record of Duty Status — driver ({date})</div>
-      <div className="small" style={{ color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
-        For the person who <strong>drove</strong> today. Review + correct the log, add trip details, and sign.
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+        For the person who <strong>drove</strong> today. Edit the duty log on the <strong>Timeline</strong>; here, add trip details and sign.
         {day.signature ? "  This day is signed." : ""}
       </div>
-
-      <button type="button" onClick={() => setShowHelp((s) => !s)} style={{ background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontSize: 13, padding: 0, marginBottom: 10 }}>
-        {showHelp ? "Hide status guide" : "What do the statuses mean?"}
-      </button>
-      {showHelp && (
-        <div className="col" style={{ gap: 6, marginBottom: 12 }}>
-          {DUTY_STATUSES.map((s) => (
-            <div key={s} className="small" style={{ lineHeight: 1.4 }}>
-              <span style={{ fontWeight: 700, color: STATUS_COLORS[s] }}>{STATUS_LABELS[s]}:</span>{" "}
-              <span style={{ color: "var(--muted)" }}>{STATUS_HELP[s]}</span>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* Totals */}
       <div className="row wrap" style={{ gap: 10, marginBottom: 12 }}>
@@ -149,21 +109,6 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
           </div>
         ))}
       </div>
-
-      {/* Editable duty changes — edit a time or add a retroactive change; totals recompute */}
-      <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Duty status changes</div>
-      <div className="col" style={{ gap: 8, marginBottom: 8 }}>
-        {sorted.map(({ c, i }) => (
-          <div key={i} className="row wrap" style={{ gap: 8, alignItems: "center" }}>
-            <input type="time" value={c.time} onChange={(e) => updateChange(i, { time: e.target.value })} style={{ width: 110 }} />
-            <select value={c.status} onChange={(e) => updateChange(i, { status: e.target.value as DutyStatus })} style={{ flex: "1 1 150px" }}>
-              {DUTY_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
-            </select>
-            <button type="button" onClick={() => removeChange(i)} disabled={day.changes.length <= 1} style={{ fontSize: 12, padding: "6px 10px", color: "var(--danger)", borderColor: "var(--danger)" }}>Remove</button>
-          </div>
-        ))}
-      </div>
-      <button type="button" onClick={addChange} style={{ fontSize: 13, marginBottom: 12 }}>+ Add a change</button>
 
       {/* Trip details */}
       <div className="col" style={{ gap: 10, marginBottom: 12 }}>

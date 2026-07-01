@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
-import { type LdDay, fetchTripDays, hydrateDay, loadLdDay, setLdDay, todayLocal as ldToday } from "../lib/ldDayStore";
 import { fetchRemoteBol, listOpenBols, type OpenBol } from "../lib/bolStore";
 import RodsSignoff from "./RodsSignoff";
 
@@ -28,6 +27,14 @@ function bolRefOf(bol: { bol_id?: string; id?: string } | null): string {
   const id = bol?.bol_id || bol?.id || "";
   return id ? `BOL-${id.slice(0, 8)}` : "";
 }
+// "Not at destination yet" — the crew can defer the BOL so it isn't a blocker.
+const BOL_DEFER_PREFIX = "crew_ld_bol_deferred_v1:";
+function loadBolDeferred(jobUuid: string): boolean {
+  try { return localStorage.getItem(BOL_DEFER_PREFIX + jobUuid) === "1"; } catch { return false; }
+}
+function saveBolDeferred(jobUuid: string, v: boolean) {
+  try { if (v) localStorage.setItem(BOL_DEFER_PREFIX + jobUuid, "1"); else localStorage.removeItem(BOL_DEFER_PREFIX + jobUuid); } catch {}
+}
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime } from "../lib/time";
@@ -46,6 +53,8 @@ export type EmployeeHoursEntry = {
   break_hours: number;
   hours: number;
   non_billable?: boolean;
+  // Long-distance: this employee was out of town this day -> $50 per-diem.
+  out_of_town?: boolean;
 };
 
 // Company billing rule: round to the next quarter-hour if the worked time
@@ -202,23 +211,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const nav = useNavigate();
   const { user } = useAuth();
 
-  // Long-distance per-diem / drive-day tally for this trip (payroll reminder).
-  const [ldDays, setLdDays] = useState<LdDay[]>([]);
-  useEffect(() => {
-    if (!longDistance || !jobUuid) return;
-    let cancelled = false;
-    fetchTripDays(jobUuid).then((d) => { if (!cancelled) setLdDays(d); });
-    return () => { cancelled = true; };
-  }, [longDistance, jobUuid]);
-  // Long-distance checklist + trip linking.
+  // Long-distance documents: PODS + BOL (with multi-day trip linking).
   const [bolStatus, setBolStatus] = useState<string>("");
   const [bolRef, setBolRef] = useState<string>("");
   const [priorDone, setPriorDone] = useState<boolean>(false);
   const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
-  const [ootToday, setOotToday] = useState<boolean>(false);
+  const [bolDeferred, setBolDeferred] = useState<boolean>(() => (jobUuid ? loadBolDeferred(jobUuid) : false));
 
-  useEffect(() => { setTripLink(jobUuid ? loadTripLink(jobUuid) : null); }, [jobUuid]);
+  useEffect(() => {
+    setTripLink(jobUuid ? loadTripLink(jobUuid) : null);
+    setBolDeferred(jobUuid ? loadBolDeferred(jobUuid) : false);
+  }, [jobUuid]);
 
   // The trip's anchor job: the linked in-progress BOL's job, or this job.
   const tripJob = tripLink?.trip_job_uuid || jobUuid;
@@ -245,43 +249,22 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     return () => { cancelled = true; };
   }, [longDistance, jobUuid, tripJob]);
 
-  // Out-of-town per-diem is PER PERSON: each crew member marks their own day.
-  useEffect(() => {
-    if (!longDistance) return;
-    const local = loadLdDay(ldToday());
-    if (local) setOotToday(!!local.out_of_town);
-    let cancelled = false;
-    hydrateDay(ldToday()).then((d) => { if (!cancelled && d) setOotToday(!!d.out_of_town); });
-    return () => { cancelled = true; };
-  }, [longDistance]);
-
-  function toggleOot() {
-    const next = !ootToday;
-    setOotToday(next);
-    setLdDay(ldToday(), { out_of_town: next });
+  function setBolDeferredFlag(v: boolean) {
+    setBolDeferred(v);
+    saveBolDeferred(jobUuid, v);
   }
   function linkTrip(o: OpenBol | null) {
     if (o) {
       const link: TripLink = { trip_job_uuid: o.job_uuid, bol_id: o.bol_id, label: `${o.job_name || "Untitled"}${o.job_date ? " · " + o.job_date : ""}` };
       saveTripLink(jobUuid, link);
       setTripLink(link);
+      setBolDeferredFlag(false);
     } else {
       saveTripLink(jobUuid, null);
       setTripLink(null);
     }
   }
 
-  const ldPay = useMemo(() => {
-    const by = new Map<string, { out: number; drive: number }>();
-    for (const d of ldDays) {
-      const name = d.driver_name || "Unknown";
-      const cur = by.get(name) || { out: 0, drive: 0 };
-      if (d.out_of_town) cur.out += 1;
-      if (d.drive_day) cur.drive += 1;
-      by.set(name, cur);
-    }
-    return [...by.entries()].map(([name, v]) => ({ name, ...v, perDiem: v.out * 50 })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [ldDays]);
   const { settings: themeSettings } = useTheme();
   const ht = themeSettings.helpTexts;
 
@@ -731,6 +714,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setSaved(false);
   }
 
+  function toggleEmployeeOutOfTown(i: number) {
+    setData((prev) => ({
+      ...prev,
+      employee_hours: prev.employee_hours.map((e, idx) =>
+        idx === i ? { ...e, out_of_town: !e.out_of_town } : e,
+      ),
+    }));
+    setSaved(false);
+  }
+
   function removeEmployee(i: number) {
     setData((prev) => ({
       ...prev,
@@ -811,6 +804,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               break_hours: Number(e.break_hours) || 0,
               hours: Number(e.hours) || 0,
               non_billable: !!e.non_billable,
+              out_of_town: !!e.out_of_town,
             })),
         }),
       });
@@ -914,115 +908,83 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-      {/* Long-distance: prompt for the interstate compliance docs alongside
-          the end-of-trip report. */}
+      {/* Long-distance documents — PODS + BOL. Checking an item off means
+          completing/attaching the actual document. */}
       {longDistance && (
         <div className="card" style={{ borderColor: "var(--brand)" }}>
-          <div className="sectionTitle">Long-distance checklist</div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-            Required for this interstate trip. Complete any that aren't done yet.
+          <div className="sectionTitle">Long-distance documents</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+            Required for this interstate trip. Complete or attach each document. Multi-day trips: link this day to the trip's Bill of Lading so its documents stay together.
           </div>
-          <div className="col" style={{ gap: 10 }}>
+          <div className="col" style={{ gap: 12 }}>
+            {/* Prior On-Duty */}
             <ChecklistItem
               done={priorDone}
               label="Prior On-Duty Statement"
               hint="§395.8(j)(2) — before the trip"
               onGo={() => nav("/long-distance")}
             />
-            <ChecklistItem
-              done={bolStatus === "origin_signed" || bolStatus === "delivered"}
-              label="BOL signed at origin"
-              hint="Shipper + carrier, before loading"
-              onGo={() => nav("/long-distance")}
-            />
-            <ChecklistItem
-              done={bolStatus === "delivered"}
-              label="BOL signed at destination"
-              hint="Shipper + carrier, on delivery"
-              onGo={() => nav("/long-distance")}
-            />
-          </div>
-        </div>
-      )}
 
-      {/* Trip documents — link a multi-day trip's days together via its BOL. */}
-      {longDistance && (
-        <div className="card">
-          <div className="sectionTitle">Trip documents</div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
-            Multi-day trips: each day is its own calendar job. Link this day to the trip's Bill of Lading so the trip's documents (BOL, Prior On-Duty) stay together.
-          </div>
-          {tripLink ? (
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div>
-                <div style={{ fontWeight: 700 }}>Part of trip: {tripLink.label}</div>
-                {bolRef && <div className="small" style={{ color: "var(--muted)" }}>{bolRef}</div>}
+            {/* Bill of Lading */}
+            {bolStatus ? (
+              <div className="col" style={{ gap: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` · ${bolRef}` : ""}
+                </div>
+                <ChecklistItem
+                  done={bolStatus === "origin_signed" || bolStatus === "delivered"}
+                  label="BOL signed at origin"
+                  hint="Shipper + carrier, before loading"
+                  onGo={() => nav("/long-distance")}
+                />
+                <ChecklistItem
+                  done={bolStatus === "delivered"}
+                  label="BOL signed at destination"
+                  hint="Shipper + carrier, on delivery"
+                  onGo={() => nav("/long-distance")}
+                />
+                {tripLink && (
+                  <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>
+                )}
               </div>
-              <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12 }}>Unlink</button>
-            </div>
-          ) : (
-            <>
-              {bolRef ? (
-                <div className="small" style={{ marginBottom: 8 }}>This job's BOL: <strong>{bolRef}</strong></div>
-              ) : (
-                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>No BOL started on this job's calendar day yet.</div>
-              )}
-              <label className="col" style={{ gap: 4 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Link this day to an in-progress trip BOL</span>
-                <select
-                  value=""
-                  onChange={(e) => {
-                    const o = openBols.find((b) => b.bol_id === e.target.value);
-                    if (o) linkTrip(o);
-                  }}
-                >
-                  <option value="">Select a trip BOL…</option>
-                  {openBols.filter((b) => b.job_uuid !== jobUuid).map((b) => (
-                    <option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " · " + b.job_date : ""}</option>
-                  ))}
-                </select>
-              </label>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Per-diem — per person, marked by each crew member for their own day. */}
-      {longDistance && (
-        <div className="card">
-          <div className="sectionTitle">Per-diem</div>
-          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14 }}>
-            <input type="checkbox" checked={ootToday} onChange={toggleOot} style={{ accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
-            <span>I was <strong>out of town</strong> today</span>
-          </label>
-          <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
-            $50 per person, per day out of town. Each crew member marks their own days.
+            ) : bolDeferred ? (
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 700 }}>Bill of Lading</div>
+                  <div className="small" style={{ color: "var(--muted)" }}>Not at destination yet — no completed BOL to attach.</div>
+                </div>
+                <button type="button" onClick={() => setBolDeferredFlag(false)} style={{ fontSize: 12 }}>Attach BOL</button>
+              </div>
+            ) : (
+              <div className="col" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div style={{ fontWeight: 700 }}>Bill of Lading</div>
+                <label className="col" style={{ gap: 4 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Attach the trip's Bill of Lading</span>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const o = openBols.find((b) => b.bol_id === e.target.value);
+                      if (o) linkTrip(o);
+                    }}
+                  >
+                    <option value="">Select an in-progress BOL…</option>
+                    {openBols.filter((b) => b.job_uuid !== jobUuid).map((b) => (
+                      <option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " · " + b.job_date : ""}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button type="button" className="btnPrimary" onClick={() => nav("/long-distance")} style={{ fontSize: 13 }}>Complete a BOL</button>
+                  <button type="button" onClick={() => setBolDeferredFlag(true)} style={{ fontSize: 13 }}>Not at destination yet</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Driver RODS sign-off (self-hides when no driving was logged today). */}
       {longDistance && <RodsSignoff bolRef={bolRef} />}
-
-      {/* Long-distance pay tally (payroll reminder for admin). */}
-      {longDistance && ldPay.length > 0 && (
-        <div className="card">
-          <div className="sectionTitle">Long-distance pay — this trip</div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-            $50 per person, per day out of town. Drive days are logged for the fixed drive pay (paid separately).
-          </div>
-          <div className="col" style={{ gap: 6 }}>
-            {ldPay.map((p) => (
-              <div key={p.name} className="row" style={{ justifyContent: "space-between", gap: 8, fontSize: 14, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-                <span style={{ fontWeight: 700 }}>{p.name}</span>
-                <span className="small" style={{ color: "var(--muted)" }}>
-                  {p.out} day{p.out === 1 ? "" : "s"} out → ${p.perDiem} · {p.drive} drive day{p.drive === 1 ? "" : "s"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Draft autosave indicator. Hidden once the report is submitted
           (the existing "✓ Report saved" banner below covers that state). */}
@@ -1309,6 +1271,23 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                           Non-billable
                         </span>
                       </label>
+                      {longDistance && (
+                        <label
+                          className="row"
+                          style={{ gap: 4, alignItems: "center", cursor: "pointer" }}
+                          title="Out of town this day — $50 per-diem for this employee"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!!emp.out_of_town}
+                            onChange={() => toggleEmployeeOutOfTown(i)}
+                            style={{ accentColor: "var(--brand)", width: 14, height: 14 }}
+                          />
+                          <span className="small" style={{ color: "var(--muted)" }}>
+                            Per-diem
+                          </span>
+                        </label>
+                      )}
                     </div>
                     <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                       {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
