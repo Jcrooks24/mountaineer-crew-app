@@ -66,8 +66,10 @@ class RodsCreate(BaseModel):
     total_sleeper: str | None = None
     total_driving: str | None = None
     total_on_duty: str | None = None
-    signature: str
-    signed_at: datetime
+    # Optional: in-progress days are autosaved to the server unsigned for
+    # continuity/backup; the signature is attached when the driver signs.
+    signature: str | None = None
+    signed_at: datetime | None = None
 
 
 class RodsResponse(BaseModel):
@@ -91,8 +93,8 @@ class RodsResponse(BaseModel):
     total_sleeper: str | None
     total_driving: str | None
     total_on_duty: str | None
-    signature: str
-    signed_at: datetime
+    signature: str | None
+    signed_at: datetime | None
     created_at: datetime
 
     class Config:

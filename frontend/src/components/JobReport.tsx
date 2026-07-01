@@ -101,7 +101,11 @@ function coerceReviewCandidate(v: unknown): ReviewCandidate | null {
 // successful submit. Keyed by job_uuid; per-device only — drafts are not
 // synced cross-device.
 const REPORT_DRAFT_PREFIX = "crew_report_draft_v1:";
-type ReportDraft = { data: ReportData; billReviewed: boolean };
+// savedAt lets us resolve draft-vs-server on load: a draft only wins over the
+// server report when it was saved AFTER the server's last update (i.e. it holds
+// newer in-progress edits). A server report updated on another device since
+// this device's draft was saved wins (cross-device continuity).
+type ReportDraft = { data: ReportData; billReviewed: boolean; savedAt?: string };
 
 function reportDraftKey(uuid: string) {
   return `${REPORT_DRAFT_PREFIX}${uuid || "none"}`;
@@ -119,7 +123,7 @@ function loadReportDraft(uuid: string): ReportDraft | null {
 }
 function saveReportDraft(uuid: string, draft: ReportDraft) {
   try {
-    localStorage.setItem(reportDraftKey(uuid), JSON.stringify(draft));
+    localStorage.setItem(reportDraftKey(uuid), JSON.stringify({ ...draft, savedAt: new Date().toISOString() }));
   } catch {}
 }
 function clearReportDraft(uuid: string) {
@@ -198,6 +202,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // the autosave effect skips writing back the just-loaded values (which
   // would flip the pill to "Saving" on mount for no reason).
   const skipNextDraftSaveRef = useRef<boolean>(false);
+  // Server report's updated_at from the last GET, to resolve draft-vs-server.
+  const serverUpdatedAtRef = useRef<string>("");
 
   // Load existing report when job_uuid changes
   useEffect(() => {
@@ -223,6 +229,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           crew_feedback: r.crew_feedback ?? "",
           employee_hours: r.employee_hours ?? [],
         });
+        serverUpdatedAtRef.current = (r as any).updated_at || "";
         setSaved(true);
       })
       .catch((e) => {
@@ -247,15 +254,19 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             crew_feedback: "",
             employee_hours: [],
           });
+          serverUpdatedAtRef.current = "";
         }
       })
       .finally(() => {
-        // After the server load (or 404 fallback), check for an in-progress
-        // draft. Drafts represent the user's most-recent typing on this
-        // device, so they win over a stale server snapshot from a previous
-        // submit. Cleared on successful Save below.
+        // Resolve draft vs. server. A local draft holds this device's most-recent
+        // typing, so it wins ONLY when it was saved after the server's last
+        // update. If the server report was updated on another device since this
+        // draft was saved (or the draft predates the savedAt stamp), the server
+        // wins so a stale local draft can't hide a newer report (cross-device).
         const draft = loadReportDraft(jobUuid);
-        if (draft) {
+        const serverUpdated = serverUpdatedAtRef.current;
+        const draftWins = !!draft && (!serverUpdated || String(draft.savedAt || "") >= serverUpdated);
+        if (draftWins && draft) {
           setData({
             ...draft.data,
             review_candidate: coerceReviewCandidate(draft.data.review_candidate),
@@ -263,6 +274,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           setBillReviewed(draft.billReviewed);
           setDraftStatus("saved");
         } else {
+          // Server is authoritative; drop the stale draft so autosave doesn't
+          // resurrect it.
+          if (draft) clearReportDraft(jobUuid);
           setDraftStatus("idle");
         }
         skipNextDraftSaveRef.current = true;

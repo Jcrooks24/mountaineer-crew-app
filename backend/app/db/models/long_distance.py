@@ -69,8 +69,10 @@ class RodsLog(Base):
     total_driving = Column(String, nullable=True)
     total_on_duty = Column(String, nullable=True)
 
-    signature = Column(Text, nullable=False)  # base64 PNG data URL
-    signed_at = Column(DateTime, nullable=False)
+    # Nullable: an in-progress day is autosaved to the server unsigned (for
+    # continuity / cross-device resume); the signature is set when finalized.
+    signature = Column(Text, nullable=True)  # base64 PNG data URL
+    signed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False)
 
 

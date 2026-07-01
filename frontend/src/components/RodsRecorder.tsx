@@ -11,9 +11,9 @@ import {
   computeTotals,
   currentStatus,
   enqueueDay,
-  fetchRemoteDay,
   listLocalDays,
   loadDay,
+  loadOrResumeDay,
   minutesOfDay,
   minutesToHHMM,
   newDay,
@@ -68,12 +68,7 @@ export default function RodsRecorder({ onBack }: { onBack?: () => void }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let d = loadDay(date);
-      if (!d) {
-        const remote = await fetchRemoteDay(date);
-        d = remote || newDay(date, driverName, listLocalDays().find((x) => x.log_date !== date) || null);
-        if (remote) saveDay(remote);
-      }
+      const d = await loadOrResumeDay(date, driverName);
       if (!cancelled) { setDay(d); setConsent(false); }
       await syncQueue();
     })();
@@ -83,8 +78,15 @@ export default function RodsRecorder({ onBack }: { onBack?: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
-  // Autosave.
-  useEffect(() => { saveDay(day); }, [day]);
+  // Autosave locally, and back the day up to the server (continuity) once it
+  // has real content — debounced so taps/typing don't spam the API. Unsigned
+  // days are DB-only on the server; signing triggers the Sheet export.
+  useEffect(() => {
+    saveDay(day);
+    if (day.changes.length <= 1 && !day.signature) return;
+    const t = window.setTimeout(() => { enqueueDay(day); syncQueue(); }, 800);
+    return () => window.clearTimeout(t);
+  }, [day]);
 
   function patch(p: Partial<RodsDay>) {
     setDay((prev) => ({ ...prev, ...p, updated_at: new Date().toISOString() }));
@@ -140,7 +142,7 @@ export default function RodsRecorder({ onBack }: { onBack?: () => void }) {
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 15 }}>Record of Duty Status</div>
-          <div className="small" style={{ color: "var(--muted)" }}>FMCSR §395.8 — tap to log a status change{day.submitted ? " · signed/synced" : ""}</div>
+          <div className="small" style={{ color: "var(--muted)" }}>FMCSR §395.8 — tap to log a status change{day.signature ? " · signed" : day.submitted ? " · backed up" : ""}</div>
         </div>
         {onBack && (
           <button onClick={onBack} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}>← Menu</button>
@@ -164,7 +166,7 @@ export default function RodsRecorder({ onBack }: { onBack?: () => void }) {
           <div className="col" style={{ gap: 6, marginTop: 10 }}>
             {recentDays.map((d) => (
               <button key={d.log_date} onClick={() => { setDate(d.log_date); setShowDays(false); }} style={{ textAlign: "left", fontSize: 13 }}>
-                <strong>{d.log_date}</strong>{d.log_date === todayLocal() ? " (today)" : ""} — {d.changes.length - 1} change{d.changes.length - 1 === 1 ? "" : "s"}{d.submitted ? " · signed" : ""}
+                <strong>{d.log_date}</strong>{d.log_date === todayLocal() ? " (today)" : ""} — {d.changes.length - 1} change{d.changes.length - 1 === 1 ? "" : "s"}{d.signature ? " · signed" : d.submitted ? " · backed up" : ""}
               </button>
             ))}
           </div>

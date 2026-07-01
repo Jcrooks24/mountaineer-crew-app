@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { type LdDay, loadLdDay, setLdDay, syncQueue, todayLocal } from "../lib/ldDayStore";
+import { type LdDay, hydrateDay, loadLdDay, setLdDay, syncQueue, todayLocal } from "../lib/ldDayStore";
 
 /** Long-distance "Today" card — the driver marks whether today was out of town
  * ($50/day per-diem) and/or a drive day, for admin payroll. Self-contained;
@@ -9,10 +9,17 @@ export default function LdDayCard() {
   const [day, setDay] = useState<LdDay | null>(() => loadLdDay(today));
 
   useEffect(() => {
-    syncQueue();
+    let cancelled = false;
+    (async () => {
+      await syncQueue();
+      // Cross-device: adopt this driver's server record for today if present.
+      const remote = await hydrateDay(today);
+      if (!cancelled && remote) setDay(remote);
+    })();
     const on = () => syncQueue();
     window.addEventListener("online", on);
-    return () => window.removeEventListener("online", on);
+    return () => { cancelled = true; window.removeEventListener("online", on); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function toggle(field: "out_of_town" | "drive_day") {

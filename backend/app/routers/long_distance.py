@@ -166,11 +166,18 @@ def create_rods(
         existing.total_sleeper = body.total_sleeper
         existing.total_driving = body.total_driving
         existing.total_on_duty = body.total_on_duty
-        existing.signature = body.signature
-        existing.signed_at = body.signed_at
+        # Only attach a signature when one is provided — an unsigned autosave
+        # (continuity backup) must NOT wipe a signature already captured on
+        # another device.
+        if body.signature is not None:
+            existing.signature = body.signature
+            existing.signed_at = body.signed_at
         db.commit()
         db.refresh(existing)
-        run_export_in_background(export_rods_to_sheets, _rods_to_response(existing).model_dump())
+        # Sheet = signed compliance record; unsigned autosaves stay DB-only so
+        # in-progress taps don't spam the replace-style Sheets export.
+        if existing.signature:
+            run_export_in_background(export_rods_to_sheets, _rods_to_response(existing).model_dump())
         return _rods_to_response(existing)
 
     row = RodsLog(
@@ -201,7 +208,8 @@ def create_rods(
     db.commit()
     db.refresh(row)
 
-    run_export_in_background(export_rods_to_sheets, _rods_to_response(row).model_dump())
+    if row.signature:
+        run_export_in_background(export_rods_to_sheets, _rods_to_response(row).model_dump())
 
     return _rods_to_response(row)
 

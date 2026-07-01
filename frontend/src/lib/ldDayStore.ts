@@ -155,3 +155,20 @@ export async function fetchTripDays(jobUuid: string): Promise<LdDay[]> {
     return [];
   }
 }
+
+/** Adopt this driver's server record for a date (cross-device continuity), so a
+ * second device shows a toggle set elsewhere. Skips when a local toggle is still
+ * queued (unsynced), to avoid clobbering it. Returns the adopted record or null. */
+export async function hydrateDay(date: string): Promise<LdDay | null> {
+  if (!date || !navigator.onLine) return null;
+  if (loadQueue().some((o) => o.date === date)) return null;
+  try {
+    const r = await apiFetch<{ ok: boolean; days: LdDay[] }>(`/api/long-distance/day`);
+    const remote = (r.days || []).find((d) => d.date === date);
+    if (!remote) return null;
+    saveLdDay(remote);
+    return remote;
+  } catch {
+    return null;
+  }
+}

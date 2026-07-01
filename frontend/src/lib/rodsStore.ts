@@ -269,7 +269,30 @@ export async function syncQueue(): Promise<number> {
   }
 }
 
-/** Fetch a signed day from the server (cross-device / prior-day resume). */
+function queueHasDay(date: string): boolean {
+  return loadQueue().some((o) => o.log_date === date);
+}
+
+/** Resolve the working day: adopt the server copy when it's ahead (more changes,
+ * or it's signed and local isn't) so the driver can resume on another device or
+ * after a dead device. Skips adoption when local has unsynced queued work. */
+export async function loadOrResumeDay(date: string, driverName: string): Promise<RodsDay> {
+  const local = loadDay(date);
+  const remote = queueHasDay(date) ? null : await fetchRemoteDay(date);
+  if (remote) {
+    const adopt =
+      !local ||
+      (remote.changes.length > local.changes.length) ||
+      (!!remote.signature && !local.signature);
+    if (adopt) {
+      saveDay(remote);
+      return remote;
+    }
+  }
+  return local || newDay(date, driverName, listLocalDays().find((x) => x.log_date !== date) || null);
+}
+
+/** Fetch a day from the server (signed or in-progress) for cross-device resume. */
 export async function fetchRemoteDay(date: string): Promise<RodsDay | null> {
   if (!date || !navigator.onLine) return null;
   try {

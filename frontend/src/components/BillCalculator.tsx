@@ -86,8 +86,20 @@ function loadBillDraft(uuid: string): Bill | null {
 }
 function saveBillDraft(uuid: string, bill: Bill) {
   try {
-    localStorage.setItem(billDraftKey(uuid), JSON.stringify(bill));
+    localStorage.setItem(billDraftKey(uuid), JSON.stringify({ ...bill, savedAt: new Date().toISOString() }));
   } catch {}
+}
+// When the draft was last saved — used to resolve draft-vs-server on load so a
+// stale local draft can't hide a bill updated on another device.
+function loadBillDraftSavedAt(uuid: string): string {
+  try {
+    const raw = localStorage.getItem(billDraftKey(uuid));
+    if (!raw) return "";
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.savedAt === "string" ? parsed.savedAt : "";
+  } catch {
+    return "";
+  }
 }
 function clearBillDraftStorage(uuid: string) {
   try {
@@ -223,14 +235,21 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     // wins if one exists. Drafts represent the user's most-recent typing on
     // this device — clobbering them with stale server data on every refresh
     // was what made bill notes feel like they didn't autosave.
-    apiFetch<{ items: LineItem[]; global_discount: number; notes: string }>(
+    apiFetch<{ items: LineItem[]; global_discount: number; notes: string; updated_at?: string }>(
       `/api/bill?job_uuid=${encodeURIComponent(jobUuid)}`
     )
       .then((r) => {
+        // A local draft wins only when saved after the server's last update;
+        // otherwise the server bill (possibly edited on another device) wins.
         const draft = loadBillDraft(jobUuid);
-        setBill(
-          draft ?? { items: r.items, globalDiscount: r.global_discount, notes: r.notes ?? "" },
-        );
+        const serverUpdated = r.updated_at || "";
+        const draftWins = !!draft && (!serverUpdated || loadBillDraftSavedAt(jobUuid) >= serverUpdated);
+        if (draftWins && draft) {
+          setBill(draft);
+        } else {
+          if (draft) clearBillDraftStorage(jobUuid);
+          setBill({ items: r.items, globalDiscount: r.global_discount, notes: r.notes ?? "" });
+        }
         setLoaded(true);
       })
       .catch((e) => {
