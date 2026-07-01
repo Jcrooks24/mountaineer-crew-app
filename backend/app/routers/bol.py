@@ -80,6 +80,13 @@ def _to_dict(row: DigitalBOL) -> Dict[str, Any]:
         "status": row.status or "draft",
         "items": items,
         "shipment": shipment,
+        # Raw signature data URLs ARE returned so a different rep / device can
+        # reopen the job's BOL and generate a complete PDF that includes the
+        # earlier (origin) signatures. GET is job-filtered (typically one BOL).
+        "origin_shipper_sig": row.origin_shipper_sig or "",
+        "origin_carrier_sig": row.origin_carrier_sig or "",
+        "dest_shipper_sig": row.dest_shipper_sig or "",
+        "dest_carrier_sig": row.dest_carrier_sig or "",
         "origin_signed": bool(row.origin_shipper_sig or row.origin_carrier_sig),
         "destination_signed": bool(row.dest_shipper_sig or row.dest_carrier_sig),
         "origin_signed_at": row.origin_signed_at.isoformat() if row.origin_signed_at else "",
@@ -180,6 +187,7 @@ class BOLSignIn(BaseModel):
     phase: str                               # "origin" | "destination"
     shipper_sig: str                         # base64 PNG data URL
     carrier_sig: str                         # base64 PNG data URL
+    shipper_name: Optional[str] = None       # client's printed name
     signed_at: Optional[str] = None
     # origin extras (stored in shipment_json)
     actual_pickup_date: Optional[str] = None
@@ -209,20 +217,22 @@ def sign_bol(
     except Exception:
         ts = datetime.now(timezone.utc)
 
+    try:
+        shipment = json.loads(row.shipment_json) if row.shipment_json else {}
+    except Exception:
+        shipment = {}
+
     if payload.phase == "origin":
         row.origin_shipper_sig = payload.shipper_sig
         row.origin_carrier_sig = payload.carrier_sig
         row.origin_signed_at = ts
         row.status = "origin_signed"
-        try:
-            shipment = json.loads(row.shipment_json) if row.shipment_json else {}
-        except Exception:
-            shipment = {}
         if payload.actual_pickup_date:
             shipment["actual_pickup_date"] = payload.actual_pickup_date
         if payload.vehicle:
             shipment["vehicle"] = payload.vehicle
-        row.shipment_json = json.dumps(shipment)
+        if payload.shipper_name:
+            shipment["origin_shipper_name"] = payload.shipper_name
     elif payload.phase == "destination":
         row.dest_shipper_sig = payload.shipper_sig
         row.dest_carrier_sig = payload.carrier_sig
@@ -231,9 +241,13 @@ def sign_bol(
             row.walkthrough_notes = payload.walkthrough_notes
         if payload.final_charges is not None:
             row.final_charges = payload.final_charges
+        if payload.shipper_name:
+            shipment["dest_shipper_name"] = payload.shipper_name
         row.status = "delivered"
     else:
         raise HTTPException(status_code=400, detail="phase must be 'origin' or 'destination'")
+
+    row.shipment_json = json.dumps(shipment)
 
     row.updated_at = datetime.now(timezone.utc)
     try:

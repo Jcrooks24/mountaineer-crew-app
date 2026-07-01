@@ -12,6 +12,7 @@ import {
   captureItemPhoto,
   enqueueSubmit,
   loadDraft,
+  loadForJob,
   newDraft,
   newUUID,
   pendingSubmitCount,
@@ -105,26 +106,45 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
   const [vehicle, setVehicle] = useState(draft.vehicle || "");
   const [walkNotes, setWalkNotes] = useState(draft.walkthrough_notes || "");
   const [finalCharges, setFinalCharges] = useState(draft.final_charges != null ? String(draft.final_charges) : "");
+  const [shipperName, setShipperName] = useState("");
   const [consent, setConsent] = useState(false);
   const [signBusy, setSignBusy] = useState(false);
   const [signErr, setSignErr] = useState<string | null>(null);
+
+  // Inventory list controls
+  const [invSearch, setInvSearch] = useState("");
+  const [invExpanded, setInvExpanded] = useState(false);
 
   // Autosave the draft on every change.
   useEffect(() => {
     saveDraft(draft);
   }, [draft]);
 
-  // On mount + whenever we come back online: finish any offline photo uploads
-  // and drain the submit queue so queued BOLs and photo links reach the server.
+  // On mount: adopt the server BOL for this job if one exists (so a different
+  // company rep / device can pick up the same job's BOL at any stage — e.g.
+  // one rep builds + signs at origin, another signs at destination). Then
+  // finish any offline photo uploads and drain the queue. Re-drain on reconnect.
   useEffect(() => {
     let cancelled = false;
-    async function flush() {
-      const updated = await retryPendingPhotos(draft);
-      if (!cancelled && updated !== draft) setDraft(updated);
+    (async () => {
+      const job = readActiveJob();
+      const loaded = await loadForJob(
+        job.job_uuid ? job : { job_uuid: draft.job_uuid, job_name: draft.job_name, job_date: draft.job_date },
+      );
+      if (cancelled) return;
+      setDraft(loaded);
+      setPickupDate(loaded.actual_pickup_date || todayLocal());
+      setVehicle(loaded.vehicle || "");
+      setWalkNotes(loaded.walkthrough_notes || "");
+      setFinalCharges(loaded.final_charges != null ? String(loaded.final_charges) : "");
+      const after = await retryPendingPhotos(loaded);
+      if (!cancelled && after !== loaded) setDraft(after);
       await syncQueue();
-    }
-    flush();
-    const onOnline = () => { flush(); };
+    })();
+    const onOnline = () => {
+      syncQueue();
+      retryPendingPhotos(draft).then((u) => { if (!cancelled && u !== draft) setDraft(u); });
+    };
     window.addEventListener("online", onOnline);
     return () => { cancelled = true; window.removeEventListener("online", onOnline); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -221,6 +241,7 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
   async function signSession(phase: "origin" | "destination") {
     setSignErr(null);
     if (draft.items.length === 0) return setSignErr("Add at least one item before signing.");
+    if (!shipperName.trim()) return setSignErr("Enter the client's printed name.");
     if (shipperSigRef.current?.isEmpty()) return setSignErr("Shipper signature is required.");
     if (carrierSigRef.current?.isEmpty()) return setSignErr("Carrier representative signature is required.");
     if (!consent) return setSignErr("Both parties must accept the electronic signature consent.");
@@ -234,6 +255,7 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
         phase,
         shipper_sig: shipperSigRef.current!.toDataURL(),
         carrier_sig: carrierSigRef.current!.toDataURL(),
+        shipper_name: shipperName.trim() || undefined,
         signed_at: new Date().toISOString(),
         ...(phase === "origin"
           ? { actual_pickup_date: pickupDate || undefined, vehicle: vehicle.trim() || undefined }
@@ -248,9 +270,10 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
       const blob = await generateBolPdf(updated);
       await deliverPdfToClient(blob, pdfFilename(updated));
 
-      // Reset pads + consent for any subsequent session.
+      // Reset pads + printed name + consent for any subsequent session.
       shipperSigRef.current?.clear();
       carrierSigRef.current?.clear();
+      setShipperName("");
       setConsent(false);
 
       // Push to the server (or leave queued if offline).
@@ -269,6 +292,19 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
   }
 
   const totalPieces = draft.items.reduce((s, it) => s + it.qty, 0);
+
+  // Inventory display: newest item nearest the Add tile (highest item_no first),
+  // filtered by the search box, and clipped to the 5 most recent unless expanded
+  // or actively searching.
+  const orderedItems = [...draft.items].sort((a, b) => b.item_no - a.item_no);
+  const invQuery = invSearch.trim().toLowerCase();
+  const filteredItems = invQuery
+    ? orderedItems.filter((it) => it.name.toLowerCase().includes(invQuery) || it.condition_notes.toLowerCase().includes(invQuery))
+    : orderedItems;
+  const CLIP = 5;
+  const showAll = invExpanded || invQuery.length > 0;
+  const visibleItems = showAll ? filteredItems : filteredItems.slice(0, CLIP);
+  const hiddenCount = filteredItems.length - visibleItems.length;
 
   return (
     <div className="container">
@@ -368,8 +404,20 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
         {draft.items.length === 0 ? (
           <div className="small" style={{ color: "var(--muted)" }}>No items yet. Add items as they go on the truck.</div>
         ) : (
+          <>
+            {draft.items.length > CLIP && (
+              <input
+                value={invSearch}
+                onChange={(e) => setInvSearch(e.target.value)}
+                placeholder="Search inventory…"
+                style={{ marginBottom: 10 }}
+              />
+            )}
+            {invQuery && filteredItems.length === 0 && (
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>No items match “{invSearch}”.</div>
+            )}
           <div className="col" style={{ gap: 10 }}>
-            {draft.items.map((it) => (
+            {visibleItems.map((it) => (
               <div
                 key={it.id}
                 style={{ padding: 10, border: "1px solid var(--border)", borderRadius: "var(--btn-r)", background: "rgba(255,255,255,0.02)" }}
@@ -445,6 +493,17 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
               </div>
             ))}
           </div>
+            {!invQuery && hiddenCount > 0 && (
+              <button type="button" onClick={() => setInvExpanded(true)} style={{ marginTop: 10, fontSize: 13 }}>
+                Show all {filteredItems.length} items ({hiddenCount} more)
+              </button>
+            )}
+            {!invQuery && invExpanded && draft.items.length > CLIP && (
+              <button type="button" onClick={() => setInvExpanded(false)} style={{ marginTop: 10, fontSize: 13 }}>
+                Show fewer
+              </button>
+            )}
+          </>
         )}
       </div>
 
@@ -517,6 +576,11 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
               </label>
             </div>
           )}
+
+          <label className="col" style={{ gap: 4, marginBottom: 12 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Client printed name *</span>
+            <input value={shipperName} onChange={(e) => setShipperName(e.target.value)} placeholder="Client's full printed name" />
+          </label>
 
           <div className="col" style={{ gap: 4, marginBottom: 12 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Shipper signature *</span>

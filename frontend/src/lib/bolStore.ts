@@ -72,6 +72,8 @@ export type BOLDraft = {
   dest_shipper_sig?: string;
   dest_carrier_sig?: string;
   dest_signed_at?: string;
+  origin_shipper_name?: string;
+  dest_shipper_name?: string;
   walkthrough_notes?: string;
   final_charges?: number | null;
   signed_pdf_url?: string;
@@ -81,6 +83,7 @@ export type SignInput = {
   phase: "origin" | "destination";
   shipper_sig: string;
   carrier_sig: string;
+  shipper_name?: string;
   signed_at: string;
   actual_pickup_date?: string;
   vehicle?: string;
@@ -195,6 +198,81 @@ export function newDraft(job: { job_uuid: string; job_name: string; job_date: st
     items: [],
     updated_at: new Date().toISOString(),
   };
+}
+
+// ── Cross-rep / cross-device loading ──────────────────────────────────────────
+
+function normalizeServerItem(it: any, i: number): BOLItem {
+  return {
+    item_no: typeof it.item_no === "number" ? it.item_no : i + 1,
+    id: String(it.id ?? newUUID()),
+    name: String(it.name ?? ""),
+    qty: Math.max(1, Math.floor(Number(it.qty) || 1)),
+    condition_notes: String(it.condition_notes ?? ""),
+    photos: Array.isArray(it.photos) ? it.photos : [],
+  };
+}
+
+function draftFromServer(s: any, job: { job_uuid: string; job_name: string; job_date: string }, crewRep?: string): BOLDraft {
+  const shipment = s.shipment || {};
+  return {
+    bol_id: s.bol_id || s.id,
+    job_uuid: s.job_uuid || job.job_uuid || "",
+    job_name: s.job_name || job.job_name || "",
+    job_date: s.job_date || job.job_date || "",
+    status: (s.status as BOLStatus) || "draft",
+    items: Array.isArray(s.items) ? s.items.map(normalizeServerItem) : [],
+    updated_at: s.updated_at || new Date().toISOString(),
+    crew_rep: crewRep || s.created_by || "",
+    origin_shipper_sig: s.origin_shipper_sig || undefined,
+    origin_carrier_sig: s.origin_carrier_sig || undefined,
+    origin_signed_at: s.origin_signed_at || undefined,
+    origin_shipper_name: shipment.origin_shipper_name || undefined,
+    actual_pickup_date: shipment.actual_pickup_date || undefined,
+    vehicle: shipment.vehicle || undefined,
+    dest_shipper_sig: s.dest_shipper_sig || undefined,
+    dest_carrier_sig: s.dest_carrier_sig || undefined,
+    dest_signed_at: s.dest_signed_at || undefined,
+    dest_shipper_name: shipment.dest_shipper_name || undefined,
+    walkthrough_notes: s.walkthrough_notes || undefined,
+    final_charges: s.final_charges ?? null,
+    signed_pdf_url: s.signed_pdf_url || undefined,
+  };
+}
+
+/** Fetch the newest server BOL for a job (server orders newest-first). */
+export async function fetchRemoteBol(jobUuid: string): Promise<any | null> {
+  if (!jobUuid || !navigator.onLine) return null;
+  try {
+    const r = await apiFetch<{ ok: boolean; bols: any[] }>(`/api/bol?job_uuid=${encodeURIComponent(jobUuid)}`);
+    const bols = r.bols || [];
+    return bols.length ? bols[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+function queueHasOpsForBol(bolId: string): boolean {
+  return loadQueue().some((o) => o.bol_id === bolId);
+}
+
+/** Resolve the working draft for a job: adopt the server BOL as the source of
+ * truth (so any rep/device can continue a job's BOL at any stage, with the
+ * earlier signatures intact) UNLESS there is unsynced local work, or the local
+ * draft is newer than the server (autosaved edits not yet pushed). */
+export async function loadForJob(job: { job_uuid: string; job_name: string; job_date: string }): Promise<BOLDraft> {
+  const local = loadDraft(job.job_uuid);
+  const pendingLocal = local ? queueHasOpsForBol(local.bol_id) : false;
+  const server = pendingLocal ? null : await fetchRemoteBol(job.job_uuid);
+  if (server) {
+    const serverAheadOrEqual = !local || String(server.updated_at || "") >= String(local.updated_at || "");
+    if (serverAheadOrEqual) {
+      const draft = draftFromServer(server, job, local?.crew_rep);
+      saveDraft(draft);
+      return draft;
+    }
+  }
+  return local || newDraft(job);
 }
 
 // ── Submit queue (idempotent upsert by bol_id) ────────────────────────────────
@@ -364,6 +442,7 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
       origin_shipper_sig: input.shipper_sig,
       origin_carrier_sig: input.carrier_sig,
       origin_signed_at: input.signed_at,
+      origin_shipper_name: input.shipper_name || draft.origin_shipper_name,
       actual_pickup_date: input.actual_pickup_date || draft.actual_pickup_date,
       vehicle: input.vehicle || draft.vehicle,
       status: "origin_signed",
@@ -375,6 +454,7 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
       dest_shipper_sig: input.shipper_sig,
       dest_carrier_sig: input.carrier_sig,
       dest_signed_at: input.signed_at,
+      dest_shipper_name: input.shipper_name || draft.dest_shipper_name,
       walkthrough_notes: input.walkthrough_notes ?? draft.walkthrough_notes,
       final_charges: input.final_charges ?? draft.final_charges,
       status: "delivered",
@@ -387,6 +467,7 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
     phase: input.phase,
     shipper_sig: input.shipper_sig,
     carrier_sig: input.carrier_sig,
+    shipper_name: input.shipper_name || "",
     signed_at: input.signed_at,
   };
   if (input.phase === "origin") {

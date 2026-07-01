@@ -181,8 +181,8 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
   }
 
   // ── Signature blocks ──
-  const drawSig = async (label: string, dataUrl?: string, whenIso?: string) => {
-    ensure(96);
+  const drawSig = async (label: string, dataUrl?: string, whenIso?: string, printedName?: string) => {
+    ensure(104);
     y -= 4;
     drawText(label, { size: 9, f: bold, gap: 3 });
     // signature area
@@ -200,19 +200,20 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
     // signature line
     page.drawLine({ start: { x: MARGIN, y: boxTop - boxH }, end: { x: MARGIN + 260, y: boxTop - boxH }, thickness: 0.6, color: rgb(0.4, 0.42, 0.45) });
     y = boxTop - boxH - 2;
+    if (printedName) drawText(`Printed name: ${printedName}`, { size: 8, gap: 1, color: rgb(0.1, 0.1, 0.12) });
     drawText(`Signature${whenIso ? "   ·   " + fmtDate(whenIso) : ""}`, { size: 7.5, gap: 6, color: rgb(0.4, 0.42, 0.45) });
   };
 
   heading("Origin Signing — before loading");
-  await drawSig("Shipper — signature at origin", draft.origin_shipper_sig, draft.origin_signed_at);
-  await drawSig("Carrier representative — signature at origin", draft.origin_carrier_sig, draft.origin_signed_at);
+  await drawSig("Shipper — signature at origin", draft.origin_shipper_sig, draft.origin_signed_at, draft.origin_shipper_name);
+  await drawSig(`Carrier representative — signature at origin`, draft.origin_carrier_sig, draft.origin_signed_at, draft.crew_rep);
 
   if (draft.dest_shipper_sig || draft.dest_carrier_sig) {
     heading("Destination Signing — upon delivery");
     if (draft.walkthrough_notes) drawText(`Walk-through notes: ${draft.walkthrough_notes}`, { size: 8, gap: 3 });
     if (draft.final_charges != null) drawText(`Final actual charges: $${Number(draft.final_charges).toFixed(2)}`, { size: 8, f: bold, gap: 4 });
-    await drawSig("Shipper — signature at delivery", draft.dest_shipper_sig, draft.dest_signed_at);
-    await drawSig("Carrier representative — signature at delivery", draft.dest_carrier_sig, draft.dest_signed_at);
+    await drawSig("Shipper — signature at delivery", draft.dest_shipper_sig, draft.dest_signed_at, draft.dest_shipper_name);
+    await drawSig(`Carrier representative — signature at delivery`, draft.dest_carrier_sig, draft.dest_signed_at, draft.crew_rep);
   }
 
   const bytes = await doc.save();
