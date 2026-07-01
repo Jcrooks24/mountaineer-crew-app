@@ -1263,6 +1263,18 @@ ESTIMATE_ITEM_HEADERS = [
     "total_weight_lbs", "total_cubic_ft", "notes", "exported_at",
 ]
 
+# Digital Bill of Lading — one summary row per BOL, one row per item. Replace
+# strategy (delete-before-write by bol_id), same as estimates.
+BOL_HEADERS = [
+    "bol_id", "created_by", "job_uuid", "job_name", "job_date",
+    "status", "item_count", "created_at", "updated_at",
+]
+
+BOL_ITEM_HEADERS = [
+    "bol_id", "job_name", "job_date", "item_no", "item_name",
+    "qty", "condition_notes", "photo_links", "exported_at",
+]
+
 
 def _delete_sheet_rows_by_value(
     svc: Any,
@@ -1425,6 +1437,92 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
 
         _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
         _generic_mark_exported(db, "estimate_item", item_keys)
+        total_written += len(item_rows)
+
+    return total_written
+
+
+def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
+    """Write one summary row to the BOLs tab and one row per item to the
+    BOLItems tab, always reflecting the current state of the BOL. Replace
+    strategy — existing rows for this bol_id are deleted before writing fresh
+    ones — so re-submits (photo-link backfill, later signing) never duplicate.
+    Modeled on export_estimate_to_sheets."""
+    summary_tab = os.getenv("SHEETS_BOLS_TAB", "BOLs").strip() or "BOLs"
+    items_tab = os.getenv("SHEETS_BOL_ITEMS_TAB", "BOLItems").strip() or "BOLItems"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    bol_id = bol.get("bol_id") or bol.get("id") or ""
+    if not bol_id:
+        return 0
+    updated_at = _iso(bol.get("updated_at"))
+
+    svc = _get_sheets_svc(db)
+
+    # Delete existing rows for this bol_id from both tabs so we end with exactly
+    # one summary row and one row per current item.
+    for tab in (summary_tab, items_tab):
+        _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "bol_id", bol_id)
+
+    # Clear dedup entries so the fresh rows are accepted.
+    db.execute(
+        text(
+            "DELETE FROM sheet_generic_exports "
+            "WHERE kind IN ('bol', 'bol_item') AND export_key LIKE :prefix"
+        ),
+        {"prefix": f"{bol_id}:%"},
+    )
+    db.commit()
+
+    total_written = 0
+    items = bol.get("items") or []
+
+    # Summary row
+    summary_row = {
+        "bol_id": bol_id,
+        "created_by": bol.get("created_by", "") or "",
+        "job_uuid": bol.get("job_uuid", "") or "",
+        "job_name": bol.get("job_name", "") or "",
+        "job_date": bol.get("job_date", "") or "",
+        "status": bol.get("status", "") or "",
+        "item_count": sum(int(it.get("qty", 1) or 1) for it in items),
+        "created_at": _iso(bol.get("created_at")),
+        "updated_at": updated_at,
+    }
+    actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, BOL_HEADERS))
+    _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, actual_summary_headers)])
+    _generic_mark_exported(db, "bol", [f"{bol_id}:{updated_at}"])
+    total_written += 1
+
+    # Item rows — one per current item
+    if items:
+        job_name = bol.get("job_name", "") or ""
+        job_date = bol.get("job_date", "") or ""
+        item_rows: List[Dict[str, Any]] = []
+        item_keys: List[str] = []
+        for it in items:
+            item_id = it.get("id", "")
+            photos = it.get("photos") or []
+            photo_links = ", ".join(
+                p.get("drive_url", "") for p in photos if p.get("drive_url")
+            )
+            item_rows.append({
+                "bol_id": bol_id,
+                "job_name": job_name,
+                "job_date": job_date,
+                "item_no": it.get("item_no", ""),
+                "item_name": it.get("name", ""),
+                "qty": it.get("qty", 0) or 0,
+                "condition_notes": it.get("condition_notes", "") or "",
+                "photo_links": photo_links,
+                "exported_at": updated_at,
+            })
+            item_keys.append(f"{bol_id}:{item_id}:{updated_at}")
+
+        actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, BOL_ITEM_HEADERS))
+        item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
+        _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
+        _generic_mark_exported(db, "bol_item", item_keys)
         total_written += len(item_rows)
 
     return total_written

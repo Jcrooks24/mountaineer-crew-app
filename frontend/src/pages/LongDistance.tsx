@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
+import BillOfLadingForm from "../components/BillOfLadingForm";
+import { BetaTag } from "../components/BetaTag";
 
-type Section = "menu" | "prior" | "rods" | "hos" | "trala";
+type Section = "menu" | "prior" | "rods" | "hos" | "trala" | "bol";
 
 function todayLocal() {
   const d = new Date();
@@ -33,6 +35,7 @@ export default function LongDistance() {
 
   if (section === "prior") return <PriorOnDutyForm onBack={() => setSection("menu")} />;
   if (section === "rods") return <RODSForm onBack={() => setSection("menu")} />;
+  if (section === "bol") return <BillOfLadingForm onBack={() => setSection("menu")} />;
 
   return (
     <div className="container">
@@ -76,6 +79,13 @@ export default function LongDistance() {
             <div style={{ fontWeight: 700 }}>Record of Duty Status (RODS)</div>
             <div className="small" style={{ color: "var(--muted)" }}>
               Fill and sign your daily log on the phone — no paper.
+            </div>
+          </button>
+          <button onClick={() => setSection("bol")} style={{ textAlign: "left" }}>
+            <div style={{ fontWeight: 700 }}>Digital Bill of Lading</div>
+            <BetaTag feature="digitalBOL" />
+            <div className="small" style={{ color: "var(--muted)" }}>
+              Build the declared inventory in the field — photos, condition notes, offline.
             </div>
           </button>
         </div>
