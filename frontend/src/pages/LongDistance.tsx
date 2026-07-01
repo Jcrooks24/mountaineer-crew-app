@@ -4,10 +4,10 @@ import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import BillOfLadingForm from "../components/BillOfLadingForm";
-import RodsRecorder from "../components/RodsRecorder";
 import { BetaTag } from "../components/BetaTag";
+import { readActiveJob } from "../lib/bolStore";
 
-type Section = "menu" | "prior" | "rods" | "hos" | "trala" | "bol";
+type Section = "menu" | "prior" | "hos" | "trala" | "bol";
 
 function todayLocal() {
   const d = new Date();
@@ -35,11 +35,6 @@ export default function LongDistance() {
   const [section, setSection] = useState<Section>("menu");
 
   if (section === "prior") return <PriorOnDutyForm onBack={() => setSection("menu")} />;
-  if (section === "rods") return (
-    <div className="container">
-      <RodsRecorder onBack={() => setSection("menu")} />
-    </div>
-  );
   if (section === "bol") return <BillOfLadingForm onBack={() => setSection("menu")} />;
 
   return (
@@ -78,12 +73,6 @@ export default function LongDistance() {
             <div style={{ fontWeight: 700 }}>Prior On-Duty Hours Statement</div>
             <div className="small" style={{ color: "var(--muted)" }}>
               Required before an interstate trip (§395.8(j)(2)).
-            </div>
-          </button>
-          <button onClick={() => setSection("rods")} style={{ textAlign: "left" }}>
-            <div style={{ fontWeight: 700 }}>Record of Duty Status (RODS)</div>
-            <div className="small" style={{ color: "var(--muted)" }}>
-              Fill and sign your daily log on the phone — no paper.
             </div>
           </button>
           <button onClick={() => setSection("bol")} style={{ textAlign: "left" }}>
@@ -179,12 +168,15 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
 
     setBusy(true);
     try {
+      const job = readActiveJob();
       await apiFetch("/api/long-distance/prior-hours", {
         method: "POST",
         body: JSON.stringify({
           statement_id: newUUID(),
           driver_name: driverName.trim(),
           statement_date: tripDate,
+          job_uuid: job.job_uuid || null,
+          job_name: job.job_name || null,
           daily_hours: priorDates.map((d) => ({ date: d, hours: Number(dailyHours[d] || 0) })),
           hours_last_24: last24,
           signature: sigRef.current!.toDataURL(),

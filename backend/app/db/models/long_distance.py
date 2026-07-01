@@ -21,6 +21,11 @@ class PriorOnDutyStatement(Base):
     driver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     driver_name = Column(String, nullable=False)
 
+    # Optional link to the trip's job so "is the PODS done for THIS trip?" can be
+    # answered (the statement is one-per-trip; the LD job is the trip).
+    job_uuid = Column(String, index=True, nullable=True)
+    job_name = Column(String, nullable=True)
+
     # YYYY-MM-DD — the date the statement covers (first day of trip)
     statement_date = Column(String, nullable=False)
 

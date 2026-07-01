@@ -28,7 +28,9 @@ export const DUTY_STATUSES: DutyStatus[] = ["off_duty", "sleeper", "driving", "o
 
 export const STATUS_LABELS: Record<DutyStatus, string> = {
   off_duty: "Off Duty",
-  sleeper: "Sleeper Berth",
+  // No sleeper berth in our trucks: a resting/riding non-driving occupant logs
+  // "Passenger" (maps to the FMCSA sleeper/rest status internally).
+  sleeper: "Passenger",
   driving: "Driving",
   on_duty: "On Duty",
 };

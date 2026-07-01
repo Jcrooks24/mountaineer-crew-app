@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { type LdDay, fetchTripDays } from "../lib/ldDayStore";
 import { fetchRemoteBol } from "../lib/bolStore";
+import RodsSignoff from "./RodsSignoff";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime } from "../lib/time";
@@ -159,13 +160,16 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
           {hint && <div className="small" style={{ color: "var(--muted)" }}>{hint}</div>}
         </span>
       </span>
-      {done ? (
-        <span className="small" style={{ color: "var(--ok)", fontWeight: 700, flexShrink: 0 }}>Done</span>
-      ) : (
-        <button type="button" onClick={onGo} className="btnPrimary" style={{ fontSize: 12, padding: "6px 12px", flexShrink: 0 }}>
-          Complete
-        </button>
-      )}
+      {/* Always openable so the driver can VIEW a completed PODS/BOL at any
+          time (FMCSR), or complete an outstanding one. */}
+      <button
+        type="button"
+        onClick={onGo}
+        className={done ? "" : "btnPrimary"}
+        style={{ fontSize: 12, padding: "6px 12px", flexShrink: 0 }}
+      >
+        {done ? "View" : "Complete"}
+      </button>
     </div>
   );
 }
@@ -192,7 +196,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       const bol = await fetchRemoteBol(jobUuid);
       if (!cancelled) setBolStatus(bol?.status || "");
       try {
-        const prior = await apiFetch<any[]>("/api/long-distance/prior-hours");
+        const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(jobUuid)}`);
         if (!cancelled) setPriorDone(Array.isArray(prior) && prior.length > 0);
       } catch {
         if (!cancelled) setPriorDone(false);
@@ -874,6 +878,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         </div>
       )}
+
+      {/* Driver RODS sign-off (self-hides when no driving was logged today). */}
+      {longDistance && <RodsSignoff />}
 
       {/* Long-distance pay tally (payroll reminder for admin). */}
       {longDistance && ldPay.length > 0 && (

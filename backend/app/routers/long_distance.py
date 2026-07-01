@@ -37,6 +37,8 @@ def _to_response(s: PriorOnDutyStatement) -> PriorOnDutyResponse:
         statement_id=s.statement_id,
         driver_id=s.driver_id,
         driver_name=s.driver_name,
+        job_uuid=s.job_uuid,
+        job_name=s.job_name,
         statement_date=s.statement_date,
         daily_hours=daily,
         hours_last_24=float(s.hours_last_24 or 0),
@@ -64,6 +66,8 @@ def create_prior_hours(
         statement_id=body.statement_id,
         driver_id=current_user.id,
         driver_name=body.driver_name.strip(),
+        job_uuid=(body.job_uuid or None),
+        job_name=(body.job_name or None),
         statement_date=body.statement_date,
         daily_hours_json=json.dumps([d.model_dump() for d in body.daily_hours]),
         hours_last_24=str(body.hours_last_24),
@@ -82,16 +86,16 @@ def create_prior_hours(
 
 @router.get("/prior-hours", response_model=List[PriorOnDutyResponse])
 def list_my_prior_hours(
+    job_uuid: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    rows = (
-        db.query(PriorOnDutyStatement)
-        .filter(PriorOnDutyStatement.driver_id == current_user.id)
-        .order_by(PriorOnDutyStatement.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    """This driver's Prior On-Duty statements (newest first). If job_uuid is
+    given, only statements for that trip (so the LD report can check per-trip)."""
+    q = db.query(PriorOnDutyStatement).filter(PriorOnDutyStatement.driver_id == current_user.id)
+    if job_uuid:
+        q = q.filter(PriorOnDutyStatement.job_uuid == job_uuid)
+    rows = q.order_by(PriorOnDutyStatement.created_at.desc()).limit(50).all()
     return [_to_response(r) for r in rows]
 
 
