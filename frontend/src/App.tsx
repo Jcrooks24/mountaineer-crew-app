@@ -98,6 +98,10 @@ function withinRetention(iso: string | undefined, days: number): boolean {
 }
 const JOB_KEY = "crew_active_job_uuid_v1";
 const JOB_STATUS_KEY = "crew_job_status_v1"; // "active" | "closed"
+// Local vs long-distance mode — a device-global toggle (persists across
+// restarts) that reshapes the Timeline + Report tabs for multi-day interstate
+// jobs. Defaults to "local".
+const MODE_KEY = "crew_mode_v1"; // "local" | "long_distance"
 const COMMENTS_PREFIX = "crew_job_comments_v1:"; // per job_uuid
 
 // Maps job_uuid → event_id of the JOB_NOTES sentinel event we created for it.
@@ -284,6 +288,15 @@ export default function App() {
   const [jobStatus, setJobStatus] = useState<"active" | "closed">(
     () => (localStorage.getItem(JOB_STATUS_KEY) as any) || "active"
   );
+
+  const [mode, setMode] = useState<"local" | "long_distance">(
+    () => (localStorage.getItem(MODE_KEY) as any) || "local"
+  );
+  const longDistance = mode === "long_distance";
+  function setPersistedMode(val: "local" | "long_distance") {
+    setMode(val);
+    localStorage.setItem(MODE_KEY, val);
+  }
 
   const [status, setStatus] = useState<string>("");
 
@@ -1654,6 +1667,35 @@ export default function App() {
           <span className="chip" style={{ color: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize" }}>
             {jobStatus}
           </span>
+          {/* Local / Long-distance mode toggle (persists on device) */}
+          <div
+            className="chip"
+            role="group"
+            aria-label="Local or long-distance mode"
+            style={{ padding: 0, overflow: "hidden", display: "inline-flex", border: "1px solid rgba(255,255,255,0.3)" }}
+          >
+            <button
+              onClick={() => setPersistedMode("local")}
+              style={{ border: "none", padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", background: !longDistance ? "var(--brand)" : "transparent", color: !longDistance ? "#fff" : "var(--muted)" }}
+            >
+              Local
+            </button>
+            <button
+              onClick={() => setPersistedMode("long_distance")}
+              style={{ border: "none", padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", background: longDistance ? "var(--brand)" : "transparent", color: longDistance ? "#fff" : "var(--muted)" }}
+            >
+              Long-distance
+            </button>
+          </div>
+          {longDistance && (
+            <button
+              className="chip"
+              onClick={() => nav("/long-distance")}
+              style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
+            >
+              LD Docs
+            </button>
+          )}
           <button
             className="chip"
             onClick={() => nav("/dvir")}
@@ -1713,7 +1755,7 @@ export default function App() {
           style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.1, gap: 2 }}
         >
           <span>Report</span>
-          <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>Complete at end of job</span>
+          <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>{longDistance ? "Complete at end of trip" : "Complete at end of job"}</span>
         </button>
       </div>
 
@@ -1818,12 +1860,16 @@ export default function App() {
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("DEPART")}>
                   {sendingType === "DEPART" ? "..." : "Depart"}
                 </button>
-                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "START" })}>
-                  {sendingType === "START" ? "..." : "Start"}
-                </button>
-                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "FINISH" })}>
-                  {sendingType === "FINISH" ? "..." : "Finish"}
-                </button>
+                {!longDistance && (
+                  <>
+                    <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "START" })}>
+                      {sendingType === "START" ? "..." : "Start"}
+                    </button>
+                    <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "FINISH" })}>
+                      {sendingType === "FINISH" ? "..." : "Finish"}
+                    </button>
+                  </>
+                )}
                 <button
                   disabled={!canSend || sendingType !== null}
                   onClick={async () => {
@@ -1835,6 +1881,26 @@ export default function App() {
                   {sendingType === "NOTE" ? "..." : "Note"}
                 </button>
               </div>
+
+              {longDistance && (
+                <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                  <div className="small" style={{ width: "100%", color: "var(--muted)", marginBottom: 2 }}>
+                    Hourly labor — clock the load and unload (drive time is paid separately)
+                  </div>
+                  <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("LOAD_START")}>
+                    {sendingType === "LOAD_START" ? "..." : "Load Start"}
+                  </button>
+                  <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("LOAD_FINISH")}>
+                    {sendingType === "LOAD_FINISH" ? "..." : "Load Finish"}
+                  </button>
+                  <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("UNLOAD_START")}>
+                    {sendingType === "UNLOAD_START" ? "..." : "Unload Start"}
+                  </button>
+                  <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("UNLOAD_FINISH")}>
+                    {sendingType === "UNLOAD_FINISH" ? "..." : "Unload Finish"}
+                  </button>
+                </div>
+              )}
 
               <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
                 <button disabled={queueLen === 0} onClick={syncQueueNow}>
@@ -2302,7 +2368,7 @@ export default function App() {
 
       {/* Report */}
       {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} />
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} />
       )}
 
       {/* DVIR reminder modal — shown before START or FINISH */}

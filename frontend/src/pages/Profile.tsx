@@ -310,10 +310,6 @@ export default function Profile() {
             onClick={() => nav("/reimbursement")}
           />
           <ProfileNavRow
-            label="Long Distance Compliance"
-            onClick={() => nav("/long-distance")}
-          />
-          <ProfileNavRow
             label="Document Library"
             onClick={() => nav("/documents")}
           />

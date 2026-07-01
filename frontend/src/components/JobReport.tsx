@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
@@ -130,9 +131,11 @@ type Props = {
   jobUuid: string;
   jobName: string;
   events?: ReportEvent[];
+  longDistance?: boolean;
 };
 
-export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
+export default function JobReport({ jobUuid, jobName, events = [], longDistance = false }: Props) {
+  const nav = useNavigate();
   const { user } = useAuth();
   const { settings: themeSettings } = useTheme();
   const ht = themeSettings.helpTexts;
@@ -755,6 +758,27 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     >
       {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+      {/* Long-distance: prompt for the interstate compliance docs alongside
+          the end-of-trip report. */}
+      {longDistance && (
+        <div className="card" style={{ borderColor: "var(--brand)" }}>
+          <div className="sectionTitle">Long-distance — complete for this trip</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+            Interstate trips require these in addition to the report below:
+          </div>
+          <div className="col" style={{ gap: 8 }}>
+            <button type="button" onClick={() => nav("/long-distance")} style={{ textAlign: "left" }}>
+              <div style={{ fontWeight: 700 }}>Prior On-Duty Hours Statement</div>
+              <div className="small" style={{ color: "var(--muted)" }}>Required before the trip (§395.8(j)(2)).</div>
+            </button>
+            <button type="button" onClick={() => nav("/long-distance")} style={{ textAlign: "left" }}>
+              <div style={{ fontWeight: 700 }}>Bill(s) of Lading</div>
+              <div className="small" style={{ color: "var(--muted)" }}>Build + sign the declared inventory for this job.</div>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Draft autosave indicator. Hidden once the report is submitted
           (the existing "✓ Report saved" banner below covers that state). */}
