@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { type LdDay, fetchTripDays } from "../lib/ldDayStore";
+import { fetchRemoteBol } from "../lib/bolStore";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime } from "../lib/time";
@@ -139,6 +140,36 @@ type Props = {
   longDistance?: boolean;
 };
 
+function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: string; hint?: string; onGo: () => void }) {
+  return (
+    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <span
+          style={{
+            width: 22, height: 22, flexShrink: 0, borderRadius: 6, display: "grid", placeItems: "center",
+            background: done ? "var(--ok)" : "transparent",
+            border: done ? "none" : "1.5px solid var(--border)",
+            color: "#0b1f14", fontWeight: 800, fontSize: 14,
+          }}
+        >
+          {done ? "✓" : ""}
+        </span>
+        <span style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, color: done ? "var(--muted)" : "var(--text)" }}>{label}</div>
+          {hint && <div className="small" style={{ color: "var(--muted)" }}>{hint}</div>}
+        </span>
+      </span>
+      {done ? (
+        <span className="small" style={{ color: "var(--ok)", fontWeight: 700, flexShrink: 0 }}>Done</span>
+      ) : (
+        <button type="button" onClick={onGo} className="btnPrimary" style={{ fontSize: 12, padding: "6px 12px", flexShrink: 0 }}>
+          Complete
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function JobReport({ jobUuid, jobName, events = [], longDistance = false }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
@@ -151,6 +182,25 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     fetchTripDays(jobUuid).then((d) => { if (!cancelled) setLdDays(d); });
     return () => { cancelled = true; };
   }, [longDistance, jobUuid]);
+  // Long-distance checklist status: PODS (prior on-duty) + BOL origin/destination sign.
+  const [bolStatus, setBolStatus] = useState<string>("");
+  const [priorDone, setPriorDone] = useState<boolean>(false);
+  useEffect(() => {
+    if (!longDistance || !jobUuid) return;
+    let cancelled = false;
+    (async () => {
+      const bol = await fetchRemoteBol(jobUuid);
+      if (!cancelled) setBolStatus(bol?.status || "");
+      try {
+        const prior = await apiFetch<any[]>("/api/long-distance/prior-hours");
+        if (!cancelled) setPriorDone(Array.isArray(prior) && prior.length > 0);
+      } catch {
+        if (!cancelled) setPriorDone(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [longDistance, jobUuid]);
+
   const ldPay = useMemo(() => {
     const by = new Map<string, { out: number; drive: number }>();
     for (const d of ldDays) {
@@ -798,19 +848,29 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           the end-of-trip report. */}
       {longDistance && (
         <div className="card" style={{ borderColor: "var(--brand)" }}>
-          <div className="sectionTitle">Long-distance — complete for this trip</div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-            Interstate trips require these in addition to the report below:
+          <div className="sectionTitle">Long-distance checklist</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+            Required for this interstate trip. Complete any that aren't done yet.
           </div>
-          <div className="col" style={{ gap: 8 }}>
-            <button type="button" onClick={() => nav("/long-distance")} style={{ textAlign: "left" }}>
-              <div style={{ fontWeight: 700 }}>Prior On-Duty Hours Statement</div>
-              <div className="small" style={{ color: "var(--muted)" }}>Required before the trip (§395.8(j)(2)).</div>
-            </button>
-            <button type="button" onClick={() => nav("/long-distance")} style={{ textAlign: "left" }}>
-              <div style={{ fontWeight: 700 }}>Bill(s) of Lading</div>
-              <div className="small" style={{ color: "var(--muted)" }}>Build + sign the declared inventory for this job.</div>
-            </button>
+          <div className="col" style={{ gap: 10 }}>
+            <ChecklistItem
+              done={priorDone}
+              label="Prior On-Duty Statement"
+              hint="§395.8(j)(2) — before the trip"
+              onGo={() => nav("/long-distance")}
+            />
+            <ChecklistItem
+              done={bolStatus === "origin_signed" || bolStatus === "delivered"}
+              label="BOL signed at origin"
+              hint="Shipper + carrier, before loading"
+              onGo={() => nav("/long-distance")}
+            />
+            <ChecklistItem
+              done={bolStatus === "delivered"}
+              label="BOL signed at destination"
+              hint="Shipper + carrier, on delivery"
+              onGo={() => nav("/long-distance")}
+            />
           </div>
         </div>
       )}

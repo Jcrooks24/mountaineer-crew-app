@@ -46,7 +46,15 @@ function DutyStrip({ changes }: { changes: DutyChange[] }) {
   );
 }
 
-export default function RodsRecorder({ onBack }: { onBack?: () => void }) {
+export default function RodsRecorder({
+  onBack,
+  onLogEvent,
+}: {
+  onBack?: () => void;
+  // When provided (timeline / drive-day context), duty taps + notes are also
+  // logged to the job activity timeline + Events sheet.
+  onLogEvent?: (type: string, note?: string | null) => void;
+}) {
   const { user } = useAuth();
   const driverName = user?.name || user?.email || "";
 
@@ -97,6 +105,24 @@ export default function RodsRecorder({ onBack }: { onBack?: () => void }) {
     if (cur === status) return; // no-op if already in this status
     const change: DutyChange = { time: nowHHMM(), status, location: "", remarks: "" };
     setDay((prev) => ({ ...prev, changes: [...prev.changes, change], updated_at: new Date().toISOString() }));
+    // Also surface the duty change on the job activity timeline + Events sheet.
+    onLogEvent?.("DUTY", STATUS_LABELS[status]);
+  }
+
+  function addNote() {
+    const text = window.prompt("Note:", "");
+    const t = (text || "").trim();
+    if (!t) return;
+    onLogEvent?.("NOTE", t);
+    // Attach the note as a remark on the most recent duty change too.
+    setDay((prev) => {
+      if (prev.changes.length === 0) return prev;
+      const sorted = [...prev.changes].sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time));
+      const idx = prev.changes.indexOf(sorted[sorted.length - 1]);
+      const changes = prev.changes.slice();
+      changes[idx] = { ...changes[idx], remarks: t };
+      return { ...prev, changes, updated_at: new Date().toISOString() };
+    });
   }
 
   function undoLast() {
@@ -194,6 +220,9 @@ export default function RodsRecorder({ onBack }: { onBack?: () => void }) {
             </button>
           ))}
         </div>
+        <button type="button" onClick={addNote} style={{ width: "100%", marginTop: 8 }}>
+          + Add note
+        </button>
       </div>
 
       {/* Strip + totals */}
@@ -207,11 +236,8 @@ export default function RodsRecorder({ onBack }: { onBack?: () => void }) {
             </div>
           ))}
         </div>
-      </div>
 
-      {/* Change log */}
-      <div className="card">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginTop: 14, marginBottom: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
           <div className="sectionTitle" style={{ marginBottom: 0 }}>Today's log</div>
           {day.changes.length > 1 && <button type="button" onClick={undoLast} style={{ fontSize: 12 }}>Undo last</button>}
         </div>

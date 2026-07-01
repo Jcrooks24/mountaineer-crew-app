@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
-import LdWorkday from "./components/LdWorkday";
+import RodsRecorder from "./components/RodsRecorder";
+import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
@@ -298,6 +299,16 @@ export default function App() {
     setMode(val);
     localStorage.setItem(MODE_KEY, val);
   }
+
+  // Long-distance day plan — drives whether the timeline shows the labor Actions
+  // buttons (packing/loading/unloading/unpacking) or the RODS recorder (driving).
+  const {
+    plan: ldPlan,
+    driving: ldDriving,
+    laborSelected: ldLabor,
+    toggleActivity: ldToggleActivity,
+    toggleOutOfTown: ldToggleOutOfTown,
+  } = useLdPlan(todayLocalYYYYMMDD());
 
   const [status, setStatus] = useState<string>("");
 
@@ -1688,15 +1699,6 @@ export default function App() {
               Long-distance
             </button>
           </div>
-          {longDistance && (
-            <button
-              className="chip"
-              onClick={() => nav("/long-distance")}
-              style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
-            >
-              LD Docs
-            </button>
-          )}
           <button
             className="chip"
             onClick={() => nav("/dvir")}
@@ -1850,11 +1852,14 @@ export default function App() {
             </div>
           </div>
 
-          {/* Long-distance: the day plan drives which tools show (labor clock / RODS) */}
+          {/* Long-distance: the day plan drives which tools show below */}
           {longDistance && (
-            <LdWorkday recordEvent={recordEvent} canSend={canSend} sendingType={sendingType} />
+            <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} onToggleOutOfTown={ldToggleOutOfTown} />
           )}
 
+          {/* Actions: shown for local jobs and for LD labor days. On a pure LD
+              drive day the RODS recorder (below) replaces these buttons. */}
+          {(!longDistance || ldLabor.length > 0) && (
           <div className="card">
             <div className="sectionTitle">Actions</div>
 
@@ -1866,16 +1871,12 @@ export default function App() {
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("DEPART")}>
                   {sendingType === "DEPART" ? "..." : "Depart"}
                 </button>
-                {!longDistance && (
-                  <>
-                    <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "START" })}>
-                      {sendingType === "START" ? "..." : "Start"}
-                    </button>
-                    <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "FINISH" })}>
-                      {sendingType === "FINISH" ? "..." : "Finish"}
-                    </button>
-                  </>
-                )}
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "START" })}>
+                  {sendingType === "START" ? "..." : "Start"}
+                </button>
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "FINISH" })}>
+                  {sendingType === "FINISH" ? "..." : "Finish"}
+                </button>
                 <button
                   disabled={!canSend || sendingType !== null}
                   onClick={async () => {
@@ -1905,6 +1906,13 @@ export default function App() {
               </div>
             </div>
           </div>
+          )}
+
+          {/* Long-distance drive day: the RODS recorder replaces the Actions
+              buttons. Duty taps + notes also log to the activity timeline. */}
+          {longDistance && ldDriving && (
+            <RodsRecorder onLogEvent={recordEvent} />
+          )}
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
