@@ -27,7 +27,7 @@ def create_user(
 ):
     """Admin-only user creation. The self-service signup flow is at
     /api/auth/signup (pending-approval by default). This endpoint bypasses
-    that approval — hence the admin gate.
+    that approval - hence the admin gate.
     """
     # Normalize the email the same way the self-service signup path does
     # (auth.py:58). Without this, an admin-created "Foo@Bar.com" lives

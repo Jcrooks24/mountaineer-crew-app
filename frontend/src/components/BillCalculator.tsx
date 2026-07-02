@@ -46,7 +46,7 @@ type SeedData = {
 
 export type BillHandle = {
   /** Returns current bill data, or null if not loaded. The "reviewed"
-   * confirmation lives on the Report (after the M1 sliders) — not here. */
+   * confirmation lives on the Report (after the M1 sliders) - not here. */
   getData: () => { items: LineItem[]; globalDiscount: number; notes: string } | null;
   /** Discard the in-progress localStorage draft for the active job. Called
    * by JobReport after a successful submit so the next load reads the
@@ -89,7 +89,7 @@ function saveBillDraft(uuid: string, bill: Bill) {
     localStorage.setItem(billDraftKey(uuid), JSON.stringify({ ...bill, savedAt: new Date().toISOString() }));
   } catch {}
 }
-// When the draft was last saved — used to resolve draft-vs-server on load so a
+// When the draft was last saved - used to resolve draft-vs-server on load so a
 // stale local draft can't hide a bill updated on another device.
 function loadBillDraftSavedAt(uuid: string): string {
   try {
@@ -119,7 +119,7 @@ const COMPANY_CHARGES: ChargeCategory[] = [
       { label: "Mover (per hour)", unit: "hr", rate: 80 },
       { label: "Truck (per hour)", unit: "hr", rate: 90 },
       { label: "Crew transport vehicle", unit: "day", rate: 100 },
-      { label: "Overtime (labor only — 1.5 × #movers × $80/hr)", unit: "hr", rate: 0 },
+      { label: "Overtime (labor only - 1.5 × #movers × $80/hr)", unit: "hr", rate: 0 },
       { label: "Holiday rate (2×)", unit: "hr", rate: 0 },
       { label: "2-hour minimum charge", unit: "flat", rate: 0 },
     ],
@@ -129,7 +129,7 @@ const COMPANY_CHARGES: ChargeCategory[] = [
     items: [
       { label: "Fuel & mileage surcharge", unit: "mi", rate: 2.25 },
       { label: "Big Sky trip fee", unit: "flat", rate: 125 },
-      { label: "Dump fee (weight-based — enter rate charged by the dump)", unit: "flat", rate: 0 },
+      { label: "Dump fee (weight-based - enter rate charged by the dump)", unit: "flat", rate: 0 },
     ],
   },
 ];
@@ -162,7 +162,7 @@ function materialExt(m: LiveMaterial): number {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-// When `children` is supplied, the parent positions the three slots itself —
+// When `children` is supplied, the parent positions the three slots itself -
 // lets JobReport interleave M1 cards between Bill Helper and Discounts/Total
 // without exporting BillCalculator's internal state. Default render keeps the
 // original stacked layout for any caller that still uses BillCalculator as a
@@ -233,7 +233,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
 
     // Load order: server bill (or seed on 404), then the localStorage draft
     // wins if one exists. Drafts represent the user's most-recent typing on
-    // this device — clobbering them with stale server data on every refresh
+    // this device - clobbering them with stale server data on every refresh
     // was what made bill notes feel like they didn't autosave.
     apiFetch<{ items: LineItem[]; global_discount: number; notes: string; updated_at?: string }>(
       `/api/bill?job_uuid=${encodeURIComponent(jobUuid)}`
@@ -254,7 +254,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       })
       .catch((e) => {
         // Real 404 = no saved bill yet, seed from events + M1 estimates.
-        // Network errors / 5xx must NOT fall through to the seed path —
+        // Network errors / 5xx must NOT fall through to the seed path -
         // the seed call would also fail, leaving us with no bill data
         // even though the user may have a perfectly good draft. Restore
         // the draft directly and bail.
@@ -265,7 +265,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           return;
         }
 
-        // 404 path — try to seed from events.
+        // 404 path - try to seed from events.
         apiFetch<SeedData>(`/api/bill/seed?job_uuid=${encodeURIComponent(jobUuid)}`)
           .then((seed) => {
             const draft = loadBillDraft(jobUuid);
@@ -277,7 +277,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             for (const h of seed.hours_lines) {
               items.push({ id: uuid(), label: h.label, qty: h.hours, rate: 0, unit: "hr", discount: 0, source: "hours" });
             }
-            // Dumpster/recycling m1 lines are populated live from the sliders —
+            // Dumpster/recycling m1 lines are populated live from the sliders -
             // see the dumpsterPct/recyclingPct sync effect below.
             setBill({ items, globalDiscount: 0, notes: "" });
           })
@@ -485,7 +485,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       setMatErr("Select a material"); return;
     }
 
-    // Queue the add locally — persists across refresh/offline.
+    // Queue the add locally - persists across refresh/offline.
     storeEnqueueAdd(jobUuid, jobName, { name: itemName, qty, unitPrice, baseCost, source });
     refreshMaterials();
     resetMatControls();
@@ -580,7 +580,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
 
         {bill.items.length === 0 && (
           <div style={{ padding: "20px 14px", color: "var(--muted)", fontSize: 13, textAlign: "center" }}>
-            No line items — add some below.
+            No line items - add some below.
           </div>
         )}
 
@@ -614,7 +614,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           <div>
             {materials.map((m) => {
               const unit = m.unitPrice == null ? "TBD" : fmt(m.unitPrice);
-              const ext = m.unitPrice == null ? "—" : fmt(materialExt(m));
+              const ext = m.unitPrice == null ? "-" : fmt(materialExt(m));
               return (
                 <div key={m.submissionId} style={{
                   display: "grid",
@@ -641,7 +641,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           </div>
         )}
 
-        {/* Add material — collapsed toggle */}
+        {/* Add material - collapsed toggle */}
         <div style={{ padding: "10px 12px 10px 28px", borderBottom: "1px solid var(--border)" }}>
           {!showAddMaterial ? (
             <button
@@ -659,7 +659,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   <option value="">Select material…</option>
                   {MATERIAL_CATALOG.map((m) => (
                     <option key={m.name} value={m.name}>
-                      {m.name} — {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}
+                      {m.name} - {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}
                     </option>
                   ))}
                   <option value="__custom__">Custom item…</option>

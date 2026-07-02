@@ -150,7 +150,7 @@ def _user_tag_ids(db: Session, user_id: int) -> List[int]:
     return [r[0] for r in rows]
 
 
-# Mounted under a different prefix because it's per-user — but the auth
+# Mounted under a different prefix because it's per-user - but the auth
 # requirement is the same. Kept in this module so the tag logic stays in
 # one place.
 users_router = APIRouter(prefix="/api/admin/users", tags=["employee-tags"])
@@ -178,7 +178,7 @@ def set_user_tags(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    # Validate all incoming tag IDs exist before mutating anything — a single
+    # Validate all incoming tag IDs exist before mutating anything - a single
     # bad ID drops the whole request so we never half-apply.
     if body.tag_ids:
         found = (

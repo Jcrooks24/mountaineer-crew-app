@@ -1,5 +1,5 @@
 /**
- * Reimbursement store — offline-capable queue for mileage + expense submissions.
+ * Reimbursement store - offline-capable queue for mileage + expense submissions.
  *
  * Photo blobs are heavy so we use IndexedDB rather than localStorage. Queue
  * entries persist until the multipart POST to /api/reimbursements/* succeeds.
@@ -45,7 +45,7 @@ export type ReimbursementRow = {
   updated_at: string;
 };
 
-// Every field below the uuid/type is optional — crew may submit a partial
+// Every field below the uuid/type is optional - crew may submit a partial
 // request and the admin follows up. null means "not provided".
 export type MileageQueueEntry = {
   reimbursement_uuid: string;
@@ -80,7 +80,7 @@ export type ExpenseQueueEntry = {
   created_at: string;
 };
 
-// Expense categories — fixed list so the form offers a dropdown rather than
+// Expense categories - fixed list so the form offers a dropdown rather than
 // free text, keeping the Reimbursements sheet filterable for admin.
 export const EXPENSE_CATEGORIES = [
   "Fuel",
@@ -97,7 +97,7 @@ export type QueueEntry = MileageQueueEntry | ExpenseQueueEntry;
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
 const DB_NAME = "crew_app_db";
-// Shared crew_app_db version — MUST stay in sync with photoStore.ts. Both
+// Shared crew_app_db version - MUST stay in sync with photoStore.ts. Both
 // modules open the same database; IndexedDB rejects opening with a version
 // below the current one, so both upgrade handlers create the full schema.
 const DB_VERSION = 2;
@@ -283,7 +283,7 @@ export async function renderedRows(): Promise<ReimbursementRow[]> {
     };
   });
 
-  // Filter out any cache rows for uuids still pending — we'd be showing the
+  // Filter out any cache rows for uuids still pending - we'd be showing the
   // local copy on top anyway.
   const pendingUuids = new Set(pendingAsRows.map((r) => r.reimbursement_uuid));
   const merged = [
@@ -337,7 +337,7 @@ export async function syncQueue(): Promise<number> {
         form.append("expense_date", entry.expense_date || "");
         form.append("notes", entry.notes || "");
         if (entry.type === "mileage") {
-          // Only append fields the crew actually provided — the backend
+          // Only append fields the crew actually provided - the backend
           // treats every field as optional, so omitting a blank one keeps
           // it null rather than coercing "null"/"" into the record.
           if (entry.odometer_start != null) {
@@ -368,7 +368,7 @@ export async function syncQueue(): Promise<number> {
         await removeFromQueue(entry.reimbursement_uuid);
         synced++;
       } catch (e) {
-        // 401/403 are excluded — an expired token is transient; dropping the
+        // 401/403 are excluded - an expired token is transient; dropping the
         // op would silently lose a crew member's reimbursement submission.
         const isPermanent =
           e instanceof ApiError &&

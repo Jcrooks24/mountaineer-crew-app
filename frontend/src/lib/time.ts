@@ -8,7 +8,7 @@
 //
 // Use these helpers any time you display a server-or-event timestamp.
 // Do NOT use them for user-picked calendar dates (job_date, move_date,
-// inspection_date) — those are date-only fields the user typed and don't
+// inspection_date) - those are date-only fields the user typed and don't
 // have a timezone to interpret in the first place.
 
 const MOUNTAIN_TZ = "America/Denver";
@@ -21,7 +21,7 @@ function asDate(input: DateInput): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** "08:08 AM" — wall-clock hour and minute in Mountain. */
+/** "08:08 AM" - wall-clock hour and minute in Mountain. */
 export function formatMountainTime(input: DateInput): string {
   const d = asDate(input);
   if (!d) return "";
@@ -32,14 +32,14 @@ export function formatMountainTime(input: DateInput): string {
   });
 }
 
-/** "5/1/2026" — calendar date as it falls in Mountain. */
+/** "5/1/2026" - calendar date as it falls in Mountain. */
 export function formatMountainDate(input: DateInput): string {
   const d = asDate(input);
   if (!d) return "";
   return d.toLocaleDateString([], { timeZone: MOUNTAIN_TZ });
 }
 
-/** "5/1/2026, 08:08 AM" — date + time, both in Mountain. */
+/** "5/1/2026, 08:08 AM" - date + time, both in Mountain. */
 export function formatMountainDateTime(input: DateInput): string {
   const d = asDate(input);
   if (!d) return "";
@@ -57,7 +57,7 @@ export function formatMountain(
   return d.toLocaleString([], { timeZone: MOUNTAIN_TZ, ...opts });
 }
 
-/** "YYYY-MM-DD" of the calendar date as it falls in Mountain — the form
+/** "YYYY-MM-DD" of the calendar date as it falls in Mountain - the form
  *  used in localStorage, sheet `job_date`, and `<input type="date">` values.
  *
  *  Critical for crew working past 5 PM Mountain: a naive `.toISOString()

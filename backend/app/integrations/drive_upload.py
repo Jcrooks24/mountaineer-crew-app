@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from app.core.google_cal_oauth import _get_creds, _build_authorized_http
 
-# 8 MB resumable chunks — keeps peak RSS bounded per upload regardless
+# 8 MB resumable chunks - keeps peak RSS bounded per upload regardless
 # of total file size. googleapiclient's default is 100 MB, which on a
 # 512 MB / even 2 GB Render worker still OOMs on bigger documents.
 DRIVE_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
@@ -27,7 +27,7 @@ DEFAULT_PARENT_FOLDER_NAME = "Mountaineer Crew Photos"
 # Estimator photos land in a separate top-level folder so the crew-job
 # parent stays clean. Set DRIVE_ESTIMATOR_PARENT_FOLDER_ID on the Render
 # service to the ID of the target Drive folder (grab it from the folder's
-# URL — the bit between /folders/ and any ?query).
+# URL - the bit between /folders/ and any ?query).
 ESTIMATOR_PARENT_ENV_VAR = "DRIVE_ESTIMATOR_PARENT_FOLDER_ID"
 
 # Reimbursement photos (odometer + receipts) land in their own folder so
@@ -137,7 +137,7 @@ def upload_photo_to_drive(
         parent_id = estimator_parent or _get_parent_folder_id(svc, db)
         if not estimator_parent:
             print(
-                f"[drive] {ESTIMATOR_PARENT_ENV_VAR} not set — estimator photo landing "
+                f"[drive] {ESTIMATOR_PARENT_ENV_VAR} not set - estimator photo landing "
                 f"in default crew-photos parent instead"
             )
     else:
@@ -213,7 +213,7 @@ def upload_reimbursement_photo_to_drive(
     (DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID, or the default crew-photos
     parent if unset).
 
-    - Receipt photos (kind="receipt") land directly in that parent — a
+    - Receipt photos (kind="receipt") land directly in that parent - a
       receipt is a single photo per submission, so no folder is needed.
     - Odometer photos (kind="odo_start"/"odo_end") go into a per-submission
       subfolder, since a mileage request has two photos that belong
@@ -229,7 +229,7 @@ def upload_reimbursement_photo_to_drive(
     parent_id = reimb_parent or _get_parent_folder_id(svc, db)
     if not reimb_parent:
         print(
-            f"[drive] {REIMBURSEMENT_PARENT_ENV_VAR} not set — reimbursement photo "
+            f"[drive] {REIMBURSEMENT_PARENT_ENV_VAR} not set - reimbursement photo "
             f"landing in default crew-photos parent instead"
         )
 
@@ -238,7 +238,7 @@ def upload_reimbursement_photo_to_drive(
     short_id = (reimbursement_uuid or filename or "photo")[:8]
     safe_user = _safe(user_name or "Unknown")
 
-    # Odometer photos come in pairs — group each submission's two photos in
+    # Odometer photos come in pairs - group each submission's two photos in
     # their own folder. Receipts are single, so they stay flat in the parent.
     if kind in ("odo_start", "odo_end"):
         folder_label = f"{safe_user} - Mileage - {short_id}"[:100]
@@ -424,7 +424,7 @@ def upload_bol_pdf_to_drive(
     named "<job_date> - <job_name>.pdf" (date first, per the spec). Publicly
     readable so the office can open it from the Sheet link without a login.
 
-    If `existing_file_id` is given (the BOL already has a stored PDF — e.g. the
+    If `existing_file_id` is given (the BOL already has a stored PDF - e.g. the
     origin/pre-delivery copy), the file's CONTENT is replaced in place so the
     completed document supersedes the earlier one instead of leaving two files.
     The Drive file id and link stay stable. Falls back to creating a new file
@@ -451,7 +451,7 @@ def upload_bol_pdf_to_drive(
             result = _execute_resumable(request)
             return {"file_id": result["id"], "url": result.get("webViewLink", "")}
         except Exception as e:
-            # Old file gone/untouchable — create a fresh one below.
+            # Old file gone/untouchable - create a fresh one below.
             print(f"[drive] BOL pdf replace failed ({existing_file_id}); creating new: {e}")
 
     parent_id = _get_bol_folder_id(svc, db)

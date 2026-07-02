@@ -4,12 +4,12 @@ Event timestamps in `events.timestamp` and `events.logged_at` are stored
 as naive `DateTime` columns in UTC (that's what /api/sync writes after
 parsing the device-provided ISO). Crew operate in Bozeman (Mountain),
 and any "what day did this happen?" question must be answered in
-Mountain — otherwise events logged after ~5 PM MT roll over to the next
+Mountain - otherwise events logged after ~5 PM MT roll over to the next
 UTC date and disappear from "today" filters / "events on 2026-05-01"
 searches.
 
 Use these helpers any time the answer to "which calendar day does this
-timestamp belong to?" matters. They are NOT for display formatting —
+timestamp belong to?" matters. They are NOT for display formatting -
 that's `lib/time.ts` on the frontend.
 """
 
@@ -33,7 +33,7 @@ def utc_naive_to_mountain_date(dt: datetime) -> date:
 
 def mountain_day_utc_bounds(d: Optional[date] = None) -> Tuple[datetime, datetime]:
     """Return [start, end) of the Mountain calendar day `d` (default today),
-    expressed as naive UTC datetimes — ready to compare against
+    expressed as naive UTC datetimes - ready to compare against
     `events.timestamp` directly.
 
     DST-safe: the start and end are computed in MT first and then converted,

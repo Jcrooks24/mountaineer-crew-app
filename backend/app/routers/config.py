@@ -1,8 +1,8 @@
 """
-Public config router — no auth required.
+Public config router - no auth required.
 
 Endpoints:
-- GET /api/config/theme  — returns the admin-saved app theme (or null if not set)
+- GET /api/config/theme  - returns the admin-saved app theme (or null if not set)
 """
 
 import json

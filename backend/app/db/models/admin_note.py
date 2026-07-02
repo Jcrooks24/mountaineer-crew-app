@@ -1,4 +1,4 @@
-"""Admin notes — admin-authored messages to crew, either global or scoped to
+"""Admin notes - admin-authored messages to crew, either global or scoped to
 one job by job_uuid."""
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text

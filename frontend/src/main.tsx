@@ -41,7 +41,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/signup" element={<Signup />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
-          {/* Public — a mechanic with no account signs off a DVIR via an emailed token link */}
+          {/* Public - a mechanic with no account signs off a DVIR via an emailed token link */}
           <Route path="/mechanic-sign" element={<MechanicSign />} />
 
           {/* Protected */}

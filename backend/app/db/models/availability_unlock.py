@@ -7,9 +7,9 @@ submitted). Crew member contacts the office; admin grants an unlock for the
 specific (user, window_start); crew opens /availability and sees that window
 become editable.
 
-Unique on (user_id, window_start) so re-granting is idempotent — a second
+Unique on (user_id, window_start) so re-granting is idempotent - a second
 admin clicking "unlock" for the same window doesn't pile up rows. Admin
-revokes by DELETE — the unlock isn't auto-consumed by the crew's next
+revokes by DELETE - the unlock isn't auto-consumed by the crew's next
 submission so the office stays in control of when the exception ends.
 """
 
@@ -30,7 +30,7 @@ class AvailabilityUnlock(Base):
     )
     user_name = Column(String, nullable=False)
 
-    # Same shape as availability_days.window_start — first day of the
+    # Same shape as availability_days.window_start - first day of the
     # 14-day block the crew member is being allowed to edit.
     window_start = Column(String, nullable=False, index=True)
 

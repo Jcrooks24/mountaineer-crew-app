@@ -3,8 +3,8 @@ Crew Resources daily calendar event.
 
 Each day generates a "Crew Resources" event on a dedicated Resources
 calendar from 5:00 to 6:00 AM Mountain Time. The event's description
-summarizes who's available that day — grouped by tier (Tier I → IV →
-Other) and calling out crew leads — and updates as employees get added
+summarizes who's available that day - grouped by tier (Tier I → IV →
+Other) and calling out crew leads - and updates as employees get added
 as attendees to events on the Jobs calendar.
 
 Read-side: pulls availability_days for the date, joined with employee_tags
@@ -16,10 +16,10 @@ Resources calendar for "Crew Resources" on the target date. If present,
 patch its description. If absent, create a fresh one.
 
 Env vars:
-  RESOURCES_CALENDAR_ID  — Resources calendar (read+write the Crew Resources event)
-  WORKSPACE_CALENDAR_ID  — Jobs calendar (read attendees from here; default for jobs)
-  JOBS_CALENDAR_ID       — optional override if jobs ever move to a separate calendar
-  CREW_RESOURCES_ENABLED — "true" to enable; default off
+  RESOURCES_CALENDAR_ID  - Resources calendar (read+write the Crew Resources event)
+  WORKSPACE_CALENDAR_ID  - Jobs calendar (read attendees from here; default for jobs)
+  JOBS_CALENDAR_ID       - optional override if jobs ever move to a separate calendar
+  CREW_RESOURCES_ENABLED - "true" to enable; default off
 
 OAuth: requires the calendar.events scope. Admin re-authorizes via
 /api/admin/cal-token after the scope bump in google_cal_oauth.py.
@@ -72,7 +72,7 @@ def _jobs_calendar_id() -> str:
 
 def _ignored_invitee_emails() -> set[str]:
     """Lowercased set of emails to skip when scanning Jobs-calendar
-    attendees — workspace / shared-mailbox addresses (e.g. the org's
+    attendees - workspace / shared-mailbox addresses (e.g. the org's
     management@ inbox) that admin invites for visibility but that don't
     map to any crew member. Listed here so they don't show up in the
     UNRECOGNIZED INVITEES section of the Crew Resources description
@@ -87,7 +87,7 @@ def _ignored_invitee_emails() -> set[str]:
 
 def _format_time(dt_str: Optional[str]) -> str:
     """Format an ISO datetime (with tz) as 'h:mm AM/PM' in local TZ. Returns
-    empty string on missing or unparseable input — caller decides whether
+    empty string on missing or unparseable input - caller decides whether
     that's a falsy 'all day' or just a skip."""
     if not dt_str:
         return ""
@@ -106,7 +106,7 @@ def _format_time(dt_str: Optional[str]) -> str:
 
 def _get_calendar_svc(db: Session) -> Any:
     """Fresh calendar svc per call. Background loop runs every hour so we
-    don't bother caching across cycles — keeps memory predictable."""
+    don't bother caching across cycles - keeps memory predictable."""
     from googleapiclient.discovery import build
     creds = _get_creds(db)
     authorized_http = _build_authorized_http(creds)
@@ -114,7 +114,7 @@ def _get_calendar_svc(db: Session) -> Any:
 
 
 def _day_bounds(target: date) -> Tuple[datetime, datetime]:
-    """Return (start_of_day, end_of_day) in local TZ — used to time-bound
+    """Return (start_of_day, end_of_day) in local TZ - used to time-bound
     the events.list query when scanning the Jobs calendar."""
     start_local = datetime.combine(target, time(0, 0, 0), tzinfo=LOCAL_TZ)
     end_local = start_local + timedelta(days=1)
@@ -128,7 +128,7 @@ def _available_employees(db: Session, target: date) -> List[Dict[str, Any]]:
     """Crew available (or conditional) for the day, joined with each user's
     tag IDs. Returns a list of {user_id, name, email, status, note, tag_ids}.
 
-    'unavailable' is excluded — they shouldn't appear in the Crew Resources
+    'unavailable' is excluded - they shouldn't appear in the Crew Resources
     roster. 'conditional' stays in with a flag so the description can mark
     them clearly. The crew member's per-day note flows through so the
     description can show context like "available after 1pm".
@@ -180,7 +180,7 @@ def _tier_and_lead(
 ) -> Tuple[Optional[str], bool]:
     """Resolve (tier_name, is_crew_lead) from a user's tag IDs. If the user
     has multiple Tier tags (admin probably misconfigured), pick the one with
-    the lowest sort_order — that's the canonical ordering admin set up."""
+    the lowest sort_order - that's the canonical ordering admin set up."""
     is_lead = False
     tier_candidates: List[EmployeeTag] = []
     for tid in tag_ids:
@@ -202,7 +202,7 @@ def _tier_and_lead(
 
 
 def _email_to_user_id(db: Session) -> Dict[str, int]:
-    """Map every known email — primary and alias — to its owning user_id,
+    """Map every known email - primary and alias - to its owning user_id,
     all lowercased + stripped. Used to resolve a Google Calendar attendee
     back to a crew member regardless of which of their addresses the
     office invited. Inactive users are excluded so we don't accidentally
@@ -239,7 +239,7 @@ def _prior_week_hours(
     Attendees keyed by user_id so a crew member invited via an alias
     is still credited to the right person.
 
-    All-day events are skipped — they don't have a defined duration the
+    All-day events are skipped - they don't have a defined duration the
     way a moving-job event does. Declined attendees are skipped. Multi-day
     events are clipped to the prior-7-day window, so a job that runs
     into target day only contributes its pre-target portion. Attendees
@@ -276,7 +276,7 @@ def _prior_week_hours(
         start_str = it.get("start", {}).get("dateTime")
         end_str = it.get("end", {}).get("dateTime")
         if not start_str or not end_str:
-            continue  # all-day event — no measurable duration
+            continue  # all-day event - no measurable duration
         try:
             s = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
             e = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
@@ -362,7 +362,7 @@ def _scheduled_by_user_id(
             email = (a.get("email") or "").strip().lower()
             if not email:
                 continue
-            # Skip declined attendees — they aren't actually working it.
+            # Skip declined attendees - they aren't actually working it.
             if a.get("responseStatus") == "declined":
                 continue
             # Workspace / org-managed addresses (admin's shared inbox) get
@@ -404,7 +404,7 @@ def _tier_sort_key(tier: Optional[str]) -> Tuple[int, str]:
     if tier is None:
         return (99, "Other")
     if tier.startswith("Tier "):
-        # Roman numerals in the tier suffix — convert to int for ordering.
+        # Roman numerals in the tier suffix - convert to int for ordering.
         roman = tier[5:].strip()
         roman_map = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
         return (roman_map.get(roman, 50), tier)
@@ -422,21 +422,21 @@ def build_description(
     """Compose the Crew Resources event description.
 
     Sections, in order:
-      UNSCHEDULED — crew marked available who aren't on any job today
+      UNSCHEDULED - crew marked available who aren't on any job today
                     (grouped by tier, leads first, then alphabetical).
-      CONDITIONAL — every conditional crew member regardless of whether
+      CONDITIONAL - every conditional crew member regardless of whether
                     they have a job today. Their per-day note + scheduled
                     blocks (if any) appear with the row so the office can
                     decide whether to lean on them.
-      SCHEDULED   — crew marked available who are on at least one job
+      SCHEDULED   - crew marked available who are on at least one job
                     today (flat list sorted by tier then name).
 
     Every row carries the crew member's total scheduled hours in the
     seven days *before* target, so admin can see at a glance who's
     overworked or underused.
     """
-    header = target.strftime("CREW RESOURCES — %A, %B %-d") if os.name != "nt" else (
-        target.strftime("CREW RESOURCES — %A, %B %d")
+    header = target.strftime("CREW RESOURCES - %A, %B %-d") if os.name != "nt" else (
+        target.strftime("CREW RESOURCES - %A, %B %d")
     )
 
     unscheduled_by_tier: Dict[Optional[str], List[Dict[str, Any]]] = defaultdict(list)
@@ -458,7 +458,7 @@ def build_description(
         }
         if emp["status"] == "conditional":
             # Conditional crew get their own section regardless of whether
-            # they're already on a job — the note matters in both cases.
+            # they're already on a job - the note matters in both cases.
             conditional_rows.append(entry)
         elif blocks:
             scheduled_rows.append(entry)
@@ -468,7 +468,7 @@ def build_description(
     lines: List[str] = [header, ""]
 
     if unscheduled_by_tier:
-        lines.append("—— UNSCHEDULED ——")
+        lines.append("-- UNSCHEDULED --")
         lines.append("")
         for tier in sorted(unscheduled_by_tier.keys(), key=_tier_sort_key):
             people = unscheduled_by_tier[tier]
@@ -476,43 +476,43 @@ def build_description(
             lines.append(tier or "Other / Untagged")
             for p in people:
                 lead_mark = "★ " if p["is_lead"] else "  "
-                hours_part = f" — {_format_prior_hours(p['prior_hours'])}"
+                hours_part = f" - {_format_prior_hours(p['prior_hours'])}"
                 note = p.get("note") or ""
-                note_part = f' — "{note}"' if note else ""
+                note_part = f' - "{note}"' if note else ""
                 lines.append(f"  {lead_mark}{p['name']}{hours_part}{note_part}")
             lines.append("")
 
     if conditional_rows:
-        lines.append("—— CONDITIONAL ——")
+        lines.append("-- CONDITIONAL --")
         lines.append("")
         conditional_rows.sort(key=lambda x: (_tier_sort_key(x["tier"]), x["name"].lower()))
         for p in conditional_rows:
             tier_text = p["tier"] or "Other"
             role = ", lead" if p["is_lead"] else ""
-            hours_part = f" — {_format_prior_hours(p['prior_hours'])}"
-            sched_part = f" — scheduled {p['blocks_text']}" if p["blocks_text"] else ""
+            hours_part = f" - {_format_prior_hours(p['prior_hours'])}"
+            sched_part = f" - scheduled {p['blocks_text']}" if p["blocks_text"] else ""
             note = p.get("note") or ""
-            note_part = f' — "{note}"' if note else ""
+            note_part = f' - "{note}"' if note else ""
             lines.append(f"  {p['name']} ({tier_text}{role}){hours_part}{sched_part}{note_part}")
         lines.append("")
 
     if scheduled_rows:
-        lines.append("—— SCHEDULED ——")
+        lines.append("-- SCHEDULED --")
         lines.append("")
         scheduled_rows.sort(key=lambda x: (_tier_sort_key(x["tier"]), x["name"].lower()))
         for p in scheduled_rows:
             tier_text = p["tier"] or "Other"
             role = ", lead" if p["is_lead"] else ""
-            hours_part = f" — {_format_prior_hours(p['prior_hours'])}"
+            hours_part = f" - {_format_prior_hours(p['prior_hours'])}"
             note = p.get("note") or ""
-            note_part = f' — note: "{note}"' if note else ""
+            note_part = f' - note: "{note}"' if note else ""
             lines.append(
-                f"{p['name']} ({tier_text}{role}){hours_part} — {p['blocks_text']}{note_part}"
+                f"{p['name']} ({tier_text}{role}){hours_part} - {p['blocks_text']}{note_part}"
             )
 
     if unrecognized_invitees:
         lines.append("")
-        lines.append("—— UNRECOGNIZED INVITEES ——")
+        lines.append("-- UNRECOGNIZED INVITEES --")
         lines.append("")
         # Sorted by email so admin can read alphabetically. Each line lists
         # the job titles the address was invited to today, so a typo is
@@ -520,7 +520,7 @@ def build_description(
         for email in sorted(unrecognized_invitees.keys()):
             jobs = unrecognized_invitees[email]
             jobs_text = ", ".join(jobs) if jobs else ""
-            lines.append(f"  {email} — invited to {jobs_text}" if jobs_text else f"  {email}")
+            lines.append(f"  {email} - invited to {jobs_text}" if jobs_text else f"  {email}")
 
     return "\n".join(lines).rstrip() + "\n"
 

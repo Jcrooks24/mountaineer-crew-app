@@ -32,7 +32,7 @@ class Event(Base):
     timestamp = Column(DateTime, nullable=False)
 
     # Immutable record of when the device actually captured the event. Set
-    # from the client's device time at insert and never updated thereafter —
+    # from the client's device time at insert and never updated thereafter -
     # this is the audit trail admins use to spot back-dated entries.
     logged_at = Column(DateTime, nullable=False)
 

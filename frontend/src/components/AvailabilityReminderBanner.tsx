@@ -47,7 +47,7 @@ export default function AvailabilityReminderBanner() {
   const [horizon, setHorizon] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<boolean>(() => isDismissed());
 
-  // Re-evaluate whenever the route changes — the user submitting availability
+  // Re-evaluate whenever the route changes - the user submitting availability
   // navigates to /availability, fills it in, submits, and goes back. Picking
   // up the new horizon on each navigation means the banner clears itself
   // without needing a manual dismiss.
@@ -110,7 +110,7 @@ export default function AvailabilityReminderBanner() {
         background: "var(--card)",
         borderBottom: "1px solid var(--warn)",
         boxShadow: "0 6px 16px rgba(0,0,0,0.35)",
-        // Slide-down reveal — simple translate-Y transition so the banner
+        // Slide-down reveal - simple translate-Y transition so the banner
         // doesn't pop suddenly when the user lands on a route that triggers it.
         transform: revealed ? "translateY(0)" : "translateY(-100%)",
         transition: "transform 220ms ease-out",

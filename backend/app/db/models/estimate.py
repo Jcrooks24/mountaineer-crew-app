@@ -1,5 +1,5 @@
 """
-Estimator — admin-only in-home estimate records with inventory and site notes.
+Estimator - admin-only in-home estimate records with inventory and site notes.
 
 Photos reuse the existing photos table via job_uuid (set to the estimate's
 own estimate_uuid) so the existing Drive upload pipeline and photo viewer

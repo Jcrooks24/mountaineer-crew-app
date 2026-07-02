@@ -1,7 +1,7 @@
 /**
  * On-device Bill of Lading PDF generator (pdf-lib).
  *
- * Produces the signed BOL as a PDF Blob entirely in the browser — so the crew
+ * Produces the signed BOL as a PDF Blob entirely in the browser - so the crew
  * can hand the shipper a dated copy at the moment of signing, even with no
  * signal. The same generator runs at sync time (in bolStore.syncQueue) to
  * upload the finished PDF to Drive.
@@ -49,16 +49,16 @@ const SECTIONS: Section[] = [
   { n: 10, title: "Delivery Notification Contact [§375.505(b)(5)]", body: "For a shipment transported on a collect-on-delivery basis, the person to be notified about charges prior to delivery is as stated on the estimate, or \"same\" as the shipper." },
   { n: 11, title: "Attachments and Reference [§375.505(b)(15)(16)(17)]", body: "The following are incorporated into this Bill of Lading: the written estimate (binding or non-binding); the declared inventory / item list (below); the Contract for Moving Services; \"Your Rights and Responsibilities When You Move\" (FMCSA-ESA-03-006); \"Ready to Move?\" (FMCSA-ESA-03-005); and the Arbitration Program Summary (Section 13). This Bill of Lading incorporates by reference all services included on the estimate." },
   { n: 12, title: "Loss and Damage Claims", body: "All claims for loss or damage must be submitted in writing to Mountaineer Moving LLC (management@mountaineermoving.com) within 9 months following the date of delivery or the date the shipment should have been delivered, whichever is later. This federal timeframe cannot be shortened by contract. The shipper must participate in a final walk-through before departure and document any damage at that time; failure to identify damage during the walk-through constitutes acceptance of the condition of the goods. Mountaineer Moving is not responsible for damage to the contents of boxes packed by the shipper." },
-  { n: 13, title: "Arbitration Program Notice [§375.211]", body: "Mountaineer Moving maintains a neutral arbitration program for loss-and-damage disputes and disputes over additional charges, as required by 49 CFR 375.211 and 49 U.S.C. 14708. Arbitration is OPTIONAL — the shipper retains the right to pursue judicial remedies under 49 U.S.C. 14704. The arbitrator is a neutral third party. A complete written summary is available on request (management@mountaineermoving.com)." },
+  { n: 13, title: "Arbitration Program Notice [§375.211]", body: "Mountaineer Moving maintains a neutral arbitration program for loss-and-damage disputes and disputes over additional charges, as required by 49 CFR 375.211 and 49 U.S.C. 14708. Arbitration is OPTIONAL - the shipper retains the right to pursue judicial remedies under 49 U.S.C. 14704. The arbitrator is a neutral third party. A complete written summary is available on request (management@mountaineermoving.com)." },
   { n: 14, title: "Acknowledgment of Required Publications [§375.213]", body: "Federal law requires Mountaineer Moving to provide, before execution of this Bill of Lading: (1) \"Your Rights and Responsibilities When You Move\" (FMCSA-ESA-03-006) and (2) \"Ready to Move?\" (FMCSA-ESA-03-005), both available at www.fmcsa.dot.gov. By signing at origin, the shipper confirms receipt of, or a link to, each publication." },
   // ── DIGITAL-ADAPTED ──
-  { n: 15, title: "Right to Rescind and Delivery of Copies [§375.505(h)]", body: "PRE-SIGNING REQUIREMENT: This Bill of Lading must be in the shipper's possession at least 3 days before the shipment is scheduled to be loaded. Do not sign on moving day unless items or services added that day require an updated estimate, in which case only the charge changes are exempt from the 3-day requirement.\nRIGHT TO RESCIND: The shipper may cancel this Bill of Lading without penalty within 3 days of the date of signing, by notifying Mountaineer Moving in writing (management@mountaineermoving.com) or by calling (406) 201-9580 within that window.\nELECTRONIC COPY PROCEDURE: This Bill of Lading is executed electronically. At the time of each signing, Mountaineer Moving provides the shipper a dated PDF copy of the signed document — downloaded to the shipper's device and/or emailed to the address on file. Mountaineer Moving retains the signed electronic record (the equivalent of the carrier copy) for a minimum of one year from the date of issue. The signed Bill of Lading remains accessible to the crew on the company device throughout transportation, in place of a printed copy carried in the cab." },
+  { n: 15, title: "Right to Rescind and Delivery of Copies [§375.505(h)]", body: "PRE-SIGNING REQUIREMENT: This Bill of Lading must be in the shipper's possession at least 3 days before the shipment is scheduled to be loaded. Do not sign on moving day unless items or services added that day require an updated estimate, in which case only the charge changes are exempt from the 3-day requirement.\nRIGHT TO RESCIND: The shipper may cancel this Bill of Lading without penalty within 3 days of the date of signing, by notifying Mountaineer Moving in writing (management@mountaineermoving.com) or by calling (406) 201-9580 within that window.\nELECTRONIC COPY PROCEDURE: This Bill of Lading is executed electronically. At the time of each signing, Mountaineer Moving provides the shipper a dated PDF copy of the signed document - downloaded to the shipper's device and/or emailed to the address on file. Mountaineer Moving retains the signed electronic record (the equivalent of the carrier copy) for a minimum of one year from the date of issue. The signed Bill of Lading remains accessible to the crew on the company device throughout transportation, in place of a printed copy carried in the cab." },
   { n: 16, title: "Signatures [§375.505(f)]", body: "This Bill of Lading is signed twice, electronically: once at origin before loading, and once at destination upon delivery. Mountaineer Moving provides the shipper a dated electronic copy at the time of each signing.\nELECTRONIC SIGNATURE CONSENT: By signing electronically below, each party agrees that their electronic signature is legally binding and equivalent to a handwritten signature for the purposes of this Bill of Lading.\nBy signing at origin, the shipper confirms: (a) all information in this Bill of Lading is accurate; (b) the valuation election in Section 7 was made freely with full understanding of both coverage options; (c) the required federal publications in Section 14 were received; and (d) the shipper agrees to the terms and conditions of this Bill of Lading, and acknowledges it has been in their possession at least 3 days prior to signing, or that today is the moving day and only charge adjustments from new or additional services are being made. At destination, by signing the shipper confirms receipt of the shipment and that a final walk-through was completed with the crew; any damage attributable to Mountaineer Moving was identified and documented at that time." },
 ];
 
 function fmtDate(iso?: string): string {
   if (!iso) return "";
-  // Accept "YYYY-MM-DD" or full ISO — show a readable date.
+  // Accept "YYYY-MM-DD" or full ISO - show a readable date.
   const d = new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso);
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -129,15 +129,15 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
 
   // ── Title + carrier ──
   drawText("BILL OF LADING", { size: 15, f: bold, gap: 1, color: rgb(0.05, 0.18, 0.23) });
-  drawText("Receipt for Household Goods and Contract for Transportation — issued pursuant to 49 CFR Part 375 (Interstate Household Goods). Standalone document, separate from the Contract for Moving Services.", { size: 8, gap: 6 });
+  drawText("Receipt for Household Goods and Contract for Transportation - issued pursuant to 49 CFR Part 375 (Interstate Household Goods). Standalone document, separate from the Contract for Moving Services.", { size: 8, gap: 6 });
 
-  heading("Section 1 — Carrier Information [§375.505(b)(1)]");
+  heading("Section 1 - Carrier Information [§375.505(b)(1)]");
   drawText(`${CARRIER.name}\n${CARRIER.address}\n${CARRIER.phone} · ${CARRIER.email}\nU.S. DOT ${CARRIER.dot} · MC ${CARRIER.mc}`, { gap: 6 });
 
   // ── Shipment / job summary ──
   heading("Shipment Summary");
   drawText(
-    `Job: ${draft.job_name || "—"}\nMove date: ${fmtDate(draft.job_date) || "—"}\nCrew representative: ${draft.crew_rep || "—"}` +
+    `Job: ${draft.job_name || "-"}\nMove date: ${fmtDate(draft.job_date) || "-"}\nCrew representative: ${draft.crew_rep || "-"}` +
       (draft.actual_pickup_date ? `\nActual pickup date: ${fmtDate(draft.actual_pickup_date)}` : "") +
       (draft.vehicle ? `\nVehicle: ${draft.vehicle}` : ""),
     { gap: 6 },
@@ -145,12 +145,12 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
 
   // ── Sections 2-11 ──
   for (const s of SECTIONS.filter((x) => x.n <= 11)) {
-    heading(`Section ${s.n} — ${s.title}`);
+    heading(`Section ${s.n} - ${s.title}`);
     drawText(s.body, { gap: 5 });
   }
 
   // ── Declared inventory (Section 11 attachment) ──
-  heading("Declared Inventory — Item List (Section 11 Attachment)");
+  heading("Declared Inventory - Item List (Section 11 Attachment)");
   if (draft.items.length === 0) {
     drawText("No items declared.", { gap: 4 });
   } else {
@@ -176,7 +176,7 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
 
   // ── Sections 12-16 ──
   for (const s of SECTIONS.filter((x) => x.n >= 12)) {
-    heading(`Section ${s.n} — ${s.title}`);
+    heading(`Section ${s.n} - ${s.title}`);
     drawText(s.body, { gap: 5 });
   }
 
@@ -194,7 +194,7 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
         const dims = png.scaleToFit(220, boxH - 6);
         page.drawImage(png, { x: MARGIN + 4, y: boxTop - dims.height, width: dims.width, height: dims.height });
       } catch {
-        /* bad image data — leave the line blank */
+        /* bad image data - leave the line blank */
       }
     }
     // signature line
@@ -204,16 +204,16 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
     drawText(`Signature${whenIso ? "   ·   " + fmtDate(whenIso) : ""}`, { size: 7.5, gap: 6, color: rgb(0.4, 0.42, 0.45) });
   };
 
-  heading("Origin Signing — before loading");
-  await drawSig("Shipper — signature at origin", draft.origin_shipper_sig, draft.origin_signed_at, draft.origin_shipper_name);
-  await drawSig(`Carrier representative — signature at origin`, draft.origin_carrier_sig, draft.origin_signed_at, draft.crew_rep);
+  heading("Origin Signing - before loading");
+  await drawSig("Shipper - signature at origin", draft.origin_shipper_sig, draft.origin_signed_at, draft.origin_shipper_name);
+  await drawSig(`Carrier representative - signature at origin`, draft.origin_carrier_sig, draft.origin_signed_at, draft.crew_rep);
 
   if (draft.dest_shipper_sig || draft.dest_carrier_sig) {
-    heading("Destination Signing — upon delivery");
+    heading("Destination Signing - upon delivery");
     if (draft.walkthrough_notes) drawText(`Walk-through notes: ${draft.walkthrough_notes}`, { size: 8, gap: 3 });
     if (draft.final_charges != null) drawText(`Final actual charges: $${Number(draft.final_charges).toFixed(2)}`, { size: 8, f: bold, gap: 4 });
-    await drawSig("Shipper — signature at delivery", draft.dest_shipper_sig, draft.dest_signed_at, draft.dest_shipper_name);
-    await drawSig(`Carrier representative — signature at delivery`, draft.dest_carrier_sig, draft.dest_signed_at, draft.crew_rep);
+    await drawSig("Shipper - signature at delivery", draft.dest_shipper_sig, draft.dest_signed_at, draft.dest_shipper_name);
+    await drawSig(`Carrier representative - signature at delivery`, draft.dest_carrier_sig, draft.dest_signed_at, draft.crew_rep);
   }
 
   const bytes = await doc.save();

@@ -6,25 +6,25 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.limits import BodySizeLimitMiddleware, MAX_REQUEST_BODY_BYTES
 from app.db.session import Base, engine  # noqa: F401
-import app.db.models.system_config  # noqa: F401 — ensure table is registered
-import app.db.models.materials  # noqa: F401 — ensures table is registered with Base
-import app.db.models.calendar_job  # noqa: F401 — ensures table is registered with Base
-import app.db.models.photo         # noqa: F401 — ensures table is registered with Base
-import app.db.models.dvir  # noqa: F401 — ensure dvirs table is registered
-import app.db.models.job_report  # noqa: F401 — ensure job_reports table is registered
-import app.db.models.job_bill  # noqa: F401 — ensure job_bills table is registered
-import app.db.models.long_distance  # noqa: F401 — register prior_on_duty_statements table
-import app.db.models.document  # noqa: F401 — register documents table
-import app.db.models.estimate  # noqa: F401 — register estimates + estimate_items + furniture_catalog tables
-import app.db.models.patch_note  # noqa: F401 — register patch_notes table
-import app.db.models.admin_note  # noqa: F401 — register admin_notes table
-import app.db.models.office_hours  # noqa: F401 — register office_hours_entries table
-import app.db.models.reimbursement  # noqa: F401 — register reimbursements table
-import app.db.models.availability  # noqa: F401 — register availability_days table
-import app.db.models.availability_unlock  # noqa: F401 — register availability_unlocks
-import app.db.models.employee_tag  # noqa: F401 — register employee_tags + user_employee_tags
-import app.db.models.user_email_alias  # noqa: F401 — register user_email_aliases
-import app.db.models.bol  # noqa: F401 — register digital_bols table
+import app.db.models.system_config  # noqa: F401 - ensure table is registered
+import app.db.models.materials  # noqa: F401 - ensures table is registered with Base
+import app.db.models.calendar_job  # noqa: F401 - ensures table is registered with Base
+import app.db.models.photo         # noqa: F401 - ensures table is registered with Base
+import app.db.models.dvir  # noqa: F401 - ensure dvirs table is registered
+import app.db.models.job_report  # noqa: F401 - ensure job_reports table is registered
+import app.db.models.job_bill  # noqa: F401 - ensure job_bills table is registered
+import app.db.models.long_distance  # noqa: F401 - register prior_on_duty_statements table
+import app.db.models.document  # noqa: F401 - register documents table
+import app.db.models.estimate  # noqa: F401 - register estimates + estimate_items + furniture_catalog tables
+import app.db.models.patch_note  # noqa: F401 - register patch_notes table
+import app.db.models.admin_note  # noqa: F401 - register admin_notes table
+import app.db.models.office_hours  # noqa: F401 - register office_hours_entries table
+import app.db.models.reimbursement  # noqa: F401 - register reimbursements table
+import app.db.models.availability  # noqa: F401 - register availability_days table
+import app.db.models.availability_unlock  # noqa: F401 - register availability_unlocks
+import app.db.models.employee_tag  # noqa: F401 - register employee_tags + user_employee_tags
+import app.db.models.user_email_alias  # noqa: F401 - register user_email_aliases
+import app.db.models.bol  # noqa: F401 - register digital_bols table
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -61,7 +61,7 @@ from app.routers.bol import router as bol_router
 
 app = FastAPI(title="Mountaineer Crew App Backend")
 
-# Hard ceiling on request body size — rejects oversized uploads with 413
+# Hard ceiling on request body size - rejects oversized uploads with 413
 # before the body reaches a router. Defense in depth: even if a future
 # endpoint accidentally buffers the whole body (`await request.body()`,
 # `await file.read()`), the worker can't OOM from a single request.
@@ -105,7 +105,7 @@ def on_startup() -> None:
     #     python backend/scripts/run_migrations.py && uvicorn app.main:app ...
     #
     # If schema is stale at boot, the first DB query that needs the missing
-    # column will surface a clear ProgrammingError — far easier to diagnose
+    # column will surface a clear ProgrammingError - far easier to diagnose
     # than an OOM kill.
 
     # Ensure sheet export dedup tables exist (idempotent, handles deployments
@@ -116,10 +116,10 @@ def on_startup() -> None:
         ensure_sheet_exports_tables(engine)
         print("[startup] Sheet export tables ensured.")
     except Exception:
-        print("[startup] WARNING — could not ensure sheet export tables:")
+        print("[startup] WARNING - could not ensure sheet export tables:")
         traceback.print_exc()
 
-    # Auto-reconciler — periodically catches events that landed in Postgres
+    # Auto-reconciler - periodically catches events that landed in Postgres
     # but never made it to the Events sheet (e.g. background export thread
     # killed by worker recycling or OOM). Without this, admin had to click
     # Refresh manually whenever App Health flagged drift.
@@ -127,18 +127,18 @@ def on_startup() -> None:
         from app.integrations.auto_reconciler import start_auto_reconciler
         start_auto_reconciler()
     except Exception:
-        print("[startup] WARNING — could not start auto-reconciler:")
+        print("[startup] WARNING - could not start auto-reconciler:")
         traceback.print_exc()
 
     # Crew Resources daily-event loop. No-op unless CREW_RESOURCES_ENABLED
-    # is set on the worker — admin enables it after re-authorizing Google
+    # is set on the worker - admin enables it after re-authorizing Google
     # OAuth with the calendar.events scope (the read-only token doesn't
     # have it). See app/integrations/crew_resources_calendar.py.
     try:
         from app.integrations.crew_resources_loop import start_crew_resources_loop
         start_crew_resources_loop()
     except Exception:
-        print("[startup] WARNING — could not start crew-resources loop:")
+        print("[startup] WARNING - could not start crew-resources loop:")
         traceback.print_exc()
 
     # Auto-promote ADMIN_EMAIL to admin role on every startup.

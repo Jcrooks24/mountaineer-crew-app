@@ -5,7 +5,7 @@ type State = { hasError: boolean; message: string };
 
 /**
  * App-wide error boundary. Without one, any render-time exception unmounts
- * React to a blank white screen — on a field device that strands the crew
+ * React to a blank white screen - on a field device that strands the crew
  * with no way back. This catches the crash and shows a recoverable screen.
  *
  * Styling is deliberately hardcoded (not theme variables): the boundary must
@@ -50,7 +50,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             Something went wrong
           </div>
           <div style={{ fontSize: 14, lineHeight: 1.5, color: "#94a3b8", marginBottom: 20 }}>
-            The app hit an unexpected error. Your saved work isn't lost — logged
+            The app hit an unexpected error. Your saved work isn't lost - logged
             jobs and queued data are stored on this device and will sync once
             the app is back up.
           </div>

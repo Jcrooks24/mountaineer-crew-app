@@ -1,5 +1,5 @@
 /**
- * LD-day store — per-diem / drive-day marks for long-distance trips.
+ * LD-day store - per-diem / drive-day marks for long-distance trips.
  *
  * The driver marks each day out of town (drives the $50/day per-diem tally) and
  * whether it was a drive day. One record per date, autosaved locally and

@@ -6,7 +6,7 @@ from app.db.session import Base
 class CalendarJob(Base):
     __tablename__ = "calendar_jobs"
 
-    # The Google Calendar event ID — primary key and unique lookup key
+    # The Google Calendar event ID - primary key and unique lookup key
     calendar_event_id = Column(String, primary_key=True, index=True)
 
     # Canonical job UUID shared across all devices

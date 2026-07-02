@@ -1,4 +1,4 @@
-"""Patch notes — admin-authored changelog entries shown to all crew."""
+"""Patch notes - admin-authored changelog entries shown to all crew."""
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 

@@ -4,7 +4,7 @@ import { apiFetch, ApiError } from "../api/client";
 import { useResolvedLogo } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 
-// Public page — a mechanic with no app account opens this from an emailed
+// Public page - a mechanic with no app account opens this from an emailed
 // link to remotely sign off a defective DVIR. Auth is the token in the URL.
 
 type MechanicReview = {
@@ -72,7 +72,7 @@ export default function MechanicSign() {
     setErr(null);
     if (!mechanicName.trim()) return setErr("Mechanic name is required.");
     if (repairsMade === null) return setErr("Please indicate whether repairs were made.");
-    if (sigRef.current?.isEmpty()) return setErr("Signature is required — please sign above.");
+    if (sigRef.current?.isEmpty()) return setErr("Signature is required - please sign above.");
 
     setBusy(true);
     try {
@@ -154,7 +154,7 @@ export default function MechanicSign() {
             No Review Required
           </div>
           <div className="small" style={{ color: "var(--muted)" }}>
-            This inspection has no defects — the vehicle is already cleared.
+            This inspection has no defects - the vehicle is already cleared.
           </div>
         </div>
       )}
@@ -257,7 +257,7 @@ export default function MechanicSign() {
               </div>
 
               <div>
-                <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Signature * — sign below</div>
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Signature * - sign below</div>
                 <SignaturePad ref={sigRef} height={150} />
                 <button
                   type="button"

@@ -1,10 +1,10 @@
 """
-Admin router — protected by require_admin dependency.
+Admin router - protected by require_admin dependency.
 
 Endpoints:
-- GET  /api/admin/users              — list all users
-- PATCH /api/admin/users/{user_id}   — update role or is_active
-- GET  /api/admin/events/today       — geotagged events from today (for map)
+- GET  /api/admin/users              - list all users
+- PATCH /api/admin/users/{user_id}   - update role or is_active
+- GET  /api/admin/events/today       - geotagged events from today (for map)
 """
 
 import json as _json
@@ -187,7 +187,7 @@ def update_cal_token(
         raise HTTPException(status_code=400, detail=f"Invalid token JSON: {e}")
 
     if not creds.refresh_token:
-        raise HTTPException(status_code=400, detail="Token has no refresh_token — run the OAuth flow with access_type=offline")
+        raise HTTPException(status_code=400, detail="Token has no refresh_token - run the OAuth flow with access_type=offline")
 
     _save_token_to_db(creds, db)
     invalidate_cache()
@@ -201,7 +201,7 @@ def events_today(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    # "Today" is the Mountain calendar day — Bozeman is where crew operate.
+    # "Today" is the Mountain calendar day - Bozeman is where crew operate.
     # Using UTC start-of-day silently dropped early-afternoon-MT events from
     # the map after 6 PM MT (when UTC midnight rolled over).
     from app.core.time_utils import mountain_day_utc_bounds
@@ -209,7 +209,7 @@ def events_today(
 
     # Cap the day's geotagged events so a runaway location-ping device
     # can't materialize tens of thousands of ORM objects in this worker.
-    # 2000 is well past any realistic crew day — if we ever brush the cap
+    # 2000 is well past any realistic crew day - if we ever brush the cap
     # we'll see it in the admin map and can paginate properly.
     events = (
         db.query(Event)
@@ -296,7 +296,7 @@ async def set_app_theme(
 
 
 # ---------------------------
-# Job search — by date + name, returns candidate job_uuids
+# Job search - by date + name, returns candidate job_uuids
 # ---------------------------
 
 @router.get("/job-search")
@@ -318,7 +318,7 @@ def job_search(
     needle = (name or "").strip().lower()
     candidates: Dict[str, Dict[str, Any]] = {}
 
-    # Events — date comes from timestamp, evaluated in Mountain. The admin
+    # Events - date comes from timestamp, evaluated in Mountain. The admin
     # types a `date` in their head as the calendar day in Bozeman; using
     # `func.date(Event.timestamp)` against a UTC-naive column would miss
     # late-evening-MT events that fell on the next UTC day.
@@ -335,7 +335,7 @@ def job_search(
             c["dates"].add(utc_naive_to_mountain_date(e.timestamp).isoformat())
         c["events"] += 1
 
-    # Materials — date comes from job_date (YYYY-MM-DD string)
+    # Materials - date comes from job_date (YYYY-MM-DD string)
     mq = db.query(MaterialsSubmission).filter(MaterialsSubmission.job_uuid.isnot(None))
     if date:
         mq = mq.filter(MaterialsSubmission.job_date == date)
@@ -349,7 +349,7 @@ def job_search(
             c["dates"].add(m.job_date)
         c["materials"] += 1
 
-    # One bulk lookup for the data-entry checkpoint chip — beats N queries
+    # One bulk lookup for the data-entry checkpoint chip - beats N queries
     # if the search ever returns a long candidate list.
     candidate_uuids = list(candidates.keys())
     entered_uuids: set[str] = set()
@@ -387,7 +387,7 @@ def job_search(
 def _iso(dt: Any) -> Optional[str]:
     """Serialize a datetime for the JSON response. Naive datetimes in this
     app are stored as UTC; emit them with a trailing 'Z' so the browser
-    doesn't reinterpret the bare ISO string in its local timezone — that's
+    doesn't reinterpret the bare ISO string in its local timezone - that's
     what was making Job Summary show events 6h off from the Timeline tab.
     """
     if dt is None:
@@ -398,7 +398,7 @@ def _iso(dt: Any) -> Optional[str]:
             s += "Z"
         return s
     if hasattr(dt, "isoformat"):
-        # date / time objects — no timezone applies, return as-is.
+        # date / time objects - no timezone applies, return as-is.
         return dt.isoformat()
     return str(dt)
 
@@ -414,7 +414,7 @@ def job_summary(
     consistently. Resource shapes mirror what each source router returns but
     trimmed to fields useful for reviewing a job end-to-end.
 
-    Per-source lists are capped to keep the response bounded — a single job
+    Per-source lists are capped to keep the response bounded - a single job
     has never come close to these limits in practice, but an unbounded
     `.all()` here was a memory cliff if a job's data ever drifted large
     (e.g., a long-running ongoing job, or a buggy duplicate-event flood).
@@ -576,7 +576,7 @@ def job_summary(
 
 
 # ---------------------------
-# Admin data-entry status — initials + date the admin records once they've
+# Admin data-entry status - initials + date the admin records once they've
 # transcribed a job's data into the books. Surfaced on the Job Summary card,
 # in job-search results, and as new entered_by / entered_on columns on every
 # job-related worksheet (Events, Materials, JobReports, Bills).
@@ -652,7 +652,7 @@ def upsert_entry_status(
     try:
         sweep_counts = update_entry_status_in_sheets(db, job_uuid, initials, entered_on)
     except Exception as exc:
-        # Log and continue — the DB row is the source of truth; the next
+        # Log and continue - the DB row is the source of truth; the next
         # export of any kind for this job will repopulate. Admin can also
         # PUT again to retry.
         print(f"[entry-status] sweep failed for {job_uuid}: {exc}")
@@ -670,7 +670,7 @@ def upsert_entry_status(
 
 
 # ---------------------------
-# Sheet reconciliation — recover events durable in Postgres but missing
+# Sheet reconciliation - recover events durable in Postgres but missing
 # from the Events sheet because their original sync's sheet append failed.
 # Idempotent: re-running is safe; the existing dedupe table covers it.
 # ---------------------------
@@ -688,7 +688,7 @@ def crew_resources_refresh_endpoint(
 ):
     """Force a Crew Resources event refresh for today + days_ahead. Useful
     right after admin enables CREW_RESOURCES_ENABLED or re-authorizes
-    Google OAuth — otherwise the next scheduled refresh is an hour away."""
+    Google OAuth - otherwise the next scheduled refresh is an hour away."""
     from app.integrations.crew_resources_calendar import (
         update_crew_resources_for_horizon,
     )
@@ -708,7 +708,7 @@ def crew_resources_status_endpoint(
 ):
     """Read-only diagnostic for the Crew Resources feature. Tells admin in
     one place whether the env vars are wired, the OAuth token has the
-    write scope, and which calendar IDs are in effect — so debugging
+    write scope, and which calendar IDs are in effect - so debugging
     "events aren't showing up" doesn't require Render-log spelunking."""
     from app.core.google_cal_oauth import get_cal_status
     from app.integrations.crew_resources_calendar import (
@@ -753,7 +753,7 @@ def reconcile_events_endpoint(
 
 
 # ---------------------------
-# App Health — snapshot of critical functions for the Settings tab. Each
+# App Health - snapshot of critical functions for the Settings tab. Each
 # check is independently try/excepted so one failing probe doesn't blank
 # the whole report. Frontend renders this as plain text.
 # ---------------------------
@@ -774,7 +774,7 @@ def _check_google_creds(db: Session) -> Dict[str, str]:
         if not creds:
             return {"name": "Google credentials", "status": "fail", "detail": "no token configured"}
         if not creds.refresh_token:
-            return {"name": "Google credentials", "status": "warn", "detail": "no refresh token — re-auth needed soon"}
+            return {"name": "Google credentials", "status": "warn", "detail": "no refresh token - re-auth needed soon"}
         if creds.expired and not creds.refresh_token:
             return {"name": "Google credentials", "status": "fail", "detail": "token expired and cannot refresh"}
         expiry = creds.expiry.isoformat() if creds.expiry else "unknown"
@@ -803,7 +803,7 @@ def _check_sheets_api(db: Session) -> Dict[str, str]:
         return {
             "name": "Google Sheets API",
             "status": "ok",
-            "detail": f"reachable — sheet '{title}', {tab_count} tabs",
+            "detail": f"reachable - sheet '{title}', {tab_count} tabs",
         }
     except Exception as ex:
         return {"name": "Google Sheets API", "status": "fail", "detail": f"{ex}"}
@@ -830,17 +830,17 @@ def _check_event_drift(db: Session) -> Dict[str, str]:
         from app.integrations.sheets_reconcile import count_unexported_events
         n = count_unexported_events(db)
         if n == 0:
-            return {"name": "Sheet drift — events", "status": "ok", "detail": "0 missing"}
+            return {"name": "Sheet drift - events", "status": "ok", "detail": "0 missing"}
         # Below 25 is normal background noise on a busy day if a sync just
         # failed and a refresh is queued. Above that suggests a real outage.
         status = "warn" if n < 25 else "fail"
         return {
-            "name": "Sheet drift — events",
+            "name": "Sheet drift - events",
             "status": status,
-            "detail": f"{n} events missing from sheet — run Refresh",
+            "detail": f"{n} events missing from sheet - run Refresh",
         }
     except Exception as ex:
-        return {"name": "Sheet drift — events", "status": "fail", "detail": f"{ex}"}
+        return {"name": "Sheet drift - events", "status": "fail", "detail": f"{ex}"}
 
 
 def _check_event_freshness(db: Session) -> Dict[str, str]:
@@ -848,7 +848,7 @@ def _check_event_freshness(db: Session) -> Dict[str, str]:
         latest = db.query(func.max(Event.timestamp)).scalar()
         if latest is None:
             return {"name": "Event freshness", "status": "warn", "detail": "no events recorded yet"}
-        # Treat naive timestamps as UTC — that's what /api/sync stores.
+        # Treat naive timestamps as UTC - that's what /api/sync stores.
         if latest.tzinfo is None:
             latest_utc = latest.replace(tzinfo=timezone.utc)
         else:
@@ -870,7 +870,7 @@ def _check_event_freshness(db: Session) -> Dict[str, str]:
 
 def _check_env_vars() -> Dict[str, str]:
     """Surface env vars we know break the app if missing or stale. Doesn't
-    leak values — only presence."""
+    leak values - only presence."""
     required = ["DATABASE_URL", "JWT_SECRET", "FRONTEND_URL", "GOOGLE_SHEETS_SPREADSHEET_ID"]
     missing = [k for k in required if not (os.getenv(k) or "").strip()]
     if not missing:

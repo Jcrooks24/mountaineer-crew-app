@@ -138,7 +138,7 @@ def update_me(
     if payload.profile_photo is not None:
         current_user.profile_photo = payload.profile_photo.strip() or None
     if payload.scheduling_notes is not None:
-        # Cap to a sane length — the field is rendered as a tooltip in admin
+        # Cap to a sane length - the field is rendered as a tooltip in admin
         # and a collapsible card in crew UI; 2000 chars is well past either use.
         current_user.scheduling_notes = payload.scheduling_notes[:2000]
     db.commit()
@@ -158,7 +158,7 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == email).first()
 
-    # Log only the user id + a coarse status — emails in Render logs are PII
+    # Log only the user id + a coarse status - emails in Render logs are PII
     # and the id is enough to grep for context if a crew member calls about
     # a failed reset. The actual link surfaces in Postmark's audit trail.
     if not user:
@@ -176,7 +176,7 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
         reset_link = f"{frontend_url}/reset-password?token={token}"
 
         # Log the existence of a generated link without the link itself or
-        # the user email — leaking either to Render logs gives anyone with
+        # the user email - leaking either to Render logs gives anyone with
         # log access a working reset path.
         print(f"[forgot-password] reset link generated for user {user.id}")
 

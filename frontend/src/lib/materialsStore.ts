@@ -1,5 +1,5 @@
 /**
- * Materials store — offline-capable per-job materials list.
+ * Materials store - offline-capable per-job materials list.
  *
  * Model:
  *   - Per-job cache (last-known server state) lives in localStorage under
@@ -159,7 +159,7 @@ function saveCache(jobUuid: string, items: LiveMaterial[]): void {
   try {
     localStorage.setItem(cacheKey(jobUuid), JSON.stringify(items));
   } catch {
-    // Quota exceeded or disabled — silently ignore.
+    // Quota exceeded or disabled - silently ignore.
   }
 }
 
@@ -276,7 +276,7 @@ let syncing = false;
 
 /**
  * Drain the queue. Transient failures (network / 5xx / 408) are retried on
- * next drain — the op stays in the queue. Permanent rejections (4xx except
+ * next drain - the op stays in the queue. Permanent rejections (4xx except
  * 408) are dropped so one malformed op can't wedge the queue behind it,
  * and a warning is logged so the problem isn't completely invisible.
  * Returns how many ops were confirmed this run.
@@ -305,7 +305,7 @@ export async function syncQueue(): Promise<number> {
         }
         synced++;
       } catch (e) {
-        // 401/403 are excluded — an expired token is transient; dropping the
+        // 401/403 are excluded - an expired token is transient; dropping the
         // op would silently lose a crew member's queued field work.
         const isPermanent =
           e instanceof ApiError &&
@@ -321,7 +321,7 @@ export async function syncQueue(): Promise<number> {
               e instanceof Error ? e.message : e
             }`,
           );
-          // Drop — do NOT push onto remaining
+          // Drop - do NOT push onto remaining
         } else {
           remaining.push(op);
         }

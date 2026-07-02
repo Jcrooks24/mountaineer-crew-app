@@ -19,7 +19,7 @@ export function markPatchNotesSeenNow(latestUpdatedAt: string): void {
       localStorage.setItem(KEY, latestUpdatedAt);
     }
   } catch {
-    /* noop — localStorage unavailable */
+    /* noop - localStorage unavailable */
   }
 }
 

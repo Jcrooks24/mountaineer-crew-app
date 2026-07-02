@@ -59,7 +59,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             ts = datetime.fromisoformat(e.timestamp.replace("Z", "+00:00"))
         except Exception:
             errors += 1
-            # A malformed timestamp can't be fixed by retrying — permanent.
+            # A malformed timestamp can't be fixed by retrying - permanent.
             failed.append({
                 "event_id": e.event_id,
                 "reason": "bad_timestamp",
@@ -74,7 +74,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             job_id=e.job_id,
             type=e.type,
             # On insert, the editable event time and the immutable
-            # logged_at are the same — the crew member's device time at
+            # logged_at are the same - the crew member's device time at
             # capture. They diverge only after the user edits the
             # timestamp from the timeline.
             timestamp=ts,
@@ -120,7 +120,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             db.rollback()
             errors += 1
             # A DB error here is almost always transient (connection blip,
-            # timeout, deadlock on the small Render instance) — the event
+            # timeout, deadlock on the small Render instance) - the event
             # never inserted, so the client must keep it queued and retry.
             # Marking it non-retryable would silently lose a logged event.
             failed.append({
@@ -129,7 +129,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
                 "retryable": True,
             })
 
-    # Export to Sheets in the bounded background pool — keeps the request
+    # Export to Sheets in the bounded background pool - keeps the request
     # thread from holding the events list + an in-flight googleapiclient call
     # at the same time. The reconciler is the safety net if a background
     # export fails. Returning sheets_exported=None preserves the response
@@ -143,7 +143,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
         "duplicates": duplicates,
         "errors": errors,
         "failed": failed,
-        "sheets_exported": None,                # async — see reconciler
+        "sheets_exported": None,                # async - see reconciler
         "sheets_error": None,
     }
 
@@ -244,7 +244,7 @@ def patch_event(
     Currently `note` and `timestamp`. The row's `logged_at`, location, and
     author stay intact. Each PATCH commits Postgres first, then writes the
     same change into the Events sheet. If the event hasn't been exported
-    yet, the sheet call is a no-op — the row will ship via the normal sync
+    yet, the sheet call is a no-op - the row will ship via the normal sync
     path with the latest values.
     """
     row = db.query(Event).filter(Event.event_id == event_id).first()
@@ -273,7 +273,7 @@ def patch_event(
 
     # Run the sheet updates synchronously (not via the background pool) so
     # memory is bounded by uvicorn's worker count. A sheet failure must never
-    # fail the PATCH — Postgres is the source of truth; the reconciler /
+    # fail the PATCH - Postgres is the source of truth; the reconciler /
     # next edit catches up on missed sheet writes.
     sheet_error: Optional[str] = None
     try:

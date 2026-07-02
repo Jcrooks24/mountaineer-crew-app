@@ -1,5 +1,5 @@
 """
-Digital Bill of Lading router — /api/bol.
+Digital Bill of Lading router - /api/bol.
 
 The crew builds a BOL's declared inventory in the field and submits it. This
 endpoint is an UPSERT keyed by bol_id (device UUID): the same BOL is POSTed
@@ -60,7 +60,7 @@ class BOLIn(BaseModel):
 def _to_dict(row: DigitalBOL) -> Dict[str, Any]:
     """Serialize a BOL row for the API response and the sheets export.
     items_json is spliced through as parsed JSON. Raw signature data URLs are
-    NOT returned (bandwidth) — only booleans + timestamps so a second device
+    NOT returned (bandwidth) - only booleans + timestamps so a second device
     reopening at destination can see that origin was already signed."""
     try:
         items = json.loads(row.items_json or "[]")
@@ -107,7 +107,7 @@ def submit_bol(
 ):
     """Create or update a Digital BOL, then export to Google Sheets.
 
-    Idempotent upsert by bol_id — a re-POST (offline retry, or a re-submit to
+    Idempotent upsert by bol_id - a re-POST (offline retry, or a re-submit to
     backfill photo Drive links) updates the existing row in place.
     """
     try:
@@ -137,7 +137,7 @@ def submit_bol(
         )
         db.add(row)
     else:
-        # Upsert — refresh the mutable fields. created_by / created_at / driver
+        # Upsert - refresh the mutable fields. created_by / created_at / driver
         # stay as first written so the record of who started it is preserved.
         row.job_uuid = payload.job_uuid or row.job_uuid
         row.job_name = payload.job_name or row.job_name
@@ -181,7 +181,7 @@ def get_bols(
         q = q.filter(DigitalBOL.job_uuid == job_uuid)
     rows = q.order_by(DigitalBOL.updated_at.desc()).limit(limit).all()
     bols = [_to_dict(r) for r in rows]
-    # Unfiltered list (the "open BOLs" chooser) only needs metadata — strip the
+    # Unfiltered list (the "open BOLs" chooser) only needs metadata - strip the
     # heavy signature blobs and item arrays so a 100-row list stays small. The
     # full record (with signatures, for continuing/printing) is returned when
     # filtered by job_uuid.

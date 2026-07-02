@@ -26,7 +26,7 @@ export default function AdminNotesBanner({ scope }: { scope: string }) {
         const cutoff = seenAt ? new Date(seenAt).getTime() : 0;
         setUnseen(rows.filter((n) => new Date(n.updated_at).getTime() > cutoff));
       })
-      .catch(() => {/* non-fatal — no banner */});
+      .catch(() => {/* non-fatal - no banner */});
   }, [scope]);
 
   if (unseen.length === 0) return null;

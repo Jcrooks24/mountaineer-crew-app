@@ -1,7 +1,7 @@
 /**
  * Wipe every user-specific store the app holds on this device.
  *
- * Called when the active crew member changes — explicit logout, or a fresh
+ * Called when the active crew member changes - explicit logout, or a fresh
  * /me response that doesn't match the previously-cached user. Without this,
  * crew B logging in on a shared phone would inherit crew A's queued
  * materials, draft availability, and dismissed-banner flags, and would
@@ -12,7 +12,7 @@
  * crew_app_db IndexedDB database that hosts the photo + reimbursement
  * queues. Non-user state (theme settings, last-seen patch notes timestamp,
  * etc.) deliberately re-uses these prefixes, so wiping them is acceptable
- * — they reseed from server defaults on next render.
+ * - they reseed from server defaults on next render.
  */
 
 const KEY_PREFIXES = ["crew_", "mm_"] as const;
@@ -29,7 +29,7 @@ function wipeStorage(s: Storage | undefined): void {
     }
     for (const k of toRemove) s.removeItem(k);
   } catch {
-    /* storage unavailable — nothing to clear */
+    /* storage unavailable - nothing to clear */
   }
 }
 
@@ -37,13 +37,13 @@ export function clearCrewState(): void {
   if (typeof window === "undefined") return;
   wipeStorage(window.localStorage);
   wipeStorage(window.sessionStorage);
-  // Fire-and-forget — onsuccess/onerror are no-ops. If the DB doesn't exist
+  // Fire-and-forget - onsuccess/onerror are no-ops. If the DB doesn't exist
   // yet, deleteDatabase is a no-op too. If something is holding a connection
   // open, the deletion is blocked but the failure is benign here: the
   // logged-in user just sees the previous queue once and re-syncs.
   try {
     window.indexedDB?.deleteDatabase(INDEXED_DB_NAME);
   } catch {
-    /* indexedDB unavailable — ignore */
+    /* indexedDB unavailable - ignore */
   }
 }

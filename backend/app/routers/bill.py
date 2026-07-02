@@ -2,9 +2,9 @@
 Bill router.
 
 Endpoints:
-- GET  /api/bill/seed?job_uuid=...  — auto-populate line items from events + materials
-- GET  /api/bill?job_uuid=...       — load saved bill (404 if none)
-- POST /api/bill                    — upsert bill
+- GET  /api/bill/seed?job_uuid=...  - auto-populate line items from events + materials
+- GET  /api/bill?job_uuid=...       - load saved bill (404 if none)
+- POST /api/bill                    - upsert bill
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def _to_response(b: JobBill) -> BillResponse:
     )
 
 
-# ── Seed — auto-populate from events + materials ─────────────────────────────
+# ── Seed - auto-populate from events + materials ─────────────────────────────
 
 @router.get("/seed")
 def get_bill_seed(
@@ -132,7 +132,7 @@ def get_bill_seed(
     hours_lines += _span_lines("unload_start", "unload_finish", "Unload labor (per hour)")
     hours_lines += _span_lines("unpack_start", "unpack_finish", "Unpacking labor (per hour)")
 
-    # Materials are no longer seeded into the bill's line items — they live
+    # Materials are no longer seeded into the bill's line items - they live
     # in a dedicated live-shared panel inside the bill helper (see
     # /api/materials). Keep the field in the response for frontend compat.
     material_lines: list[dict] = []

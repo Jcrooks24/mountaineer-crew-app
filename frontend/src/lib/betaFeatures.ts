@@ -4,7 +4,7 @@
 // (via <BetaTag feature="..." />). The tag persists until the next manual
 // APP_VERSION bump, at which point graduated features are removed from the
 // set. APP_VERSION is the user-facing milestone the crew sees in patch notes
-// (e.g. "1.4", "1.5") — not the per-deploy build id.
+// (e.g. "1.4", "1.5") - not the per-deploy build id.
 //
 // On version bump:
 //   1. Bump APP_VERSION below.

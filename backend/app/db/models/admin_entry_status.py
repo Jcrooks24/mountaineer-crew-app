@@ -16,7 +16,7 @@ class AdminEntryStatus(Base):
     id = Column(Integer, primary_key=True, index=True)
     job_uuid = Column(String, unique=True, index=True, nullable=False)
 
-    # Free-text initials (no length cap — short strings are typical but the
+    # Free-text initials (no length cap - short strings are typical but the
     # form accepts anything the admin wants to record).
     entered_by = Column(String, nullable=False)
     # ISO YYYY-MM-DD; stored as Text so it round-trips into the sheet column

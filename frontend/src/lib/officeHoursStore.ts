@@ -1,5 +1,5 @@
 /**
- * Office Hours store — offline-capable list of admin office-hours entries.
+ * Office Hours store - offline-capable list of admin office-hours entries.
  *
  * Model mirrors materialsStore.ts but flatter: each entry is a single object
  * (no per-job grouping). One localStorage cache + a queue of add/edit/delete
@@ -99,7 +99,7 @@ export function computeWorkedHours(
   for (const b of breaks) {
     const bs = hhmmToMinutes(b.start);
     const be = hhmmToMinutes(b.end);
-    if (bs === null || be === null) continue; // half-entered — skip
+    if (bs === null || be === null) continue; // half-entered - skip
     let bSpan = be - bs;
     if (bSpan <= 0) bSpan += 24 * 60;
     if (bSpan > 0) breakMin += bSpan;
@@ -212,7 +212,7 @@ export function pendingOpCount(): number {
 
 export function enqueueUpsert(input: OfficeHoursInput, userName: string): void {
   const q = loadQueue();
-  // Collapse multiple edits of the same entry while offline — only the most
+  // Collapse multiple edits of the same entry while offline - only the most
   // recent payload matters when we eventually drain.
   const filtered = q.filter(
     (o) => !(o.op === "upsert" && o.payload.entry_uuid === input.entry_uuid),
@@ -269,7 +269,7 @@ export async function syncQueue(): Promise<number> {
         }
         synced++;
       } catch (e) {
-        // 401/403 are excluded — an expired token is transient; dropping the
+        // 401/403 are excluded - an expired token is transient; dropping the
         // op would silently lose the admin's queued hours entry.
         const isPermanent =
           e instanceof ApiError &&

@@ -32,7 +32,7 @@ const AuthCtx = createContext<AuthState | null>(null);
 
 // Last successful /me response, kept in localStorage so the app can boot
 // against the cached profile when the network is unreachable. Cleared on
-// logout and on a genuine auth rejection (401/403) — never on transient
+// logout and on a genuine auth rejection (401/403) - never on transient
 // network errors.
 const USER_CACHE_KEY = "mm_user_cache_v1";
 
@@ -78,7 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return loadCachedUser() === null;
   });
 
-  // setUser is the externally-exposed setter — keep the cache in sync so a
+  // setUser is the externally-exposed setter - keep the cache in sync so a
   // profile update (name change, photo upload) survives the next offline boot.
   const setUser = useCallback((next: User | null) => {
     setUserState(next);
@@ -108,7 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       // Only clear on a genuine auth rejection. Network errors (TypeError,
       // "Failed to fetch") preserve whatever's already in state, including
-      // the seed-from-cache user from constructor — so an offline launch
+      // the seed-from-cache user from constructor - so an offline launch
       // doesn't kick the crew member to /login.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         setUser(null);
@@ -125,7 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // When connectivity returns, re-validate the token against the server so a
-  // revoked / deactivated user does eventually get logged out — just not
+  // revoked / deactivated user does eventually get logged out - just not
   // while they're offline in the field.
   useEffect(() => {
     function onOnline() { loadMe(); }

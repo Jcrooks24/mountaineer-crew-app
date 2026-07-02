@@ -27,7 +27,7 @@ class User(Base):
     reset_token = Column(String, nullable=True, index=True)
     reset_token_expiry = Column(DateTime(timezone=True), nullable=True)
 
-    # Profile photo — resized ~256px data URL (image/jpeg), shared across devices
+    # Profile photo - resized ~256px data URL (image/jpeg), shared across devices
     profile_photo = Column(Text, nullable=True)
 
     # Free-form scheduling notes the crew maintains on their availability page.

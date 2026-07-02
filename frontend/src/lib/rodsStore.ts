@@ -1,5 +1,5 @@
 /**
- * RODS store — resumable, tap-recorded Record of Duty Status.
+ * RODS store - resumable, tap-recorded Record of Duty Status.
  *
  * In long-distance mode the driver taps a duty status (Off Duty / Sleeper /
  * Driving / On Duty) and we append a change stamped with the current time. Each
@@ -44,10 +44,10 @@ export const STATUS_COLORS: Record<DutyStatus, string> = {
 
 // Plain-language explanation of each status and when it applies.
 export const STATUS_HELP: Record<DutyStatus, string> = {
-  off_duty: "Truck is PARKED and you're on your own time — meal or rest stop, overnight, or done for the day. Not driving and not traveling.",
-  sleeper: "Riding in the truck while someone else drives (in transit, not driving) — travel time as a passenger, resting or just along for the ride.",
+  off_duty: "Truck is PARKED and you're on your own time - meal or rest stop, overnight, or done for the day. Not driving and not traveling.",
+  sleeper: "Riding in the truck while someone else drives (in transit, not driving) - travel time as a passenger, resting or just along for the ride.",
   driving: "Behind the wheel with the truck moving or stopped in traffic.",
-  on_duty: "Working but not driving — loading, unloading, packing, fueling, inspections, paperwork, or waiting to load.",
+  on_duty: "Working but not driving - loading, unloading, packing, fueling, inspections, paperwork, or waiting to load.",
 };
 
 export type RodsDay = {
@@ -55,7 +55,7 @@ export type RodsDay = {
   log_date: string; // YYYY-MM-DD
   driver_name: string;
   changes: DutyChange[];
-  // Trip header — carried across days.
+  // Trip header - carried across days.
   co_driver_name?: string;
   vehicle_number?: string;
   trailer_number?: string;
@@ -232,7 +232,7 @@ function dayToPayload(day: RodsDay): Record<string, unknown> {
 }
 
 /** Queue a signed day for upsert (replaces any earlier queued payload for the
- * same date — only the latest state matters). */
+ * same date - only the latest state matters). */
 export function enqueueDay(day: RodsDay): void {
   const q = loadQueue().filter((x) => x.log_date !== day.log_date);
   q.push({ log_date: day.log_date, payload: dayToPayload(day) });

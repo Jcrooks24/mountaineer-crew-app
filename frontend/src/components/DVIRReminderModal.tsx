@@ -17,12 +17,12 @@ const COPY: Record<Trigger, { heading: string; body: string; multiJob: string }>
   "post-trip": {
     heading: "Post-trip inspection",
     body: "Has the driver completed a post-trip DVIR for the vehicle used on this job?",
-    multiJob: "Multiple jobs today — final DVIR at end of last job",
+    multiJob: "Multiple jobs today - final DVIR at end of last job",
   },
   "report": {
     heading: "DVIR required",
     body: "Before submitting this report, confirm that the driver has completed a Driver Vehicle Inspection Report for any truck used on this job.",
-    multiJob: "Multiple jobs today — final DVIR at end of last job",
+    multiJob: "Multiple jobs today - final DVIR at end of last job",
   },
 };
 
@@ -121,7 +121,7 @@ export default function DVIRReminderModal({ trigger, onProceed, onCancel }: Prop
               fontSize: 14, cursor: "pointer",
             }}
           >
-            N/A — no truck used
+            N/A - no truck used
           </button>
         </div>
       </div>

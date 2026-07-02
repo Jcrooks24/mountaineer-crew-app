@@ -52,7 +52,7 @@ def _to_response(r: JobReport) -> JobReportResponse:
 
 
 def _job_name_for(db: Session, job_uuid: str) -> str:
-    """Best-effort job name lookup — grab the most recent non-empty job_name from events."""
+    """Best-effort job name lookup - grab the most recent non-empty job_name from events."""
     row = (
         db.query(Event.job_name)
         .filter(Event.job_uuid == job_uuid, Event.job_name.isnot(None), Event.job_name != "")

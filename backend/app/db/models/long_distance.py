@@ -26,7 +26,7 @@ class PriorOnDutyStatement(Base):
     job_uuid = Column(String, index=True, nullable=True)
     job_name = Column(String, nullable=True)
 
-    # YYYY-MM-DD — the date the statement covers (first day of trip)
+    # YYYY-MM-DD - the date the statement covers (first day of trip)
     statement_date = Column(String, nullable=False)
 
     # JSON: [{ "date": "YYYY-MM-DD", "hours": 0.0 }, ...] for the 7 days before
@@ -41,7 +41,7 @@ class PriorOnDutyStatement(Base):
 
 
 class RodsLog(Base):
-    """Record of Duty Status (FMCSR §395.8) — one row per driver per day."""
+    """Record of Duty Status (FMCSR §395.8) - one row per driver per day."""
 
     __tablename__ = "rods_logs"
 
@@ -87,7 +87,7 @@ class LdDay(Base):
     The driver marks whether a given day was spent out of town (drives $50/day
     per-diem, incorporated into the client's long-distance fee) and/or a drive
     day (drive time is paid a fixed amount off-app). This exists so admin can
-    tally per-diem owed and drive days per employee from the sheet — the app
+    tally per-diem owed and drive days per employee from the sheet - the app
     doesn't compute the fixed drive-pay dollar figure. Upserted by (driver, date).
     """
 

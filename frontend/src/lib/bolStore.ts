@@ -1,5 +1,5 @@
 /**
- * BOL store — offline-capable Digital Bill of Lading draft + submit queue.
+ * BOL store - offline-capable Digital Bill of Lading draft + submit queue.
  *
  * Model (deliberately simpler than the per-op materials queue): a BOL is ONE
  * document per job, built in a single field session, so we persist the whole
@@ -9,7 +9,7 @@
  *     localStorage under DRAFT_PREFIX + job_uuid, so nothing is lost if the app
  *     is backgrounded or reloaded mid-build (offline-first invariant).
  *   - Submit queue: on Save, the current draft is enqueued as an upsert under
- *     QUEUE_KEY (keyed by bol_id — a re-save replaces the queued payload rather
+ *     QUEUE_KEY (keyed by bol_id - a re-save replaces the queued payload rather
  *     than stacking). syncQueue() POSTs each to /api/bol; the backend upserts,
  *     so retries never duplicate.
  *   - Photos: captured to IndexedDB (photoStore) first so an offline photo
@@ -20,7 +20,7 @@
  *
  * Job autofill: the main timeline persists the active job to these localStorage
  * keys; reading them here means the BOL is prefilled with (and shares the same
- * job_uuid as) the job the crew already selected — no separate job picker, and
+ * job_uuid as) the job the crew already selected - no separate job picker, and
  * admin sees one job_uuid across Events / Materials / BOL.
  */
 
@@ -62,7 +62,7 @@ export type BOLDraft = {
   updated_at: string;       // ISO
   // Crew rep (informational; server records the authenticated user).
   crew_rep?: string;
-  // ── Signing (Push 2) — base64 PNG data URLs kept in the local draft so the
+  // ── Signing (Push 2) - base64 PNG data URLs kept in the local draft so the
   // PDF can be (re)generated on-device, even offline. ──
   origin_shipper_sig?: string;
   origin_carrier_sig?: string;
@@ -123,7 +123,7 @@ export function newUUID(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** Resize/compress before upload. Always resolves — falls back to the original
+/** Resize/compress before upload. Always resolves - falls back to the original
  * on any failure. Copied from the estimator's proven implementation (the 30s
  * timer guards against a synchronous throw inside onload hanging forever). */
 async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Promise<Blob> {
@@ -184,7 +184,7 @@ export function saveDraft(d: BOLDraft): void {
   try {
     localStorage.setItem(draftKey(d.job_uuid), JSON.stringify(d));
   } catch {
-    // Quota exceeded / disabled — ignore.
+    // Quota exceeded / disabled - ignore.
   }
 }
 
@@ -204,7 +204,7 @@ export function newDraft(job: { job_uuid: string; job_name: string; job_date: st
 
 export type CalEvent = { id: string; summary: string };
 
-/** Deterministic UUID from a Google Calendar event id — identical to the
+/** Deterministic UUID from a Google Calendar event id - identical to the
  * Timeline's calEventToJobUuid so a job selected here shares the same job_uuid
  * as clock-in events, materials, photos, etc. */
 export function calEventToJobUuid(calId: string): string {
@@ -231,7 +231,7 @@ export function calEventToJobUuid(calId: string): string {
 }
 
 /** Resolve a calendar event to its canonical job_uuid (server), falling back to
- * the deterministic local hash offline — same as the Timeline. */
+ * the deterministic local hash offline - same as the Timeline. */
 export async function resolveJobUuid(calId: string): Promise<string> {
   if (navigator.onLine) {
     try {
@@ -289,7 +289,7 @@ export type OpenBol = {
 };
 
 /** List BOLs that are still open (not delivered) for the "continue a BOL"
- * chooser — server BOLs merged with any local drafts, newest first. */
+ * chooser - server BOLs merged with any local drafts, newest first. */
 export async function listOpenBols(): Promise<OpenBol[]> {
   const map = new Map<string, OpenBol>();
   // Local drafts (covers offline-built BOLs not yet synced).
@@ -305,7 +305,7 @@ export async function listOpenBols(): Promise<OpenBol[]> {
       });
     }
   } catch {}
-  // Server BOLs (authoritative — overrides a local dup by bol_id).
+  // Server BOLs (authoritative - overrides a local dup by bol_id).
   if (navigator.onLine) {
     try {
       const r = await apiFetch<{ ok: boolean; bols: any[] }>(`/api/bol?limit=100`);
@@ -452,7 +452,7 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
 }
 
 /** Queue the current draft as an upsert. A re-save replaces any queued SUBMIT
- * for the same bol_id (upsert — no point sending stale intermediate states);
+ * for the same bol_id (upsert - no point sending stale intermediate states);
  * queued sign/pdf ops are preserved. */
 export function enqueueSubmit(d: BOLDraft): void {
   const payload = draftToPayload(d);
@@ -623,7 +623,7 @@ async function uploadPhoto(
   form.append("job_name", draft.job_name || "");
   form.append("job_date", draft.job_date || "");
   form.append("caption", caption);
-  // No "folder" field — item photos land in the job's normal photo folder,
+  // No "folder" field - item photos land in the job's normal photo folder,
   // alongside the crew's other job photos (per the feature requirement).
   const token = getToken() || "";
   const res = await fetch(`${API}/api/photos/upload`, {
@@ -646,7 +646,7 @@ export async function captureItemPhoto(
 ): Promise<{ photo: BOLPhoto; previewUrl: string }> {
   const photoId = newUUID();
   const resized = await resizeImage(file);
-  const caption = `BOL item ${itemNo} — ${draft.job_name || "job"}`.slice(0, 120);
+  const caption = `BOL item ${itemNo} - ${draft.job_name || "job"}`.slice(0, 120);
   const previewUrl = URL.createObjectURL(resized);
 
   // Persist offline-first so nothing is lost if the upload can't happen now.
@@ -661,7 +661,7 @@ export async function captureItemPhoto(
       drive_status: "pending",
     });
   } catch {
-    // IndexedDB unavailable — we still try the upload below.
+    // IndexedDB unavailable - we still try the upload below.
   }
 
   const photo: BOLPhoto = { photo_id: photoId, caption, pending: true };

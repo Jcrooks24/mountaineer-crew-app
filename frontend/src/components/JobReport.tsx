@@ -27,7 +27,7 @@ function bolRefOf(bol: { bol_id?: string; id?: string } | null): string {
   const id = bol?.bol_id || bol?.id || "";
   return id ? `BOL-${id.slice(0, 8)}` : "";
 }
-// "Not at destination yet" — the crew can defer the BOL so it isn't a blocker.
+// "Not at destination yet" - the crew can defer the BOL so it isn't a blocker.
 const BOL_DEFER_PREFIX = "crew_ld_bol_deferred_v1:";
 function loadBolDeferred(jobUuid: string): boolean {
   try { return localStorage.getItem(BOL_DEFER_PREFIX + jobUuid) === "1"; } catch { return false; }
@@ -70,7 +70,7 @@ export function roundBillableQuarter(hours: number): number {
   return roundedMin / 60;
 }
 
-// Compact subset of EventRecord — enough to populate the Employee Hours
+// Compact subset of EventRecord - enough to populate the Employee Hours
 // dropdowns without leaking the rest of App.tsx's offline state into
 // JobReport. `note` surfaces in the dropdown labels (truncated to one line)
 // so crew can disambiguate which "ARRIVED" they're picking when a job has
@@ -91,11 +91,11 @@ type BillingMethod =
   | "end_of_job";
 
 const BILLING_OPTIONS: { value: BillingMethod; label: string }[] = [
-  { value: "crew_cash",           label: "Crew collected — cash" },
-  { value: "crew_check",          label: "Crew collected — check" },
+  { value: "crew_cash",           label: "Crew collected - cash" },
+  { value: "crew_check",          label: "Crew collected - check" },
   { value: "office_invoice",      label: "Office sends invoice" },
-  { value: "office_arrange_cash", label: "Office arranges pick-up / drop-off — cash" },
-  { value: "office_arrange_check",label: "Office arranges pick-up / drop-off — check" },
+  { value: "office_arrange_cash", label: "Office arranges pick-up / drop-off - cash" },
+  { value: "office_arrange_check",label: "Office arranges pick-up / drop-off - check" },
   { value: "end_of_job",          label: "Bill at end of job (multi-day)" },
 ];
 
@@ -135,7 +135,7 @@ function coerceReviewCandidate(v: unknown): ReviewCandidate | null {
 // In-progress draft persisted to localStorage so partially filled reports
 // survive tab switches (the JobReport component unmounts when the user
 // navigates away from the Report tab) and full page reloads. Cleared on
-// successful submit. Keyed by job_uuid; per-device only — drafts are not
+// successful submit. Keyed by job_uuid; per-device only - drafts are not
 // synced cross-device.
 const REPORT_DRAFT_PREFIX = "crew_report_draft_v1:";
 // savedAt lets us resolve draft-vs-server on load: a draft only wins over the
@@ -304,7 +304,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const pendingSaveRef = useRef<(() => Promise<void>) | null>(null);
   const billRef = useRef<BillHandle>(null);
 
-  // Draft autosave state — see REPORT_DRAFT_PREFIX above for the persistence
+  // Draft autosave state - see REPORT_DRAFT_PREFIX above for the persistence
   // contract. Pill mirrors the global notes pattern: "Saving…" → "✓ Draft saved".
   type DraftStatus = "idle" | "saving" | "saved";
   const [draftStatus, setDraftStatus] = useState<DraftStatus>("idle");
@@ -325,7 +325,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     apiFetch<ReportData & { id: number; employee_hours: EmployeeHoursEntry[] | null }>(`/api/job-report?job_uuid=${encodeURIComponent(jobUuid)}`)
       .then((r) => {
         setData({
-          // Existing reports — infer answers from saved values
+          // Existing reports - infer answers from saved values
           has_personal_vehicles: r.personal_vehicles > 0,
           personal_vehicles: r.personal_vehicles,
           has_dumpster_use: r.dumpster_pct > 0,
@@ -346,7 +346,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       })
       .catch((e) => {
         // ONLY reset to empty defaults on a real 404 (no report exists yet).
-        // Network errors / 5xx must preserve whatever's in memory — wiping
+        // Network errors / 5xx must preserve whatever's in memory - wiping
         // on a transient "Failed to fetch" was the cause of crew losing
         // a partly-edited report after a backend hiccup. The .finally()
         // below still tries to recover from the localStorage draft.
@@ -484,8 +484,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const editorInitializedRef = useRef<boolean>(false);
 
   // One-shot: as soon as defaults are knowable (events arrived from App.tsx),
-  // populate start + end. Subsequent edits to either slot — including the
-  // user clearing it — won't be clobbered because the flag stops the effect.
+  // populate start + end. Subsequent edits to either slot - including the
+  // user clearing it - won't be clobbered because the flag stops the effect.
   useEffect(() => {
     if (editorInitializedRef.current) return;
     if (defaultStart.selection || defaultEnd.selection) {
@@ -495,7 +495,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     }
   }, [defaultStart, defaultEnd]);
 
-  // Drop-down label for an event. Truncates the note onto one line — long
+  // Drop-down label for an event. Truncates the note onto one line - long
   // notes are clipped with "…" so the option width stays bounded; shorter
   // notes show in full. Newlines are collapsed so multi-line notes don't
   // wrap inside the <option>.
@@ -504,7 +504,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     const rawNote = (ev.note || "").replace(/\s+/g, " ").trim();
     const NOTE_MAX = 40;
     const note = rawNote.length > NOTE_MAX ? rawNote.slice(0, NOTE_MAX - 1) + "…" : rawNote;
-    return note ? `${ev.type} — ${time} — ${note}` : `${ev.type} — ${time}`;
+    return note ? `${ev.type} - ${time} - ${note}` : `${ev.type} - ${time}`;
   }
 
   function fmtHHMM(iso: string): string {
@@ -680,7 +680,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     };
     setData((prev) => {
       if (editingIndex !== null && editingIndex < prev.employee_hours.length) {
-        // Preserve the existing non_billable flag — that toggle lives on the
+        // Preserve the existing non_billable flag - that toggle lives on the
         // saved tile, not in the editor, and shouldn't reset on edit.
         const next = prev.employee_hours.slice();
         next[editingIndex] = {
@@ -697,7 +697,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
   // Pre-fill the editor with a saved row's contents so the crew can correct a
   // mistake without removing + re-adding. Start/end load as MANUAL_SENTINEL
-  // with the stored HH:MM — we don't store the source event ids, so manual
+  // with the stored HH:MM - we don't store the source event ids, so manual
   // mode is the only way to surface the original time exactly. Breaks load
   // as a single manual-time pair when there was any break time recorded.
   function editEmployee(i: number) {
@@ -734,7 +734,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     if (editingIndex === i) resetEditor();
   }
 
-  // Sum actuals first, round once at the end — per the company rule. Each
+  // Sum actuals first, round once at the end - per the company rule. Each
   // row's display stays unrounded so users can see the raw math.
   const totalActualHours = useMemo(
     () =>
@@ -772,7 +772,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
     // Clear the stale "✓ Report saved" banner from the previous load/save
     // before we start. Otherwise a failed update shows the success banner
-    // and the error banner together, which reads as nonsense — the user
+    // and the error banner together, which reads as nonsense - the user
     // can't tell if anything actually saved.
     setSaved(false);
     setErr(null);
@@ -826,7 +826,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       }
 
       setSaved(true);
-      // Submit succeeded — discard the in-progress drafts (report + bill).
+      // Submit succeeded - discard the in-progress drafts (report + bill).
       // The server is now authoritative; further edits start fresh drafts.
       clearReportDraft(jobUuid);
       billRef.current?.clearDraft?.();
@@ -834,12 +834,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     } catch (e: any) {
       // "Failed to fetch" is the browser's generic for any network failure
       // including a Render cold start that exceeded the fetch timeout. The
-      // POST may have actually committed server-side — turn the message
+      // POST may have actually committed server-side - turn the message
       // into something actionable so the crew knows to verify on refresh
       // instead of re-typing everything.
       const raw = e?.message ?? "Save failed. Please try again.";
       const friendlier = /failed to fetch|network/i.test(raw)
-        ? `${raw} — your data is preserved locally; refresh the page to see if the save went through, then retry if not.`
+        ? `${raw} - your data is preserved locally; refresh the page to see if the save went through, then retry if not.`
         : raw;
       setErr(friendlier);
     } finally {
@@ -941,7 +941,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
-      {/* Report header — surfaced at the top so crew confirm at a glance
+      {/* Report header - surfaced at the top so crew confirm at a glance
           which job they're reporting on before filling anything out. */}
       {jobName && (
         <div
@@ -1037,7 +1037,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
       {/* ── Employee Hours ──
           Sits after the bill flow because employee hours are a parallel
-          record (sheet column for admin/payroll) — they don't feed the
+          record (sheet column for admin/payroll) - they don't feed the
           bill calculation. Crew opens the tab to the auto-populated
           bill above; this section captures the per-employee breakdown
           on its own. */}
@@ -1396,7 +1396,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           value={data.review_candidate}
           onChange={(v) => set("review_candidate", v)}
           options={[
-            { value: "yes", label: "Yes — reach out", tone: "ok" },
+            { value: "yes", label: "Yes - reach out", tone: "ok" },
             { value: "no",  label: "No",              tone: "danger" },
             { value: "na",  label: "N/A",             tone: "muted" },
           ]}
@@ -1456,12 +1456,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         {data.has_crew_feedback && (
           <div style={{ marginTop: 12 }}>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
-              Share your feedback * — the more detail, the better we can address it
+              Share your feedback * - the more detail, the better we can address it
             </div>
             <textarea
               value={data.crew_feedback}
               onChange={(e) => set("crew_feedback", e.target.value)}
-              placeholder="What happened, what the client said, what we should know — be as specific as you can."
+              placeholder="What happened, what the client said, what we should know - be as specific as you can."
               rows={4}
               style={textareaStyle}
             />

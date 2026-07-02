@@ -52,7 +52,7 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 .row{ display:flex; gap:10px; align-items:center; }
 .row.wrap{ flex-wrap: wrap; }
 /* min-width:0 lets column-flex items shrink below their intrinsic content
-   size when the parent is narrow — without this, wide children like
+   size when the parent is narrow - without this, wide children like
    native date inputs push their container past the tile edge on phones. */
 .col{ display:flex; flex-direction:column; gap:6px; min-width: 0; }
 

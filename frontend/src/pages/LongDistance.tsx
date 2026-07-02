@@ -50,18 +50,18 @@ export default function LongDistance() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">Hours of Service — Quick Reference</div>
+        <div className="sectionTitle">Hours of Service - Quick Reference</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             <li><strong>11-hour driving limit</strong> after 10 consecutive hours off-duty.</li>
-            <li><strong>14-hour on-duty window</strong> — driving prohibited after 14 hours following the start of the day, even with off-duty breaks.</li>
+            <li><strong>14-hour on-duty window</strong> - driving prohibited after 14 hours following the start of the day, even with off-duty breaks.</li>
             <li><strong>30-minute break</strong> after 8 cumulative hours of driving without a 30-minute interruption.</li>
-            <li><strong>60/70-hour limit</strong> — 60 hrs / 7 days or 70 hrs / 8 days. Reset with 34+ consecutive hours off-duty.</li>
-            <li><strong>Short-haul exception</strong> (§395.1(e)) — on-duty up to 14 hrs within a 150 air-mile radius from normal work reporting location, returning each day.</li>
+            <li><strong>60/70-hour limit</strong> - 60 hrs / 7 days or 70 hrs / 8 days. Reset with 34+ consecutive hours off-duty.</li>
+            <li><strong>Short-haul exception</strong> (§395.1(e)) - on-duty up to 14 hrs within a 150 air-mile radius from normal work reporting location, returning each day.</li>
             <li>When leaving the short-haul radius you must keep a <strong>paper RODS log</strong> for that day (or use the in-app RODS below).</li>
           </ul>
           <div style={{ marginTop: 10, color: "var(--muted)" }}>
-            When in doubt — call the office before crossing state lines.
+            When in doubt - call the office before crossing state lines.
           </div>
         </div>
       </div>
@@ -79,14 +79,14 @@ export default function LongDistance() {
             <div style={{ fontWeight: 700 }}>Digital Bill of Lading</div>
             <BetaTag feature="digitalBOL" />
             <div className="small" style={{ color: "var(--muted)" }}>
-              Build the declared inventory in the field — photos, condition notes, offline.
+              Build the declared inventory in the field - photos, condition notes, offline.
             </div>
           </button>
         </div>
       </div>
 
       <div className="card">
-        <div className="sectionTitle">TRALA Rental-Truck Exemption — 82 FR 47306</div>
+        <div className="sectionTitle">TRALA Rental-Truck Exemption - 82 FR 47306</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           Published by FMCSA in the Federal Register (Oct 11, 2017), this exemption covers
           drivers operating a rental truck on our behalf during out-of-state moves. Carry a
@@ -96,12 +96,12 @@ export default function LongDistance() {
             <strong>When it applies to us:</strong>
             <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
               <li>The vehicle is a rental truck (CDL not required for class) operated for a Mountaineer customer.</li>
-              <li>The trip crosses state lines — this is the out-of-state use case we rely on.</li>
+              <li>The trip crosses state lines - this is the out-of-state use case we rely on.</li>
               <li>Office has confirmed the exemption applies to this specific move before departure.</li>
             </ul>
           </div>
           <div style={{ marginTop: 10 }}>
-            <strong>When it doesn't cover you — use RODS instead:</strong>
+            <strong>When it doesn't cover you - use RODS instead:</strong>
             <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
               <li>You're not returning to the reporting location that same day, or</li>
               <li>The move requires driving beyond what TRALA's HOS relief allows.</li>
@@ -111,7 +111,7 @@ export default function LongDistance() {
           </div>
           <div style={{ marginTop: 10, color: "var(--muted)" }}>
             The short-haul / 150 air-mile clauses in 82 FR 47306 are rarely the reason we use
-            this exemption — document your trip the same way regardless. A full copy of the
+            this exemption - document your trip the same way regardless. A full copy of the
             exemption lives in the <strong>Document Library</strong>; ask an admin if you don't
             see it.
           </div>
@@ -292,7 +292,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
           </div>
 
           <div>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Driver Signature * — sign below</div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Driver Signature * - sign below</div>
             <SignaturePad ref={sigRef} height={150} />
             <button
               type="button"

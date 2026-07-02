@@ -33,7 +33,7 @@ const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 // Caps the longest side at 1920px and encodes as JPEG at 80% quality.
 // Typical mobile photo: 8MB → ~600KB after this.
 async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Promise<Blob> {
-  // Always resolves — never rejects, never hangs. Falls back to the original
+  // Always resolves - never rejects, never hangs. Falls back to the original
   // file on any failure (decode error, OOM on canvas, unsupported MIME).
   // The 30s safety timer is the load-bearing piece: without it, an `onload`
   // that throws synchronously (e.g. `getContext("2d")` returns null on a
@@ -50,7 +50,7 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
       resolve(out);
     };
     const timeout = window.setTimeout(() => {
-      console.warn("[photo] resize timed out — uploading original");
+      console.warn("[photo] resize timed out - uploading original");
       finish(file);
     }, 30_000);
     img.onload = () => {
@@ -67,7 +67,7 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
         ctx.drawImage(img, 0, 0, w, h);
         canvas.toBlob((blob) => finish(blob ?? file), "image/jpeg", quality);
       } catch (e) {
-        console.warn("[photo] resize failed — uploading original", e);
+        console.warn("[photo] resize failed - uploading original", e);
         finish(file);
       }
     };
@@ -84,7 +84,7 @@ const LOG_KEY = "crew_event_log_v1"; // full job activity log (synced + queued)
 // reach Postgres + the Events sheet.
 const NOTE_PATCH_KEY = "crew_event_note_patch_queue_v1";
 
-// Retention — the Google Sheet is the long-term record; the client log is a
+// Retention - the Google Sheet is the long-term record; the client log is a
 // working buffer for the offline-first UX. Trim anything older than the
 // retention window (and cap length as a hard ceiling) on boot so
 // localStorage doesn't silently blow out its quota after months of use.
@@ -100,7 +100,7 @@ function withinRetention(iso: string | undefined, days: number): boolean {
 }
 const JOB_KEY = "crew_active_job_uuid_v1";
 const JOB_STATUS_KEY = "crew_job_status_v1"; // "active" | "closed"
-// Local vs long-distance mode — a device-global toggle (persists across
+// Local vs long-distance mode - a device-global toggle (persists across
 // restarts) that reshapes the Timeline + Report tabs for multi-day interstate
 // jobs. Defaults to "local".
 const MODE_KEY = "crew_mode_v1"; // "local" | "long_distance"
@@ -112,7 +112,7 @@ const JOB_NOTES_EVENT_PREFIX = "crew_job_notes_event_v1:"; // per job_uuid
 
 // Per-job snapshot of the notes text that was last accepted into the sync
 // pipeline. Compared against the live `jobComments` to decide whether the
-// debounce should fire — survives across reloads and job switches so a save
+// debounce should fire - survives across reloads and job switches so a save
 // pending at the moment of switch eventually flushes when the user returns.
 const NOTES_SYNCED_PREFIX = "crew_job_notes_synced_v1:"; // per job_uuid
 
@@ -148,7 +148,7 @@ type EventRecord = {
 // Patch ops carry whichever fields the user changed. Either or both of
 // `note` / `timestamp` may be present. Storage key keeps its historical
 // "note_patch" name to preserve already-queued ops on devices upgrading
-// in place — the shape is a strict superset.
+// in place - the shape is a strict superset.
 type EventPatchOp = {
   event_id: string;
   note?: string | null;
@@ -185,7 +185,7 @@ type ServerPhoto = {
 
 // `<input type="time">` round-tripping. The element's value is "HH:mm" in
 // the user's local time. We keep the event's existing date intact and only
-// rewrite hours/minutes — crew typically just need to nudge minutes within
+// rewrite hours/minutes - crew typically just need to nudge minutes within
 // a shift; a date change usually means the event is a much bigger mistake
 // and should be re-logged.
 function toTimeValue(iso: string): string {
@@ -300,7 +300,7 @@ export default function App() {
     localStorage.setItem(MODE_KEY, val);
   }
 
-  // Long-distance day plan — drives whether the timeline shows the labor Actions
+  // Long-distance day plan - drives whether the timeline shows the labor Actions
   // buttons (packing/loading/unloading/unpacking) or the RODS recorder (driving).
   const {
     plan: ldPlan,
@@ -315,7 +315,7 @@ export default function App() {
   const [queueLen, setQueueLen] = useState<number>(0);
   const [activityLog, setActivityLog] = useState<EventRecord[]>([]);
 
-  const [clockText, setClockText] = useState<string>("—");
+  const [clockText, setClockText] = useState<string>("-");
   const [patchNotesUnseen, setPatchNotesUnseen] = useState<boolean>(false);
 
   useEffect(() => {
@@ -324,10 +324,10 @@ export default function App() {
         const latest = rows[0]?.updated_at ?? null;
         setPatchNotesUnseen(hasUnseenPatchNotes(latest));
       })
-      .catch(() => {/* non-fatal — no indicator */});
+      .catch(() => {/* non-fatal - no indicator */});
   }, []);
 
-  // Retention prune on boot — drop stale log entries and stuck queue ops
+  // Retention prune on boot - drop stale log entries and stuck queue ops
   // so localStorage stays well clear of its per-origin quota. The Google
   // Sheet is authoritative long-term; this buffer only needs a couple of
   // weeks of history.
@@ -352,7 +352,7 @@ export default function App() {
         }
       }
     } catch {
-      /* corrupted JSON — ignore; next write will overwrite */
+      /* corrupted JSON - ignore; next write will overwrite */
     }
   }, []);
 
@@ -370,7 +370,7 @@ export default function App() {
 
   // Sync status for the global Notes textarea. Drives the small status pill
   // shown next to the Notes header so crew can confirm their text reached the
-  // queue (the previous behavior wrote to localStorage only — sheets never saw
+  // queue (the previous behavior wrote to localStorage only - sheets never saw
   // it, so admin couldn't read the notes off-device).
   type NotesSyncStatus = "idle" | "saving" | "saved" | "offline";
   const [notesStatus, setNotesStatus] = useState<NotesSyncStatus>("idle");
@@ -414,7 +414,7 @@ export default function App() {
 
   // Calendar "Other" option
   const [calOtherName, setCalOtherName] = useState<string>("");
-  // Manual job entries created this session — shown as dropdown options so
+  // Manual job entries created this session - shown as dropdown options so
   // users can re-select them without re-typing. Persisted to sessionStorage
   // so they survive navigation within the same tab.
   const [manualCalEntries, setManualCalEntries] = useState<{ id: string; summary: string }[]>(() => {
@@ -440,7 +440,7 @@ export default function App() {
     try {
       localStorage.setItem(key, JSON.stringify(val));
     } catch {
-      // Quota exceeded or similar — surface once so the problem isn't silent.
+      // Quota exceeded or similar - surface once so the problem isn't silent.
       // Retention pruning on boot should keep us well clear of this.
       console.warn(`[storage] failed to write ${key}; log retention may need review`);
     }
@@ -468,7 +468,7 @@ export default function App() {
   }
 
   function saveLog(log: EventRecord[]) {
-    // Defensive cap — saveLog is called from many paths; enforce the ceiling
+    // Defensive cap - saveLog is called from many paths; enforce the ceiling
     // on every write rather than trusting each caller to prune.
     const capped = log.length > LOG_MAX_ENTRIES
       ? log.slice(0, LOG_MAX_ENTRIES)
@@ -653,7 +653,7 @@ export default function App() {
 
   function computeClockHoursText(log: EventRecord[]) {
     const uuid = jobUuid.trim();
-    if (!uuid) return "—";
+    if (!uuid) return "-";
 
     const jobLog = log.filter((e) => e.job_uuid === uuid);
 
@@ -663,7 +663,7 @@ export default function App() {
       .filter((t) => Number.isFinite(t))
       .sort((a, b) => a - b)[0];
 
-    if (!Number.isFinite(start)) return "—";
+    if (!Number.isFinite(start)) return "-";
 
     const finishTs = jobLog
       .filter((e) => e.type === "FINISH")
@@ -696,7 +696,7 @@ export default function App() {
           body: JSON.stringify(body),
         });
         if (res.ok) continue;
-        // 4xx that's specifically about a malformed timestamp is permanent —
+        // 4xx that's specifically about a malformed timestamp is permanent -
         // dropping the op prevents a wedged queue. 404 means the event hasn't
         // synced from another device yet; keep retrying on later drains.
         if (res.status === 400) continue;
@@ -714,7 +714,7 @@ export default function App() {
     const log = loadLog();
     const logIdx = log.findIndex((x) => x.event_id === eventId);
     // If this device still has the event queued for sync, just rewrite the
-    // note in-place — it will ride the normal sync and the server will insert
+    // note in-place - it will ride the normal sync and the server will insert
     // it with the correct note on first arrival. No PATCH needed.
     const queuedLocally = logIdx >= 0 && log[logIdx].sync_status === "queued";
     if (logIdx >= 0) {
@@ -889,11 +889,11 @@ export default function App() {
 
       const json = await res.json();
 
-      // An event the server "handled" — inserted, deduped, or *permanently*
-      // rejected (e.g. a malformed timestamp) — leaves the queue; retrying it
+      // An event the server "handled" - inserted, deduped, or *permanently*
+      // rejected (e.g. a malformed timestamp) - leaves the queue; retrying it
       // would just wedge the queue. But a `retryable` failure (a transient
       // server-side DB error means the event never persisted) must stay
-      // queued — dropping it silently loses a logged field event.
+      // queued - dropping it silently loses a logged field event.
       if (json?.ok === true) {
         const failed: { event_id: string; reason?: string; retryable?: boolean }[] =
           json.failed ?? [];
@@ -918,9 +918,9 @@ export default function App() {
           );
         }
         if (remaining.length > 0) {
-          setStatus(`Synced — ${remaining.length} will retry`);
+          setStatus(`Synced - ${remaining.length} will retry`);
         } else if (permanentFailed.length > 0) {
-          setStatus(`Synced — ${permanentFailed.length} rejected`);
+          setStatus(`Synced - ${permanentFailed.length} rejected`);
         } else {
           setStatus("Synced");
         }
@@ -952,7 +952,7 @@ export default function App() {
       job_uuid: jobUuid.trim(),
       type,
       // On capture, the editable event time and the immutable logged_at are
-      // the same — both reflect the device clock at the moment of the tap.
+      // the same - both reflect the device clock at the moment of the tap.
       // They diverge only after the user edits `timestamp` from the timeline.
       timestamp: nowIso,
       logged_at: nowIso,
@@ -989,7 +989,7 @@ export default function App() {
     setCalWarning("");
     setCalLoading(true);
     setCalEvents([]);
-    // Do NOT clear calSelectedId here — callers own that decision.
+    // Do NOT clear calSelectedId here - callers own that decision.
     // The date-change effect clears it before calling; the first-mount
     // guard intentionally preserves the sessionStorage-restored value.
     setCalLoaded(false);
@@ -1052,13 +1052,13 @@ export default function App() {
       setPersistedJobUuid(newUuid);
       setPersistedJobStatus("active");
       setJobName("");
-      setStatus("Manual job — enter description below");
+      setStatus("Manual job - enter description below");
       fetchJobEvents(newUuid);
       fetchServerPhotos(newUuid);
       return;
     }
 
-    // Re-selecting a previously confirmed manual entry — restore same UUID + name.
+    // Re-selecting a previously confirmed manual entry - restore same UUID + name.
     const manualEntry = manualCalEntries.find((e) => e.id === calId);
     if (manualEntry) {
       setPersistedJobUuid(calId);
@@ -1187,7 +1187,7 @@ export default function App() {
       const data = await apiFetch<{ ok: boolean; events: EventRecord[] }>(`/api/events?job_uuid=${encodeURIComponent(uuid)}`);
       if (data?.events) setServerEvents(data.events);
     } catch {
-      // offline or error — server events unavailable, local queue still shown
+      // offline or error - server events unavailable, local queue still shown
     }
   }
 
@@ -1197,7 +1197,7 @@ export default function App() {
       const data = await apiFetch<{ ok: boolean; photos: ServerPhoto[] }>(`/api/photos?job_uuid=${encodeURIComponent(uuid)}`);
       if (data?.photos) setServerPhotos(data.photos);
     } catch {
-      // offline — server photos unavailable
+      // offline - server photos unavailable
     }
   }
 
@@ -1211,10 +1211,10 @@ export default function App() {
   async function readPhotoUploadResponse(res: Response): Promise<{ error: string | null; body: any }> {
     if (res.status === 401) {
       // Token expired or revoked. Wipe it so the next render kicks the user
-      // back to the login screen — otherwise they keep tapping Retry and seeing
+      // back to the login screen - otherwise they keep tapping Retry and seeing
       // "HTTP 401" without any explanation of what to do.
       clearToken();
-      return { error: "Session expired — log out and sign in again to upload photos", body: null };
+      return { error: "Session expired - log out and sign in again to upload photos", body: null };
     }
     if (res.status === 413) {
       return { error: "Photo too large to upload (server limit is 100 MB)", body: null };
@@ -1223,11 +1223,11 @@ export default function App() {
       return { error: "Server rejected the upload (not authorized)", body: null };
     }
     if (res.status >= 500) {
-      return { error: `Server error (HTTP ${res.status}) — try again in a moment`, body: null };
+      return { error: `Server error (HTTP ${res.status}) - try again in a moment`, body: null };
     }
     let body: any = null;
     try { body = await res.json(); }
-    catch { return { error: "Upload failed — server returned an unreadable response", body: null }; }
+    catch { return { error: "Upload failed - server returned an unreadable response", body: null }; }
     if (body && body.ok === false) {
       const msg = body.error ? `Drive upload failed: ${body.error}` : "Drive upload failed";
       return { error: msg, body };
@@ -1236,7 +1236,7 @@ export default function App() {
       return { error: `Upload failed (HTTP ${res.status})`, body };
     }
     if (!body || !body.drive_url) {
-      return { error: "Drive upload didn't complete — please retry", body };
+      return { error: "Drive upload didn't complete - please retry", body };
     }
     return { error: null, body };
   }
@@ -1283,7 +1283,7 @@ export default function App() {
       setPendingPhotoFile(null);
       setPendingCaption("");
       await refreshPhotos();
-      setStatus("Photo saved — uploading to Drive…");
+      setStatus("Photo saved - uploading to Drive…");
     } catch (e: any) {
       setPhotoError(e?.message ?? "Photo save failed");
       setPhotoBusy(false);
@@ -1321,8 +1321,8 @@ export default function App() {
     } catch (uploadErr: any) {
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
       const msg = offline
-        ? "Offline — photo will retry when you're back online"
-        : (uploadErr?.message ?? "Network error — tap Retry");
+        ? "Offline - photo will retry when you're back online"
+        : (uploadErr?.message ?? "Network error - tap Retry");
       await updatePhoto(photoId, { drive_status: "failed", drive_error: msg });
       await refreshPhotos();
       setPhotoError(msg);
@@ -1364,8 +1364,8 @@ export default function App() {
     } catch (uploadErr: any) {
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
       const msg = offline
-        ? "Offline — photo will retry when you're back online"
-        : (uploadErr?.message ?? "Network error — tap Retry");
+        ? "Offline - photo will retry when you're back online"
+        : (uploadErr?.message ?? "Network error - tap Retry");
       await updatePhoto(photo.id, { drive_status: "failed", drive_error: msg });
       setPhotoError(msg);
     }
@@ -1392,7 +1392,7 @@ export default function App() {
   }
 
   // -----------------------
-  // Materials summary — read from the offline-capable materialsStore cache,
+  // Materials summary - read from the offline-capable materialsStore cache,
   // then fire a background sync + refetch.
   // -----------------------
   function refreshMaterialsSummary(uuid: string) {
@@ -1426,7 +1426,7 @@ export default function App() {
     setJobComments(loadCommentsForJob(jobUuid));
 
     // Rehydrate the active job's name on boot, but leave jobDate at today
-    // (the useState initializer). Crews log in to work today's jobs — showing
+    // (the useState initializer). Crews log in to work today's jobs - showing
     // last session's date in the Timeline filter was confusing.
     const meta = loadJobMeta(jobUuid);
     if (meta) {
@@ -1441,7 +1441,7 @@ export default function App() {
 
     // Fetch the user directory so we can show crew members' profile photos in
     // activity entries and photo attributions.
-    ensureDirectory().catch(() => { /* offline — fall back to initials */ });
+    ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
     const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); loadMaterialsSummary(jobUuid); };
     const onOffline = () => setIsOnline(false);
@@ -1509,7 +1509,7 @@ export default function App() {
   // When the server-events fetch returns a JOB_NOTES row for the active job,
   // mirror it into local state so a fresh device/install sees notes typed
   // on another device. Only hydrate when the user hasn't typed anything
-  // locally yet — otherwise their unsaved keystrokes would be clobbered.
+  // locally yet - otherwise their unsaved keystrokes would be clobbered.
   useEffect(() => {
     const uuid = jobUuid.trim();
     if (!uuid) return;
@@ -1528,7 +1528,7 @@ export default function App() {
       saveSyncedNotes(uuid, serverText);
       setJobComments(serverText);
     } else if (localText && localText === serverText) {
-      // Local and server agree — record the sync baseline so the autosave
+      // Local and server agree - record the sync baseline so the autosave
       // effect doesn't fire a needless re-flush.
       saveSyncedNotes(uuid, serverText);
     }
@@ -1549,7 +1549,7 @@ export default function App() {
   useEffect(() => { sessionStorage.setItem("crew_session_calId", calSelectedId); }, [calSelectedId]);
 
   // When date changes, calendar results are stale. On first mount we're
-  // restoring session state — skip the clear so the restored calSelectedId
+  // restoring session state - skip the clear so the restored calSelectedId
   // survives until the events reload and the dropdown can match it.
   useEffect(() => {
     if (isFirstDateEffect.current) {
@@ -1610,12 +1610,12 @@ export default function App() {
     const serverById = new Map(serverByJob.map((e) => [e.event_id, e]));
     const localIds = new Set(localByJob.map((e) => e.event_id));
 
-    // For events already synced to the server, prefer the server's copy —
+    // For events already synced to the server, prefer the server's copy -
     // it carries the latest note and editable timestamp regardless of which
     // device made the edit. The local cache can be stale (was populated on
     // an earlier history sync, before another device added a note); without
     // this preference, the stale local row hides the updated note forever.
-    // Local wins only when an event is still queued locally — the server
+    // Local wins only when an event is still queued locally - the server
     // doesn't have that one yet.
     const reconciled = localByJob.map((e) =>
       e.sync_status === "queued" ? e : (serverById.get(e.event_id) ?? e)
@@ -1653,7 +1653,7 @@ export default function App() {
             src={logo}
             alt="Logo"
             style={{
-              // Inversion is only applied to the "light" variant — the
+              // Inversion is only applied to the "light" variant - the
               // placeholder file is the original dark-pixel logo, so inverting
               // makes it readable on dark backgrounds. The "dark" variant
               // renders as-is for use on light backgrounds. When real
@@ -1664,7 +1664,7 @@ export default function App() {
           />
           <div>
             <div className="title">Mountaineer Moving Co.</div>
-            <div className="small">{clockText === "—" ? "Clock starts at Start" : `Clock: ${clockText}`}</div>
+            <div className="small">{clockText === "-" ? "Clock starts at Start" : `Clock: ${clockText}`}</div>
           </div>
         </div>
 
@@ -1702,7 +1702,7 @@ export default function App() {
             Profile
             {patchNotesUnseen && (
               <span
-                title="New patch notes — view on Profile"
+                title="New patch notes - view on Profile"
                 style={{
                   position: "absolute",
                   top: -2,
@@ -1719,7 +1719,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Admin notes — global, then per-job when a job is selected */}
+      {/* Admin notes - global, then per-job when a job is selected */}
       <AdminNotesBanner scope="global" />
       {jobUuid && <AdminNotesBanner key={jobUuid} scope={jobUuid} />}
 
@@ -1748,13 +1748,13 @@ export default function App() {
             <div className="sectionTitle">Job</div>
 
             <div className="col" style={{ gap: 12 }}>
-              {/* 1 — Date */}
+              {/* 1 - Date */}
               <div className="col">
                 <div className="label">Date</div>
                 <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
               </div>
 
-              {/* 2 — Calendar job selector */}
+              {/* 2 - Calendar job selector */}
               <div className="col">
                 <div className="label">
                   Select Job{" "}
@@ -1810,7 +1810,7 @@ export default function App() {
                 ) : null}
               </div>
 
-              {/* 3 — Job name display */}
+              {/* 3 - Job name display */}
               {jobName && (
                 <div className="col">
                   <div className="label">Job Name</div>
@@ -1818,7 +1818,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 4 — Job ID (auto, read-only) */}
+              {/* 4 - Job ID (auto, read-only) */}
               {jobUuid && (
                 <div className="col">
                   <div className="label">Job ID</div>
@@ -1831,7 +1831,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Job type — the user declares whether this is a local or a
+          {/* Job type - the user declares whether this is a local or a
               long-distance (interstate) job; this reshapes the workflow. The
               LD day plan lives in the same tile. */}
           <div className="card">
@@ -1928,7 +1928,7 @@ export default function App() {
                 >
                   {notesStatus === "saving" && "Saving…"}
                   {notesStatus === "saved" && "✓ Saved"}
-                  {notesStatus === "offline" && "Saved offline — will sync"}
+                  {notesStatus === "offline" && "Saved offline - will sync"}
                 </span>
               ) : null}
             </div>
@@ -1987,7 +1987,7 @@ export default function App() {
                           </span>
                         )}
                       </div>
-                      {/* Time + date — wrap independently so the date can
+                      {/* Time + date - wrap independently so the date can
                           drop to its own line on narrow phones instead of
                           running off the tile. Tap the time to edit it;
                           logged_at is preserved separately as the audit
@@ -2187,7 +2187,7 @@ export default function App() {
                         {m.pending && <span style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
                       </span>
                       <span style={{ color: "var(--muted)" }}>
-                        {ext != null ? money(ext) : "—"}
+                        {ext != null ? money(ext) : "-"}
                       </span>
                     </div>
                   );
@@ -2204,7 +2204,7 @@ export default function App() {
       {/* Photos */}
       {tab === "photos" && (
         <>
-          {/* Pending photo — caption + save */}
+          {/* Pending photo - caption + save */}
           {pendingPhotoFile ? (
             <div className="card">
               <div className="sectionTitle">Add Photo</div>
@@ -2299,7 +2299,7 @@ export default function App() {
                           ) : driveFail ? (
                             <>
                               <span style={{ fontSize: 11, color: "var(--danger)" }} title={p.drive_error}>
-                                Drive upload failed{p.drive_error ? ` — ${p.drive_error}` : ""}
+                                Drive upload failed{p.drive_error ? ` - ${p.drive_error}` : ""}
                               </span>
                               <button onClick={() => onRetryPhotoUpload(p)} disabled={photoBusy}
                                 style={{ fontSize: 11, padding: "2px 8px" }}>
@@ -2361,7 +2361,7 @@ export default function App() {
         <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} />
       )}
 
-      {/* DVIR reminder modal — shown before START or FINISH */}
+      {/* DVIR reminder modal - shown before START or FINISH */}
       {dvirPending && (
         <DVIRReminderModal
           trigger={dvirPending.type === "START" ? "pre-trip" : "post-trip"}

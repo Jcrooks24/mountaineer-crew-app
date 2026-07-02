@@ -13,7 +13,7 @@ class MaterialsSubmission(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # UUID generated on device — used for idempotent upserts
+    # UUID generated on device - used for idempotent upserts
     submission_id = Column(String, unique=True, index=True, nullable=False)
 
     created_at = Column(DateTime, nullable=False)

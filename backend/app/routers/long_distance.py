@@ -142,8 +142,8 @@ def create_rods(
 
     RODS is now a resumable, tap-recorded daily log: the recorder appends duty
     changes through the day and re-submits, and the driver may reopen a day to
-    finalize/sign. So this upserts by (driver_id, log_date) — one row per driver
-    per day — updating the duty changes, totals, and signature in place. The
+    finalize/sign. So this upserts by (driver_id, log_date) - one row per driver
+    per day - updating the duty changes, totals, and signature in place. The
     original rods_id + created_at are preserved so the Sheet row (replace-style
     export) tracks the same entity across the day.
     """
@@ -170,7 +170,7 @@ def create_rods(
         existing.total_sleeper = body.total_sleeper
         existing.total_driving = body.total_driving
         existing.total_on_duty = body.total_on_duty
-        # Only attach a signature when one is provided — an unsigned autosave
+        # Only attach a signature when one is provided - an unsigned autosave
         # (continuity backup) must NOT wipe a signature already captured on
         # another device.
         if body.signature is not None:

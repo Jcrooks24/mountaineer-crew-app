@@ -38,7 +38,7 @@ async function deliverPdfToClient(blob: Blob, filename: string): Promise<void> {
       return;
     }
   } catch {
-    /* share cancelled / unsupported — fall through to download */
+    /* share cancelled / unsupported - fall through to download */
   }
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -50,7 +50,7 @@ async function deliverPdfToClient(blob: Blob, filename: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-// Static carrier block — from the Mountaineer Moving Bill of Lading template.
+// Static carrier block - from the Mountaineer Moving Bill of Lading template.
 // Autofilled onto every BOL (federal law requires it to appear; §375.505(b)(1)).
 const CARRIER = {
   name: "Mountaineer Moving LLC",
@@ -81,7 +81,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// Hub — choose an open BOL to continue, or start a new one (job selector).
+// Hub - choose an open BOL to continue, or start a new one (job selector).
 // ─────────────────────────────────────────────────────────────────────────
 export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
   const [editing, setEditing] = useState<BOLDraft | null>(null);
@@ -272,7 +272,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   const { user } = useAuth();
   const nav = useNavigate();
 
-  // Crew rep — carries over from the BOL if set, otherwise the logged-in user.
+  // Crew rep - carries over from the BOL if set, otherwise the logged-in user.
   const [crewRep, setCrewRep] = useState(initialDraft.crew_rep || user?.name || user?.email || "");
   const [draft, setDraft] = useState<BOLDraft>(initialDraft);
 
@@ -358,7 +358,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
   function removeItem(itemNo: number) {
     // Item numbers stay stable (no renumber) so a number never shifts under the
-    // crew or diverges from an already-saved copy — a gap is acceptable.
+    // crew or diverges from an already-saved copy - a gap is acceptable.
     setDraft((prev) => ({
       ...prev,
       items: prev.items.filter((it) => it.item_no !== itemNo),
@@ -399,7 +399,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     setSavedNote(
       synced > 0 && queued === 0
         ? "Saved and synced."
-        : "Saved on this device — will sync when back online.",
+        : "Saved on this device - will sync when back online.",
     );
     window.setTimeout(() => setSavedNote(null), 4000);
   }
@@ -452,12 +452,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       const synced = await syncQueue();
       setSavedNote(
         synced > 0 && pendingSubmitCount() === 0
-          ? `${phase === "origin" ? "Origin" : "Delivery"} signing complete — copy delivered and synced.`
-          : `${phase === "origin" ? "Origin" : "Delivery"} signing saved — copy delivered; will sync when back online.`,
+          ? `${phase === "origin" ? "Origin" : "Delivery"} signing complete - copy delivered and synced.`
+          : `${phase === "origin" ? "Origin" : "Delivery"} signing saved - copy delivered; will sync when back online.`,
       );
       window.setTimeout(() => setSavedNote(null), 5000);
     } catch {
-      setSignErr("Could not complete signing. Your data is saved — try again.");
+      setSignErr("Could not complete signing. Your data is saved - try again.");
     } finally {
       setSignBusy(false);
     }
@@ -484,7 +484,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         <div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>Bill of Lading</div>
           <BetaTag feature="digitalBOL" />
-          <div className="small" style={{ color: "var(--muted)" }}>Declared inventory — interstate move</div>
+          <div className="small" style={{ color: "var(--muted)" }}>Declared inventory - interstate move</div>
         </div>
         <button onClick={onBack} style={backBtnStyle}>← BOLs</button>
       </div>
@@ -670,7 +670,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       {/* Save inventory */}
       <div className="card">
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
-          Save the inventory as you build it — it syncs to the office sheet and works offline. Signing is below.
+          Save the inventory as you build it - it syncs to the office sheet and works offline. Signing is below.
         </div>
         {savedNote && (
           <div className="small" style={{ color: "var(--ok)", marginBottom: 10 }}>{savedNote}</div>
@@ -708,7 +708,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       ) : (
         <div className="card">
           <div className="sectionTitle">
-            {draft.status === "origin_signed" ? "Destination Signing — upon delivery" : "Origin Signing — before loading"}
+            {draft.status === "origin_signed" ? "Destination Signing - upon delivery" : "Origin Signing - before loading"}
           </div>
 
           {draft.status === "origin_signed" ? (

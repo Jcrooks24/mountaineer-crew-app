@@ -68,7 +68,7 @@ def upload_document(
     except SQLAlchemyError:
         db.rollback()
         traceback.print_exc()
-        # The file is already in Drive but the DB row failed — delete the
+        # The file is already in Drive but the DB row failed - delete the
         # orphan so the admin can cleanly retry without piling up dupes.
         try:
             delete_drive_file(db, result["file_id"])
@@ -90,7 +90,7 @@ def delete_document(
     try:
         delete_drive_file(db, row.drive_file_id)
     except Exception:
-        # Drive delete failures shouldn't block DB cleanup — trash can be purged later
+        # Drive delete failures shouldn't block DB cleanup - trash can be purged later
         traceback.print_exc()
     db.delete(row)
     db.commit()
