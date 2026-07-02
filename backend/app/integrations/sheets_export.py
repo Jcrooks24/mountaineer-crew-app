@@ -558,6 +558,48 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
         lock.release()
 
 
+def delete_event_from_sheets(db: Session, event_id: str) -> int:
+    """Remove the Events-tab row for a deleted event. Returns rows deleted (0/1).
+    No-op when the event was never exported."""
+    if not event_id:
+        return 0
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
+    svc = _get_sheets_svc(db)
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    props = next(
+        (s["properties"] for s in meta.get("sheets", []) if s["properties"]["title"] == tab),
+        None,
+    )
+    if not props:
+        return 0
+    sheet_numeric_id = props["sheetId"]
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!1:1",
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0]
+    if "event_id" not in headers_row:
+        return 0
+    col_letter = _col_letter(headers_row.index("event_id"))
+    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}",
+    ).execute())
+    col_values = col.get("values") or []
+    target_indices = [i for i, row in enumerate(col_values) if i > 0 and (row[0] if row else "") == event_id]
+    if not target_indices:
+        return 0
+    requests = [
+        {"deleteDimension": {"range": {
+            "sheetId": sheet_numeric_id, "dimension": "ROWS", "startIndex": idx, "endIndex": idx + 1,
+        }}}
+        for idx in sorted(target_indices, reverse=True)
+    ]
+    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id, body={"requests": requests},
+    ).execute())
+    return len(target_indices)
+
+
 def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str) -> int:
     """Rewrite the editable `timestamp` cell for an already-exported event row.
     Returns the number of rows updated (0 or 1).

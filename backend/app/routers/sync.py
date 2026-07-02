@@ -13,6 +13,7 @@ from app.db.session import get_db
 from app.db.models.event import Event
 from app.db.models.calendar_job import CalendarJob
 from app.integrations.sheets_export import (
+    delete_event_from_sheets,
     export_events_to_sheets,
     run_export_in_background,
     update_event_note_in_sheets,
@@ -291,6 +292,30 @@ def patch_event(
         "timestamp": new_ts.isoformat() if timestamp_changed and new_ts else None,
         "sheet_error": sheet_error,
     }
+
+
+@router.delete("/events/{event_id}")
+def delete_event(
+    event_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete an event logged in error (removes the derived RODS duty change too
+    when it's a DUTY event). Idempotent: a missing event is a no-op. Postgres is
+    the source of truth; the sheet row is removed best-effort."""
+    row = db.query(Event).filter(Event.event_id == event_id).first()
+    if row is None:
+        return {"ok": True, "event_id": event_id, "noop": True}
+    db.delete(row)
+    db.commit()
+
+    sheet_error: Optional[str] = None
+    try:
+        delete_event_from_sheets(db, event_id)
+    except Exception as ex:  # a sheet failure must never fail the delete
+        sheet_error = str(ex)
+
+    return {"ok": True, "event_id": event_id, "sheet_error": sheet_error}
 
 
 @router.get("/jobs/resolve")

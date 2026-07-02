@@ -35,7 +35,7 @@ export default function LongDistance() {
   const [section, setSection] = useState<Section>("menu");
 
   if (section === "prior") return <PriorOnDutyForm onBack={() => setSection("menu")} />;
-  if (section === "bol") return <BillOfLadingForm onBack={() => setSection("menu")} />;
+  if (section === "bol") return <BillOfLadingForm onBack={() => setSection("menu")} onFilePods={() => setSection("prior")} />;
 
   return (
     <div className="container">
@@ -139,6 +139,20 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [bolId, setBolId] = useState("");
   useEffect(() => { listOpenBols().then(setOpenBols).catch(() => {}); }, []);
+  // If launched from a BOL ("File Prior On-Duty for this BOL"), pre-attach it.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("crew_pods_attach_bol_v1");
+      if (raw) {
+        const ctx = JSON.parse(raw);
+        if (ctx?.bol_id) {
+          setBolId(ctx.bol_id);
+          if (ctx.job_name) setJobName(ctx.job_name);
+        }
+        localStorage.removeItem("crew_pods_attach_bol_v1");
+      }
+    } catch {}
+  }, []);
   const priorDates = useMemo(() => datesBefore(tripDate, 7), [tripDate]);
   const [dailyHours, setDailyHours] = useState<Record<string, string>>({});
   const [hoursLast24, setHoursLast24] = useState("0");

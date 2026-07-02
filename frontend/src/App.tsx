@@ -153,6 +153,8 @@ type EventPatchOp = {
   event_id: string;
   note?: string | null;
   timestamp?: string;
+  // Offline-safe delete: drained as a DELETE instead of a PATCH.
+  deleted?: boolean;
   enqueued_at: string;
 };
 
@@ -685,6 +687,15 @@ export default function App() {
     const remaining: EventPatchOp[] = [];
     for (const op of q) {
       try {
+        if (op.deleted) {
+          const res = await fetch(`${API}/api/events/${encodeURIComponent(op.event_id)}`, {
+            method: "DELETE",
+            headers: makeAuthHeaders(token),
+          });
+          if (res.ok || res.status === 404) continue; // 404 = already gone
+          remaining.push(op);
+          continue;
+        }
         // Send only the fields the user actually changed. Older queue
         // items predating editable timestamps just have `note`.
         const body: Record<string, unknown> = {};
@@ -745,6 +756,39 @@ export default function App() {
     else nextPatchQueue.push(op);
     saveNotePatchQueue(nextPatchQueue);
 
+    drainNotePatchQueue();
+  }
+
+  // Delete an event logged in error (also removes the derived RODS duty change
+  // when it's a DUTY event). Offline-safe: drops it from local state + the
+  // outbox, and queues a DELETE for the server if it had already synced.
+  async function deleteEvent(eventId: string) {
+    const log = loadLog();
+    const logIdx = log.findIndex((x) => x.event_id === eventId);
+    const queuedLocally = logIdx >= 0 && log[logIdx].sync_status === "queued";
+    if (logIdx >= 0) {
+      const next = log.slice();
+      next.splice(logIdx, 1);
+      saveLog(next);
+      setActivityLog(next);
+    }
+    // Drop from the outbox (an as-yet-unsynced event needs no server delete).
+    const q = loadQueue();
+    const qIdx = q.findIndex((x) => x.event_id === eventId);
+    if (qIdx >= 0) {
+      const nq = q.slice();
+      nq.splice(qIdx, 1);
+      saveQueue(nq);
+    }
+    setServerEvents((prev) => prev.filter((e) => e.event_id !== eventId));
+    // Drop any pending edit for this event, then delete server-side if synced.
+    const patchQueue = loadNotePatchQueue().filter((p) => p.event_id !== eventId);
+    if (queuedLocally) {
+      saveNotePatchQueue(patchQueue);
+      return;
+    }
+    patchQueue.push({ event_id: eventId, deleted: true, enqueued_at: new Date().toISOString() });
+    saveNotePatchQueue(patchQueue);
     drainNotePatchQueue();
   }
 
@@ -2080,7 +2124,29 @@ export default function App() {
                             hour: "2-digit", minute: "2-digit",
                           })}.
                         </div>
-                        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+                        <div className="row" style={{ gap: 8, justifyContent: "space-between", alignItems: "center" }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm("Delete this event? This can't be undone.")) {
+                                deleteEvent(e.event_id);
+                                setEditingTimeFor(null);
+                                setEditingTimeError(null);
+                              }
+                            }}
+                            style={{
+                              fontSize: 12,
+                              padding: "6px 12px",
+                              background: "transparent",
+                              border: "1px solid var(--danger)",
+                              color: "var(--danger)",
+                              borderRadius: 6,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Delete
+                          </button>
+                          <div className="row" style={{ gap: 8 }}>
                           <button
                             type="button"
                             onClick={() => {
@@ -2125,6 +2191,7 @@ export default function App() {
                           >
                             Save
                           </button>
+                          </div>
                         </div>
                       </div>
                     )}
