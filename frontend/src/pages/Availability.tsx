@@ -24,13 +24,6 @@ import {
   type AvailabilityUnlock,
 } from "../lib/availabilityStore";
 
-type AdminUserLite = {
-  id: number;
-  email: string;
-  name: string | null;
-  is_active: boolean;
-};
-
 function formatHuman(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
   if (!y || !m || !d) return iso;
@@ -82,19 +75,15 @@ export default function Availability() {
   const today = useMemo(() => todayLocalIso(), []);
 
   // viewingUserId: null = looking at your own data; otherwise an admin is
-  // viewing/editing another crew member. Drives both the data source and
+  // viewing/editing another crew member (opened from the roster as its own
+  // page, e.g. /availability?admin_user=42). Drives both the data source and
   // whether History cells become editable.
-  const [viewingUserId, setViewingUserId] = useState<number | null>(null);
+  const [viewingUserId, setViewingUserId] = useState<number | null>(() => {
+    const raw = new URLSearchParams(window.location.search).get("admin_user");
+    const id = raw ? Number(raw) : NaN;
+    return Number.isFinite(id) ? id : null;
+  });
   const isViewingSelf = viewingUserId === null;
-
-  // Admin-only user list for the "View as" picker. Lazy-loaded once on mount.
-  const [adminUsers, setAdminUsers] = useState<AdminUserLite[]>([]);
-  useEffect(() => {
-    if (!isAdmin) return;
-    apiFetch<AdminUserLite[]>("/api/admin/users")
-      .then(setAdminUsers)
-      .catch(() => { /* silently ignore — picker just stays empty */ });
-  }, [isAdmin]);
 
   const [cache, setCache] = useState<AvailabilityState>(() => loadCache());
   // Discard any draft whose window_start has already passed — otherwise a
@@ -445,17 +434,20 @@ export default function Availability() {
         </button>
       </div>
 
-      {/* Admin-only "View as" picker. Collapsed by default so the page
-          reads the same way for admins on a normal day. The viewed-user
-          name surfaces in the collapsed header as a hint when admin is
-          acting on someone else's data. */}
-      {isAdmin && (
-        <AdminViewToggle
-          users={adminUsers}
-          currentUserId={user?.id ?? null}
-          viewingUserId={viewingUserId}
-          onChange={setViewingUserId}
-        />
+      {/* Admin view banner — this page is opened per-employee from the roster
+          (Employees → Availability), so there's no in-page "view as" dropdown.
+          The banner just confirms whose availability is being edited. */}
+      {isAdmin && viewingUserId !== null && (
+        <div className="card" style={{ borderColor: "var(--brand)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>Admin view</div>
+            <div className="small" style={{ color: "var(--muted)" }}>Editing this employee's availability — tap a History day to set it.</div>
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <button type="button" onClick={() => setViewingUserId(null)}>My availability</button>
+            <button type="button" onClick={() => nav("/admin")}>Back to roster</button>
+          </div>
+        </div>
       )}
 
       {/* Tab switcher — Submit hidden when an admin is viewing another user
@@ -897,95 +889,6 @@ export default function Availability() {
   );
 }
 
-// ── Admin "View as" toggle ───────────────────────────────────────────────────
-
-function AdminViewToggle({
-  users,
-  currentUserId,
-  viewingUserId,
-  onChange,
-}: {
-  users: AdminUserLite[];
-  currentUserId: number | null;
-  viewingUserId: number | null;
-  onChange: (id: number | null) => void;
-}) {
-  // Auto-expand when admin is already acting on someone else, so they can
-  // see + change/clear the selection without hunting for the toggle.
-  const [open, setOpen] = useState<boolean>(viewingUserId !== null);
-  useEffect(() => {
-    if (viewingUserId !== null) setOpen(true);
-  }, [viewingUserId]);
-
-  const viewingUser =
-    viewingUserId !== null ? users.find((u) => u.id === viewingUserId) : null;
-
-  return (
-    <div
-      className="card"
-      style={{ padding: open ? undefined : "6px 10px" }}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          width: "100%", gap: 8,
-          background: "none", border: "none", padding: 0,
-          color: "var(--muted)", fontSize: 12, cursor: "pointer",
-          textAlign: "left",
-        }}
-      >
-        <span>
-          Admin view
-          {viewingUser && (
-            <span style={{ color: "var(--brand)", fontWeight: 700 }}>
-              {" · acting as "}{viewingUser.name || viewingUser.email}
-            </span>
-          )}
-        </span>
-        <span style={{ fontSize: 13 }}>{open ? "▾" : "▸"}</span>
-      </button>
-
-      {open && (
-        <div
-          className="row"
-          style={{
-            alignItems: "center", gap: 10, flexWrap: "wrap",
-            marginTop: 10,
-          }}
-        >
-          <div className="small" style={{ color: "var(--muted)", flex: "1 1 220px" }}>
-            Tap a cell in History to cycle status. Edits bypass the 2-week lock.
-          </div>
-          <select
-            value={viewingUserId === null ? "" : String(viewingUserId)}
-            onChange={(e) => {
-              const v = e.target.value;
-              onChange(v === "" ? null : Number(v));
-            }}
-            style={{
-              flex: "1 1 200px", padding: "8px 10px",
-              borderRadius: 8, border: "1px solid var(--border)",
-              background: "var(--bg)", color: "var(--text)", fontSize: 13,
-            }}
-          >
-            <option value="">Yourself (default)</option>
-            {users
-              .filter((u) => u.is_active && u.id !== currentUserId)
-              .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email))
-              .map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name || u.email}
-                </option>
-              ))}
-          </select>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Caught-up view ───────────────────────────────────────────────────────────
 

@@ -49,6 +49,7 @@ class UserAdminResponse(BaseModel):
     id: int
     email: str
     name: Optional[str] = None
+    phone: Optional[str] = None
     role: str
     is_active: bool
     tag_ids: List[int] = []
@@ -64,6 +65,8 @@ class UserAdminResponse(BaseModel):
 class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
     role: Optional[str] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
 
 
 def _tag_ids_by_user(db: Session) -> Dict[int, List[int]]:
@@ -94,6 +97,7 @@ def _user_with_tags(
         id=user.id,
         email=user.email,
         name=user.name,
+        phone=user.phone,
         role=user.role,
         is_active=user.is_active,
         tag_ids=tag_ids,
@@ -129,17 +133,23 @@ def update_user(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    if user_id == admin.id:
-        raise HTTPException(status_code=400, detail="Cannot modify your own account")
-
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Role / access changes can't target your own account (lock-out guard);
+    # contact fields (name/phone) are always editable.
+    if (payload.is_active is not None or payload.role is not None) and user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot change your own role or access")
 
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.role is not None and payload.role in ("user", "admin"):
         user.role = payload.role
+    if payload.name is not None:
+        user.name = payload.name.strip() or None
+    if payload.phone is not None:
+        user.phone = payload.phone.strip() or None
 
     db.commit()
     db.refresh(user)

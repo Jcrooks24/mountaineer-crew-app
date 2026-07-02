@@ -34,6 +34,7 @@ type AdminUser = {
   id: number;
   email: string;
   name: string | null;
+  phone: string | null;
   role: string;
   is_active: boolean;
   tag_ids: number[];
@@ -263,6 +264,7 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
 // Employees tab
 // ─────────────────────────────────────────
 function EmployeesTab() {
+  const nav = useNavigate();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [tags, setTags] = useState<EmployeeTag[]>([]);
   const [loading, setLoading] = useState(true);
@@ -312,6 +314,23 @@ function EmployeesTab() {
       const updated = await apiFetch<AdminUser>(`/api/admin/users/${u.id}`, {
         method: "PATCH",
         body: JSON.stringify({ role: newRole }),
+      });
+      setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Failed to update");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function editPhone(u: AdminUser) {
+    const next = window.prompt(`Contact phone for ${u.name || u.email}:`, u.phone || "");
+    if (next === null) return;
+    setBusy(u.id);
+    try {
+      const updated = await apiFetch<AdminUser>(`/api/admin/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ phone: next.trim() }),
       });
       setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
     } catch (e: any) {
@@ -389,7 +408,10 @@ function EmployeesTab() {
                 }}
               >
                 <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>—</span>}</td>
-                <td style={{ padding: "10px 14px", color: "var(--muted)" }}>{u.email}</td>
+                <td style={{ padding: "10px 14px", color: "var(--muted)" }}>
+                  <div>{u.email}</div>
+                  {u.phone && <div className="small" style={{ color: "var(--text)" }}>{u.phone}</div>}
+                </td>
                 <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role}</td>
                 <td style={{ padding: "10px 14px" }}>
                   <span style={{
@@ -480,6 +502,21 @@ function EmployeesTab() {
                       title="Manage alternate email addresses for Crew Resources matching"
                     >
                       Emails{u.alias_count > 0 ? ` (${u.alias_count})` : ""}
+                    </button>
+                    <button
+                      disabled={busy === u.id}
+                      onClick={() => editPhone(u)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
+                      title="Set the contact phone shown on the scheduling header"
+                    >
+                      Phone
+                    </button>
+                    <button
+                      onClick={() => nav(`/availability?admin_user=${u.id}`)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
+                      title="Open this employee's availability (admin view)"
+                    >
+                      Availability
                     </button>
                   </div>
                 </td>
@@ -1289,6 +1326,12 @@ function MonthScheduleView({
                             note
                           </span>
                         )}
+                      </div>
+                      {/* Contact info so admin can reach the crew member without
+                          leaving the schedule. */}
+                      <div className="small" style={{ color: "var(--muted)", fontSize: 10, marginTop: 2, lineHeight: 1.35, wordBreak: "break-word" }}>
+                        {u.phone && <div style={{ color: "var(--text)" }}>{u.phone}</div>}
+                        <div>{u.email}</div>
                       </div>
                       {userTags.length > 0 && (
                         <div

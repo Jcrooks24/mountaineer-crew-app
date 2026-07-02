@@ -17,6 +17,8 @@ class User(Base):
 
     # New fields (Phase A / Track 2)
     name = Column(String, nullable=True)
+    # Contact phone (roster config); surfaced on the admin scheduling header.
+    phone = Column(String, nullable=True)
     role = Column(String, nullable=False, default="user")
 
     is_active = Column(Boolean, default=True, nullable=False)
