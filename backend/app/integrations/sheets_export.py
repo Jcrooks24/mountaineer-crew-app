@@ -884,8 +884,6 @@ def _format_employee_hours(entries: Optional[list]) -> str:
             pieces.append(f"→ non-billable {tail}")
         else:
             pieces.append(f"→ {tail}")
-        if bool(e.get("out_of_town") or False):
-            pieces.append("[per-diem $50]")
         lines.append(" ".join(pieces))
     if lines:
         total_billable = _round_billable_quarter(total_actual)
@@ -927,7 +925,8 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "crew_feedback": report.get("crew_feedback", "") or "",
         "employee_hours": _format_employee_hours(report.get("employee_hours")),
         "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
-        "per_diem_total": _per_diem_total(report.get("employee_hours")),
+        # Per-diem is a report-level "out of town all day" flag ($50/day).
+        "per_diem_total": 50 if report.get("out_of_town") else 0,
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,

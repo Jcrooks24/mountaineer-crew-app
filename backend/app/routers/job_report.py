@@ -44,6 +44,7 @@ def _to_response(r: JobReport) -> JobReportResponse:
         hours_mismatch_reason=r.hours_mismatch_reason,
         has_crew_feedback=r.has_crew_feedback,
         crew_feedback=r.crew_feedback,
+        out_of_town=bool(r.out_of_town),
         employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
         updated_at=r.updated_at,
@@ -79,6 +80,7 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "hours_mismatch_reason": report.hours_mismatch_reason,
         "has_crew_feedback": report.has_crew_feedback,
         "crew_feedback": report.crew_feedback,
+        "out_of_town": bool(report.out_of_town),
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
         "updated_at": report.updated_at,
@@ -113,6 +115,7 @@ def upsert_job_report(
         existing.hours_mismatch_reason = body.hours_mismatch_reason
         existing.has_crew_feedback = body.has_crew_feedback
         existing.crew_feedback = body.crew_feedback
+        existing.out_of_town = body.out_of_town
         existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
         db.commit()
@@ -133,6 +136,7 @@ def upsert_job_report(
         hours_mismatch_reason=body.hours_mismatch_reason,
         has_crew_feedback=body.has_crew_feedback,
         crew_feedback=body.crew_feedback,
+        out_of_town=body.out_of_town,
         employee_hours_json=employee_hours_json,
         created_at=now,
         updated_at=now,

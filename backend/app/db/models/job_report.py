@@ -52,6 +52,11 @@ class JobReport(Base):
     has_crew_feedback = Column(Boolean, nullable=True)
     crew_feedback = Column(Text, nullable=True)
 
+    # Long-distance: the submitter started AND ended the day out of town (drives
+    # the $50/day per-diem on the JobReports sheet). Nullable so pre-existing
+    # rows read as False without a backfill.
+    out_of_town = Column(Boolean, nullable=True, default=False)
+
     # JSON-encoded list of per-employee entries:
     #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float }]
     # Crew enters these on the Report tab using the time-math helper. Stored

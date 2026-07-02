@@ -228,6 +228,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
 
       <div className="card">
         <div className="small" style={{ color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
+          The <strong>driver</strong> is responsible for completing this statement.
           Record total on-duty hours (driving + other work) for each of the 7 days
           immediately before this trip, plus hours worked in the last 24.
         </div>

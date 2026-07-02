@@ -2358,7 +2358,7 @@ export default function App() {
 
       {/* Report */}
       {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} />
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} />
       )}
 
       {/* DVIR reminder modal — shown before START or FINISH */}

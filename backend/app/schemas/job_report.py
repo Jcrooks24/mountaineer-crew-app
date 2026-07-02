@@ -46,6 +46,7 @@ class JobReportUpsert(BaseModel):
     hours_mismatch_reason: Optional[str] = None
     has_crew_feedback: Optional[bool] = None
     crew_feedback: Optional[str] = None
+    out_of_town: bool = False
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
 
     @field_validator("personal_vehicles")
@@ -84,6 +85,7 @@ class JobReportResponse(BaseModel):
     hours_mismatch_reason: Optional[str]
     has_crew_feedback: Optional[bool] = None
     crew_feedback: Optional[str] = None
+    out_of_town: bool = False
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime

@@ -117,6 +117,8 @@ type ReportData = {
   hours_mismatch_reason: string;
   has_crew_feedback: boolean | null;
   crew_feedback: string;
+  // Long-distance: submitter started AND ended the day out of town ($50 per-diem).
+  out_of_town: boolean;
   employee_hours: EmployeeHoursEntry[];
 };
 
@@ -175,6 +177,8 @@ type Props = {
   // Long-distance drive-only day: skip the billing/eval questions that don't
   // apply when the crew only drove (no labor to bill).
   driveOnly?: boolean;
+  // Long-distance day with BOTH labor and driving: LD docs are required to submit.
+  mixedLd?: boolean;
 };
 
 function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: string; hint?: string; onGo: () => void }) {
@@ -210,7 +214,7 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
   );
 }
 
-export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false }: Props) {
+export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
 
@@ -284,6 +288,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     hours_mismatch_reason: "",
     has_crew_feedback: null,
     crew_feedback: "",
+    out_of_town: false,
     employee_hours: [],
   });
 
@@ -333,6 +338,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           hours_mismatch_reason: r.hours_mismatch_reason ?? "",
           has_crew_feedback: r.has_crew_feedback ?? null,
           crew_feedback: r.crew_feedback ?? "",
+          out_of_town: !!(r as any).out_of_town,
           employee_hours: r.employee_hours ?? [],
         });
         serverUpdatedAtRef.current = (r as any).updated_at || "";
@@ -358,6 +364,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             hours_mismatch_reason: "",
             has_crew_feedback: null,
             crew_feedback: "",
+            out_of_town: false,
             employee_hours: [],
           });
           serverUpdatedAtRef.current = "";
@@ -717,16 +724,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setSaved(false);
   }
 
-  function toggleEmployeeOutOfTown(i: number) {
-    setData((prev) => ({
-      ...prev,
-      employee_hours: prev.employee_hours.map((e, idx) =>
-        idx === i ? { ...e, out_of_town: !e.out_of_town } : e,
-      ),
-    }));
-    setSaved(false);
-  }
-
   function removeEmployee(i: number) {
     setData((prev) => ({
       ...prev,
@@ -789,13 +786,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           personal_vehicles: data.personal_vehicles,
           dumpster_pct: data.dumpster_pct,
           recycling_pct: data.recycling_pct,
-          billing_method: data.billing_method,
-          review_candidate: data.review_candidate,
-          hours_match: data.hours_match,
+          // Drive-only days skip the billing/eval questions; send backend-valid
+          // placeholders so the required columns still satisfy the schema.
+          billing_method: driveOnly ? (data.billing_method || "end_of_job") : data.billing_method,
+          review_candidate: driveOnly ? (data.review_candidate || "na") : data.review_candidate,
+          hours_match: driveOnly ? (data.hours_match ?? true) : data.hours_match,
           hours_mismatch_reason: data.hours_mismatch_reason.trim() || null,
           has_crew_feedback: data.has_crew_feedback,
           // "No" answer keeps a null body; "Yes" sends the trimmed text.
           crew_feedback: data.has_crew_feedback ? (data.crew_feedback.trim() || null) : null,
+          out_of_town: !!data.out_of_town,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
           employee_hours: data.employee_hours
@@ -852,6 +852,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setErr(null);
 
     if (!jobUuid) return setErr("No job selected.");
+    // Mixed LD days (labor + driving): the long-distance documents are required.
+    if (mixedLd) {
+      if (!priorDone) return setErr("Complete the driver's Prior On-Duty statement before submitting.");
+      if (!bolStatus && !bolDeferred) return setErr("Attach the trip's Bill of Lading (or mark not at destination yet) before submitting.");
+    }
     // Drive-only LD days skip the billing/eval questions (no labor to bill).
     if (!driveOnly) {
       if (data.has_personal_vehicles === null) return setErr("Indicate whether personal vehicles were at the job site.");
@@ -913,86 +918,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     >
       {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-
-      {/* Long-distance documents — PODS + BOL. Checking an item off means
-          completing/attaching the actual document. */}
-      {longDistance && (
-        <div className="card" style={{ borderColor: "var(--brand)" }}>
-          <div className="sectionTitle">Long-distance documents</div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
-            Required for this interstate trip. Complete or attach each document. Multi-day trips: link this day to the trip's Bill of Lading so its documents stay together.
-          </div>
-          <div className="col" style={{ gap: 12 }}>
-            {/* Prior On-Duty */}
-            <ChecklistItem
-              done={priorDone}
-              label="Prior On-Duty Statement"
-              hint="§395.8(j)(2) — before the trip"
-              onGo={() => nav("/long-distance")}
-            />
-
-            {/* Bill of Lading */}
-            {bolStatus ? (
-              <div className="col" style={{ gap: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-                <div className="small" style={{ color: "var(--muted)" }}>
-                  {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` · ${bolRef}` : ""}
-                </div>
-                <ChecklistItem
-                  done={bolStatus === "origin_signed" || bolStatus === "delivered"}
-                  label="BOL signed at origin"
-                  hint="Shipper + carrier, before loading"
-                  onGo={() => nav("/long-distance")}
-                />
-                <ChecklistItem
-                  done={bolStatus === "delivered"}
-                  label="BOL signed at destination"
-                  hint="Shipper + carrier, on delivery"
-                  onGo={() => nav("/long-distance")}
-                />
-                {tripLink && (
-                  <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>
-                )}
-              </div>
-            ) : bolDeferred ? (
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-                <div>
-                  <div style={{ fontWeight: 700 }}>Bill of Lading</div>
-                  <div className="small" style={{ color: "var(--muted)" }}>Not at destination yet — no completed BOL to attach.</div>
-                </div>
-                <button type="button" onClick={() => setBolDeferredFlag(false)} style={{ fontSize: 12 }}>Attach BOL</button>
-              </div>
-            ) : (
-              <div className="col" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-                <div style={{ fontWeight: 700 }}>Bill of Lading</div>
-                <label className="col" style={{ gap: 4 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Attach the trip's Bill of Lading</span>
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const o = openBols.find((b) => b.bol_id === e.target.value);
-                      if (o) linkTrip(o);
-                    }}
-                  >
-                    <option value="">Select an in-progress BOL…</option>
-                    {/* Surface every in-progress BOL (any rep/day) so cross-rep,
-                        multi-day trips can be linked. */}
-                    {openBols.map((b) => (
-                      <option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " · " + b.job_date : ""}</option>
-                    ))}
-                  </select>
-                </label>
-                <div className="row wrap" style={{ gap: 8 }}>
-                  <button type="button" className="btnPrimary" onClick={() => nav("/long-distance")} style={{ fontSize: 13 }}>Complete a BOL</button>
-                  <button type="button" onClick={() => setBolDeferredFlag(true)} style={{ fontSize: 13 }}>Not at destination yet</button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Driver RODS sign-off (self-hides when no driving was logged today). */}
-      {longDistance && <RodsSignoff bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null} />}
 
       {/* Draft autosave indicator. Hidden once the report is submitted
           (the existing "✓ Report saved" banner below covers that state). */}
@@ -1116,6 +1041,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           bill calculation. Crew opens the tab to the auto-populated
           bill above; this section captures the per-employee breakdown
           on its own. */}
+      {!driveOnly && (
       <div className="card">
         <div className="sectionTitle">Employee Hours</div>
 
@@ -1284,23 +1210,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                           Non-billable
                         </span>
                       </label>
-                      {longDistance && (
-                        <label
-                          className="row"
-                          style={{ gap: 4, alignItems: "center", cursor: "pointer" }}
-                          title="Out of town this day — $50 per-diem for this employee"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={!!emp.out_of_town}
-                            onChange={() => toggleEmployeeOutOfTown(i)}
-                            style={{ accentColor: "var(--brand)", width: 14, height: 14 }}
-                          />
-                          <span className="small" style={{ color: "var(--muted)" }}>
-                            Per-diem
-                          </span>
-                        </label>
-                      )}
                     </div>
                     <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                       {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
@@ -1375,6 +1284,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         )}
       </div>
+      )}
 
       {/* Drive-only LD days skip auto-populate review, billing method,
           personal vehicles, review candidate, and hours reconciliation. */}
@@ -1558,6 +1468,72 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         )}
       </div>
+
+      {/* ── Long-distance (interstate) ── Positioned last; on mixed
+          labor+driving days these are required to submit. */}
+      {longDistance && (
+        <div className="card" style={{ borderColor: "var(--brand)" }}>
+          <div className="sectionTitle">Long-distance documents</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+            Required for this interstate trip. The <strong>driver</strong> is responsible for the Prior On-Duty statement. Complete or attach each document; multi-day trips link this day to the trip's Bill of Lading.
+          </div>
+          <div className="col" style={{ gap: 12 }}>
+            <ChecklistItem
+              done={priorDone}
+              label="Prior On-Duty Statement (driver)"
+              hint="395.8(j)(2). The driver completes this before the trip."
+              onGo={() => nav("/long-distance")}
+            />
+            {bolStatus ? (
+              <div className="col" style={{ gap: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` (${bolRef})` : ""}
+                </div>
+                <ChecklistItem done={bolStatus === "origin_signed" || bolStatus === "delivered"} label="BOL signed at origin" hint="Shipper + carrier, before loading" onGo={() => nav("/long-distance")} />
+                <ChecklistItem done={bolStatus === "delivered"} label="BOL signed at destination" hint="Shipper + carrier, on delivery" onGo={() => nav("/long-distance")} />
+                {tripLink && <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>}
+              </div>
+            ) : bolDeferred ? (
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 700 }}>Bill of Lading</div>
+                  <div className="small" style={{ color: "var(--muted)" }}>Not at destination yet (no completed BOL to attach).</div>
+                </div>
+                <button type="button" onClick={() => setBolDeferredFlag(false)} style={{ fontSize: 12 }}>Attach BOL</button>
+              </div>
+            ) : (
+              <div className="col" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div style={{ fontWeight: 700 }}>Bill of Lading</div>
+                <label className="col" style={{ gap: 4 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Attach the trip's Bill of Lading</span>
+                  <select value="" onChange={(e) => { const o = openBols.find((b) => b.bol_id === e.target.value); if (o) linkTrip(o); }}>
+                    <option value="">Select an in-progress BOL...</option>
+                    {openBols.map((b) => (<option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " (" + b.job_date + ")" : ""}</option>))}
+                  </select>
+                </label>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button type="button" className="btnPrimary" onClick={() => nav("/long-distance")} style={{ fontSize: 13 }}>Complete a BOL</button>
+                  <button type="button" onClick={() => setBolDeferredFlag(true)} style={{ fontSize: 13 }}>Not at destination yet</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Per-diem: a single "out of town all day" flag ($50/day). */}
+      {longDistance && (
+        <div className="card">
+          <div className="sectionTitle">Per-diem</div>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14 }}>
+            <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
+            <span>I <strong>started and ended</strong> the day out of town ($50 per-diem)</span>
+          </label>
+        </div>
+      )}
+
+      {/* Driver RODS sign-off (self-hides when no driving was logged today). */}
+      {longDistance && <RodsSignoff bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null} />}
 
       {err && (
         <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
