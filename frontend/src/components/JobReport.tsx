@@ -992,7 +992,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       )}
 
       {/* Driver RODS sign-off (self-hides when no driving was logged today). */}
-      {longDistance && <RodsSignoff bolRef={bolRef} />}
+      {longDistance && <RodsSignoff bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null} />}
 
       {/* Draft autosave indicator. Hidden once the report is submitted
           (the existing "✓ Report saved" banner below covers that state). */}

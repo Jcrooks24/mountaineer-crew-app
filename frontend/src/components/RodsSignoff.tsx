@@ -21,9 +21,10 @@ import {
 /**
  * Driver RODS sign-off, shown on the Report tab. Duty status is recorded AND
  * edited on the Timeline (RodsRecorder); here the DRIVER reviews the day's
- * totals, fills the trip details, and signs. Self-hides when there's no RODS.
+ * totals, fills the trip details, and signs. The BOL is shown as a link to the
+ * BOL linked in the Long-distance documents tile. Self-hides when there's no RODS.
  */
-export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
+export default function RodsSignoff({ bolLink }: { bolLink?: { ref: string; onOpen: () => void } | null }) {
   const { user } = useAuth();
   const driverName = user?.name || user?.email || "";
   const date = todayLocal();
@@ -50,14 +51,6 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
   }, []);
   useEffect(() => { saveDay(day); }, [day]);
 
-  // Autofill shipping-docs (BOL/manifest #) from the trip's BOL once known.
-  useEffect(() => {
-    if (bolRef && !(day.shipping_docs || "").trim()) {
-      setDay((prev) => ({ ...prev, shipping_docs: bolRef, updated_at: new Date().toISOString() }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bolRef]);
-
   function patch(p: Partial<RodsDay>) {
     setDay((prev) => ({ ...prev, ...p, updated_at: new Date().toISOString() }));
   }
@@ -81,10 +74,10 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
       const n = await syncQueue();
       sigRef.current?.clear();
       setConsent(false);
-      setNote(n > 0 ? "RODS signed and synced." : "RODS signed — will sync when back online.");
+      setNote(n > 0 ? "RODS signed and synced." : "RODS signed - will sync when back online.");
       window.setTimeout(() => setNote(null), 4000);
     } catch {
-      setErr("Could not submit. Your log is saved — try again.");
+      setErr("Could not submit. Your log is saved - try again.");
     } finally {
       setBusy(false);
     }
@@ -94,7 +87,7 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
 
   return (
     <div className="card" style={{ borderColor: "var(--brand)" }}>
-      <div className="sectionTitle">Record of Duty Status — driver ({date})</div>
+      <div className="sectionTitle">Record of Duty Status &ndash; driver ({date})</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
         For the person who <strong>drove</strong> today. Edit the duty log on the <strong>Timeline</strong>; here, add trip details and sign.
         {day.signature ? "  This day is signed." : ""}
@@ -116,7 +109,7 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
           <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Vehicle</span>
             <select value={day.vehicle_number || ""} onChange={(e) => patch({ vehicle_number: e.target.value })}>
-              <option value="">Select…</option>
+              <option value="">Select&hellip;</option>
               {units.map((u) => <option key={u} value={u}>{u}</option>)}
               {day.vehicle_number && !units.includes(day.vehicle_number) && <option value={day.vehicle_number}>{day.vehicle_number}</option>}
             </select>
@@ -127,8 +120,22 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
           <label className="col" style={{ gap: 4, flex: 1 }}><span className="small" style={{ color: "var(--muted)" }}>Origin</span><input value={day.origin || ""} onChange={(e) => patch({ origin: e.target.value })} placeholder="City, ST" /></label>
           <label className="col" style={{ gap: 4, flex: 1 }}><span className="small" style={{ color: "var(--muted)" }}>Destination</span><input value={day.destination || ""} onChange={(e) => patch({ destination: e.target.value })} placeholder="City, ST" /></label>
         </div>
-        <label className="col" style={{ gap: 4 }}><span className="small" style={{ color: "var(--muted)" }}>Shipping docs (BOL / manifest #)</span><input value={day.shipping_docs || ""} onChange={(e) => patch({ shipping_docs: e.target.value })} /></label>
-        <label className="col" style={{ gap: 4 }}><span className="small" style={{ color: "var(--muted)" }}>Co-driver</span><input value={day.co_driver_name || ""} onChange={(e) => patch({ co_driver_name: e.target.value })} placeholder="If any" /></label>
+        {/* Bill of Lading: link to the one attached in the Long-distance
+            documents tile (not a typed number). */}
+        <div className="col" style={{ gap: 4 }}>
+          <span className="small" style={{ color: "var(--muted)" }}>Bill of Lading</span>
+          {bolLink ? (
+            <button
+              type="button"
+              onClick={bolLink.onOpen}
+              style={{ alignSelf: "flex-start", fontSize: 13, padding: "6px 12px", border: "1px solid var(--brand)", color: "var(--brand)", background: "transparent", borderRadius: 8, cursor: "pointer" }}
+            >
+              View {bolLink.ref} &rsaquo;
+            </button>
+          ) : (
+            <span className="small" style={{ color: "var(--muted)" }}>Attach a BOL in the Long-distance documents tile above.</span>
+          )}
+        </div>
       </div>
 
       {/* Signature */}
@@ -144,7 +151,7 @@ export default function RodsSignoff({ bolRef }: { bolRef?: string }) {
       {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
       {note && <div className="small" style={{ color: "var(--ok)", marginTop: 10 }}>{note}</div>}
       <button className="btnPrimary" onClick={sign} disabled={busy} style={{ marginTop: 12 }}>
-        {busy ? "Submitting…" : "Sign & submit RODS"}
+        {busy ? "Submitting&hellip;" : "Sign & submit RODS"}
       </button>
     </div>
   );

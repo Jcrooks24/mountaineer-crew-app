@@ -81,10 +81,11 @@ export function useLdPlan(date: string) {
   };
 }
 
+// Renders bare (no card wrapper) so it can live inside the Job type tile.
 export function LdPlanTile({ plan, onToggleActivity }: { plan: LdPlan; onToggleActivity: (a: LdActivity) => void }) {
   return (
-    <div className="card" style={{ borderColor: "var(--brand)" }}>
-      <div className="sectionTitle">Today's plan</div>
+    <>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Today's plan</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         What are you doing today? The tools below match your selection.
       </div>
@@ -106,6 +107,6 @@ export function LdPlanTile({ plan, onToggleActivity }: { plan: LdPlan; onToggleA
       {plan.activities.length === 0 && (
         <div className="small" style={{ color: "var(--muted)", marginTop: 10 }}>Pick at least one to start logging.</div>
       )}
-    </div>
+    </>
   );
 }

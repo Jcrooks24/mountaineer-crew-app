@@ -1832,7 +1832,8 @@ export default function App() {
           </div>
 
           {/* Job type — the user declares whether this is a local or a
-              long-distance (interstate) job; this reshapes the workflow. */}
+              long-distance (interstate) job; this reshapes the workflow. The
+              LD day plan lives in the same tile. */}
           <div className="card">
             <div className="sectionTitle">Job type</div>
             <div className="row wrap" style={{ gap: 10 }}>
@@ -1851,12 +1852,12 @@ export default function App() {
                 Long-distance (interstate)
               </button>
             </div>
+            {longDistance && (
+              <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
+                <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
+              </div>
+            )}
           </div>
-
-          {/* Long-distance: the day plan drives which tools show below */}
-          {longDistance && (
-            <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
-          )}
 
           {(() => {
             const coreActions = (
