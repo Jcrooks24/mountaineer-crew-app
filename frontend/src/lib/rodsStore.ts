@@ -121,24 +121,59 @@ export function currentStatus(changes: DutyChange[]): DutyStatus | null {
   return [...changes].sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time)).slice(-1)[0].status;
 }
 
-// Reverse map from a DUTY event's note (the status label) back to the status.
+// Reverse map from a DUTY event's status-label back to the status.
 const LABEL_TO_STATUS: Record<string, DutyStatus> = Object.fromEntries(
   DUTY_STATUSES.map((s) => [STATUS_LABELS[s], s]),
 ) as Record<string, DutyStatus>;
 
-/** Build the day's duty changes from the activity log's DUTY events (the single
- * source of truth). Duty taps log a DUTY event whose note is the status label;
- * editing that event's time in the activity log edits the RODS too. The log
- * always begins off-duty at midnight (FMCSA). */
-export function changesFromDutyEvents(
-  events: Array<{ type: string; note?: string | null; timestamp: string }>,
-): DutyChange[] {
+// A DUTY event's note carries BOTH the status label and the driver it's for
+// ("Driving · Jane Smith"), so a passenger can log on behalf of a driver and
+// each driver's changes group into their own RODS. Multi-driver support hangs
+// off this encoding, no event-schema change required.
+const DUTY_SEP = " · ";
+
+type MinEvent = { type: string; note?: string | null; timestamp: string };
+
+/** Build a DUTY event note from a status + the driver it's logged for. */
+export function dutyEventNote(status: DutyStatus, driverName: string): string {
+  const label = STATUS_LABELS[status];
+  return driverName ? `${label}${DUTY_SEP}${driverName}` : label;
+}
+
+function parseDutyNote(note: string): { status: DutyStatus | null; driver: string } {
+  const raw = (note || "").trim();
+  const idx = raw.indexOf(DUTY_SEP);
+  const label = idx >= 0 ? raw.slice(0, idx).trim() : raw;
+  const driver = idx >= 0 ? raw.slice(idx + DUTY_SEP.length).trim() : "";
+  return { status: LABEL_TO_STATUS[label] ?? null, driver };
+}
+
+/** Distinct driver names that have DUTY events in the log (old notes without a
+ * driver fall back to `fallbackDriver`). */
+export function rodsDriverNames(events: MinEvent[], fallbackDriver = ""): string[] {
+  const set = new Set<string>();
+  for (const e of events) {
+    if (e.type !== "DUTY") continue;
+    const p = parseDutyNote(e.note || "");
+    if (!p.status) continue;
+    set.add(p.driver || fallbackDriver);
+  }
+  return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+/** Duty changes for ONE driver, derived from the DUTY events. Editing an
+ * event's time in the activity log edits the RODS. Begins off-duty at midnight. */
+export function changesForDriver(events: MinEvent[], driver: string, fallbackDriver = ""): DutyChange[] {
   const duty = events
-    .filter((e) => e.type === "DUTY" && !!LABEL_TO_STATUS[(e.note || "").trim()])
+    .filter((e) => {
+      if (e.type !== "DUTY") return false;
+      const p = parseDutyNote(e.note || "");
+      return !!p.status && (p.driver || fallbackDriver) === driver;
+    })
     .map((e) => {
+      const p = parseDutyNote(e.note || "");
       const d = new Date(e.timestamp);
-      const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-      return { time, status: LABEL_TO_STATUS[(e.note || "").trim()], location: "", remarks: "" } as DutyChange;
+      return { time: `${pad(d.getHours())}:${pad(d.getMinutes())}`, status: p.status as DutyStatus, location: "", remarks: "" } as DutyChange;
     })
     .sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time));
   return [{ time: "00:00", status: "off_duty", location: "", remarks: "" }, ...duty];
@@ -148,13 +183,15 @@ export function changesFromDutyEvents(
 
 const DAY_PREFIX = "crew_rods_day_v1:";
 
-function dayKey(date: string): string {
-  return `${DAY_PREFIX}${date}`;
+// Keyed by date AND driver so multiple drivers can each keep a RODS for the
+// same day (trip details + signature) on one device.
+function dayKey(date: string, driver = ""): string {
+  return `${DAY_PREFIX}${date}::${driver}`;
 }
 
-export function loadDay(date: string): RodsDay | null {
+export function loadDay(date: string, driver = ""): RodsDay | null {
   try {
-    const raw = localStorage.getItem(dayKey(date));
+    const raw = localStorage.getItem(dayKey(date, driver));
     if (!raw) return null;
     const d = JSON.parse(raw) as RodsDay;
     if (!d || !Array.isArray(d.changes)) return null;
@@ -166,7 +203,7 @@ export function loadDay(date: string): RodsDay | null {
 
 export function saveDay(day: RodsDay): void {
   try {
-    localStorage.setItem(dayKey(day.log_date), JSON.stringify(day));
+    localStorage.setItem(dayKey(day.log_date, day.driver_name || ""), JSON.stringify(day));
   } catch {}
 }
 
@@ -198,8 +235,12 @@ export function listLocalDays(): RodsDay[] {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k || !k.startsWith(DAY_PREFIX)) continue;
-      const d = loadDay(k.slice(DAY_PREFIX.length));
-      if (d) out.push(d);
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      try {
+        const d = JSON.parse(raw) as RodsDay;
+        if (d && Array.isArray(d.changes)) out.push(d);
+      } catch {}
     }
   } catch {}
   return out.sort((a, b) => b.log_date.localeCompare(a.log_date));
@@ -209,7 +250,7 @@ export function listLocalDays(): RodsDay[] {
 
 const QUEUE_KEY = "crew_rods_queue_v1";
 
-type QueuedDay = { log_date: string; payload: Record<string, unknown> };
+type QueuedDay = { log_date: string; driver_name: string; payload: Record<string, unknown> };
 
 function loadQueue(): QueuedDay[] {
   try {
@@ -257,8 +298,9 @@ function dayToPayload(day: RodsDay): Record<string, unknown> {
 /** Queue a signed day for upsert (replaces any earlier queued payload for the
  * same date - only the latest state matters). */
 export function enqueueDay(day: RodsDay): void {
-  const q = loadQueue().filter((x) => x.log_date !== day.log_date);
-  q.push({ log_date: day.log_date, payload: dayToPayload(day) });
+  const driver = day.driver_name || "";
+  const q = loadQueue().filter((x) => !(x.log_date === day.log_date && x.driver_name === driver));
+  q.push({ log_date: day.log_date, driver_name: driver, payload: dayToPayload(day) });
   saveQueue(q);
 }
 
@@ -282,7 +324,7 @@ export async function syncQueue(): Promise<number> {
       try {
         await apiFetch("/api/long-distance/rods", { method: "POST", body: JSON.stringify(op.payload) });
         // Mark the local day submitted.
-        const d = loadDay(op.log_date);
+        const d = loadDay(op.log_date, op.driver_name || "");
         if (d) { d.submitted = true; saveDay(d); }
         synced++;
       } catch (e) {

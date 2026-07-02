@@ -1,24 +1,26 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useAuth } from "../auth/AuthContext";
+import type { DirectoryEntry } from "../auth/AuthContext";
+import { ensureDirectory } from "../lib/userDirectory";
 import {
   type DutyStatus,
   DUTY_STATUSES,
   STATUS_COLORS,
   STATUS_HELP,
   STATUS_LABELS,
-  changesFromDutyEvents,
+  changesForDriver,
   currentStatus,
+  dutyEventNote,
 } from "../lib/rodsStore";
 
 type MinEvent = { type: string; note?: string | null; timestamp: string };
 
 /**
- * Timeline RODS surface for a drive day. The DRIVER taps their duty status as
- * it changes; each tap logs a DUTY event to the single activity log (via
- * onLogEvent), which is also the RODS record - editing an event's time in the
- * activity log edits the RODS. So there is no separate duty log or summary here;
- * the day's summary + signature live on the Report tab (RodsSignoff). On a mixed
- * day the parent passes the normal Actions buttons via `actionsSlot`, shown as a
- * second labeled subsection with one shared Note button.
+ * Timeline RODS surface for a drive day. The DRIVER (or a passenger logging on
+ * their behalf) taps a duty status; each tap logs a DUTY event to the single
+ * activity log via onLogEvent, encoding WHO the change is for. Multiple drivers
+ * can log on the same day - each driver's changes group into their own RODS on
+ * the Report tab. Editing an event's time in the activity log edits the RODS.
  */
 export default function RodsRecorder({
   events = [],
@@ -29,12 +31,21 @@ export default function RodsRecorder({
   onLogEvent?: (type: string, note?: string | null) => void;
   actionsSlot?: ReactNode;
 }) {
+  const { user } = useAuth();
+  const me = user?.name || user?.email || "";
   const [showHelp, setShowHelp] = useState(false);
-  const cur = useMemo(() => currentStatus(changesFromDutyEvents(events)), [events]);
+  const [dir, setDir] = useState<DirectoryEntry[]>([]);
+  const [loggingFor, setLoggingFor] = useState<string>(me);
+  useEffect(() => { ensureDirectory().then(setDir).catch(() => {}); }, []);
+  useEffect(() => { if (me && !loggingFor) setLoggingFor(me); }, [me, loggingFor]);
+
+  const driver = loggingFor || me;
+  const cur = useMemo(() => currentStatus(changesForDriver(events, driver, me)), [events, driver, me]);
+  const others = dir.map((d) => d.name || d.email).filter((n) => n && n !== me);
 
   function tap(status: DutyStatus) {
     if (cur === status) return;
-    onLogEvent?.("DUTY", STATUS_LABELS[status]);
+    onLogEvent?.("DUTY", dutyEventNote(status, driver));
   }
   function addNote() {
     const text = window.prompt("Note:", "");
@@ -47,9 +58,9 @@ export default function RodsRecorder({
     <div className="card" style={{ borderColor: "var(--brand)" }}>
       <div className="sectionTitle">Record of Duty Status - driver</div>
       <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
-        For the person <strong>driving the truck</strong>. Tap your status as it changes; each tap is logged in the
-        Activity list below (tap a time there to correct it). Passengers and non-driving crew do not keep a RODS.
-        Review the day's totals and sign on the <strong>Report</strong> tab.
+        For the person <strong>driving the truck</strong>. Tap a status as it changes; each tap is logged in the
+        Activity list below (tap a time there to correct it). A RODS is required for each driver, each day - sign them
+        on the <strong>Report</strong> tab.
       </div>
       <button type="button" onClick={() => setShowHelp((s) => !s)} style={{ background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontSize: 13, padding: 0, marginTop: 8 }}>
         {showHelp ? "Hide status guide" : "What do the statuses mean?"}
@@ -65,7 +76,6 @@ export default function RodsRecorder({
         </div>
       )}
 
-      {/* Job labor actions come first on a mixed day; RODS below. */}
       {actionsSlot && (
         <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
           <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>Actions - job labor</div>
@@ -89,7 +99,17 @@ export default function RodsRecorder({
         </div>
       </div>
 
-      <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>RODS - tap your duty status</div>
+      {/* Who this duty change is for - default is the person logging it, but a
+          passenger can log on behalf of the driver. */}
+      <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <span className="small" style={{ color: "var(--muted)" }}>I'm logging this duty change for</span>
+        <select value={driver} onChange={(e) => setLoggingFor(e.target.value)} style={{ flex: "1 1 160px", minWidth: 0 }}>
+          <option value={me}>Myself{me ? ` (${me})` : ""}</option>
+          {others.map((n) => <option key={n} value={n}>on behalf of {n}</option>)}
+        </select>
+      </div>
+
+      <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>RODS - tap the duty status</div>
       <div className="row wrap" style={{ gap: 8 }}>
         {DUTY_STATUSES.map((s) => (
           <button key={s} className="btnPrimary" onClick={() => tap(s)} disabled={cur === s} style={{ flex: "1 1 45%", opacity: cur === s ? 0.55 : 1 }}>

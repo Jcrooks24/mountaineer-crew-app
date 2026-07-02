@@ -227,9 +227,19 @@ def create_rods(
     original rods_id + created_at are preserved so the Sheet row (replace-style
     export) tracks the same entity across the day.
     """
+    # Resolve the driver: a passenger may submit a RODS on behalf of a driver,
+    # so key the record by the NAMED driver (matched to a user), not the
+    # submitter. Falls back to the submitter when the name doesn't match a user.
+    driver_id = current_user.id
+    dn = body.driver_name.strip()
+    if dn:
+        matched = db.query(User).filter(User.name == dn).first()
+        if matched:
+            driver_id = matched.id
+
     existing = (
         db.query(RodsLog)
-        .filter(RodsLog.driver_id == current_user.id, RodsLog.log_date == body.log_date)
+        .filter(RodsLog.driver_id == driver_id, RodsLog.log_date == body.log_date)
         .first()
     )
 
@@ -266,7 +276,7 @@ def create_rods(
 
     row = RodsLog(
         rods_id=body.rods_id,
-        driver_id=current_user.id,
+        driver_id=driver_id,
         driver_name=body.driver_name.strip(),
         log_date=body.log_date,
         co_driver_name=(body.co_driver_name or "").strip() or None,
