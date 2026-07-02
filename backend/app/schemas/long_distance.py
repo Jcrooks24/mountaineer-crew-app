@@ -17,6 +17,7 @@ class PriorOnDutyCreate(BaseModel):
     statement_date: str           # YYYY-MM-DD
     job_uuid: str | None = None
     job_name: str | None = None
+    bol_id: str | None = None
     daily_hours: List[DailyHours]
     hours_last_24: float
     signature: str                # base64 PNG data URL
@@ -30,6 +31,7 @@ class PriorOnDutyResponse(BaseModel):
     driver_name: str
     job_uuid: str | None = None
     job_name: str | None = None
+    bol_id: str | None = None
     statement_date: str
     daily_hours: List[DailyHours]
     hours_last_24: float

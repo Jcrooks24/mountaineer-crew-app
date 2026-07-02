@@ -222,6 +222,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [bolStatus, setBolStatus] = useState<string>("");
   const [bolRef, setBolRef] = useState<string>("");
   const [priorDone, setPriorDone] = useState<boolean>(false);
+  // Whether a PODS is on file for the attached BOL specifically (item: PODS
+  // attaches to the BOL and is required to sign it).
+  const [podsForBol, setPodsForBol] = useState<boolean>(false);
   const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [bolDeferred, setBolDeferred] = useState<boolean>(() => (jobUuid ? loadBolDeferred(jobUuid) : false));
@@ -240,6 +243,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     (async () => {
       const bol = await fetchRemoteBol(tripJob);
       if (!cancelled) { setBolStatus(bol?.status || ""); setBolRef(bolRefOf(bol)); }
+      // PODS attached to THIS BOL (required before it can be signed).
+      const bid = (bol as any)?.bol_id || (bol as any)?.id || tripLink?.bol_id || "";
+      if (bid) {
+        try {
+          const pb = await apiFetch<any[]>(`/api/long-distance/prior-hours?bol_id=${encodeURIComponent(bid)}`);
+          if (!cancelled) setPodsForBol(Array.isArray(pb) && pb.length > 0);
+        } catch { if (!cancelled) setPodsForBol(false); }
+      } else if (!cancelled) {
+        setPodsForBol(false);
+      }
       try {
         const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(tripJob)}`);
         // Robust: only count statements that EXACTLY match the trip job, so a
@@ -960,56 +973,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
-      {/* Drive-only LD days skip the entire billing block (no labor to bill). */}
-      {!driveOnly && (
-      <>
-      {/* ── M1 Equipment (dumpster + recycling). The sliders drive bill line
-             items shown in the Billing tile below. ── */}
-      <div className="card">
-        <div className="sectionTitle">M1 Equipment *</div>
-
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Dumpster (trash)</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-          Was the M1 dumpster used on this job?
-        </div>
-        <YesNo
-          value={data.has_dumpster_use}
-          onChange={(v) => {
-            setData((prev) => ({ ...prev, has_dumpster_use: v, dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0 }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_dumpster_use && (
-          <div style={{ marginTop: 14 }}>
-            <PctSlider label="Dumpster fill estimate" value={data.dumpster_pct} onChange={(v) => set("dumpster_pct", v)} color="var(--danger)" />
-          </div>
-        )}
-
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Recycling bin</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-          Was the M1 recycling bin used on this job?
-        </div>
-        <YesNo
-          value={data.has_recycling_use}
-          onChange={(v) => {
-            setData((prev) => ({ ...prev, has_recycling_use: v, recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0 }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_recycling_use && (
-          <div style={{ marginTop: 14 }}>
-            <PctSlider label="Recycling bin fill estimate" value={data.recycling_pct} onChange={(v) => set("recycling_pct", v)} color="var(--ok)" />
-          </div>
-        )}
-      </div>
-      </>
-      )}
-
-      {/* ── Employee Hours ──
+      {/* ── Job data (employee hours + M1 equipment + personal vehicles) ──
           Sits after the bill flow because employee hours are a parallel
           record (sheet column for admin/payroll) - they don't feed the
           bill calculation. Crew opens the tab to the auto-populated
@@ -1017,7 +981,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           on its own. */}
       {!driveOnly && (
       <div className="card">
-        <div className="sectionTitle">Employee Hours</div>
+        <div className="sectionTitle">Job data</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Hours, equipment, and vehicles - the data used to build the invoice line items.
+        </div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Employee hours</div>
 
         {sortedEvents.length < 2 ? (
           <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
@@ -1257,6 +1225,53 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             </div>
           </div>
         )}
+
+        {/* M1 equipment (dumpster + recycling; the sliders drive invoice lines) */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>M1 equipment *</div>
+        <div style={{ fontWeight: 700, fontSize: 12, marginTop: 8 }}>Dumpster (trash)</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Was the M1 dumpster used on this job?</div>
+        <YesNo
+          value={data.has_dumpster_use}
+          onChange={(v) => { setData((prev) => ({ ...prev, has_dumpster_use: v, dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0 })); setSaved(false); }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_dumpster_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider label="Dumpster fill estimate" value={data.dumpster_pct} onChange={(v) => set("dumpster_pct", v)} color="var(--danger)" />
+          </div>
+        )}
+        <div style={{ fontWeight: 700, fontSize: 12, marginTop: 14 }}>Recycling bin</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Was the M1 recycling bin used on this job?</div>
+        <YesNo
+          value={data.has_recycling_use}
+          onChange={(v) => { setData((prev) => ({ ...prev, has_recycling_use: v, recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0 })); setSaved(false); }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_recycling_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider label="Recycling bin fill estimate" value={data.recycling_pct} onChange={(v) => set("recycling_pct", v)} color="var(--ok)" />
+          </div>
+        )}
+
+        {/* Personal vehicles at the job site */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Personal vehicles at job site *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Were any crew personal vehicles at the job site?</div>
+        <YesNo
+          value={data.has_personal_vehicles}
+          onChange={(v) => { setData((prev) => ({ ...prev, has_personal_vehicles: v, personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0 })); setSaved(false); }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_personal_vehicles && (
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
+            <button type="button" onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))} style={stepBtnStyle} aria-label="Decrease">−</button>
+            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>{data.personal_vehicles}</span>
+            <button type="button" onClick={() => set("personal_vehicles", data.personal_vehicles + 1)} style={stepBtnStyle} aria-label="Increase">+</button>
+            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
+          </div>
+        )}
       </div>
       )}
 
@@ -1318,49 +1333,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       {/* ── Personal vehicles ── */}
       <div className="card">
         <div className="sectionTitle">Job wrap-up</div>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Personal vehicles at job site *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-          Were any crew personal vehicles at the job site?
-        </div>
-        <YesNo
-          value={data.has_personal_vehicles}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_personal_vehicles: v,
-              personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_personal_vehicles && (
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))}
-              style={stepBtnStyle}
-              aria-label="Decrease"
-            >
-              −
-            </button>
-            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>
-              {data.personal_vehicles}
-            </span>
-            <button
-              type="button"
-              onClick={() => set("personal_vehicles", data.personal_vehicles + 1)}
-              style={stepBtnStyle}
-              aria-label="Increase"
-            >
-              +
-            </button>
-            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
-          </div>
-        )}
-
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
@@ -1461,7 +1434,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` (${bolRef})` : ""}
                 </div>
                 {/* PODS is attached to the BOL: surface its status here too. */}
-                <ChecklistItem done={priorDone} label="Prior On-Duty on file for this BOL" hint={priorDone ? "PODS attached" : "Required before signing the BOL"} onGo={() => nav("/long-distance")} />
+                <ChecklistItem done={podsForBol} label="Prior On-Duty on file for this BOL" hint={podsForBol ? "PODS attached to this BOL" : "Required before this BOL can be signed"} onGo={() => nav("/long-distance")} />
                 <ChecklistItem done={bolStatus === "origin_signed" || bolStatus === "delivered"} label="BOL signed at origin" hint="Shipper + carrier, before loading" onGo={() => nav("/long-distance")} />
                 <ChecklistItem done={bolStatus === "delivered"} label="BOL signed at destination" hint="Shipper + carrier, on delivery" onGo={() => nav("/long-distance")} />
                 {tripLink && <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>}

@@ -110,6 +110,7 @@ def _to_response(s: PriorOnDutyStatement) -> PriorOnDutyResponse:
         driver_name=s.driver_name,
         job_uuid=s.job_uuid,
         job_name=s.job_name,
+        bol_id=s.bol_id,
         statement_date=s.statement_date,
         daily_hours=daily,
         hours_last_24=float(s.hours_last_24 or 0),
@@ -139,6 +140,7 @@ def create_prior_hours(
         driver_name=body.driver_name.strip(),
         job_uuid=(body.job_uuid or None),
         job_name=(body.job_name or None),
+        bol_id=(body.bol_id or None),
         statement_date=body.statement_date,
         daily_hours_json=json.dumps([d.model_dump() for d in body.daily_hours]),
         hours_last_24=str(body.hours_last_24),
@@ -158,14 +160,21 @@ def create_prior_hours(
 @router.get("/prior-hours", response_model=List[PriorOnDutyResponse])
 def list_my_prior_hours(
     job_uuid: Optional[str] = Query(default=None),
+    bol_id: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """This driver's Prior On-Duty statements (newest first). If job_uuid is
-    given, only statements for that trip (so the LD report can check per-trip)."""
-    q = db.query(PriorOnDutyStatement).filter(PriorOnDutyStatement.driver_id == current_user.id)
-    if job_uuid:
-        q = q.filter(PriorOnDutyStatement.job_uuid == job_uuid)
+    """Prior On-Duty statements, newest first. Filter by `bol_id` to check
+    whether a PODS is on file for a specific BOL (any driver's - so a rep can
+    verify the trip's PODS); by `job_uuid` for this driver's per-trip statement;
+    otherwise this driver's own statements."""
+    q = db.query(PriorOnDutyStatement)
+    if bol_id:
+        q = q.filter(PriorOnDutyStatement.bol_id == bol_id)
+    elif job_uuid:
+        q = q.filter(PriorOnDutyStatement.driver_id == current_user.id, PriorOnDutyStatement.job_uuid == job_uuid)
+    else:
+        q = q.filter(PriorOnDutyStatement.driver_id == current_user.id)
     rows = q.order_by(PriorOnDutyStatement.created_at.desc()).limit(50).all()
     return [_to_response(r) for r in rows]
 

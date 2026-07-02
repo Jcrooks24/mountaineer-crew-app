@@ -26,6 +26,10 @@ class PriorOnDutyStatement(Base):
     job_uuid = Column(String, index=True, nullable=True)
     job_name = Column(String, nullable=True)
 
+    # The PODS attaches to the trip's BOL: a PODS on file for a BOL is required
+    # before that BOL can be signed at origin.
+    bol_id = Column(String, index=True, nullable=True)
+
     # YYYY-MM-DD - the date the statement covers (first day of trip)
     statement_date = Column(String, nullable=False)
 

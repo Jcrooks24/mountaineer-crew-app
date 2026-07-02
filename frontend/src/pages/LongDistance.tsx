@@ -1,11 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import BillOfLadingForm from "../components/BillOfLadingForm";
 import { BetaTag } from "../components/BetaTag";
-import { readActiveJob } from "../lib/bolStore";
+import { listOpenBols, readActiveJob, type OpenBol } from "../lib/bolStore";
 
 type Section = "menu" | "prior" | "hos" | "trala" | "bol";
 
@@ -134,6 +134,11 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
   // Prefill the job name from the active job so the PODS can be linked to a
   // specific long-distance job; the driver can edit or clear it.
   const [jobName, setJobName] = useState(() => readActiveJob().job_name || "");
+  // Attach the PODS to a specific in-progress BOL (required before that BOL can
+  // be signed at origin).
+  const [openBols, setOpenBols] = useState<OpenBol[]>([]);
+  const [bolId, setBolId] = useState("");
+  useEffect(() => { listOpenBols().then(setOpenBols).catch(() => {}); }, []);
   const priorDates = useMemo(() => datesBefore(tripDate, 7), [tripDate]);
   const [dailyHours, setDailyHours] = useState<Record<string, string>>({});
   const [hoursLast24, setHoursLast24] = useState("0");
@@ -172,14 +177,16 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
     setBusy(true);
     try {
       const job = readActiveJob();
+      const bol = openBols.find((b) => b.bol_id === bolId);
       await apiFetch("/api/long-distance/prior-hours", {
         method: "POST",
         body: JSON.stringify({
           statement_id: newUUID(),
           driver_name: driverName.trim(),
           statement_date: tripDate,
-          job_uuid: job.job_uuid || null,
-          job_name: jobName.trim() || job.job_name || null,
+          job_uuid: bol?.job_uuid || job.job_uuid || null,
+          job_name: jobName.trim() || bol?.job_name || job.job_name || null,
+          bol_id: bolId || null,
           daily_hours: priorDates.map((d) => ({ date: d, hours: Number(dailyHours[d] || 0) })),
           hours_last_24: last24,
           signature: sigRef.current!.toDataURL(),
@@ -241,6 +248,26 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
           <div>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Job name</div>
             <input value={jobName} onChange={(e) => setJobName(e.target.value)} placeholder="Which long-distance job is this for?" />
+          </div>
+          <div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Attach to Bill of Lading</div>
+            <select
+              value={bolId}
+              onChange={(e) => {
+                const id = e.target.value;
+                setBolId(id);
+                const b = openBols.find((x) => x.bol_id === id);
+                if (b && b.job_name) setJobName(b.job_name);
+              }}
+            >
+              <option value="">None (attach later)</option>
+              {openBols.map((b) => (
+                <option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " (" + b.job_date + ")" : ""}</option>
+              ))}
+            </select>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+              A PODS on file for a BOL is required before that BOL can be signed at origin.
+            </div>
           </div>
           <div>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trip Start Date *</div>
