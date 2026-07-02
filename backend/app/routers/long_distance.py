@@ -32,35 +32,72 @@ from app.schemas.long_distance import (
 router = APIRouter(prefix="/api/long-distance", tags=["long-distance"])
 
 
+def _http_json(url: str, headers: Optional[dict] = None, timeout: int = 8):
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _google_miles(origin: str, destination: str, key: str) -> Optional[int]:
+    qs = urllib.parse.urlencode({"origins": origin, "destinations": destination, "units": "imperial", "key": key})
+    data = _http_json(f"https://maps.googleapis.com/maps/api/distancematrix/json?{qs}")
+    element = (data.get("rows") or [{}])[0].get("elements", [{}])[0]
+    if element.get("status") == "OK":
+        return round(element.get("distance", {}).get("value", 0) / 1609.344)
+    return None
+
+
+def _geocode_osm(place: str) -> Optional[tuple]:
+    qs = urllib.parse.urlencode({"q": place, "format": "json", "limit": 1})
+    data = _http_json(
+        f"https://nominatim.openstreetmap.org/search?{qs}",
+        headers={"User-Agent": "MountaineerMovingCrewApp/1.0 (dispatch)"},
+    )
+    if data:
+        return float(data[0]["lat"]), float(data[0]["lon"])
+    return None
+
+
+def _osrm_miles(origin: str, destination: str) -> Optional[int]:
+    a = _geocode_osm(origin)
+    b = _geocode_osm(destination)
+    if not a or not b:
+        return None
+    url = f"https://router.project-osrm.org/route/v1/driving/{a[1]},{a[0]};{b[1]},{b[0]}?overview=false"
+    routes = _http_json(url).get("routes") or []
+    if routes:
+        return round(routes[0]["distance"] / 1609.344)
+    return None
+
+
 @router.get("/distance")
 def driving_distance(
     origin: str = Query(...),
     destination: str = Query(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Driving miles between two places via the Google Maps Distance Matrix API.
-    Returns {miles: null} gracefully when GOOGLE_MAPS_API_KEY isn't configured or
-    no route is found, so the RODS miles field just falls back to manual entry."""
+    """Driving miles between two places. Uses the Google Maps Distance Matrix API
+    if GOOGLE_MAPS_API_KEY is set, otherwise a free fallback (OpenStreetMap
+    geocoding + OSRM routing) so the RODS "Auto" button works out of the box.
+    Returns {miles: null} gracefully when nothing resolves (manual entry)."""
+    o, d = origin.strip(), destination.strip()
+    if not o or not d:
+        return {"ok": False, "miles": None, "reason": "missing_input"}
     key = os.environ.get("GOOGLE_MAPS_API_KEY")
-    if not key or not origin.strip() or not destination.strip():
-        return {"ok": False, "miles": None, "reason": "no_api_key" if not key else "missing_input"}
+    if key:
+        try:
+            miles = _google_miles(o, d, key)
+            if miles is not None:
+                return {"ok": True, "miles": miles, "source": "google"}
+        except Exception:
+            pass  # fall through to the free path
     try:
-        qs = urllib.parse.urlencode({
-            "origins": origin.strip(),
-            "destinations": destination.strip(),
-            "units": "imperial",
-            "key": key,
-        })
-        url = f"https://maps.googleapis.com/maps/api/distancematrix/json?{qs}"
-        with urllib.request.urlopen(url, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        element = (data.get("rows") or [{}])[0].get("elements", [{}])[0]
-        if element.get("status") == "OK":
-            meters = element.get("distance", {}).get("value", 0)
-            return {"ok": True, "miles": round(meters / 1609.344)}
-        return {"ok": False, "miles": None, "reason": element.get("status", "no_route")}
+        miles = _osrm_miles(o, d)
+        if miles is not None:
+            return {"ok": True, "miles": miles, "source": "osm"}
     except Exception:
-        return {"ok": False, "miles": None, "reason": "error"}
+        pass
+    return {"ok": False, "miles": None, "reason": "no_route"}
 
 
 def _to_response(s: PriorOnDutyStatement) -> PriorOnDutyResponse:

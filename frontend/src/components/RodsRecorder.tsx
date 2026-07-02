@@ -65,6 +65,14 @@ export default function RodsRecorder({
         </div>
       )}
 
+      {/* Job labor actions come first on a mixed day; RODS below. */}
+      {actionsSlot && (
+        <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
+          <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>Actions - job labor</div>
+          {actionsSlot}
+        </div>
+      )}
+
       <div
         style={{
           display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", margin: "12px 0",
@@ -89,13 +97,6 @@ export default function RodsRecorder({
           </button>
         ))}
       </div>
-
-      {actionsSlot && (
-        <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
-          <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>Actions - job labor</div>
-          {actionsSlot}
-        </div>
-      )}
 
       <button type="button" onClick={addNote} style={{ width: "100%", marginTop: 10 }}>+ Add note</button>
     </div>

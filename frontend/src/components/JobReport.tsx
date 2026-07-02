@@ -437,6 +437,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const sortedEvents = useMemo(
     () =>
       events
+        // Drive-time (RODS duty changes) is not paid hourly, so DUTY events must
+        // not appear as options when recording employee hours.
+        .filter((e) => e.type !== "DUTY")
         .slice()
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
     [events],
@@ -1278,7 +1281,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           />
           <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
             I have reviewed and confirmed the correctness of the auto-populated line items
-            in the Bill Helper above (including any dumpster / recycling charges from the
+            in the Invoice Builder above (including any dumpster / recycling charges from the
             sliders).
           </span>
         </label>
@@ -1434,11 +1437,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       </>
       )}
 
-      {/* ── Long-distance (interstate) ── Positioned last; on mixed
-          labor+driving days these are required to submit. */}
+      {/* ── Long-distance (interstate): documents + per-diem + RODS in one
+          tile. Positioned last; on mixed labor+driving days the documents are
+          required to submit. */}
       {longDistance && (
         <div className="card" style={{ borderColor: "var(--brand)" }}>
-          <div className="sectionTitle">Long-distance documents</div>
+          <div className="sectionTitle">Long-distance</div>
+
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
             Required for this interstate trip. The <strong>driver</strong> is responsible for the Prior On-Duty statement. Complete or attach each document; multi-day trips link this day to the trip's Bill of Lading.
           </div>
@@ -1454,6 +1460,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 <div className="small" style={{ color: "var(--muted)" }}>
                   {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` (${bolRef})` : ""}
                 </div>
+                {/* PODS is attached to the BOL: surface its status here too. */}
+                <ChecklistItem done={priorDone} label="Prior On-Duty on file for this BOL" hint={priorDone ? "PODS attached" : "Required before signing the BOL"} onGo={() => nav("/long-distance")} />
                 <ChecklistItem done={bolStatus === "origin_signed" || bolStatus === "delivered"} label="BOL signed at origin" hint="Shipper + carrier, before loading" onGo={() => nav("/long-distance")} />
                 <ChecklistItem done={bolStatus === "delivered"} label="BOL signed at destination" hint="Shipper + carrier, on delivery" onGo={() => nav("/long-distance")} />
                 {tripLink && <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>}
@@ -1483,22 +1491,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               </div>
             )}
           </div>
-        </div>
-      )}
 
-      {/* Per-diem: a single "out of town all day" flag ($50/day). */}
-      {longDistance && (
-        <div className="card">
-          <div className="sectionTitle">Per-diem</div>
-          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14 }}>
+          {/* Per-diem */}
+          <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Per-diem</div>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 8 }}>
             <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
             <span>The <strong>crew</strong> started and ended the day out of town ($50 per-diem, per crew member)</span>
           </label>
+
+          {/* Driver RODS sign-off (renders bare; self-hides when no driving). */}
+          <RodsSignoff events={events} bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null} />
         </div>
       )}
-
-      {/* Driver RODS sign-off (self-hides when no driving was logged today). */}
-      {longDistance && <RodsSignoff events={events} bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null} />}
 
       {err && (
         <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>

@@ -547,7 +547,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // fall back to the original stacked layout.
   const billHelperSlot = (
     <>
-      <div className="sectionTitle" style={{ marginBottom: 0 }}>Bill Helper</div>
+      <div className="sectionTitle" style={{ marginBottom: 0 }}>Invoice Builder</div>
       {jobName && (
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
           Bill for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>

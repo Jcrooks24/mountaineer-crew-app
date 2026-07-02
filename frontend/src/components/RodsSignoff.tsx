@@ -123,8 +123,10 @@ export default function RodsSignoff({ events = [], bolLink }: { events?: MinEven
 
   if (changes.length <= 1 && !day.signature) return null;
 
+  // Renders as a sub-section (no card) so it sits inside the combined
+  // Long-distance tile alongside the documents + per-diem.
   return (
-    <div className="card" style={{ borderColor: "var(--brand)" }}>
+    <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
       <div className="sectionTitle">Record of Duty Status - driver ({date})</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
         For the person who <strong>drove</strong> today. The duty log is the Activity list on the Timeline (tap a time

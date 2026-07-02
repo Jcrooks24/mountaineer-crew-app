@@ -1829,34 +1829,28 @@ export default function App() {
               {status && <div className="small" style={{ color: "var(--brand)" }}>{status}</div>}
               {historyStatus && <div className="small" style={{ color: "var(--muted)" }}>{historyStatus}</div>}
             </div>
-          </div>
 
-          {/* Job type - the user declares whether this is a local or a
-              long-distance (interstate) job; this reshapes the workflow. The
-              LD day plan lives in the same tile. */}
-          <div className="card">
-            <div className="sectionTitle">Job type</div>
-            <div className="row wrap" style={{ gap: 10 }}>
-              <button
-                className={!longDistance ? "btnPrimary" : ""}
-                onClick={() => setPersistedMode("local")}
-                style={{ flex: "1 1 140px" }}
-              >
-                Local job
-              </button>
-              <button
-                className={longDistance ? "btnPrimary" : ""}
-                onClick={() => setPersistedMode("long_distance")}
-                style={{ flex: "1 1 140px" }}
-              >
-                Long-distance (interstate)
-              </button>
+            {/* Job type toggle + LD day plan live in the Job tile. */}
+            <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                <span className="label" style={{ marginBottom: 0 }}>Job type</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={longDistance}
+                  onClick={() => setPersistedMode(longDistance ? "local" : "long_distance")}
+                  style={{ position: "relative", width: 52, height: 28, borderRadius: 999, border: "none", cursor: "pointer", background: longDistance ? "var(--brand)" : "var(--border)", transition: "background .15s", flexShrink: 0 }}
+                >
+                  <span style={{ position: "absolute", top: 3, left: longDistance ? 27 : 3, width: 22, height: 22, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
+                </button>
+                <span style={{ fontWeight: 700, fontSize: 13 }}>{longDistance ? "Long-distance (interstate)" : "Local"}</span>
+              </label>
+              {longDistance && (
+                <div style={{ marginTop: 12 }}>
+                  <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
+                </div>
+              )}
             </div>
-            {longDistance && (
-              <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
-                <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
-              </div>
-            )}
           </div>
 
           {(() => {
@@ -2212,7 +2206,7 @@ export default function App() {
                 })}
               </div>
               <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-                Manage via the Report tab · Bill Helper · Materials
+                Manage via the Report tab · Invoice Builder · Materials
               </div>
             </div>
           )}
