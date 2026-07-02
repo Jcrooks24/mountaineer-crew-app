@@ -870,11 +870,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
       if (!data.hours_match && !data.hours_mismatch_reason.trim())
         return setErr("Please explain why the hours don't match.");
+      if (data.has_crew_feedback === null)
+        return setErr("Indicate whether you have any feedback for the office.");
+      if (data.has_crew_feedback && !data.crew_feedback.trim())
+        return setErr("Please share your feedback or change your answer to No.");
     }
-    if (data.has_crew_feedback === null)
-      return setErr("Indicate whether you have any feedback for the office.");
-    if (data.has_crew_feedback && !data.crew_feedback.trim())
-      return setErr("Please share your feedback or change your answer to No.");
 
     // Show DVIR reminder before saving
     pendingSaveRef.current = doSave;
@@ -960,13 +960,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       {/* Drive-only LD days skip the entire billing block (no labor to bill). */}
       {!driveOnly && (
       <>
-      {/* Bill Helper line items (slot from BillCalculator). Opens
-          auto-populated from events + M1 sliders, so crew see the bill
-          "ready" the moment they reach the Report tab. */}
-      {billSlots.billHelper}
-
-      {/* ── M1 Equipment (dumpster + recycling in one tile; the sliders drive
-             bill line items so this sits under the Bill Helper). ── */}
+      {/* ── M1 Equipment (dumpster + recycling). The sliders drive bill line
+             items shown in the Billing tile below. ── */}
       <div className="card">
         <div className="sectionTitle">M1 Equipment *</div>
 
@@ -1008,12 +1003,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         )}
       </div>
-
-      {/* Bill totals + notes slots from BillCalculator. Placed after the M1
-          sliders so their line items have already populated by the time the
-          crew sees the running total and the bill notes textarea. */}
-      {billSlots.totals}
-      {billSlots.notes}
       </>
       )}
 
@@ -1272,9 +1261,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           personal vehicles, review candidate, and hours reconciliation. */}
       {!driveOnly && (
       <>
-      {/* ── Billing (bill review + method in one tile) ── */}
+      {/* ── Billing (bill helper + totals + notes + review + method in one tile) ── */}
       <div className="card">
         <div className="sectionTitle">Billing</div>
+        <div style={{ marginBottom: 12 }}>
+          {billSlots.billHelper}
+          {billSlots.totals}
+          {billSlots.notes}
+        </div>
         <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
           <input
             type="checkbox"
@@ -1401,15 +1395,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             />
           </div>
         )}
-      </div>
-      </>
-      )}
 
-      {/* ── Crew feedback ── */}
-      <div className="card">
-        <div className="sectionTitle">Crew Feedback *</div>
-        <BetaTag feature="crewFeedback" />
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        {/* Crew feedback folded into the wrap-up tile, kept at the bottom. */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          Crew feedback *<BetaTag feature="crewFeedback" />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Would you like to submit any general feedback or feedback about this job in particular to the office?
         </div>
         <YesNo
@@ -1440,6 +1431,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* ── Long-distance (interstate) ── Positioned last; on mixed
           labor+driving days these are required to submit. */}
@@ -1499,13 +1492,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           <div className="sectionTitle">Per-diem</div>
           <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14 }}>
             <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
-            <span>I <strong>started and ended</strong> the day out of town ($50 per-diem)</span>
+            <span>The <strong>crew</strong> started and ended the day out of town ($50 per-diem, per crew member)</span>
           </label>
         </div>
       )}
 
       {/* Driver RODS sign-off (self-hides when no driving was logged today). */}
-      {longDistance && <RodsSignoff bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null} />}
+      {longDistance && <RodsSignoff events={events} bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null} />}
 
       {err && (
         <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>

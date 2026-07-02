@@ -125,9 +125,20 @@ export default function Admin() {
       : "← Dashboard";
 
   return (
+    <>
+    {/* Admin-only background image (fixed, behind content; overlay keeps cards
+        + text readable). */}
+    <div
+      aria-hidden
+      style={{
+        position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none",
+        backgroundImage: "linear-gradient(rgba(10,16,22,0.82), rgba(10,16,22,0.82)), url('/admin-bg.jpg')",
+        backgroundSize: "cover", backgroundPosition: "center",
+      }}
+    />
     <div
       className="container"
-      style={{ maxWidth: desktopMode ? 1500 : 860 }}
+      style={{ maxWidth: desktopMode ? 1500 : 860, position: "relative", zIndex: 1 }}
     >
       {/* Header */}
       <div className="topbar" style={{ marginBottom: 12 }}>
@@ -164,6 +175,7 @@ export default function Admin() {
       {tab === "advanced" && <AdvancedSettingsPage />}
       {tab === "appearance" && <ThemeAppearancePage />}
     </div>
+    </>
   );
 }
 

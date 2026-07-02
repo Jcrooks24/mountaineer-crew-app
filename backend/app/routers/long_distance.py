@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -27,6 +30,37 @@ from app.schemas.long_distance import (
 )
 
 router = APIRouter(prefix="/api/long-distance", tags=["long-distance"])
+
+
+@router.get("/distance")
+def driving_distance(
+    origin: str = Query(...),
+    destination: str = Query(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Driving miles between two places via the Google Maps Distance Matrix API.
+    Returns {miles: null} gracefully when GOOGLE_MAPS_API_KEY isn't configured or
+    no route is found, so the RODS miles field just falls back to manual entry."""
+    key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not key or not origin.strip() or not destination.strip():
+        return {"ok": False, "miles": None, "reason": "no_api_key" if not key else "missing_input"}
+    try:
+        qs = urllib.parse.urlencode({
+            "origins": origin.strip(),
+            "destinations": destination.strip(),
+            "units": "imperial",
+            "key": key,
+        })
+        url = f"https://maps.googleapis.com/maps/api/distancematrix/json?{qs}"
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        element = (data.get("rows") or [{}])[0].get("elements", [{}])[0]
+        if element.get("status") == "OK":
+            meters = element.get("distance", {}).get("value", 0)
+            return {"ok": True, "miles": round(meters / 1609.344)}
+        return {"ok": False, "miles": None, "reason": element.get("status", "no_route")}
+    except Exception:
+        return {"ok": False, "miles": None, "reason": "error"}
 
 
 def _to_response(s: PriorOnDutyStatement) -> PriorOnDutyResponse:

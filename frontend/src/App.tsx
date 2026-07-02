@@ -1890,18 +1890,36 @@ export default function App() {
             );
             // Drive-only LD day: the RODS duty logger replaces the Actions tile.
             if (longDistance && ldDriving && ldLabor.length === 0) {
-              return <RodsRecorder onLogEvent={recordEvent} />;
+              return <RodsRecorder events={mergedLog} onLogEvent={recordEvent} />;
             }
             // Mixed LD day (driving + labor): RODS + Actions as two labeled
             // subsections in one flow, sharing a single Note button (RODS's).
             if (longDistance && ldDriving && ldLabor.length > 0) {
-              return <RodsRecorder onLogEvent={recordEvent} actionsSlot={<div className="row wrap">{coreActions}</div>} />;
+              return (
+                <RodsRecorder
+                  events={mergedLog}
+                  onLogEvent={recordEvent}
+                  actionsSlot={
+                    <>
+                      <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                        Log labor, materials, and line items only. Driving is recorded by the RODS above and the Long-distance documents on the Report tab.
+                      </div>
+                      <div className="row wrap">{coreActions}</div>
+                    </>
+                  }
+                />
+              );
             }
             // Local, or LD labor-only day: the normal Actions tile.
             if (!longDistance || ldLabor.length > 0) {
               return (
                 <div className="card">
                   <div className="sectionTitle">Actions</div>
+                  {longDistance && (
+                    <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+                      Log labor, materials, and line items only. Driving is handled by the RODS and Long-distance documents on the Report tab.
+                    </div>
+                  )}
                   <div className="row wrap">{coreActions}{noteButton}</div>
                 </div>
               );

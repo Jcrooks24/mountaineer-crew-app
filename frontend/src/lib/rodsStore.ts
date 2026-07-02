@@ -121,6 +121,29 @@ export function currentStatus(changes: DutyChange[]): DutyStatus | null {
   return [...changes].sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time)).slice(-1)[0].status;
 }
 
+// Reverse map from a DUTY event's note (the status label) back to the status.
+const LABEL_TO_STATUS: Record<string, DutyStatus> = Object.fromEntries(
+  DUTY_STATUSES.map((s) => [STATUS_LABELS[s], s]),
+) as Record<string, DutyStatus>;
+
+/** Build the day's duty changes from the activity log's DUTY events (the single
+ * source of truth). Duty taps log a DUTY event whose note is the status label;
+ * editing that event's time in the activity log edits the RODS too. The log
+ * always begins off-duty at midnight (FMCSA). */
+export function changesFromDutyEvents(
+  events: Array<{ type: string; note?: string | null; timestamp: string }>,
+): DutyChange[] {
+  const duty = events
+    .filter((e) => e.type === "DUTY" && !!LABEL_TO_STATUS[(e.note || "").trim()])
+    .map((e) => {
+      const d = new Date(e.timestamp);
+      const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      return { time, status: LABEL_TO_STATUS[(e.note || "").trim()], location: "", remarks: "" } as DutyChange;
+    })
+    .sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time));
+  return [{ time: "00:00", status: "off_duty", location: "", remarks: "" }, ...duty];
+}
+
 // ── Per-day persistence ───────────────────────────────────────────────────────
 
 const DAY_PREFIX = "crew_rods_day_v1:";

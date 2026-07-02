@@ -811,13 +811,16 @@ def _has_non_billable(entries: Optional[list]) -> str:
     return "No"
 
 
-def _per_diem_total(entries: Optional[list]) -> Any:
-    """Total per-diem owed for this report: $50 per employee marked out of town.
-    Surfaced as its own column so admin can tally payroll at a glance."""
-    if not entries:
+def _per_diem_total(report: Dict[str, Any]) -> Any:
+    """Total per-diem owed for this report: $50 per crew member when the report's
+    out_of_town flag is set (the whole crew is out of town for the day). Crew
+    size comes from the named employee-hours rows; floors at 1 so a drive-only
+    day with no hours rows still records the driver's per-diem."""
+    if not report.get("out_of_town"):
         return 0
-    n = sum(1 for e in entries if isinstance(e, dict) and e.get("out_of_town"))
-    return n * 50
+    entries = report.get("employee_hours") or []
+    n = sum(1 for e in entries if isinstance(e, dict) and (e.get("name") or "").strip())
+    return 50 * max(1, n)
 
 
 def _round_billable_quarter(hours: float) -> float:
@@ -925,8 +928,8 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "crew_feedback": report.get("crew_feedback", "") or "",
         "employee_hours": _format_employee_hours(report.get("employee_hours")),
         "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
-        # Per-diem is a report-level "out of town all day" flag ($50/day).
-        "per_diem_total": 50 if report.get("out_of_town") else 0,
+        # Per-diem: $50/day per crew member when the whole crew is out of town.
+        "per_diem_total": _per_diem_total(report),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,

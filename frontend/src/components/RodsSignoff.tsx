@@ -7,24 +7,37 @@ import {
   DUTY_STATUSES,
   STATUS_COLORS,
   STATUS_LABELS,
+  changesFromDutyEvents,
   computeTotals,
   enqueueDay,
   loadDay,
-  loadOrResumeDay,
+  minutesOfDay,
   minutesToHHMM,
   newDay,
+  nowHHMM,
   saveDay,
   syncQueue,
   todayLocal,
 } from "../lib/rodsStore";
 
+type MinEvent = { type: string; note?: string | null; timestamp: string };
+
+function fmt12(hhmm: string): string {
+  const mins = minutesOfDay(hhmm);
+  let h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const ap = h >= 12 ? "p" : "a";
+  h = h % 12; if (h === 0) h = 12;
+  return `${h}:${String(m).padStart(2, "0")}${ap}`;
+}
+
 /**
- * Driver RODS sign-off, shown on the Report tab. Duty status is recorded AND
- * edited on the Timeline (RodsRecorder); here the DRIVER reviews the day's
- * totals, fills the trip details, and signs. The BOL is shown as a link to the
- * BOL linked in the Long-distance documents tile. Self-hides when there's no RODS.
+ * Driver RODS sign-off on the Report tab. The duty log IS the activity log
+ * (duty taps + time edits happen there); this derives the day's duty changes
+ * from the DUTY events, shows the day's summary + totals, collects trip details,
+ * and signs. Self-hides when no driving was logged.
  */
-export default function RodsSignoff({ bolLink }: { bolLink?: { ref: string; onOpen: () => void } | null }) {
+export default function RodsSignoff({ events = [], bolLink }: { events?: MinEvent[]; bolLink?: { ref: string; onOpen: () => void } | null }) {
   const { user } = useAuth();
   const driverName = user?.name || user?.email || "";
   const date = todayLocal();
@@ -35,24 +48,48 @@ export default function RodsSignoff({ bolLink }: { bolLink?: { ref: string; onOp
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [units, setUnits] = useState<string[]>([]);
+  const [calcMsg, setCalcMsg] = useState<string | null>(null);
   const sigRef = useRef<SignaturePadHandle>(null);
 
-  const totals = useMemo(() => computeTotals(day.changes), [day.changes]);
+  // Duty changes come from the activity log's DUTY events (single source).
+  const changes = useMemo(() => changesFromDutyEvents(events), [events]);
+  const totals = useMemo(() => computeTotals(changes), [changes]);
+  const periods = useMemo(() => {
+    const nowMin = minutesOfDay(nowHHMM());
+    const sorted = [...changes].sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time));
+    return sorted.map((c, i) => {
+      const startMin = minutesOfDay(c.time);
+      const isLast = i === sorted.length - 1;
+      const endMin = isLast ? Math.max(startMin, nowMin) : minutesOfDay(sorted[i + 1].time);
+      return { start: c.time, end: isLast ? null : sorted[i + 1].time, status: c.status, dur: Math.max(0, endMin - startMin), isLast };
+    });
+  }, [changes]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const d = await loadOrResumeDay(date, driverName);
-      if (!cancelled) setDay(d);
-    })();
-    apiFetch<{ units: string[] }>("/api/dvir/units").then((r) => { if (!cancelled) setUnits(r.units || []); }).catch(() => {});
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    apiFetch<{ units: string[] }>("/api/dvir/units").then((r) => setUnits(r.units || [])).catch(() => {});
   }, []);
   useEffect(() => { saveDay(day); }, [day]);
 
   function patch(p: Partial<RodsDay>) {
     setDay((prev) => ({ ...prev, ...p, updated_at: new Date().toISOString() }));
+  }
+
+  // Auto-calculate driving miles from the origin/destination cities via the
+  // backend (Google Maps Distance Matrix). Falls back to manual entry.
+  async function calcMiles() {
+    const o = (day.origin || "").trim();
+    const d = (day.destination || "").trim();
+    if (!o || !d) { setCalcMsg("Enter origin + destination first."); return; }
+    setCalcMsg("Calculating…");
+    try {
+      const r = await apiFetch<{ ok: boolean; miles: number | null }>(
+        `/api/long-distance/distance?origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}`,
+      );
+      if (r.ok && r.miles != null) { patch({ total_miles: String(r.miles) }); setCalcMsg(null); }
+      else setCalcMsg("Couldn't calculate - enter manually.");
+    } catch {
+      setCalcMsg("Couldn't calculate - enter manually.");
+    }
   }
 
   async function sign() {
@@ -64,6 +101,7 @@ export default function RodsSignoff({ bolLink }: { bolLink?: { ref: string; onOp
       const signed: RodsDay = {
         ...day,
         driver_name: driverName || day.driver_name,
+        changes,                       // derived from the activity log
         signature: sigRef.current!.toDataURL(),
         signed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -83,18 +121,31 @@ export default function RodsSignoff({ bolLink }: { bolLink?: { ref: string; onOp
     }
   }
 
-  if (day.changes.length <= 1 && !day.signature) return null;
+  if (changes.length <= 1 && !day.signature) return null;
 
   return (
     <div className="card" style={{ borderColor: "var(--brand)" }}>
-      <div className="sectionTitle">Record of Duty Status &ndash; driver ({date})</div>
+      <div className="sectionTitle">Record of Duty Status - driver ({date})</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
-        For the person who <strong>drove</strong> today. Edit the duty log on the <strong>Timeline</strong>; here, add trip details and sign.
+        For the person who <strong>drove</strong> today. The duty log is the Activity list on the Timeline (tap a time
+        there to correct it). Review the summary, add trip details, and sign.
         {day.signature ? "  This day is signed." : ""}
       </div>
 
-      {/* Totals */}
-      <div className="row wrap" style={{ gap: 10, marginBottom: 12 }}>
+      {/* Duty summary: chronological periods + daily totals. */}
+      <div className="col" style={{ gap: 6, marginBottom: 12 }}>
+        {periods.map((p, i) => (
+          <div key={i} className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <span className="row" style={{ gap: 8, alignItems: "center", minWidth: 0 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLORS[p.status], flexShrink: 0 }} />
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{STATUS_LABELS[p.status]}</span>
+              <span className="small" style={{ color: "var(--muted)" }}>{fmt12(p.start)} &rarr; {p.end ? fmt12(p.end) : "now"}</span>
+            </span>
+            <span className="small" style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>{minutesToHHMM(p.dur)}{p.isLast ? " so far" : ""}</span>
+          </div>
+        ))}
+      </div>
+      <div className="row wrap" style={{ gap: 10, marginBottom: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
         {DUTY_STATUSES.map((s) => (
           <div key={s} className="col" style={{ gap: 2, flex: "1 1 110px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>{STATUS_LABELS[s]}</span>
@@ -114,22 +165,23 @@ export default function RodsSignoff({ bolLink }: { bolLink?: { ref: string; onOp
               {day.vehicle_number && !units.includes(day.vehicle_number) && <option value={day.vehicle_number}>{day.vehicle_number}</option>}
             </select>
           </label>
-          <label className="col" style={{ gap: 4, flex: "1 1 120px" }}><span className="small" style={{ color: "var(--muted)" }}>Miles today</span><input value={day.total_miles || ""} onChange={(e) => patch({ total_miles: e.target.value })} inputMode="numeric" /></label>
+          <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Miles today</span>
+            <div className="row" style={{ gap: 6 }}>
+              <input value={day.total_miles || ""} onChange={(e) => patch({ total_miles: e.target.value })} inputMode="numeric" style={{ flex: 1, minWidth: 0 }} />
+              <button type="button" onClick={calcMiles} title="Calculate from the origin/destination cities" style={{ fontSize: 12, padding: "6px 10px", whiteSpace: "nowrap" }}>Auto</button>
+            </div>
+            {calcMsg && <span className="small" style={{ color: "var(--muted)" }}>{calcMsg}</span>}
+          </label>
         </div>
         <div className="row wrap" style={{ gap: 10 }}>
           <label className="col" style={{ gap: 4, flex: 1 }}><span className="small" style={{ color: "var(--muted)" }}>Origin</span><input value={day.origin || ""} onChange={(e) => patch({ origin: e.target.value })} placeholder="City, ST" /></label>
           <label className="col" style={{ gap: 4, flex: 1 }}><span className="small" style={{ color: "var(--muted)" }}>Destination</span><input value={day.destination || ""} onChange={(e) => patch({ destination: e.target.value })} placeholder="City, ST" /></label>
         </div>
-        {/* Bill of Lading: link to the one attached in the Long-distance
-            documents tile (not a typed number). */}
         <div className="col" style={{ gap: 4 }}>
           <span className="small" style={{ color: "var(--muted)" }}>Bill of Lading</span>
           {bolLink ? (
-            <button
-              type="button"
-              onClick={bolLink.onOpen}
-              style={{ alignSelf: "flex-start", fontSize: 13, padding: "6px 12px", border: "1px solid var(--brand)", color: "var(--brand)", background: "transparent", borderRadius: 8, cursor: "pointer" }}
-            >
+            <button type="button" onClick={bolLink.onOpen} style={{ alignSelf: "flex-start", fontSize: 13, padding: "6px 12px", border: "1px solid var(--brand)", color: "var(--brand)", background: "transparent", borderRadius: 8, cursor: "pointer" }}>
               View {bolLink.ref} &rsaquo;
             </button>
           ) : (
