@@ -413,11 +413,12 @@ function EmployeesTab() {
                           <span
                             key={t.id}
                             style={{
-                              fontSize: 11, fontWeight: 600,
+                              fontSize: 11, fontWeight: 700,
                               padding: "2px 8px", borderRadius: 999,
-                              background: "rgba(93,214,194,0.12)",
-                              color: "var(--brand)",
-                              border: "1px solid rgba(93,214,194,0.4)",
+                              // Theme-text label keeps tags legible on light themes.
+                              background: "var(--tag-bg, rgba(93,214,194,0.16))",
+                              color: "var(--text)",
+                              border: "1px solid var(--brand)",
                             }}
                           >
                             {t.name}
@@ -1035,19 +1036,43 @@ function MonthScheduleView({
     return () => { cancelled = true; };
   }, [monthStart, monthEnd]);
 
-  // Active employees only, sorted by display name.
-  const activeUsers = useMemo(
-    () => users
-      .filter((u) => u.is_active)
-      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email)),
-    [users],
-  );
-
   const tagsById = useMemo(() => {
     const m = new Map<number, EmployeeTag>();
     for (const t of tags) m.set(t.id, t);
     return m;
   }, [tags]);
+
+  // Column ordering: by crew tier (I far left … IV far right) by default, or
+  // pull a chosen tag's holders to the left ("compatibility highest on left").
+  const [orderTagId, setOrderTagId] = useState<number | null>(null);
+  const [reminderCopied, setReminderCopied] = useState(false);
+  const AVAILABILITY_REMINDER =
+    "Hi! Please update your crew availability in the app for the next two weeks. Open the Mountaineer app, go to Availability, and mark each day (available, unavailable, or conditional). This helps us schedule jobs around you. Thanks!";
+  const activeUsers = useMemo(() => {
+    type U = (typeof users)[number];
+    const tierRank = (u: U): number => {
+      const map: Record<string, number> = { i: 1, ii: 2, iii: 3, iv: 4, "1": 1, "2": 2, "3": 3, "4": 4 };
+      for (const tid of u.tag_ids) {
+        const t = tagsById.get(tid);
+        if (!t) continue;
+        const m = t.name.match(/tier\s*(iv|iii|ii|i|4|3|2|1)\b/i);
+        if (m) return map[m[1].toLowerCase()] ?? 99;
+      }
+      return 99; // untiered sinks to the right
+    };
+    const name = (u: U) => (u.name || u.email).toLowerCase();
+    const list = users.filter((u) => u.is_active);
+    return list.sort((a, b) => {
+      if (orderTagId != null) {
+        const ah = a.tag_ids.includes(orderTagId) ? 0 : 1;
+        const bh = b.tag_ids.includes(orderTagId) ? 0 : 1;
+        if (ah !== bh) return ah - bh;
+      }
+      const t = tierRank(a) - tierRank(b);
+      if (t) return t;
+      return name(a).localeCompare(name(b));
+    });
+  }, [users, orderTagId, tagsById]);
 
   // (user_id, day) → record map for O(1) cell lookup.
   const matrix = useMemo(() => {
@@ -1096,6 +1121,9 @@ function MonthScheduleView({
 
   return (
     <>
+      {/* Row hover highlight — a translucent overlay reads on any cell bg/theme,
+          making it easy to scan who's available on a given day. */}
+      <style>{`.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(93,214,194,0.10); }`}</style>
       <div
         className="card"
         style={{
@@ -1133,6 +1161,18 @@ function MonthScheduleView({
         >
           ›
         </button>
+      </div>
+
+      {/* Column ordering: tier by default, or pull a tag's holders to the left. */}
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span className="small" style={{ color: "var(--muted)" }}>Order columns by</span>
+        <select
+          value={orderTagId ?? ""}
+          onChange={(e) => setOrderTagId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="">Tier (I → IV)</option>
+          {tags.map((t) => <option key={t.id} value={t.id}>{t.name} first</option>)}
+        </select>
       </div>
 
       {err && (
@@ -1216,11 +1256,10 @@ function MonthScheduleView({
                         borderRight: "1px solid var(--border)",
                         padding: "6px 8px", textAlign: "left",
                         verticalAlign: "top",
-                        // Tightened from 110 to 80 so more employees fit per
-                        // viewport on standard desktop AND ultra-wide.
-                        // Scheduled job cells still wrap-break their text so
-                        // narrower cells stay legible.
-                        minWidth: 80,
+                        // Tightened to 60 so more employees fit per viewport on
+                        // standard desktop AND ultra-wide. Scheduled job cells
+                        // still wrap-break their text so narrow cells stay legible.
+                        minWidth: 60,
                         cursor: notes ? "help" : "default",
                       }}
                     >
@@ -1262,11 +1301,14 @@ function MonthScheduleView({
                             <span
                               key={t.id}
                               style={{
-                                fontSize: 9, fontWeight: 600,
+                                fontSize: 9, fontWeight: 700,
                                 padding: "1px 5px", borderRadius: 3,
-                                background: "rgba(93,214,194,0.12)",
-                                color: "var(--brand)",
-                                border: "1px solid rgba(93,214,194,0.35)",
+                                // Theme-text label (not --brand) so tags stay
+                                // legible on light themes; brand border keeps
+                                // the identity.
+                                background: "var(--tag-bg, rgba(93,214,194,0.16))",
+                                color: "var(--text)",
+                                border: "1px solid var(--brand)",
                                 whiteSpace: "nowrap",
                               }}
                             >
@@ -1288,7 +1330,7 @@ function MonthScheduleView({
                 const isToday = dIso === today;
                 const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
                 return (
-                  <tr key={dIso}>
+                  <tr key={dIso} className="month-row">
                     <td
                       style={{
                         position: "sticky", left: 0, zIndex: 1,
@@ -1434,6 +1476,50 @@ function MonthScheduleView({
           />
           <span>Not submitted</span>
         </span>
+      </div>
+
+      {/* Copy-pasteable reminder for Google Voice SMS. Lists who hasn't
+          submitted availability for the visible window so admin knows who to
+          nudge. No em dashes (per house style). */}
+      <div className="card">
+        <div className="sectionTitle">Availability reminder</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+          Copy this into Google Voice to remind crew to set their availability.
+        </div>
+        {(() => {
+          const notSubmitted = activeUsers.filter((u) => !matrix.has(u.id));
+          return (
+            <>
+              <textarea
+                readOnly
+                value={AVAILABILITY_REMINDER}
+                rows={4}
+                style={{ width: "100%", resize: "vertical", fontSize: 13, padding: 10, borderRadius: 8, border: "1px solid var(--border)", background: "rgba(255,255,255,0.03)", color: "var(--text)" }}
+              />
+              <div className="row" style={{ gap: 10, alignItems: "center", marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="btnPrimary"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(AVAILABILITY_REMINDER).then(
+                      () => { setReminderCopied(true); window.setTimeout(() => setReminderCopied(false), 2500); },
+                      () => {},
+                    );
+                  }}
+                >
+                  Copy reminder
+                </button>
+                {reminderCopied && <span className="small" style={{ color: "var(--ok)" }}>Copied</span>}
+              </div>
+              {notSubmitted.length > 0 && (
+                <div className="small" style={{ color: "var(--muted)", marginTop: 10 }}>
+                  Not submitted for this month ({notSubmitted.length}):{" "}
+                  <span style={{ color: "var(--text)" }}>{notSubmitted.map((u) => u.name || u.email).join(", ")}</span>
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
     </>
   );
