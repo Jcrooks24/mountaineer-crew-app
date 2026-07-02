@@ -131,6 +131,9 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
 
   const [tripDate, setTripDate] = useState(todayLocal());
   const [driverName, setDriverName] = useState(user?.name || "");
+  // Prefill the job name from the active job so the PODS can be linked to a
+  // specific long-distance job; the driver can edit or clear it.
+  const [jobName, setJobName] = useState(() => readActiveJob().job_name || "");
   const priorDates = useMemo(() => datesBefore(tripDate, 7), [tripDate]);
   const [dailyHours, setDailyHours] = useState<Record<string, string>>({});
   const [hoursLast24, setHoursLast24] = useState("0");
@@ -176,7 +179,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
           driver_name: driverName.trim(),
           statement_date: tripDate,
           job_uuid: job.job_uuid || null,
-          job_name: job.job_name || null,
+          job_name: jobName.trim() || job.job_name || null,
           daily_hours: priorDates.map((d) => ({ date: d, hours: Number(dailyHours[d] || 0) })),
           hours_last_24: last24,
           signature: sigRef.current!.toDataURL(),
@@ -233,6 +236,10 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
           <div>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver Name *</div>
             <input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Full name" />
+          </div>
+          <div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Job name</div>
+            <input value={jobName} onChange={(e) => setJobName(e.target.value)} placeholder="Which long-distance job is this for?" />
           </div>
           <div>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trip Start Date *</div>

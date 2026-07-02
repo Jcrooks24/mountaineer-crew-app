@@ -172,6 +172,9 @@ type Props = {
   jobName: string;
   events?: ReportEvent[];
   longDistance?: boolean;
+  // Long-distance drive-only day: skip the billing/eval questions that don't
+  // apply when the crew only drove (no labor to bill).
+  driveOnly?: boolean;
 };
 
 function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: string; hint?: string; onGo: () => void }) {
@@ -207,7 +210,7 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
   );
 }
 
-export default function JobReport({ jobUuid, jobName, events = [], longDistance = false }: Props) {
+export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
 
@@ -752,7 +755,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   async function doSave() {
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
-    if (billData !== null && billData !== undefined && !billReviewed) {
+    if (!driveOnly && billData !== null && billData !== undefined && !billReviewed) {
       return setErr("Please confirm you have reviewed the auto-populated bill items before saving.");
     }
 
@@ -849,17 +852,20 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setErr(null);
 
     if (!jobUuid) return setErr("No job selected.");
-    if (data.has_personal_vehicles === null) return setErr("Indicate whether personal vehicles were at the job site.");
-    if (data.has_personal_vehicles && data.personal_vehicles < 1) return setErr("Enter how many personal vehicles were at the job site.");
-    if (data.has_dumpster_use === null) return setErr("Indicate whether the M1 dumpster was used on this job.");
-    if (data.has_dumpster_use && data.dumpster_pct <= 0) return setErr("Select the M1 dumpster fill percentage.");
-    if (data.has_recycling_use === null) return setErr("Indicate whether the M1 recycling bin was used on this job.");
-    if (data.has_recycling_use && data.recycling_pct <= 0) return setErr("Select the M1 recycling bin fill percentage.");
-    if (!data.billing_method) return setErr("Select a billing method.");
-    if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
-    if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
-    if (!data.hours_match && !data.hours_mismatch_reason.trim())
-      return setErr("Please explain why the hours don't match.");
+    // Drive-only LD days skip the billing/eval questions (no labor to bill).
+    if (!driveOnly) {
+      if (data.has_personal_vehicles === null) return setErr("Indicate whether personal vehicles were at the job site.");
+      if (data.has_personal_vehicles && data.personal_vehicles < 1) return setErr("Enter how many personal vehicles were at the job site.");
+      if (data.has_dumpster_use === null) return setErr("Indicate whether the M1 dumpster was used on this job.");
+      if (data.has_dumpster_use && data.dumpster_pct <= 0) return setErr("Select the M1 dumpster fill percentage.");
+      if (data.has_recycling_use === null) return setErr("Indicate whether the M1 recycling bin was used on this job.");
+      if (data.has_recycling_use && data.recycling_pct <= 0) return setErr("Select the M1 recycling bin fill percentage.");
+      if (!data.billing_method) return setErr("Select a billing method.");
+      if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
+      if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
+      if (!data.hours_match && !data.hours_mismatch_reason.trim())
+        return setErr("Please explain why the hours don't match.");
+    }
     if (data.has_crew_feedback === null)
       return setErr("Indicate whether you have any feedback for the office.");
     if (data.has_crew_feedback && !data.crew_feedback.trim())
@@ -968,7 +974,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                     }}
                   >
                     <option value="">Select an in-progress BOL…</option>
-                    {openBols.filter((b) => b.job_uuid !== jobUuid).map((b) => (
+                    {/* Surface every in-progress BOL (any rep/day) so cross-rep,
+                        multi-day trips can be linked. */}
+                    {openBols.map((b) => (
                       <option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " · " + b.job_date : ""}</option>
                     ))}
                   </select>
@@ -1024,6 +1032,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
+      {/* Drive-only LD days skip the entire billing block (no labor to bill). */}
+      {!driveOnly && (
+      <>
       {/* Bill Helper line items (slot from BillCalculator). Opens
           auto-populated from events + M1 sliders, so crew see the bill
           "ready" the moment they reach the Report tab. */}
@@ -1096,6 +1107,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           crew sees the running total and the bill notes textarea. */}
       {billSlots.totals}
       {billSlots.notes}
+      </>
+      )}
 
       {/* ── Employee Hours ──
           Sits after the bill flow because employee hours are a parallel
@@ -1363,6 +1376,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         )}
       </div>
 
+      {/* Drive-only LD days skip auto-populate review, billing method,
+          personal vehicles, review candidate, and hours reconciliation. */}
+      {!driveOnly && (
+      <>
       {/* ── Bill auto-populate review ──
           Placed here so the crew sees the M1 sliders drive new bill
           line items before confirming them. */}
@@ -1503,6 +1520,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* ── Crew feedback ── */}
       <div className="card">

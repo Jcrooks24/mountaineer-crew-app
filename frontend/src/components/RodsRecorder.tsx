@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthContext";
 import {
   type DutyChange,
@@ -26,8 +26,10 @@ import {
 /**
  * Timeline RODS surface for a drive day. The DRIVER taps their duty status as
  * it changes (each tap + note is mirrored to the job activity timeline via
- * onLogEvent), and can edit any time / add a retroactive change here so the
- * totals stay accurate. The day is signed on the Report tab (RodsSignoff).
+ * onLogEvent), and can edit any time / add a retroactive change here so totals
+ * stay accurate. On a mixed day (driving + labor) the parent passes the normal
+ * Actions buttons via `actionsSlot`, shown as a second labeled subsection so
+ * there's a single Note button for both. Signed on the Report tab (RodsSignoff).
  */
 
 function DutyStrip({ changes }: { changes: DutyChange[] }) {
@@ -41,13 +43,27 @@ function DutyStrip({ changes }: { changes: DutyChange[] }) {
   }
   return (
     <div>
-      <div style={{ position: "relative", height: 30, borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)" }}>
+      {/* Hour grid + colored duty segments; taller bar with 6-hour gridlines so
+          the shape of the day reads at a glance. */}
+      <div style={{ position: "relative", height: 40, borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)" }}>
+        {[0.25, 0.5, 0.75].map((f) => (
+          <div key={f} style={{ position: "absolute", top: 0, bottom: 0, left: `${f * 100}%`, width: 1, background: "rgba(255,255,255,0.12)" }} />
+        ))}
         {segments.map((s, i) => (
-          <div key={i} title={STATUS_LABELS[s.status]} style={{ position: "absolute", top: 0, bottom: 0, left: `${s.left}%`, width: `${s.width}%`, background: STATUS_COLORS[s.status] }} />
+          <div key={i} title={`${STATUS_LABELS[s.status]}`} style={{ position: "absolute", top: 0, bottom: 0, left: `${s.left}%`, width: `${s.width}%`, background: STATUS_COLORS[s.status] }} />
         ))}
       </div>
       <div className="row" style={{ justifyContent: "space-between", marginTop: 3, fontSize: 10, color: "var(--muted)" }}>
-        <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+        <span>12a</span><span>6a</span><span>12p</span><span>6p</span><span>12a</span>
+      </div>
+      {/* Legend so the colors are decodable. */}
+      <div className="row wrap" style={{ gap: 12, marginTop: 8 }}>
+        {DUTY_STATUSES.map((s) => (
+          <span key={s} className="row small" style={{ gap: 6, alignItems: "center", color: "var(--muted)" }}>
+            <span style={{ width: 12, height: 12, borderRadius: 3, background: STATUS_COLORS[s], flexShrink: 0 }} />
+            {STATUS_LABELS[s]}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -55,14 +71,17 @@ function DutyStrip({ changes }: { changes: DutyChange[] }) {
 
 export default function RodsRecorder({
   onLogEvent,
+  actionsSlot,
 }: {
   onLogEvent?: (type: string, note?: string | null) => void;
+  actionsSlot?: ReactNode;
 }) {
   const { user } = useAuth();
   const driverName = user?.name || user?.email || "";
   const date = todayLocal();
   const [day, setDay] = useState<RodsDay>(() => loadDay(date) || newDay(date, driverName, listLocalDays()[0] || null));
   const [showHelp, setShowHelp] = useState(false);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
 
   const totals = useMemo(() => computeTotals(day.changes), [day.changes]);
   const cur = currentStatus(day.changes);
@@ -128,7 +147,11 @@ export default function RodsRecorder({
       const mins = Math.min(23 * 60 + 59, minutesOfDay(sorted[sorted.length - 1].c.time) + 60);
       t = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
     }
-    setDay((prev) => ({ ...prev, changes: [...prev.changes, { time: t, status: "on_duty", location: "", remarks: "" }], updated_at: new Date().toISOString() }));
+    setDay((prev) => {
+      const next = { ...prev, changes: [...prev.changes, { time: t, status: "on_duty" as DutyStatus, location: "", remarks: "" }], updated_at: new Date().toISOString() };
+      return next;
+    });
+    setEditingIdx(day.changes.length); // open the new row for editing
   }
 
   return (
@@ -154,7 +177,7 @@ export default function RodsRecorder({
         )}
       </div>
 
-      {/* Current-status banner (not a button) + tap buttons */}
+      {/* Current-status banner (not a button) + RODS buttons (+ Actions on mixed days) */}
       <div className="card">
         <div
           style={{
@@ -171,6 +194,8 @@ export default function RodsRecorder({
             </div>
           </div>
         </div>
+
+        <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>RODS — tap your duty status</div>
         <div className="row wrap" style={{ gap: 8 }}>
           {DUTY_STATUSES.map((s) => (
             <button key={s} className="btnPrimary" onClick={() => tap(s)} disabled={cur === s} style={{ flex: "1 1 45%", opacity: cur === s ? 0.55 : 1 }}>
@@ -178,32 +203,78 @@ export default function RodsRecorder({
             </button>
           ))}
         </div>
-        <button type="button" onClick={addNote} style={{ width: "100%", marginTop: 8 }}>+ Add note</button>
+
+        {actionsSlot && (
+          <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
+            <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>Actions — job labor</div>
+            {actionsSlot}
+          </div>
+        )}
+
+        <button type="button" onClick={addNote} style={{ width: "100%", marginTop: 10 }}>+ Add note</button>
       </div>
 
-      {/* Editable duty changes — edit a time / status, remove, or add a retroactive change */}
+      {/* Editable duty changes — tap a time to edit (matches the activity log). */}
       <div className="card">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
           <div className="sectionTitle" style={{ marginBottom: 0 }}>Duty changes</div>
           <button type="button" onClick={addChange} style={{ fontSize: 12 }}>+ Add</button>
         </div>
-        <div className="col" style={{ gap: 8 }}>
-          {sorted.map(({ c, i }) => (
-            <div key={i} className="row wrap" style={{ gap: 8, alignItems: "center" }}>
-              <input type="time" value={c.time} onChange={(e) => updateChange(i, { time: e.target.value })} style={{ width: 110 }} />
-              <select value={c.status} onChange={(e) => updateChange(i, { status: e.target.value as DutyStatus })} style={{ flex: "1 1 150px" }}>
-                {DUTY_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
-              </select>
-              <button type="button" onClick={() => removeChange(i)} disabled={day.changes.length <= 1} style={{ fontSize: 12, padding: "6px 10px", color: "var(--danger)", borderColor: "var(--danger)" }}>Remove</button>
+        <div>
+          {sorted.map(({ c, i }, pos) => (
+            <div key={i} style={{ padding: "10px 0", borderTop: pos > 0 ? "1px solid var(--border)" : "none" }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <span className="row" style={{ gap: 8, alignItems: "center", minWidth: 0 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: STATUS_COLORS[c.status], flexShrink: 0 }} />
+                  <strong style={{ fontSize: 14 }}>{STATUS_LABELS[c.status]}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEditingIdx((prev) => (prev === i ? null : i))}
+                  title="Tap to edit this duty change"
+                  style={{ background: "transparent", border: "none", padding: 0, color: "var(--muted)", cursor: "pointer", fontSize: 13, whiteSpace: "nowrap", textDecoration: "underline dotted", textDecorationColor: "var(--border)", textUnderlineOffset: 3 }}
+                >
+                  {c.time}
+                </button>
+              </div>
+              {editingIdx === i && (
+                <div style={{ marginTop: 8, padding: 10, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label className="small" style={{ color: "var(--muted)" }}>Edit duty change</label>
+                  <input
+                    type="time"
+                    value={c.time}
+                    onChange={(e) => updateChange(i, { time: e.target.value })}
+                    style={{ padding: "8px 10px", fontSize: 14, borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.05)", color: "var(--text)" }}
+                  />
+                  <select
+                    value={c.status}
+                    onChange={(e) => updateChange(i, { status: e.target.value as DutyStatus })}
+                    style={{ padding: "8px 10px", fontSize: 14, borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.05)", color: "var(--text)" }}
+                  >
+                    {DUTY_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+                  </select>
+                  <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+                    <button
+                      type="button"
+                      onClick={() => { removeChange(i); setEditingIdx(null); }}
+                      disabled={day.changes.length <= 1}
+                      style={{ fontSize: 12, padding: "6px 12px", background: "transparent", border: "1px solid var(--danger)", color: "var(--danger)", borderRadius: 6, cursor: "pointer" }}
+                    >
+                      Remove
+                    </button>
+                    <button type="button" className="btnPrimary" onClick={() => setEditingIdx(null)} style={{ fontSize: 12, padding: "6px 12px" }}>Done</button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
       </div>
 
-      {/* 24h strip + totals */}
+      {/* 24h strip + legend + totals */}
       <div className="card">
         <DutyStrip changes={day.changes} />
-        <div className="row wrap" style={{ gap: 10, marginTop: 10 }}>
+        <div className="row wrap" style={{ gap: 10, marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
           {DUTY_STATUSES.map((s) => (
             <div key={s} className="col" style={{ gap: 2, flex: "1 1 110px" }}>
               <span className="small" style={{ color: "var(--muted)" }}>{STATUS_LABELS[s]}</span>

@@ -1678,26 +1678,6 @@ export default function App() {
           <span className="chip" style={{ color: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize" }}>
             {jobStatus}
           </span>
-          {/* Local / Long-distance mode toggle (persists on device) */}
-          <div
-            className="chip"
-            role="group"
-            aria-label="Local or long-distance mode"
-            style={{ padding: 0, overflow: "hidden", display: "inline-flex", border: "1px solid rgba(255,255,255,0.3)" }}
-          >
-            <button
-              onClick={() => setPersistedMode("local")}
-              style={{ border: "none", padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", background: !longDistance ? "var(--brand)" : "transparent", color: !longDistance ? "#fff" : "var(--muted)" }}
-            >
-              Local
-            </button>
-            <button
-              onClick={() => setPersistedMode("long_distance")}
-              style={{ border: "none", padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", background: longDistance ? "var(--brand)" : "transparent", color: longDistance ? "#fff" : "var(--muted)" }}
-            >
-              Long-distance
-            </button>
-          </div>
           <button
             className="chip"
             onClick={() => nav("/dvir")}
@@ -1851,19 +1831,36 @@ export default function App() {
             </div>
           </div>
 
+          {/* Job type — the user declares whether this is a local or a
+              long-distance (interstate) job; this reshapes the workflow. */}
+          <div className="card">
+            <div className="sectionTitle">Job type</div>
+            <div className="row wrap" style={{ gap: 10 }}>
+              <button
+                className={!longDistance ? "btnPrimary" : ""}
+                onClick={() => setPersistedMode("local")}
+                style={{ flex: "1 1 140px" }}
+              >
+                Local job
+              </button>
+              <button
+                className={longDistance ? "btnPrimary" : ""}
+                onClick={() => setPersistedMode("long_distance")}
+                style={{ flex: "1 1 140px" }}
+              >
+                Long-distance (interstate)
+              </button>
+            </div>
+          </div>
+
           {/* Long-distance: the day plan drives which tools show below */}
           {longDistance && (
             <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
           )}
 
-          {/* Actions: shown for local jobs and for LD labor days. On a pure LD
-              drive day the RODS recorder (below) replaces these buttons. */}
-          {(!longDistance || ldLabor.length > 0) && (
-          <div className="card">
-            <div className="sectionTitle">Actions</div>
-
-            <div className="col" style={{ gap: 10 }}>
-              <div className="row wrap">
+          {(() => {
+            const coreActions = (
+              <>
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("ARRIVE")}>
                   {sendingType === "ARRIVE" ? "..." : "Arrive"}
                 </button>
@@ -1876,42 +1873,40 @@ export default function App() {
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "FINISH" })}>
                   {sendingType === "FINISH" ? "..." : "Finish"}
                 </button>
-                <button
-                  disabled={!canSend || sendingType !== null}
-                  onClick={async () => {
-                    const text = window.prompt("Note:", "");
-                    if (!text || !text.trim()) return;
-                    await recordEvent("NOTE", text.trim());
-                  }}
-                >
-                  {sendingType === "NOTE" ? "..." : "Note"}
-                </button>
-              </div>
-
-
-              <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                <button disabled={queueLen === 0} onClick={syncQueueNow}>
-                  {queueLen > 0 ? `Sync (${queueLen} pending)` : "Sync"}
-                </button>
-                <button
-                  disabled={!jobUuid.trim() || !isOnline}
-                  onClick={() => {
-                    loadHistoryFromBackend();
-                    if (jobUuid.trim()) fetchJobEvents(jobUuid.trim());
-                  }}
-                >
-                  Refresh
-                </button>
-              </div>
-            </div>
-          </div>
-          )}
-
-          {/* Long-distance drive day: the RODS recorder replaces the Actions
-              buttons. Duty taps + notes also log to the activity timeline. */}
-          {longDistance && ldDriving && (
-            <RodsRecorder onLogEvent={recordEvent} />
-          )}
+              </>
+            );
+            const noteButton = (
+              <button
+                disabled={!canSend || sendingType !== null}
+                onClick={async () => {
+                  const text = window.prompt("Note:", "");
+                  if (!text || !text.trim()) return;
+                  await recordEvent("NOTE", text.trim());
+                }}
+              >
+                {sendingType === "NOTE" ? "..." : "Note"}
+              </button>
+            );
+            // Drive-only LD day: the RODS duty logger replaces the Actions tile.
+            if (longDistance && ldDriving && ldLabor.length === 0) {
+              return <RodsRecorder onLogEvent={recordEvent} />;
+            }
+            // Mixed LD day (driving + labor): RODS + Actions as two labeled
+            // subsections in one flow, sharing a single Note button (RODS's).
+            if (longDistance && ldDriving && ldLabor.length > 0) {
+              return <RodsRecorder onLogEvent={recordEvent} actionsSlot={<div className="row wrap">{coreActions}</div>} />;
+            }
+            // Local, or LD labor-only day: the normal Actions tile.
+            if (!longDistance || ldLabor.length > 0) {
+              return (
+                <div className="card">
+                  <div className="sectionTitle">Actions</div>
+                  <div className="row wrap">{coreActions}{noteButton}</div>
+                </div>
+              );
+            }
+            return null;
+          })()}
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -2362,7 +2357,7 @@ export default function App() {
 
       {/* Report */}
       {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} />
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} />
       )}
 
       {/* DVIR reminder modal — shown before START or FINISH */}
