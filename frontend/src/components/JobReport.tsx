@@ -965,21 +965,19 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           "ready" the moment they reach the Report tab. */}
       {billSlots.billHelper}
 
-      {/* ── Dumpster & Recycling (sit under the Bill Helper because the
-             sliders drive bill line items) ── */}
+      {/* ── M1 Equipment (dumpster + recycling in one tile; the sliders drive
+             bill line items so this sits under the Bill Helper). ── */}
       <div className="card">
-        <div className="sectionTitle">M1 Dumpster Use *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Was the M1 dumpster (trash) used on this job?
+        <div className="sectionTitle">M1 Equipment *</div>
+
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Dumpster (trash)</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
+          Was the M1 dumpster used on this job?
         </div>
         <YesNo
           value={data.has_dumpster_use}
           onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_dumpster_use: v,
-              dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0,
-            }));
+            setData((prev) => ({ ...prev, has_dumpster_use: v, dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0 }));
             setSaved(false);
           }}
           yesLabel="Yes"
@@ -987,29 +985,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         />
         {data.has_dumpster_use && (
           <div style={{ marginTop: 14 }}>
-            <PctSlider
-              label="Dumpster fill estimate"
-              value={data.dumpster_pct}
-              onChange={(v) => set("dumpster_pct", v)}
-              color="var(--danger)"
-            />
+            <PctSlider label="Dumpster fill estimate" value={data.dumpster_pct} onChange={(v) => set("dumpster_pct", v)} color="var(--danger)" />
           </div>
         )}
-      </div>
 
-      <div className="card">
-        <div className="sectionTitle">M1 Recycling Use *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Recycling bin</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Was the M1 recycling bin used on this job?
         </div>
         <YesNo
           value={data.has_recycling_use}
           onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_recycling_use: v,
-              recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0,
-            }));
+            setData((prev) => ({ ...prev, has_recycling_use: v, recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0 }));
             setSaved(false);
           }}
           yesLabel="Yes"
@@ -1017,12 +1004,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         />
         {data.has_recycling_use && (
           <div style={{ marginTop: 14 }}>
-            <PctSlider
-              label="Recycling bin fill estimate"
-              value={data.recycling_pct}
-              onChange={(v) => set("recycling_pct", v)}
-              color="var(--ok)"
-            />
+            <PctSlider label="Recycling bin fill estimate" value={data.recycling_pct} onChange={(v) => set("recycling_pct", v)} color="var(--ok)" />
           </div>
         )}
       </div>
@@ -1290,11 +1272,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           personal vehicles, review candidate, and hours reconciliation. */}
       {!driveOnly && (
       <>
-      {/* ── Bill auto-populate review ──
-          Placed here so the crew sees the M1 sliders drive new bill
-          line items before confirming them. */}
+      {/* ── Billing (bill review + method in one tile) ── */}
       <div className="card">
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+        <div className="sectionTitle">Billing</div>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
           <input
             type="checkbox"
             checked={billReviewed}
@@ -1307,11 +1288,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             sliders).
           </span>
         </label>
-      </div>
-
-      {/* ── Billing method ── */}
-      <div className="card">
-        <div className="sectionTitle">Billing Method *</div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
           {BILLING_OPTIONS.map(({ value, label }) => {
             const active = data.billing_method === value;
@@ -1343,8 +1320,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
       {/* ── Personal vehicles ── */}
       <div className="card">
-        <div className="sectionTitle">Personal Vehicles at Job Site *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        <div className="sectionTitle">Job wrap-up</div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Personal vehicles at job site *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Were any crew personal vehicles at the job site?
         </div>
         <YesNo
@@ -1384,12 +1362,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
           </div>
         )}
-      </div>
 
-      {/* ── Review candidate ── */}
-      <div className="card">
-        <div className="sectionTitle">Review Candidate *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
         <ThreeWay
@@ -1401,12 +1376,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             { value: "na",  label: "N/A",             tone: "muted" },
           ]}
         />
-      </div>
 
-      {/* ── Hours reconciliation ── */}
-      <div className="card">
-        <div className="sectionTitle">Hours Reconciliation *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Hours reconciliation *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Do hours worked match hours billed?
         </div>
         <YesNo
