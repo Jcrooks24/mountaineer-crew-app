@@ -19,6 +19,7 @@ import {
   mountainDateYYYYMMDD,
 } from "./lib/time";
 import AdminNotesBanner from "./components/AdminNotesBanner";
+import BetaTag from "./components/BetaTag";
 import { getToken, clearToken } from "./auth/token";
 import {
   syncQueue as syncMaterialsQueue,
@@ -225,11 +226,10 @@ function todayLocalYYYYMMDD() {
 }
 
 /**
- * Derive a deterministic UUID v4 from a Google Calendar event ID.
- * Any device calling this with the same calId gets the same UUID,
- * so all crew members on the same job share a single job_uuid.
+ * Derive a deterministic UUID v4 from any string.
+ * Same input always produces the same UUID across devices.
  */
-function calEventToJobUuid(calId: string): string {
+function stringToJobUuid(seedStr: string): string {
   // FNV-1a 32-bit with different seeds to produce 128 bits total
   const fnv = (s: string, seed: number): number => {
     let h = seed >>> 0;
@@ -239,10 +239,10 @@ function calEventToJobUuid(calId: string): string {
     }
     return h >>> 0;
   };
-  const a = fnv(calId, 2166136261);
-  const b = fnv(calId + "\x00", 2166136261);
-  const c = fnv(calId + "\x01", 2166136261);
-  const d = fnv(calId + "\x02", 2166136261);
+  const a = fnv(seedStr, 2166136261);
+  const b = fnv(seedStr + "\x00", 2166136261);
+  const c = fnv(seedStr + "\x01", 2166136261);
+  const d = fnv(seedStr + "\x02", 2166136261);
   const hex = [a, b, c, d].map((n) => n.toString(16).padStart(8, "0")).join("");
   return [
     hex.slice(0, 8),
@@ -251,6 +251,42 @@ function calEventToJobUuid(calId: string): string {
     ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0") + hex.slice(18, 20),
     hex.slice(20, 32),
   ].join("-");
+}
+
+/**
+ * Derive a deterministic UUID v4 from a Google Calendar event ID.
+ * All devices calling this with the same calId get the same UUID.
+ */
+function calEventToJobUuid(calId: string): string {
+  return stringToJobUuid(calId);
+}
+
+/**
+ * Derive a deterministic UUID v4 for a manually-entered job. Any device
+ * that types the same (normalized) name on the same date resolves to the
+ * same job_uuid, so their events auto-merge without a round-trip to the
+ * backend. Whitespace and case are collapsed to keep "The Smith Job" and
+ * " The  Smith Job " on the same UUID.
+ */
+function manualJobToJobUuid(name: string, date: string): string {
+  const normalized = (name || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return stringToJobUuid(`manual:${date}:${normalized}`);
+}
+
+// Manual entries persisted locally so they survive refresh (sessionStorage
+// used to drop them). Keyed by jobDate; each entry is { id, summary, date }.
+const MANUAL_ENTRIES_KEY = "crew_manual_entries_v1";
+type ManualEntry = { id: string; summary: string; date: string };
+function loadManualEntries(): ManualEntry[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(MANUAL_ENTRIES_KEY) || "[]");
+    return Array.isArray(arr) ? arr.filter((e) => e && e.id && e.summary && e.date) : [];
+  } catch {
+    return [];
+  }
+}
+function saveManualEntries(entries: ManualEntry[]) {
+  try { localStorage.setItem(MANUAL_ENTRIES_KEY, JSON.stringify(entries)); } catch {}
 }
 
 /** Build a fetch-compatible headers object, adding Authorization if a token is present. */
@@ -405,13 +441,11 @@ export default function App() {
 
   // Calendar "Other" option
   const [calOtherName, setCalOtherName] = useState<string>("");
-  // Manual job entries created this session - shown as dropdown options so
-  // users can re-select them without re-typing. Persisted to sessionStorage
-  // so they survive navigation within the same tab.
-  const [manualCalEntries, setManualCalEntries] = useState<{ id: string; summary: string }[]>(() => {
-    try { return JSON.parse(sessionStorage.getItem("crew_session_manualEntries") || "[]"); }
-    catch { return []; }
-  });
+  // Manual job entries shown as dropdown options so the crew can re-select
+  // them without re-typing. Persisted to localStorage (survives refresh) and
+  // synced to the backend so a name typed on one device appears on other
+  // devices working the same date - see /api/jobs/manual.
+  const [manualEntries, setManualEntries] = useState<ManualEntry[]>(() => loadManualEntries());
 
 
   // -----------------------
@@ -1027,6 +1061,10 @@ export default function App() {
     // guard intentionally preserves the sessionStorage-restored value.
     setCalLoaded(false);
 
+    // Pull manual entries for this date in parallel so cross-device names
+    // land in the dropdown alongside the calendar events.
+    void fetchManualEntriesForDate(jobDate);
+
     try {
       const token = getToken();
       const res = await fetch(`${API}/api/calendar/day?date=${encodeURIComponent(jobDate)}`, {
@@ -1060,39 +1098,84 @@ export default function App() {
     }
   }
 
-  // Called on blur of the manual-entry input. Promotes the typed name from
-  // the hidden "__other__" sentinel to a real named dropdown option so the
-  // user can re-select this job without re-typing the description.
+  async function fetchManualEntriesForDate(date: string) {
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/api/jobs/manual?date=${encodeURIComponent(date)}`, {
+        headers: makeAuthHeaders(token),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const remote: { job_uuid: string; name: string }[] = json?.entries ?? [];
+      if (!Array.isArray(remote) || remote.length === 0) return;
+      setManualEntries((prev) => {
+        const byId = new Map(prev.map((e) => [e.id, e]));
+        for (const r of remote) {
+          byId.set(r.job_uuid, { id: r.job_uuid, summary: r.name, date });
+        }
+        const next = Array.from(byId.values());
+        saveManualEntries(next);
+        return next;
+      });
+    } catch { /* offline is fine */ }
+  }
+
+  // Called on blur of the manual-entry input. Derives the canonical job_uuid
+  // deterministically from (name, jobDate) so any device typing the same
+  // name for the same day gets the same UUID and their events auto-merge.
+  // Persists to localStorage + best-effort POSTs to the backend so the entry
+  // shows up in other crew members' dropdowns for that date.
   function confirmManualEntry() {
     const name = calOtherName.trim();
-    if (!name || !jobUuid) return;
-    const entry = { id: jobUuid, summary: name };
-    setManualCalEntries((prev) => {
-      const idx = prev.findIndex((e) => e.id === jobUuid);
+    if (!name) return;
+    const canonicalUuid = manualJobToJobUuid(name, jobDate);
+
+    setPersistedJobUuid(canonicalUuid);
+    setPersistedJobStatus("active");
+    setJobName(name);
+    setStatus("Job selected");
+    saveJobMeta({ job_uuid: canonicalUuid, jobName: name, jobDate, source: "manual", updated_at: new Date().toISOString() });
+
+    const entry: ManualEntry = { id: canonicalUuid, summary: name, date: jobDate };
+    setManualEntries((prev) => {
+      const idx = prev.findIndex((e) => e.id === canonicalUuid);
       const next = idx >= 0 ? prev.map((e, i) => (i === idx ? entry : e)) : [...prev, entry];
-      sessionStorage.setItem("crew_session_manualEntries", JSON.stringify(next));
+      saveManualEntries(next);
       return next;
     });
-    setCalSelectedId(jobUuid); // switch dropdown value to the real UUID
+    setCalSelectedId(canonicalUuid);
+    fetchJobEvents(canonicalUuid);
+    fetchServerPhotos(canonicalUuid);
+
+    // Best-effort backend upsert. If it fails (offline / 5xx), the local
+    // entry still works; the next successful call reconciles.
+    (async () => {
+      try {
+        const token = getToken();
+        await fetch(`${API}/api/jobs/manual`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...makeAuthHeaders(token) },
+          body: JSON.stringify({ job_uuid: canonicalUuid, name, date: jobDate }),
+        });
+      } catch { /* offline is fine - retried next confirm or by list-fetch */ }
+    })();
   }
 
   async function onSelectCalendarEvent(calId: string) {
     setCalSelectedId(calId);
 
     if (calId === "__other__") {
-      const newUuid = crypto.randomUUID();
+      // Don't create a UUID yet - it's derived from the name on blur so
+      // two devices typing the same name land on the same UUID.
       setCalOtherName("");
-      setPersistedJobUuid(newUuid);
-      setPersistedJobStatus("active");
+      setPersistedJobUuid("");
       setJobName("");
       setStatus("Manual job - enter description below");
-      fetchJobEvents(newUuid);
-      fetchServerPhotos(newUuid);
       return;
     }
 
-    // Re-selecting a previously confirmed manual entry - restore same UUID + name.
-    const manualEntry = manualCalEntries.find((e) => e.id === calId);
+    // Re-selecting a previously confirmed manual entry - restore UUID + name.
+    const manualEntry = manualEntries.find((e) => e.id === calId);
     if (manualEntry) {
       setPersistedJobUuid(calId);
       setPersistedJobStatus("active");
@@ -1649,6 +1732,13 @@ export default function App() {
     return "No jobs found (try another date)";
   }, [calLoading, calLoaded, calEvents.length]);
 
+  // Manual entries relevant to the currently-viewed date - fed into the
+  // Select Job dropdown alongside Google Calendar events.
+  const manualCalEntries = useMemo(
+    () => manualEntries.filter((e) => e.date === jobDate),
+    [manualEntries, jobDate],
+  );
+
   return (
     <div className="container">
       {/* Top bar */}
@@ -1762,11 +1852,13 @@ export default function App() {
 
               {/* 2 - Calendar job selector */}
               <div className="col">
-                <div className="label">
-                  Select Job{" "}
-                  <span className="small" style={{ marginLeft: 8 }}>
-                    {calLoading ? "Loading…" : calEvents.length > 0 ? `(${calEvents.length} found)` : calLoaded ? "(none found)" : ""}
+                <div className="label" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span>Select Job{" "}
+                    <span className="small" style={{ marginLeft: 4 }}>
+                      {calLoading ? "Loading…" : calEvents.length > 0 ? `(${calEvents.length} found)` : calLoaded ? "(none found)" : ""}
+                    </span>
                   </span>
+                  <BetaTag feature="manualJobsCrossDevice" style={{ marginTop: 0 }} />
                 </div>
                 <select
                   value={calSelectedId}

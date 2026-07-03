@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.db.models.event import Event
 from app.db.models.calendar_job import CalendarJob
+from app.db.models.manual_job import ManualJob
 from app.integrations.sheets_export import (
     delete_event_from_sheets,
     export_events_to_sheets,
@@ -327,3 +328,87 @@ def resolve_calendar_job(
     db.add(row)
     db.commit()
     return {"ok": True, "job_uuid": new_uuid, "created": True}
+
+
+# ── Manual jobs ────────────────────────────────────────────────────────────
+# The "Other (enter manually)" option on the Timeline lets crew type a job
+# name that isn't on the Google Calendar. The client derives a deterministic
+# job_uuid from (normalized name, date) so any device typing the same name
+# on the same day gets the same UUID (their events auto-merge). These
+# endpoints persist the mapping so a manual entry shows up in other crew
+# members' dropdowns for that day.
+
+
+class ManualJobIn(BaseModel):
+    job_uuid: str
+    name: str
+    date: str  # YYYY-MM-DD
+
+
+@router.post("/jobs/manual")
+def upsert_manual_job(
+    payload: ManualJobIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Register a manual job so the (name, date) pair is visible to other
+    devices for that day. Idempotent: a client can POST the same entry any
+    number of times without side effects."""
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name_required")
+    try:
+        job_date = datetime.strptime(payload.date, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad_date")
+
+    existing = db.query(ManualJob).filter(ManualJob.job_uuid == payload.job_uuid).first()
+    if existing:
+        # Keep the display name in sync if the crew fixes a typo; the UUID
+        # is what pins the job so we never touch it here.
+        if existing.name != name or existing.job_date != job_date:
+            existing.name = name
+            existing.job_date = job_date
+            db.commit()
+        return {"ok": True, "job_uuid": existing.job_uuid, "created": False}
+
+    row = ManualJob(job_uuid=payload.job_uuid, name=name, job_date=job_date)
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Race: another device inserted the same (name, date) pair first.
+        # Whichever job_uuid wins the race is canonical — the client will
+        # re-derive its UUID from the deterministic hash on next load and
+        # they should match anyway.
+        db.rollback()
+        existing = (
+            db.query(ManualJob)
+            .filter(ManualJob.name == name, ManualJob.job_date == job_date)
+            .first()
+        )
+        if existing:
+            return {"ok": True, "job_uuid": existing.job_uuid, "created": False}
+        raise
+    return {"ok": True, "job_uuid": row.job_uuid, "created": True}
+
+
+@router.get("/jobs/manual")
+def list_manual_jobs(
+    date: str = Query(..., description="YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all manual jobs for a given calendar date so the Timeline
+    dropdown can offer entries added by other crew members / devices."""
+    try:
+        job_date = datetime.strptime(date, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad_date")
+    rows = (
+        db.query(ManualJob)
+        .filter(ManualJob.job_date == job_date)
+        .order_by(ManualJob.created_at.asc())
+        .all()
+    )
+    return {"ok": True, "entries": [{"job_uuid": r.job_uuid, "name": r.name} for r in rows]}

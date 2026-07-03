@@ -21,7 +21,12 @@ export const APP_VERSION = "1.6";
 //   crewFeedback, reimbursementPhotoLibrary, reimbursementExpenseDate,
 //   schedulingAvailability, schedulingNotes.
 // Add the next round of beta keys here as new features ship.
-export const BETA_FEATURES: ReadonlySet<string> = new Set<string>(["digitalBOL"]);
+export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
+  "digitalBOL",
+  // v1.6.x additions
+  "rosterTypeahead",         // RODS driver + Employee Hours name typeahead
+  "manualJobsCrossDevice",   // Manual "Other" jobs sync across devices
+]);
 
 export function isBeta(feature: string): boolean {
   return BETA_FEATURES.has(feature);

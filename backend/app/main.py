@@ -9,6 +9,7 @@ from app.db.session import Base, engine  # noqa: F401
 import app.db.models.system_config  # noqa: F401 - ensure table is registered
 import app.db.models.materials  # noqa: F401 - ensures table is registered with Base
 import app.db.models.calendar_job  # noqa: F401 - ensures table is registered with Base
+import app.db.models.manual_job  # noqa: F401 - ensures table is registered with Base
 import app.db.models.photo         # noqa: F401 - ensures table is registered with Base
 import app.db.models.dvir  # noqa: F401 - ensure dvirs table is registered
 import app.db.models.job_report  # noqa: F401 - ensure job_reports table is registered

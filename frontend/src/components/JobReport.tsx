@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { fetchRemoteBol, listOpenBols, type OpenBol } from "../lib/bolStore";
 import RodsSignoff from "./RodsSignoff";
+import RosterTypeahead from "./RosterTypeahead";
 
 // Multi-day LD trips: each day is its own calendar event / job_uuid, so the
 // driver can link a day to the trip's in-progress BOL. The link is the trip's
@@ -985,7 +986,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Hours, equipment, and vehicles - the data used to build the invoice line items.
         </div>
-        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Employee hours</div>
+        <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>Employee hours</span>
+          <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
+        </div>
 
         {sortedEvents.length < 2 ? (
           <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
@@ -1025,11 +1029,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   Editing entry #{editingIndex + 1}. Save replaces the row; Cancel keeps the original.
                 </div>
               )}
-              <input
-                type="text"
+              <RosterTypeahead
                 placeholder="Employee name"
                 value={editName}
-                onChange={(e) => { setEditName(e.target.value); setEditError(null); }}
+                onChange={(v) => { setEditName(v); setEditError(null); }}
                 style={{ width: "100%" }}
               />
 

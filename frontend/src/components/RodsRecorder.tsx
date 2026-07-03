@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthContext";
-import type { DirectoryEntry } from "../auth/AuthContext";
-import { ensureDirectory } from "../lib/userDirectory";
+import RosterTypeahead from "./RosterTypeahead";
+import BetaTag from "./BetaTag";
 import {
   type DutyStatus,
   DUTY_STATUSES,
@@ -34,14 +34,11 @@ export default function RodsRecorder({
   const { user } = useAuth();
   const me = user?.name || user?.email || "";
   const [showHelp, setShowHelp] = useState(false);
-  const [dir, setDir] = useState<DirectoryEntry[]>([]);
   const [loggingFor, setLoggingFor] = useState<string>(me);
-  useEffect(() => { ensureDirectory().then(setDir).catch(() => {}); }, []);
   useEffect(() => { if (me && !loggingFor) setLoggingFor(me); }, [me, loggingFor]);
 
-  const driver = loggingFor || me;
+  const driver = (loggingFor || "").trim() || me;
   const cur = useMemo(() => currentStatus(changesForDriver(events, driver, me)), [events, driver, me]);
-  const others = dir.map((d) => d.name || d.email).filter((n) => n && n !== me);
 
   function tap(status: DutyStatus) {
     if (cur === status) return;
@@ -82,13 +79,19 @@ export default function RodsRecorder({
       </div>
 
       {/* Who this duty change is for - default is the person logging it, but a
-          passenger can log on behalf of the driver. */}
-      <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-        <span className="small" style={{ color: "var(--muted)" }}>I'm logging this duty change for</span>
-        <select value={driver} onChange={(e) => setLoggingFor(e.target.value)} style={{ flex: "1 1 160px", minWidth: 0 }}>
-          <option value={me}>Myself{me ? ` (${me})` : ""}</option>
-          {others.map((n) => <option key={n} value={n}>on behalf of {n}</option>)}
-        </select>
+          passenger can log on behalf of the driver. Freeform typeahead so a
+          custom name still submits when the driver isn't in the roster. */}
+      <div className="col" style={{ gap: 4, marginBottom: 8 }}>
+        <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span className="small" style={{ color: "var(--muted)" }}>I'm logging this duty change for</span>
+          <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
+        </div>
+        <RosterTypeahead
+          value={loggingFor}
+          onChange={setLoggingFor}
+          placeholder="Start typing a name…"
+          style={{ width: "100%" }}
+        />
       </div>
 
       <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
