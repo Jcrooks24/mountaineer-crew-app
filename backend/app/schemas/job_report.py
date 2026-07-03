@@ -47,6 +47,7 @@ class JobReportUpsert(BaseModel):
     has_crew_feedback: Optional[bool] = None
     crew_feedback: Optional[str] = None
     out_of_town: bool = False
+    bill_personal_vehicles: bool = False
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
 
     @field_validator("personal_vehicles")
@@ -86,6 +87,7 @@ class JobReportResponse(BaseModel):
     has_crew_feedback: Optional[bool] = None
     crew_feedback: Optional[str] = None
     out_of_town: bool = False
+    bill_personal_vehicles: bool = False
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime

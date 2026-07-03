@@ -28,13 +28,26 @@ function bolRefOf(bol: { bol_id?: string; id?: string } | null): string {
   const id = bol?.bol_id || bol?.id || "";
   return id ? `BOL-${id.slice(0, 8)}` : "";
 }
-// "Not at destination yet" - the crew can defer the BOL so it isn't a blocker.
+// The crew can defer the BOL so it isn't a submit blocker. We track WHICH
+// stage they're deferring for ("load" = origin loading still in progress,
+// "unload" = at destination, unload still in progress) so the deferred
+// state is meaningful on a follow-up read. Legacy "1" values from the
+// pre-split boolean flag are read back as "load" for back-compat.
+type BolDeferredReason = "" | "load" | "unload";
 const BOL_DEFER_PREFIX = "crew_ld_bol_deferred_v1:";
-function loadBolDeferred(jobUuid: string): boolean {
-  try { return localStorage.getItem(BOL_DEFER_PREFIX + jobUuid) === "1"; } catch { return false; }
+function loadBolDeferred(jobUuid: string): BolDeferredReason {
+  try {
+    const raw = localStorage.getItem(BOL_DEFER_PREFIX + jobUuid) || "";
+    if (raw === "load" || raw === "unload") return raw;
+    if (raw === "1") return "load"; // pre-split value
+    return "";
+  } catch { return ""; }
 }
-function saveBolDeferred(jobUuid: string, v: boolean) {
-  try { if (v) localStorage.setItem(BOL_DEFER_PREFIX + jobUuid, "1"); else localStorage.removeItem(BOL_DEFER_PREFIX + jobUuid); } catch {}
+function saveBolDeferred(jobUuid: string, reason: BolDeferredReason) {
+  try {
+    if (reason) localStorage.setItem(BOL_DEFER_PREFIX + jobUuid, reason);
+    else localStorage.removeItem(BOL_DEFER_PREFIX + jobUuid);
+  } catch {}
 }
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
@@ -217,11 +230,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [podsDriverNames, setPodsDriverNames] = useState<Set<string>>(() => new Set());
   const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
-  const [bolDeferred, setBolDeferred] = useState<boolean>(() => (jobUuid ? loadBolDeferred(jobUuid) : false));
+  const [bolDeferred, setBolDeferred] = useState<BolDeferredReason>(() => (jobUuid ? loadBolDeferred(jobUuid) : ""));
 
   useEffect(() => {
     setTripLink(jobUuid ? loadTripLink(jobUuid) : null);
-    setBolDeferred(jobUuid ? loadBolDeferred(jobUuid) : false);
+    setBolDeferred(jobUuid ? loadBolDeferred(jobUuid) : "");
   }, [jobUuid]);
 
   // The trip's anchor job: the linked in-progress BOL's job, or this job.
@@ -269,16 +282,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     return () => { cancelled = true; };
   }, [longDistance, jobUuid, tripJob]);
 
-  function setBolDeferredFlag(v: boolean) {
-    setBolDeferred(v);
-    saveBolDeferred(jobUuid, v);
+  function setBolDeferredFlag(reason: BolDeferredReason) {
+    setBolDeferred(reason);
+    saveBolDeferred(jobUuid, reason);
   }
   function linkTrip(o: OpenBol | null) {
     if (o) {
       const link: TripLink = { trip_job_uuid: o.job_uuid, bol_id: o.bol_id, label: `${o.job_name || "Untitled"}${o.job_date ? " · " + o.job_date : ""}` };
       saveTripLink(jobUuid, link);
       setTripLink(link);
-      setBolDeferredFlag(false);
+      setBolDeferredFlag("");
       // Optimistically flip the render into the "attached" branch. Without
       // this, a local-only BOL (not yet synced to the server) would leave
       // bolStatus empty after fetchRemoteBol returns null - the render
@@ -374,7 +387,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           // Existing reports - infer answers from saved values
           has_personal_vehicles: r.personal_vehicles > 0,
           personal_vehicles: r.personal_vehicles,
-          bill_personal_vehicles: false,
+          bill_personal_vehicles: !!(r as any).bill_personal_vehicles,
           has_dumpster_use: r.dumpster_pct > 0,
           dumpster_pct: r.dumpster_pct,
           has_recycling_use: r.recycling_pct > 0,
@@ -850,6 +863,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           // "No" answer keeps a null body; "Yes" sends the trimmed text.
           crew_feedback: data.has_crew_feedback ? (data.crew_feedback.trim() || null) : null,
           out_of_town: !!data.out_of_town,
+          bill_personal_vehicles: !!data.bill_personal_vehicles,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
           employee_hours: data.employee_hours
@@ -1480,7 +1494,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
-            Required for this interstate trip. Each driver's PODS is tracked below in the Driver &amp; per-diem section. Complete or attach the Bill of Lading; multi-day trips link this day to the trip's BOL.
+            Required for this interstate trip. Each driver's PODS is tracked in the Driver PODS section below. Complete or attach the Bill of Lading; multi-day trips link this day to the trip's BOL.
           </div>
           <div className="col" style={{ gap: 12 }}>
             {bolStatus ? (
@@ -1496,9 +1510,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
                 <div>
                   <div style={{ fontWeight: 700 }}>Bill of Lading</div>
-                  <div className="small" style={{ color: "var(--muted)" }}>Marked as not yet complete - no signed BOL to attach.</div>
+                  <div className="small" style={{ color: "var(--muted)" }}>
+                    {bolDeferred === "load"
+                      ? "Load not completed yet - no signed BOL to attach."
+                      : bolDeferred === "unload"
+                        ? "Unload not completed yet - no signed BOL to attach."
+                        : "Marked as not yet complete - no signed BOL to attach."}
+                  </div>
                 </div>
-                <button type="button" onClick={() => setBolDeferredFlag(false)} style={{ fontSize: 12 }}>Attach BOL</button>
+                <button type="button" onClick={() => setBolDeferredFlag("")} style={{ fontSize: 12 }}>Attach BOL</button>
               </div>
             ) : (
               <div className="col" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
@@ -1512,8 +1532,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 </label>
                 <div className="row wrap" style={{ gap: 8 }}>
                   <button type="button" className="btnPrimary" onClick={() => nav("/long-distance")} style={{ fontSize: 13 }}>Start a new BOL</button>
-                  <button type="button" onClick={() => setBolDeferredFlag(true)} style={{ fontSize: 13 }}>Load not completed yet</button>
-                  <button type="button" onClick={() => setBolDeferredFlag(true)} style={{ fontSize: 13 }}>Unload not completed yet</button>
+                  <button type="button" onClick={() => setBolDeferredFlag("load")} style={{ fontSize: 13 }}>Load not completed yet</button>
+                  <button type="button" onClick={() => setBolDeferredFlag("unload")} style={{ fontSize: 13 }}>Unload not completed yet</button>
                 </div>
               </div>
             )}

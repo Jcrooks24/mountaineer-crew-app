@@ -820,6 +820,7 @@ def _review_candidate_label(value: Any) -> str:
 
 JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
+    "bill_personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
     "has_crew_feedback", "crew_feedback",
@@ -960,6 +961,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "job_name": report.get("job_name", ""),
         "submitted_by": report.get("submitted_by_name", "") or "",
         "personal_vehicles": report.get("personal_vehicles", ""),
+        "bill_personal_vehicles": _yes_no_blank(report.get("bill_personal_vehicles")),
         "dumpster_pct": report.get("dumpster_pct", ""),
         "recycling_pct": report.get("recycling_pct", ""),
         "billing_method": report.get("billing_method", ""),

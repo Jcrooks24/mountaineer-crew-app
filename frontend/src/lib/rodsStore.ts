@@ -184,8 +184,15 @@ export function changesForDriver(events: MinEvent[], driver: string, fallbackDri
       };
     })
     // Sort by full timestamp so same-minute events keep their true
-    // chronological order regardless of input order.
-    .sort((a, b) => String(a._ts).localeCompare(String(b._ts)));
+    // chronological order regardless of input order. Numeric parse so a
+    // "2026-07-03T09:45:12Z" vs "2026-07-03T09:45:12.123+00:00" ordering
+    // works correctly - string compare would have given the wrong answer
+    // for the fractional-seconds case.
+    .sort((a, b) => {
+      const ta = Date.parse(String(a._ts));
+      const tb = Date.parse(String(b._ts));
+      return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0);
+    });
 
   // Collapse consecutive entries that share HH:MM - the latest tap in a
   // given minute is the truth (user corrected a misclick).

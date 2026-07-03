@@ -1481,9 +1481,14 @@ function MonthScheduleView({
                             // Highlight a conflict (scheduled cell on a
                             // submitted-availability day) with the
                             // availability color as a tinted outline.
+                            // Conflict outline: in HC mode the availability
+                            // fg is white/near-black which barely reads on
+                            // the saturated Scheduled cell - fall back to a
+                            // high-contrast dark outline that stands out
+                            // regardless of which two colors clash.
                             outline:
                               isScheduled && availColors
-                                ? `2px solid ${availColors.fg}`
+                                ? (highContrast ? `2px dashed #111` : `2px solid ${availColors.fg}`)
                                 : undefined,
                             outlineOffset:
                               isScheduled && availColors ? "-2px" : undefined,

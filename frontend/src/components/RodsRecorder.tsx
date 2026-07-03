@@ -132,7 +132,7 @@ export default function RodsRecorder({
             {STATUS_LABELS[s]}
           </button>
         ))}
-        <button type="button" onClick={addNote}>+ Note</button>
+        <button type="button" className="btnPrimary" onClick={addNote} style={{ background: "transparent", color: "var(--text)", borderColor: "var(--border)" }}>+ Note</button>
       </div>
     </div>
   );

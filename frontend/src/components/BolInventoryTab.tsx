@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
 import {
   type BOLDraft,
@@ -30,6 +30,10 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
   const [itemQty, setItemQty] = useState<number>(1);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // Tracks whether the loaded draft came from the server (existing BOL) or
+  // was freshly minted by newDraft(). Flipped to false once loadForJob
+  // returns a server-backed draft.
+  const isNewBolRef = useRef<boolean>(true);
 
   const totalPieces = useMemo(
     () => (draft ? draft.items.reduce((s, it) => s + it.qty, 0) : 0),
@@ -38,7 +42,13 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   async function refresh() {
     if (!jobUuid) return;
+    // Detect "does the server already have a BOL for this job" by peeking
+    // at the raw remote row before loadForJob adapts it into a draft. That
+    // gives us a reliable first-save flag for the "BOL linked" note.
+    const { fetchRemoteBol } = await import("../lib/bolStore");
+    const remote = await fetchRemoteBol(jobUuid);
     const d = await loadForJob({ job_uuid: jobUuid, job_name: jobName, job_date: jobDate });
+    isNewBolRef.current = !remote;
     setDraft(d);
   }
 
@@ -138,7 +148,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
     // newDraft(), and the POST /api/bol upsert either creates the row
     // or updates the existing one. Either way the BOL is linked to
     // this job_uuid, so it appears attached on the Report tab.
-    const wasFirstSave = !draft.updated_at || draft.items.length === 0 || !draft.origin_shipper_sig;
+    const wasFirstSave = isNewBolRef.current;
     enqueueSubmit(draft);
     try {
       const synced = await syncQueue();
@@ -146,6 +156,9 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
         ? "Inventory saved and synced."
         : "Saved on this device - will sync when back online.";
       setNote(wasFirstSave ? `${baseMsg} BOL linked to this job.` : baseMsg);
+      // After a successful first save the server now has the row, so
+      // subsequent saves should not brag about creating it again.
+      if (wasFirstSave && synced > 0) isNewBolRef.current = false;
     } finally {
       setStatus("idle");
       window.setTimeout(() => setNote(null), 5000);

@@ -57,6 +57,11 @@ class JobReport(Base):
     # rows read as False without a backfill.
     out_of_town = Column(Boolean, nullable=True, default=False)
 
+    # Personal vehicles at the job site are billed as crew transport vehicles
+    # ($100/vehicle/day). Nullable so pre-existing rows read as False without
+    # a backfill; drives the auto-populated Invoice Builder line items.
+    bill_personal_vehicles = Column(Boolean, nullable=True, default=False)
+
     # JSON-encoded list of per-employee entries:
     #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float }]
     # Crew enters these on the Report tab using the time-math helper. Stored

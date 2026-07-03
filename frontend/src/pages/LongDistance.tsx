@@ -139,7 +139,19 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
   const nav = useNavigate();
 
   const [tripDate, setTripDate] = useState(todayLocal());
-  const [driverName, setDriverName] = useState(user?.name || "");
+  const [driverName, setDriverName] = useState(() => {
+    // Prefer the driver the Report tab asked us to file for (Report ->
+    // Driver PODS section -> tap to file). Falls back to the signed-in
+    // user so a driver filing their own PODS still sees their name.
+    try {
+      const preset = localStorage.getItem("crew_pods_preset_driver_v1");
+      if (preset && preset.trim()) {
+        localStorage.removeItem("crew_pods_preset_driver_v1");
+        return preset.trim();
+      }
+    } catch { /* noop */ }
+    return user?.name || "";
+  });
   // Job selector - mirrors the Timeline: date + calendar dropdown + manual
   // "Other" fallback. The picked calendar/manual entry drives both the
   // display name and the canonical job_uuid sent with the PODS submission.

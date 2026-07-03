@@ -130,12 +130,15 @@ function RodsDriverSection({
 
       {/* Per-driver PODS confirmation for this driver. Auto-checks once a
           PODS record with this driver name is on file for the trip. Tap
-          to file a PODS if not yet on file (opens /long-distance). */}
+          to file a PODS if not yet on file (opens /long-distance). Preset
+          the target driver so a passenger logging on behalf files under
+          the right name instead of their own. */}
       <label
         style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: podsFiled ? "default" : "pointer", fontSize: 14, marginBottom: 12 }}
         onClick={(e) => {
           if (podsFiled) return;
           e.preventDefault();
+          try { if (driver) localStorage.setItem("crew_pods_preset_driver_v1", driver); } catch { /* noop */ }
           onNeedPods();
         }}
       >
