@@ -205,6 +205,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // Whether a PODS is on file for the attached BOL specifically (item: PODS
   // attaches to the BOL and is required to sign it).
   const [podsForBol, setPodsForBol] = useState<boolean>(false);
+  // Whether the currently signed-in user has a PODS for this trip's job.
+  // Drives the "As the driver, I've submitted my PODS" checkbox by the
+  // per-diem row so a driver can see their own compliance at a glance
+  // without conflating it with any other driver on a multi-driver trip.
+  const [podsForDriver, setPodsForDriver] = useState<boolean>(false);
   const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [bolDeferred, setBolDeferred] = useState<boolean>(() => (jobUuid ? loadBolDeferred(jobUuid) : false));
@@ -240,8 +245,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         // false-positive the "done" state.
         const forJob = (Array.isArray(prior) ? prior : []).filter((p) => (p?.job_uuid || "") === tripJob);
         if (!cancelled) setPriorDone(forJob.length > 0);
+        // Per-driver check: does the *current user's* PODS exist for this
+        // trip? A multi-driver trip needs each driver to file their own.
+        const mine = user?.id
+          ? forJob.filter((p) => Number(p?.driver_id) === Number(user.id))
+          : [];
+        if (!cancelled) setPodsForDriver(mine.length > 0);
       } catch {
-        if (!cancelled) setPriorDone(false);
+        if (!cancelled) { setPriorDone(false); setPodsForDriver(false); }
       }
       const open = await listOpenBols();
       if (!cancelled) setOpenBols(open);
@@ -1448,8 +1459,39 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             )}
           </div>
 
-          {/* Per-diem */}
-          <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Per-diem</div>
+          {/* Per-driver checks + per-diem */}
+          <div className="row" style={{ alignItems: "center", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Driver &amp; per-diem</div>
+            <BetaTag feature="podsPerDriver" style={{ marginTop: 0 }} />
+          </div>
+
+          {/* Per-driver PODS self-verification. Auto-checks once the current
+              user has a PODS filed for this trip; when unchecked, an inline
+              link opens the /long-distance page so the driver can file one. */}
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "default", fontSize: 14, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={podsForDriver}
+              readOnly
+              style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+            />
+            <span>
+              As the <strong>driver</strong>, I have submitted my Prior On-Duty Statement for this trip.
+              {!podsForDriver && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    onClick={() => nav("/long-distance")}
+                    style={{ background: "none", border: "none", color: "var(--brand)", padding: 0, cursor: "pointer", textDecoration: "underline", fontSize: 14 }}
+                  >
+                    Complete PODS →
+                  </button>
+                </>
+              )}
+            </span>
+          </label>
+
           <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 8 }}>
             <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
             <span>The <strong>crew</strong> started and ended the day out of town ($50 per-diem, per crew member)</span>

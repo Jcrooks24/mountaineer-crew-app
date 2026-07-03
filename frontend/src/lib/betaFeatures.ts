@@ -27,6 +27,7 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   "rosterTypeahead",         // RODS driver + Employee Hours name typeahead
   "manualJobsCrossDevice",   // Manual "Other" jobs sync across devices
   "autoLaborLines",          // Employee hours auto-populate labor lines in Invoice Builder
+  "podsPerDriver",           // Per-driver PODS checkbox on the Report tab
 ]);
 
 export function isBeta(feature: string): boolean {
