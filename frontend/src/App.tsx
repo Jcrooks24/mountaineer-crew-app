@@ -21,10 +21,8 @@ import {
 import AdminNotesBanner from "./components/AdminNotesBanner";
 import { getToken, clearToken } from "./auth/token";
 import {
-  renderedForJob as materialsRenderedForJob,
   syncQueue as syncMaterialsQueue,
   fetchAndCache as fetchAndCacheMaterials,
-  type LiveMaterial,
 } from "./lib/materialsStore";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -210,16 +208,12 @@ function applyTimeToIso(localTime: string, baseIso: string): string | null {
   return d.toISOString();
 }
 
-// Mirrors the server-side bounds in /api/events PATCH. Returns null when
-// valid, or a short reason when the user picked an invalid time.
-function validateEditableTimestamp(newIso: string, loggedAtIso: string | undefined): string | null {
+// Returns null when valid, or a short reason when the user picked an
+// unparseable time. Any real timestamp is allowed — crew can set event
+// time to any time, past or future.
+function validateEditableTimestamp(newIso: string, _loggedAtIso: string | undefined): string | null {
   const newT = Date.parse(newIso);
   if (!Number.isFinite(newT)) return "Invalid date.";
-  const now = Date.now();
-  if (newT - now > 5 * 60 * 1000) return "Time can't be in the future.";
-  const baseline = loggedAtIso ? Date.parse(loggedAtIso) : now;
-  const earliest = (Number.isFinite(baseline) ? baseline : now) - 7 * 24 * 60 * 60 * 1000;
-  if (newT < earliest) return "Time can't be more than 7 days before the event was logged.";
   return null;
 }
 
@@ -228,10 +222,6 @@ function validateEditableTimestamp(newIso: string, loggedAtIso: string | undefin
 // see Mountain's "today" as the default job date.
 function todayLocalYYYYMMDD() {
   return mountainDateYYYYMMDD();
-}
-
-function money(n: number) {
-  return `$${n.toFixed(2)}`;
 }
 
 /**
@@ -404,7 +394,6 @@ export default function App() {
   const [dvirPending, setDvirPending] = useState<{ type: string } | null>(null);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
   const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
-  const [materialsSummary, setMaterialsSummary] = useState<LiveMaterial[]>([]);
   // event_id of the timeline row whose timestamp is currently being edited.
   // null when nothing is open. Only one row can edit at a time.
   const [editingTimeFor, setEditingTimeFor] = useState<string | null>(null);
@@ -1439,17 +1428,14 @@ export default function App() {
   // Materials summary - read from the offline-capable materialsStore cache,
   // then fire a background sync + refetch.
   // -----------------------
-  function refreshMaterialsSummary(uuid: string) {
-    setMaterialsSummary(materialsRenderedForJob(uuid.trim()));
-  }
-
-  async function loadMaterialsSummary(uuid: string) {
+  // Drain offline-queued materials + warm the cache so the Invoice Builder
+  // opens with fresh data. No render — the visible summary now lives only
+  // in the Invoice Builder on the Report tab.
+  async function syncMaterialsInBackground(uuid: string) {
     const trimmed = uuid.trim();
-    refreshMaterialsSummary(trimmed);
     if (!trimmed) return;
     await syncMaterialsQueue();
-    const ok = await fetchAndCacheMaterials(trimmed);
-    if (ok) refreshMaterialsSummary(trimmed);
+    await fetchAndCacheMaterials(trimmed);
   }
 
   // -----------------------
@@ -1481,13 +1467,13 @@ export default function App() {
 
     // Restore history from backend so mobile devices aren't empty on first load
     loadHistoryFromBackend();
-    loadMaterialsSummary(jobUuid);
+    syncMaterialsInBackground(jobUuid);
 
     // Fetch the user directory so we can show crew members' profile photos in
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); loadMaterialsSummary(jobUuid); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
@@ -1617,23 +1603,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
 
-  // Refresh materials summary when the user returns to the Timeline tab
-  // or re-focuses the window so they see other crew members' additions.
-  useEffect(() => {
-    if (tab !== "timeline") return;
-    loadMaterialsSummary(jobUuid);
-    function onVis() {
-      if (document.visibilityState === "visible") loadMaterialsSummary(jobUuid);
-    }
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("focus", onVis);
-    return () => {
-      document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("focus", onVis);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, jobUuid]);
-
   // Select visibility on dark theme
   const selectStyle: React.CSSProperties = {
     width: "100%",
@@ -1672,13 +1641,6 @@ export default function App() {
       .filter((e) => e.type !== "JOB_NOTES")
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, [activityLog, serverEvents, jobUuid]);
-
-  // Aggregate totals for the current job's materials (populated from the
-  // backend via loadMaterialsSummary)
-  const materialsTotal = useMemo(
-    () => materialsSummary.reduce((s, m) => s + (m.unitPrice == null ? 0 : m.unitPrice * m.qty), 0),
-    [materialsSummary],
-  );
 
   const calPlaceholder = useMemo(() => {
     if (calLoading) return "Loading…";
@@ -2250,33 +2212,6 @@ export default function App() {
             )}
           </div>
 
-          {materialsSummary.length > 0 && (
-            <div className="card">
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-                <div className="sectionTitle">Materials ({materialsSummary.length})</div>
-                <div style={{ fontWeight: 700 }}>{money(materialsTotal)}</div>
-              </div>
-              <div className="col" style={{ gap: 4, marginTop: 8 }}>
-                {materialsSummary.map((m, i) => {
-                  const ext = m.unitPrice == null ? null : m.unitPrice * m.qty;
-                  return (
-                    <div key={`${m.submissionId}:${i}`} className="row small" style={{ justifyContent: "space-between", color: "var(--text)", opacity: m.pending ? 0.7 : 1 }}>
-                      <span>
-                        {m.qty}× {m.name}
-                        {m.pending && <span style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
-                      </span>
-                      <span style={{ color: "var(--muted)" }}>
-                        {ext != null ? money(ext) : "-"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-                Manage via the Report tab · Invoice Builder · Materials
-              </div>
-            </div>
-          )}
         </>
       )}
 

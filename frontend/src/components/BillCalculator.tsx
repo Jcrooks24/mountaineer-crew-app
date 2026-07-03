@@ -39,11 +39,6 @@ type Bill = {
   notes: string;
 };
 
-type SeedData = {
-  hours_lines: { created_by: string; label: string; hours: number }[];
-  material_lines: { name: string; qty: number; unit_price: number }[];
-};
-
 export type BillHandle = {
   /** Returns current bill data, or null if not loaded. The "reviewed"
    * confirmation lives on the Report (after the M1 sliders) - not here. */
@@ -265,27 +260,14 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           return;
         }
 
-        // 404 path - try to seed from events.
-        apiFetch<SeedData>(`/api/bill/seed?job_uuid=${encodeURIComponent(jobUuid)}`)
-          .then((seed) => {
-            const draft = loadBillDraft(jobUuid);
-            if (draft) {
-              setBill(draft);
-              return;
-            }
-            const items: LineItem[] = [];
-            for (const h of seed.hours_lines) {
-              items.push({ id: uuid(), label: h.label, qty: h.hours, rate: 0, unit: "hr", discount: 0, source: "hours" });
-            }
-            // Dumpster/recycling m1 lines are populated live from the sliders -
-            // see the dumpsterPct/recyclingPct sync effect below.
-            setBill({ items, globalDiscount: 0, notes: "" });
-          })
-          .catch(() => {
-            const draft = loadBillDraft(jobUuid);
-            if (draft) setBill(draft);
-          })
-          .finally(() => setLoaded(true));
+        // 404 path - no saved bill yet. Restore local draft if any, else
+        // start empty. Labor autopopulate was removed (the seeded hours
+        // lines had a sticky $0 rate placeholder that wouldn't clear on
+        // edit). Dumpster/recycling m1 lines are still driven live from
+        // the sliders - see the sync effect below.
+        const draft = loadBillDraft(jobUuid);
+        if (draft) setBill(draft);
+        setLoaded(true);
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);

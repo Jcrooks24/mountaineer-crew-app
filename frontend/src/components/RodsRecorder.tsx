@@ -57,24 +57,6 @@ export default function RodsRecorder({
   return (
     <div className="card" style={{ borderColor: "var(--brand)" }}>
       <div className="sectionTitle">Record of Duty Status - driver</div>
-      <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
-        For the person <strong>driving the truck</strong>. Tap a status as it changes; each tap is logged in the
-        Activity list below (tap a time there to correct it). A RODS is required for each driver, each day - sign them
-        on the <strong>Report</strong> tab.
-      </div>
-      <button type="button" onClick={() => setShowHelp((s) => !s)} style={{ background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontSize: 13, padding: 0, marginTop: 8 }}>
-        {showHelp ? "Hide status guide" : "What do the statuses mean?"}
-      </button>
-      {showHelp && (
-        <div className="col" style={{ gap: 6, marginTop: 8 }}>
-          {DUTY_STATUSES.map((s) => (
-            <div key={s} className="small" style={{ lineHeight: 1.4 }}>
-              <span style={{ fontWeight: 700, color: STATUS_COLORS[s] }}>{STATUS_LABELS[s]}:</span>{" "}
-              <span style={{ color: "var(--muted)" }}>{STATUS_HELP[s]}</span>
-            </div>
-          ))}
-        </div>
-      )}
 
       {actionsSlot && (
         <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
@@ -108,6 +90,25 @@ export default function RodsRecorder({
           {others.map((n) => <option key={n} value={n}>on behalf of {n}</option>)}
         </select>
       </div>
+
+      <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+        For the person <strong>driving the truck</strong>. Tap a status as it changes; each tap is logged in the
+        Activity list below (tap a time there to correct it). A RODS is required for each driver, each day - sign them
+        on the <strong>Report</strong> tab.
+      </div>
+      <button type="button" onClick={() => setShowHelp((s) => !s)} style={{ background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontSize: 13, padding: 0, marginTop: 8, marginBottom: 8 }}>
+        {showHelp ? "Hide status guide" : "What do the statuses mean?"}
+      </button>
+      {showHelp && (
+        <div className="col" style={{ gap: 6, marginBottom: 8 }}>
+          {DUTY_STATUSES.map((s) => (
+            <div key={s} className="small" style={{ lineHeight: 1.4 }}>
+              <span style={{ fontWeight: 700, color: STATUS_COLORS[s] }}>{STATUS_LABELS[s]}:</span>{" "}
+              <span style={{ color: "var(--muted)" }}>{STATUS_HELP[s]}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>RODS - tap the duty status</div>
       <div className="row wrap" style={{ gap: 8 }}>

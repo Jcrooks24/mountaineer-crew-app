@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -207,29 +207,15 @@ class EventPatch(BaseModel):
     timestamp: Optional[str] = None
 
 
-# Bounds on how far an editable timestamp can drift from logged_at. Future
-# is rejected outright (with a small clock-skew grace); past is capped so
-# year-typo accidents don't sprinkle events under the wrong job. Mirrors
-# the client-side guard.
-_TIMESTAMP_FUTURE_GRACE_S = 5 * 60       # 5 minutes
-_TIMESTAMP_PAST_LIMIT_S = 7 * 24 * 60 * 60  # 7 days
-
-
-def _validate_editable_timestamp(new_ts_iso: str, logged_at: datetime) -> datetime:
+def _validate_editable_timestamp(new_ts_iso: str) -> datetime:
     try:
         new_ts = datetime.fromisoformat(new_ts_iso.replace("Z", "+00:00"))
     except Exception:
         raise HTTPException(status_code=400, detail="bad_timestamp")
-    # Normalize to naive UTC so the comparison matches how /api/sync stores
-    # datetimes (the `timestamp` column is naive UTC).
+    # Normalize to naive UTC so the stored timestamp matches how /api/sync
+    # stores datetimes (the `timestamp` column is naive UTC).
     if new_ts.tzinfo is not None:
         new_ts = new_ts.astimezone(timezone.utc).replace(tzinfo=None)
-    now = datetime.utcnow()
-    if (new_ts - now).total_seconds() > _TIMESTAMP_FUTURE_GRACE_S:
-        raise HTTPException(status_code=400, detail="timestamp_in_future")
-    earliest = logged_at - timedelta(seconds=_TIMESTAMP_PAST_LIMIT_S)
-    if new_ts < earliest:
-        raise HTTPException(status_code=400, detail="timestamp_too_far_past")
     return new_ts
 
 
@@ -263,7 +249,7 @@ def patch_event(
         note_changed = True
 
     if payload.timestamp is not None:
-        new_ts = _validate_editable_timestamp(payload.timestamp, row.logged_at)
+        new_ts = _validate_editable_timestamp(payload.timestamp)
         row.timestamp = new_ts
         timestamp_changed = True
 

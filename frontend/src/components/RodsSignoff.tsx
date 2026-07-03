@@ -198,7 +198,12 @@ export default function RodsSignoff({ events = [], bolLink }: { events?: MinEven
   const drivers = useMemo(() => Array.from(new Set([...driversWithEvents, ...manual])), [driversWithEvents, manual]);
   const addable = dir.map((d) => d.name || d.email).filter((n) => n && !drivers.includes(n));
 
-  if (drivers.length === 0) return null;
+  // Always render the "Add RODS" control on long-distance days, even before
+  // any duty events have been logged - otherwise the vehicle/trip fields
+  // appear to have disappeared until someone taps a duty status.
+  const emptyLabel = drivers.length === 0
+    ? "Add a RODS to record vehicle, miles, origin/destination, and sign (one is required per driver, per day)"
+    : "Add a RODS for another driver (one is required per driver, per day)";
 
   return (
     <>
@@ -206,15 +211,15 @@ export default function RodsSignoff({ events = [], bolLink }: { events?: MinEven
         <RodsDriverSection key={dr} date={date} driver={dr} fallback={me} events={events} bolLink={bolLink ?? null} units={units} />
       ))}
 
-      {/* Add a RODS for another driver (a RODS is required for each driver, each day). */}
-      <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+      <div style={{ borderTop: drivers.length > 0 ? "1px solid var(--border)" : undefined, marginTop: drivers.length > 0 ? 14 : 0, paddingTop: drivers.length > 0 ? 14 : 0 }}>
         <label className="col" style={{ gap: 4 }}>
-          <span className="small" style={{ color: "var(--muted)" }}>Add a RODS for another driver (one is required per driver, per day)</span>
+          <span className="small" style={{ color: "var(--muted)" }}>{emptyLabel}</span>
           <select
             value=""
             onChange={(e) => { const v = e.target.value; if (v) setManual((prev) => Array.from(new Set([...prev, v]))); }}
           >
             <option value="">+ Add RODS…</option>
+            {me && !drivers.includes(me) && <option value={me}>Myself{me ? ` (${me})` : ""}</option>}
             {addable.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>
