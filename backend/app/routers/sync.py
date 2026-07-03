@@ -353,26 +353,49 @@ def upsert_manual_job(
 ):
     """Register a manual job so the (name, date) pair is visible to other
     devices for that day. Idempotent: a client can POST the same entry any
-    number of times without side effects."""
-    name = (payload.name or "").strip()
-    if not name:
+    number of times without side effects.
+
+    The client normalizes (trim + collapse whitespace + lowercase) before
+    deriving the deterministic job_uuid. We mirror that normalization when
+    looking for duplicates so `"The Job"` and `"the  job"` collapse to the
+    same row - otherwise the natural-key uniqueness only fires on exact
+    case matches and we end up with duplicate rows sharing a UUID.
+    """
+    raw_name = (payload.name or "").strip()
+    if not raw_name:
         raise HTTPException(status_code=400, detail="name_required")
     try:
         job_date = datetime.strptime(payload.date, "%Y-%m-%d").date()
     except Exception:
         raise HTTPException(status_code=400, detail="bad_date")
 
+    def _normalize(s: str) -> str:
+        return " ".join(s.split()).lower()
+
+    norm_name = _normalize(raw_name)
+
     existing = db.query(ManualJob).filter(ManualJob.job_uuid == payload.job_uuid).first()
     if existing:
         # Keep the display name in sync if the crew fixes a typo; the UUID
         # is what pins the job so we never touch it here.
-        if existing.name != name or existing.job_date != job_date:
-            existing.name = name
+        if existing.name != raw_name or existing.job_date != job_date:
+            existing.name = raw_name
             existing.job_date = job_date
             db.commit()
         return {"ok": True, "job_uuid": existing.job_uuid, "created": False}
 
-    row = ManualJob(job_uuid=payload.job_uuid, name=name, job_date=job_date)
+    # Case-insensitive duplicate check BEFORE insert so we return the
+    # earlier row's UUID instead of racing to an IntegrityError.
+    from sqlalchemy import func as _sa_func
+    dupe = (
+        db.query(ManualJob)
+        .filter(_sa_func.lower(ManualJob.name) == norm_name, ManualJob.job_date == job_date)
+        .first()
+    )
+    if dupe:
+        return {"ok": True, "job_uuid": dupe.job_uuid, "created": False}
+
+    row = ManualJob(job_uuid=payload.job_uuid, name=raw_name, job_date=job_date)
     db.add(row)
     try:
         db.commit()
@@ -384,7 +407,7 @@ def upsert_manual_job(
         db.rollback()
         existing = (
             db.query(ManualJob)
-            .filter(ManualJob.name == name, ManualJob.job_date == job_date)
+            .filter(_sa_func.lower(ManualJob.name) == norm_name, ManualJob.job_date == job_date)
             .first()
         )
         if existing:

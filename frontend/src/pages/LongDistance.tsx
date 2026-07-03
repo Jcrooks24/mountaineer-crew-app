@@ -53,16 +53,16 @@ export default function LongDistance() {
   const [section, setSectionState] = useState<Section>(initialSection);
   function setSection(next: Section) {
     setSectionState(next);
+    const p = new URLSearchParams(params);
     if (next === "menu") {
-      // Clean up the query string when the crew backs out of a sub-page.
-      const p = new URLSearchParams(params);
+      // Clean up ALL deep-link params so a browser-back to the menu URL
+      // doesn't accidentally re-drop the crew into a specific BOL.
       p.delete("section");
-      setParams(p, { replace: true });
+      p.delete("bol_id");
     } else {
-      const p = new URLSearchParams(params);
       p.set("section", next);
-      setParams(p, { replace: true });
     }
+    setParams(p, { replace: true });
   }
 
   if (section === "prior") return <PriorOnDutyForm onBack={() => setSection("menu")} />;
