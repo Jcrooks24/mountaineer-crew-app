@@ -634,7 +634,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [editName, setEditName] = useState<string>("");
   const [editStart, setEditStart] = useState<SlotPick>(emptySlot);
   const [editEnd, setEditEnd] = useState<SlotPick>(emptySlot);
-  type BreakDraft = { start: SlotPick; end: SlotPick };
+  // uid is a stable React key so removing a middle break doesn't reuse
+  // the wrong slot picker's DOM (index-as-key was subtly wrong here).
+  type BreakDraft = { uid: string; start: SlotPick; end: SlotPick };
   const [editBreaks, setEditBreaks] = useState<BreakDraft[]>([]);
   // null when adding; index of the saved row when editing it. Flips Save to
   // "replace at index" semantics and surfaces a banner so the crew sees they
@@ -796,7 +798,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   }, [editStart, editEnd, editBreaks, eventById]);
 
   function addBreakDraft() {
-    setEditBreaks((prev) => [...prev, { start: emptySlot, end: emptySlot }]);
+    const uid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setEditBreaks((prev) => [...prev, { uid, start: emptySlot, end: emptySlot }]);
   }
   function updateBreakStart(i: number, slot: SlotPick) {
     setEditBreaks((prev) => prev.map((b, idx) => (idx === i ? { ...b, start: slot } : b)));
@@ -1202,7 +1205,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   subtracted from hours worked):
                 </div>
                 {editBreaks.map((b, i) => (
-                  <div key={i} className="row wrap" style={{ gap: 6, alignItems: "center" }}>
+                  <div key={b.uid} className="row wrap" style={{ gap: 6, alignItems: "center" }}>
                     {renderSlotPicker(b.start, (s) => updateBreakStart(i, s), "Out at…")}
                     <span className="small">→</span>
                     {renderSlotPicker(b.end, (s) => updateBreakEnd(i, s), "Back at…")}
