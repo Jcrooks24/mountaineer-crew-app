@@ -1024,13 +1024,30 @@ type AvailabilityRangeResponse = {
   scheduled: ScheduledJobRow[];
 };
 
-const MONTH_STATUS_COLORS: Record<AvailabilityRangeRow["status"], { bg: string; fg: string; label: string }> = {
+type StatusColor = { bg: string; fg: string; label: string };
+type MonthStatusPalette = Record<AvailabilityRangeRow["status"], StatusColor>;
+type MonthScheduledPalette = { bg: string; fg: string; label: string };
+
+const MONTH_STATUS_COLORS: MonthStatusPalette = {
   available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
   unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
   conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
 };
 
-const SCHEDULED_COLORS = { bg: "var(--scheduled-bg)", fg: "var(--scheduled)", label: "Scheduled" };
+const SCHEDULED_COLORS: MonthScheduledPalette = { bg: "var(--scheduled-bg)", fg: "var(--scheduled)", label: "Scheduled" };
+
+// High-contrast palette: saturated Google-workspace fills (matches the
+// spreadsheet colors the business partner uses). Cell text stays legible
+// on every bg so job titles print cleanly on the Scheduled cells.
+const HC_MONTH_STATUS_COLORS: MonthStatusPalette = {
+  available:   { bg: "#34a853", fg: "#ffffff", label: "Available" },
+  unavailable: { bg: "#ea4335", fg: "#ffffff", label: "Unavailable" },
+  conditional: { bg: "#fbbc04", fg: "#111111", label: "Conditional" },
+};
+
+const HC_SCHEDULED_COLORS: MonthScheduledPalette = { bg: "#4285f4", fg: "#ffffff", label: "Scheduled" };
+
+const HC_MONTH_KEY = "crew_admin_hc_month_v1";
 
 function MonthScheduleView({
   users,
@@ -1098,6 +1115,18 @@ function MonthScheduleView({
   // Column ordering: by crew tier (I far left … IV far right) by default, or
   // pull a chosen tag's holders to the left ("compatibility highest on left").
   const [orderTagId, setOrderTagId] = useState<number | null>(null);
+
+  // High-contrast palette toggle for the color-forward variant of this view.
+  // Persists per-device (localStorage) so an admin who prefers the vibrant
+  // Google-Sheets-style fills sees them by default on their machine.
+  const [highContrast, setHighContrast] = useState<boolean>(() => {
+    try { return localStorage.getItem(HC_MONTH_KEY) === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(HC_MONTH_KEY, highContrast ? "1" : "0"); } catch { /* noop */ }
+  }, [highContrast]);
+  const statusPalette = highContrast ? HC_MONTH_STATUS_COLORS : MONTH_STATUS_COLORS;
+  const scheduledPalette = highContrast ? HC_SCHEDULED_COLORS : SCHEDULED_COLORS;
   const [reminderCopied, setReminderCopied] = useState(false);
   const AVAILABILITY_REMINDER =
     "Hi! Please update your crew availability in the app for the next two weeks. Open the Mountaineer app, go to Availability, and mark each day (available, unavailable, or conditional). This helps us schedule jobs around you. Thanks!";
@@ -1216,16 +1245,27 @@ function MonthScheduleView({
         </button>
       </div>
 
-      {/* Column ordering: tier by default, or pull a tag's holders to the left. */}
-      <div className="card" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span className="small" style={{ color: "var(--muted)" }}>Order columns by</span>
-        <select
-          value={orderTagId ?? ""}
-          onChange={(e) => setOrderTagId(e.target.value ? Number(e.target.value) : null)}
-        >
-          <option value="">Tier (I → IV)</option>
-          {tags.map((t) => <option key={t.id} value={t.id}>{t.name} first</option>)}
-        </select>
+      {/* Column ordering + display options. */}
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="small" style={{ color: "var(--muted)" }}>Order columns by</span>
+          <select
+            value={orderTagId ?? ""}
+            onChange={(e) => setOrderTagId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">Tier (I → IV)</option>
+            {tags.map((t) => <option key={t.id} value={t.id}>{t.name} first</option>)}
+          </select>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={highContrast}
+            onChange={(e) => setHighContrast(e.target.checked)}
+            style={{ accentColor: "var(--brand)", width: 16, height: 16 }}
+          />
+          <span>High contrast (saturated fills)</span>
+        </label>
       </div>
 
       {err && (
@@ -1409,7 +1449,7 @@ function MonthScheduleView({
                       const record = matrix.get(u.id)?.get(dIso) ?? null;
                       const jobs = scheduledMatrix.get(u.id)?.get(dIso);
                       const isScheduled = !!(jobs && jobs.length > 0);
-                      const availColors = record ? MONTH_STATUS_COLORS[record.status] : null;
+                      const availColors = record ? statusPalette[record.status] : null;
 
                       // Scheduled takes precedence - it's the most actionable
                       // signal. Availability still surfaces via the cell border
@@ -1417,7 +1457,7 @@ function MonthScheduleView({
                       // unavailable would show a red border around a yellow
                       // cell).
                       const cellBg = isScheduled
-                        ? SCHEDULED_COLORS.bg
+                        ? scheduledPalette.bg
                         : (availColors?.bg ?? "transparent");
 
                       const noteSuffix = record?.note ? ` - ${record.note}` : "";
@@ -1453,7 +1493,7 @@ function MonthScheduleView({
                           {isScheduled && (
                             <div
                               style={{
-                                color: SCHEDULED_COLORS.fg,
+                                color: scheduledPalette.fg,
                                 fontSize: 11,
                                 fontWeight: 600,
                                 lineHeight: 1.25,
@@ -1503,7 +1543,7 @@ function MonthScheduleView({
       >
         <span className="small" style={{ color: "var(--muted)" }}>Legend:</span>
         {(["available", "unavailable", "conditional"] as const).map((st) => {
-          const c = MONTH_STATUS_COLORS[st];
+          const c = statusPalette[st];
           return (
             <span key={st} style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span
@@ -1520,11 +1560,11 @@ function MonthScheduleView({
           <span
             style={{
               width: 14, height: 14, borderRadius: 3,
-              background: SCHEDULED_COLORS.bg,
-              border: `1px solid ${SCHEDULED_COLORS.fg}`,
+              background: scheduledPalette.bg,
+              border: `1px solid ${scheduledPalette.fg}`,
             }}
           />
-          <span>{SCHEDULED_COLORS.label}</span>
+          <span>{scheduledPalette.label}</span>
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span
