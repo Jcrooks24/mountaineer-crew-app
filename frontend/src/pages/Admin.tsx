@@ -1340,11 +1340,12 @@ function MonthScheduleView({
           <table style={{
             borderCollapse: "separate", borderSpacing: 0,
             fontSize: 12,
-            // width: max-content lets the table shrink-wrap to its natural
-            // size when employee count fits comfortably; the parent's
-            // overflow:auto kicks in only when it doesn't. Combined with the
-            // tighter per-column minWidth below, more employees fit per
-            // screen than with the previous "minWidth: 100%" stretch rule.
+            // table-layout: fixed + explicit per-<th> widths below is the
+            // only way to make each column exactly the width of its email
+            // string. Auto-layout kept losing to unbreakable content in
+            // the browser's min-content pass no matter what CSS tricks
+            // we threw at the tag chips.
+            tableLayout: "fixed",
             width: "max-content",
             minWidth: "100%",
           }}>
@@ -1357,7 +1358,7 @@ function MonthScheduleView({
                     borderBottom: "1px solid var(--border)",
                     borderRight: "1px solid var(--border)",
                     padding: "6px 8px", textAlign: "left",
-                    minWidth: 56,
+                    width: 56,
                   }}
                 >
                   <span className="small" style={{ color: "var(--muted)" }}>Day</span>
@@ -1368,6 +1369,13 @@ function MonthScheduleView({
                     .filter((t): t is EmployeeTag => !!t)
                     .sort((a, b) => a.sort_order - b.sort_order);
                   const notes = (u.scheduling_notes ?? "").trim();
+                  // Explicit width sized to fit the email on one line at
+                  // the 10px muted-address font. Uses `ch` units so it
+                  // scales with whatever font the admin has picked. 4ch
+                  // slack for padding + safety; MIN keeps super-short
+                  // emails from producing unusably narrow cells.
+                  const emailLen = (u.email || "").length;
+                  const colWidth = `${Math.max(emailLen + 4, 14)}ch`;
                   return (
                     <th
                       key={u.id}
@@ -1384,10 +1392,10 @@ function MonthScheduleView({
                         borderRight: "1px solid var(--border)",
                         padding: "6px 8px", textAlign: "left",
                         verticalAlign: "top",
-                        // Column width is now driven by the email (nowrap
-                        // below) - no explicit minWidth so short-email
-                        // employees tighten right down. Name + tags flow
-                        // within that width.
+                        // Fixed table-layout + explicit width = each column
+                        // is exactly the width of its email. Name and tags
+                        // wrap into whatever's left over.
+                        width: colWidth,
                         cursor: notes ? "help" : "default",
                       }}
                     >
