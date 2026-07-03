@@ -71,13 +71,19 @@ export default function RodsRecorder({
         style={{
           display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", margin: "12px 0",
           borderRadius: 8, borderLeft: `5px solid ${cur ? STATUS_COLORS[cur] : "var(--border)"}`,
-          background: "rgba(255,255,255,0.04)",
+          // Deeper fill so the "Current status" label reads on both dark
+          // and light themes (the prior 0.04 was invisible on light).
+          background: "rgba(255,255,255,0.08)",
+          border: "1px solid var(--border)",
+          borderLeftWidth: 5,
+          borderLeftColor: cur ? STATUS_COLORS[cur] : "var(--border)",
+          borderLeftStyle: "solid",
         }}
       >
         <span style={{ width: 10, height: 10, borderRadius: "50%", background: cur ? STATUS_COLORS[cur] : "var(--muted)", flexShrink: 0 }} />
         <div>
-          <div className="small" style={{ color: "var(--muted)" }}>Current status</div>
-          <div style={{ fontWeight: 800, fontSize: 16, color: cur ? STATUS_COLORS[cur] : "var(--muted)" }}>
+          <div className="small" style={{ color: "var(--text)", opacity: 0.7 }}>Current status</div>
+          <div style={{ fontWeight: 800, fontSize: 16, color: cur ? STATUS_COLORS[cur] : "var(--text)" }}>
             {cur ? STATUS_LABELS[cur] : "Off Duty (day start)"}
           </div>
         </div>

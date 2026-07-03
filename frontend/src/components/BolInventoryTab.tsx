@@ -255,12 +255,12 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
                   padding: 10,
                   border: "1px solid var(--border)",
                   borderRadius: "var(--btn-r)",
-                  background: "rgba(255,255,255,0.02)",
+                  background: "rgba(255,255,255,0.05)",
                 }}
               >
                 <div className="row" style={{ justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                  <div style={{ fontWeight: 700 }}>
-                    <span style={{ color: "var(--muted)", marginRight: 6 }}>#{it.item_no}</span>
+                  <div style={{ fontWeight: 700, color: "var(--text)" }}>
+                    <span style={{ color: "var(--text)", opacity: 0.7, marginRight: 6 }}>#{it.item_no}</span>
                     {it.name}
                   </div>
                   <button

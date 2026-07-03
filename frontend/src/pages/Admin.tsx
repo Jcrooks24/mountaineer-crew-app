@@ -199,13 +199,17 @@ function DesktopModeToggle({
       title={on ? "Desktop sizing - click for mobile" : "Mobile sizing - click for desktop"}
       style={{
         display: "inline-flex", alignItems: "center", gap: 8,
-        background: "none", padding: "3px 8px",
-        border: "1px solid var(--border)", borderRadius: 999,
+        // Solid card background + brand border so the pill reads over
+        // the admin background image (previously transparent + muted
+        // border made it disappear into the overlay).
+        background: "var(--card)", padding: "4px 10px",
+        border: "1px solid var(--brand)", borderRadius: 999,
         cursor: "pointer", fontSize: 11, lineHeight: 1,
-        color: "var(--muted)",
+        color: "var(--text)",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
       }}
     >
-      <span style={{ fontWeight: 600 }}>{on ? "Desktop" : "Mobile"}</span>
+      <span style={{ fontWeight: 700 }}>{on ? "Desktop" : "Mobile"}</span>
       <span
         aria-hidden="true"
         style={{
@@ -1203,9 +1207,10 @@ function MonthScheduleView({
 
   return (
     <>
-      {/* Row hover highlight - a translucent overlay reads on any cell bg/theme,
-          making it easy to scan who's available on a given day. */}
-      <style>{`.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(93,214,194,0.10); }`}</style>
+      {/* Row hover highlight - dark inset overlay reads on both the muted
+          default fills and the saturated HC fills. The previous brand-tint
+          overlay disappeared entirely under Google-vibrant reds/greens. */}
+      <style>{`.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.22); }`}</style>
       <div
         className="card"
         style={{
@@ -1481,17 +1486,22 @@ function MonthScheduleView({
                             // Highlight a conflict (scheduled cell on a
                             // submitted-availability day) with the
                             // availability color as a tinted outline.
-                            // Conflict outline: in HC mode the availability
-                            // fg is white/near-black which barely reads on
-                            // the saturated Scheduled cell - fall back to a
-                            // high-contrast dark outline that stands out
-                            // regardless of which two colors clash.
+                            // Conflict outline: HC saturated bg + white fg
+                            // needs a two-tone stroke that reads on ALL four
+                            // Google fills. A dashed pure-white outline
+                            // paired with a small inset dark ring gives
+                            // visible edges over yellow, red, green, and
+                            // blue alike.
                             outline:
                               isScheduled && availColors
-                                ? (highContrast ? `2px dashed #111` : `2px solid ${availColors.fg}`)
+                                ? (highContrast ? `2px dashed #ffffff` : `2px solid ${availColors.fg}`)
                                 : undefined,
                             outlineOffset:
                               isScheduled && availColors ? "-2px" : undefined,
+                            boxShadow:
+                              isScheduled && availColors && highContrast
+                                ? "inset 0 0 0 3px rgba(0,0,0,0.35)"
+                                : undefined,
                             verticalAlign: "top",
                           }}
                         >

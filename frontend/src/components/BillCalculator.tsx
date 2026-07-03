@@ -644,9 +644,10 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
           minWidth: 430,
           gap: 6, padding: "10px 12px",
-          background: "rgba(255,255,255,0.04)",
+          background: "rgba(255,255,255,0.08)",
           borderBottom: "1px solid var(--border)",
-          fontSize: 11, fontWeight: 700, color: "var(--muted)",
+          fontSize: 11, fontWeight: 800, color: "var(--text)",
+          opacity: 0.85,
           textTransform: "uppercase", letterSpacing: "0.04em",
         }}>
           <span>Description</span>

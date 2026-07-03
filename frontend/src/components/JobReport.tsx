@@ -1435,7 +1435,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   padding: "11px 14px",
                   borderRadius: 10,
                   border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.1)" : "transparent",
+                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 400,
                   fontSize: 13,
@@ -1741,8 +1741,8 @@ function ThreeWay<T extends string>({
           tone === "danger" ? "var(--danger)" :
           "var(--muted)";
         const accentBg =
-          tone === "ok" ? "rgba(93,214,194,0.1)" :
-          tone === "danger" ? "rgba(255,107,107,0.08)" :
+          tone === "ok" ? "rgba(93,214,194,0.18)" :
+          tone === "danger" ? "rgba(255,107,107,0.16)" :
           "rgba(148,163,184,0.12)";
         return (
           <button
@@ -1800,7 +1800,7 @@ function YesNo({
                 ? `2px solid ${v ? "var(--brand)" : "var(--danger)"}`
                 : "1px solid var(--border)",
               background: active
-                ? v ? "rgba(93,214,194,0.1)" : "rgba(255,107,107,0.08)"
+                ? v ? "rgba(93,214,194,0.18)" : "rgba(255,107,107,0.16)"
                 : "transparent",
               color: active
                 ? v ? "var(--brand)" : "var(--danger)"
