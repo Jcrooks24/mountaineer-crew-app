@@ -1425,25 +1425,32 @@ function MonthScheduleView({
                         <div>{u.email}</div>
                       </div>
                       {userTags.length > 0 && (
+                        // Three-column grid so tags stack 3-per-row instead
+                        // of forcing the column wide enough to fit the
+                        // longest tag on a single line. Ellipsis on
+                        // overflow so a very long tag name still fits
+                        // its third-width slot.
                         <div
                           style={{
-                            display: "flex", flexWrap: "wrap",
+                            display: "grid",
+                            gridTemplateColumns: "1fr 1fr 1fr",
                             gap: 3, marginTop: 4,
                           }}
                         >
                           {userTags.map((t) => (
                             <span
                               key={t.id}
+                              title={t.name}
                               style={{
                                 fontSize: 9, fontWeight: 700,
                                 padding: "1px 5px", borderRadius: 3,
-                                // Theme-text label (not --brand) so tags stay
-                                // legible on light themes; brand border keeps
-                                // the identity.
                                 background: "var(--tag-bg, rgba(93,214,194,0.16))",
                                 color: "var(--text)",
                                 border: "1px solid var(--brand)",
                                 whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                minWidth: 0,
                               }}
                             >
                               {t.name}
