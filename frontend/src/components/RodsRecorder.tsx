@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthContext";
 import RosterTypeahead from "./RosterTypeahead";
 import BetaTag from "./BetaTag";
@@ -35,7 +35,18 @@ export default function RodsRecorder({
   const me = user?.name || user?.email || "";
   const [showHelp, setShowHelp] = useState(false);
   const [loggingFor, setLoggingFor] = useState<string>(me);
-  useEffect(() => { if (me && !loggingFor) setLoggingFor(me); }, [me, loggingFor]);
+  // Hydrate once when `me` first becomes truthy (auth loads after mount).
+  // Do NOT re-hydrate every time `loggingFor` becomes empty - that made
+  // the field un-clearable: as soon as the crew backspaced the current
+  // name to type another, the effect jammed the current user's name back
+  // in and swallowed further keystrokes.
+  const hydratedRef = useRef<boolean>(!!me);
+  useEffect(() => {
+    if (me && !hydratedRef.current) {
+      hydratedRef.current = true;
+      setLoggingFor((prev) => prev || me);
+    }
+  }, [me]);
 
   const driver = (loggingFor || "").trim() || me;
   const cur = useMemo(() => currentStatus(changesForDriver(events, driver, me)), [events, driver, me]);
