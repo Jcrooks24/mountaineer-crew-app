@@ -15,21 +15,13 @@
 //   1. Add its key to BETA_FEATURES.
 //   2. Drop <BetaTag feature="<key>" /> next to the feature's section header.
 
-export const APP_VERSION = "1.6";
+export const APP_VERSION = "1.7";
 
-// All v1.5 betas graduated at the v1.6 bump:
-//   crewFeedback, reimbursementPhotoLibrary, reimbursementExpenseDate,
-//   schedulingAvailability, schedulingNotes.
+// All v1.6 betas graduated at the v1.7 bump:
+//   digitalBOL, rosterTypeahead, manualJobsCrossDevice, autoLaborLines,
+//   podsPerDriver, bolInventoryTab.
 // Add the next round of beta keys here as new features ship.
-export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
-  "digitalBOL",
-  // v1.6.x additions
-  "rosterTypeahead",         // RODS driver + Employee Hours name typeahead
-  "manualJobsCrossDevice",   // Manual "Other" jobs sync across devices
-  "autoLaborLines",          // Employee hours auto-populate labor lines in Invoice Builder
-  "podsPerDriver",           // Per-driver PODS checkbox on the Report tab
-  "bolInventoryTab",         // Standalone Inventory tab on LD+ load/unload days
-]);
+export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([]);
 
 export function isBeta(feature: string): boolean {
   return BETA_FEATURES.has(feature);
