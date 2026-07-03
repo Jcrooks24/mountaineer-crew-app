@@ -132,17 +132,23 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
     }
     setErr(null);
     setStatus("saving");
+
+    // Saving auto-creates a BOL on the server if one doesn't already
+    // exist for this job - the draft carries a fresh bol_id from
+    // newDraft(), and the POST /api/bol upsert either creates the row
+    // or updates the existing one. Either way the BOL is linked to
+    // this job_uuid, so it appears attached on the Report tab.
+    const wasFirstSave = !draft.updated_at || draft.items.length === 0 || !draft.origin_shipper_sig;
     enqueueSubmit(draft);
     try {
       const synced = await syncQueue();
-      setNote(
-        synced > 0
-          ? "Inventory saved and synced."
-          : "Saved on this device - will sync when back online.",
-      );
+      const baseMsg = synced > 0
+        ? "Inventory saved and synced."
+        : "Saved on this device - will sync when back online.";
+      setNote(wasFirstSave ? `${baseMsg} BOL linked to this job.` : baseMsg);
     } finally {
       setStatus("idle");
-      window.setTimeout(() => setNote(null), 4000);
+      window.setTimeout(() => setNote(null), 5000);
     }
   }
 

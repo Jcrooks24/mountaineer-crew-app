@@ -87,6 +87,9 @@ type ReviewCandidate = "yes" | "no" | "na";
 type ReportData = {
   has_personal_vehicles: boolean | null;
   personal_vehicles: number;
+  // Bill the personal vehicles as crew transport vehicles ($100/vehicle/day).
+  // Local-only for now (draft-persisted) - backend column can follow.
+  bill_personal_vehicles: boolean;
   has_dumpster_use: boolean | null;
   dumpster_pct: number;
   has_recycling_use: boolean | null;
@@ -207,6 +210,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // per-diem row so a driver can see their own compliance at a glance
   // without conflating it with any other driver on a multi-driver trip.
   const [podsForDriver, setPodsForDriver] = useState<boolean>(false);
+  // Set of driver names (lowercased) with a PODS on file for this trip.
+  // Each RodsDriverSection reads its own driver to render its own PODS
+  // checkbox - the sign-in user's checkbox is above; this covers the
+  // added-on-behalf drivers.
+  const [podsDriverNames, setPodsDriverNames] = useState<Set<string>>(() => new Set());
   const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [bolDeferred, setBolDeferred] = useState<boolean>(() => (jobUuid ? loadBolDeferred(jobUuid) : false));
@@ -224,7 +232,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     let cancelled = false;
     (async () => {
       const bol = await fetchRemoteBol(tripJob);
-      if (!cancelled) { setBolStatus(bol?.status || ""); setBolRef(bolRefOf(bol)); }
+      if (!cancelled) {
+        // Preserve any optimistic bolStatus set by linkTrip when the linked
+        // BOL is local-only and hasn't synced yet - fetchRemoteBol would
+        // return null in that case and would otherwise wipe the attached
+        // state right after the user picked a BOL.
+        if (bol) { setBolStatus(bol.status || ""); setBolRef(bolRefOf(bol)); }
+      }
       try {
         const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(tripJob)}`);
         // Robust: only count statements that EXACTLY match the trip job, so a
@@ -238,8 +252,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           ? forJob.filter((p) => Number(p?.driver_id) === Number(user.id))
           : [];
         if (!cancelled) setPodsForDriver(mine.length > 0);
+        // Names (lowercased) so RodsDriverSection can flag each driver's
+        // PODS status. Includes driver_name from every PODS record.
+        const names = new Set<string>();
+        for (const p of forJob) {
+          const n = String(p?.driver_name || "").trim().toLowerCase();
+          if (n) names.add(n);
+        }
+        if (!cancelled) setPodsDriverNames(names);
       } catch {
-        if (!cancelled) { setPriorDone(false); setPodsForDriver(false); }
+        if (!cancelled) { setPriorDone(false); setPodsForDriver(false); setPodsDriverNames(new Set()); }
       }
       const open = await listOpenBols();
       if (!cancelled) setOpenBols(open);
@@ -257,9 +279,17 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       saveTripLink(jobUuid, link);
       setTripLink(link);
       setBolDeferredFlag(false);
+      // Optimistically flip the render into the "attached" branch. Without
+      // this, a local-only BOL (not yet synced to the server) would leave
+      // bolStatus empty after fetchRemoteBol returns null - the render
+      // stays on the dropdown and the click appears to do nothing.
+      setBolStatus(o.status || "draft");
+      setBolRef(o.bol_id || "");
     } else {
       saveTripLink(jobUuid, null);
       setTripLink(null);
+      setBolStatus("");
+      setBolRef("");
     }
   }
 
@@ -269,6 +299,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [data, setData] = useState<ReportData>({
     has_personal_vehicles: null,
     personal_vehicles: 0,
+    bill_personal_vehicles: false,
     has_dumpster_use: null,
     dumpster_pct: 0,
     has_recycling_use: null,
@@ -343,6 +374,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           // Existing reports - infer answers from saved values
           has_personal_vehicles: r.personal_vehicles > 0,
           personal_vehicles: r.personal_vehicles,
+          bill_personal_vehicles: false,
           has_dumpster_use: r.dumpster_pct > 0,
           dumpster_pct: r.dumpster_pct,
           has_recycling_use: r.recycling_pct > 0,
@@ -369,6 +401,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           setData({
             has_personal_vehicles: null,
             personal_vehicles: 0,
+            bill_personal_vehicles: false,
             has_dumpster_use: null,
             dumpster_pct: 0,
             has_recycling_use: null,
@@ -945,6 +978,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       dumpsterPct={data.dumpster_pct}
       recyclingPct={data.recycling_pct}
       employeeHours={loaded ? data.employee_hours : undefined}
+      personalVehicleCount={loaded && data.bill_personal_vehicles ? data.personal_vehicles : 0}
     >
       {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1279,12 +1313,25 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           noLabel="No"
         />
         {data.has_personal_vehicles && (
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
-            <button type="button" onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))} style={stepBtnStyle} aria-label="Decrease">−</button>
-            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>{data.personal_vehicles}</span>
-            <button type="button" onClick={() => set("personal_vehicles", data.personal_vehicles + 1)} style={stepBtnStyle} aria-label="Increase">+</button>
-            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
-          </div>
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
+              <button type="button" onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))} style={stepBtnStyle} aria-label="Decrease">−</button>
+              <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>{data.personal_vehicles}</span>
+              <button type="button" onClick={() => set("personal_vehicles", data.personal_vehicles + 1)} style={stepBtnStyle} aria-label="Increase">+</button>
+              <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
+            </div>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 12 }}>
+              <input
+                type="checkbox"
+                checked={data.bill_personal_vehicles}
+                onChange={(e) => set("bill_personal_vehicles", e.target.checked)}
+                style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+              />
+              <span>
+                Bill these as <strong>crew transport vehicles</strong> ($100 / vehicle / day) - adds one line per vehicle to the Invoice Builder.
+              </span>
+            </label>
+          </>
         )}
       </div>
       )}
@@ -1433,15 +1480,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
-            Required for this interstate trip. The <strong>driver</strong> is responsible for the Prior On-Duty statement. Complete or attach each document; multi-day trips link this day to the trip's Bill of Lading.
+            Required for this interstate trip. Each driver's PODS is tracked below in the Driver &amp; per-diem section. Complete or attach the Bill of Lading; multi-day trips link this day to the trip's BOL.
           </div>
           <div className="col" style={{ gap: 12 }}>
-            <ChecklistItem
-              done={priorDone}
-              label="Prior On-Duty Statement (driver)"
-              hint="395.8(j)(2). The driver completes this before the trip."
-              onGo={() => nav("/long-distance")}
-            />
             {bolStatus ? (
               <div className="col" style={{ gap: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
                 <div className="small" style={{ color: "var(--muted)" }}>
@@ -1455,7 +1496,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
                 <div>
                   <div style={{ fontWeight: 700 }}>Bill of Lading</div>
-                  <div className="small" style={{ color: "var(--muted)" }}>Not at destination yet (no completed BOL to attach).</div>
+                  <div className="small" style={{ color: "var(--muted)" }}>Marked as not yet complete - no signed BOL to attach.</div>
                 </div>
                 <button type="button" onClick={() => setBolDeferredFlag(false)} style={{ fontSize: 12 }}>Attach BOL</button>
               </div>
@@ -1470,53 +1511,62 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   </select>
                 </label>
                 <div className="row wrap" style={{ gap: 8 }}>
-                  <button type="button" className="btnPrimary" onClick={() => nav("/long-distance")} style={{ fontSize: 13 }}>Complete a BOL</button>
-                  <button type="button" onClick={() => setBolDeferredFlag(true)} style={{ fontSize: 13 }}>Not at destination yet</button>
+                  <button type="button" className="btnPrimary" onClick={() => nav("/long-distance")} style={{ fontSize: 13 }}>Start a new BOL</button>
+                  <button type="button" onClick={() => setBolDeferredFlag(true)} style={{ fontSize: 13 }}>Load not completed yet</button>
+                  <button type="button" onClick={() => setBolDeferredFlag(true)} style={{ fontSize: 13 }}>Unload not completed yet</button>
                 </div>
               </div>
             )}
+
+            {/* Per-diem sits next to the BOL selector so the crew rep
+                confirming which BOL is attached also flags whether the
+                crew was out of town for that day's charge. */}
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
+              <span>The <strong>crew</strong> started and ended the day out of town ($50 per-diem, per crew member)</span>
+            </label>
           </div>
 
-          {/* Per-driver checks + per-diem */}
+          {/* Per-driver PODS check */}
           <div className="row" style={{ alignItems: "center", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-            <div style={{ fontWeight: 700, fontSize: 13 }}>Driver &amp; per-diem</div>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Driver PODS</div>
             <BetaTag feature="podsPerDriver" style={{ marginTop: 0 }} />
           </div>
 
-          {/* Per-driver PODS self-verification. Auto-checks once the current
-              user has a PODS filed for this trip; when unchecked, an inline
-              link opens the /long-distance page so the driver can file one. */}
-          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "default", fontSize: 14, marginTop: 8 }}>
+          {/* Per-driver PODS self-verification. Auto-checks when the current
+              user has a PODS filed for this trip. Tapping the row when it's
+              unchecked opens /long-distance so the driver can file one -
+              server state remains the source of truth, so tapping never
+              force-checks locally. */}
+          <label
+            style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: podsForDriver ? "default" : "pointer", fontSize: 14, marginTop: 8 }}
+            onClick={(e) => {
+              if (podsForDriver) return;
+              e.preventDefault();
+              nav("/long-distance");
+            }}
+          >
             <input
               type="checkbox"
               checked={podsForDriver}
-              readOnly
-              style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+              onChange={() => { /* server owns state - see label onClick */ }}
+              style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0, cursor: podsForDriver ? "default" : "pointer" }}
             />
             <span>
               As the <strong>driver</strong>, I have submitted my Prior On-Duty Statement for this trip.
               {!podsForDriver && (
-                <>
-                  {" "}
-                  <button
-                    type="button"
-                    onClick={() => nav("/long-distance")}
-                    style={{ background: "none", border: "none", color: "var(--brand)", padding: 0, cursor: "pointer", textDecoration: "underline", fontSize: 14 }}
-                  >
-                    Complete PODS →
-                  </button>
-                </>
+                <span style={{ color: "var(--brand)", marginLeft: 6 }}>Tap to complete PODS →</span>
               )}
             </span>
           </label>
 
-          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 8 }}>
-            <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
-            <span>The <strong>crew</strong> started and ended the day out of town ($50 per-diem, per crew member)</span>
-          </label>
-
           {/* Driver RODS sign-off (renders bare; self-hides when no driving). */}
-          <RodsSignoff events={events} bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null} />
+          <RodsSignoff
+            events={events}
+            bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null}
+            podsDriverNames={podsDriverNames}
+            onNeedPods={() => nav("/long-distance")}
+          />
         </div>
       )}
 

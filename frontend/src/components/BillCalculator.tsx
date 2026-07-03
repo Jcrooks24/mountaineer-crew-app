@@ -32,7 +32,7 @@ type LineItem = {
   rate: number;
   unit: Unit;
   discount: number;   // per-line % (0–100)
-  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips";
+  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips" | "personal_vehicle";
 };
 
 type Bill = {
@@ -179,11 +179,14 @@ type Props = {
   // one labor line per employee at DEFAULT_LABOR_RATE; the crew can then
   // edit the rate/qty per line. Non-billable rows are skipped.
   employeeHours?: EmployeeHoursEntry[];
+  // Personal vehicles the crew flagged to bill as crew transport ($100/day).
+  // Number of vehicles; 0 means "don't bill". One line item per vehicle.
+  personalVehicleCount?: number;
   children?: (slots: BillSlots) => ReactNode;
 };
 
 const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
-  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, employeeHours, children },
+  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, employeeHours, personalVehicleCount, children },
   ref,
 ) {
   const { settings: themeSettings } = useTheme();
@@ -391,6 +394,42 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       return { ...prev, items: nextItems };
     });
   }, [loaded, employeeHours]);
+
+  // ── Personal vehicles billed as crew transport ($100/vehicle/day) ──
+  // Report tab checkbox drives the count; N vehicles ⇒ N line items so
+  // admin can see one row per vehicle in the sheet. Rate stays at 100
+  // unless the crew hand-edits it (mirrors the labor-line preservation).
+  useEffect(() => {
+    if (!loaded || personalVehicleCount === undefined) return;
+    setBill((prev) => {
+      const desired = [] as LineItem[];
+      for (let i = 1; i <= personalVehicleCount; i++) {
+        const label = `Crew transport vehicle #${i}`;
+        const existing = prev.items.find((it) => it.source === "personal_vehicle" && it.label === label);
+        desired.push({
+          id: existing?.id ?? uuid(),
+          label,
+          qty: 1,
+          rate: existing ? existing.rate : 100,
+          unit: "day",
+          discount: existing?.discount ?? 0,
+          source: "personal_vehicle",
+        });
+      }
+      const otherItems = prev.items.filter((it) => it.source !== "personal_vehicle");
+      const nextItems = [...otherItems, ...desired];
+      if (nextItems.length === prev.items.length) {
+        const same = nextItems.every((n, i) => {
+          const p = prev.items[i];
+          return p && p.id === n.id && p.label === n.label &&
+            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
+            p.discount === n.discount && p.source === n.source;
+        });
+        if (same) return prev;
+      }
+      return { ...prev, items: nextItems };
+    });
+  }, [loaded, personalVehicleCount]);
 
   // ── Materials: local cache + queue (offline-safe) ────────────────────────────
   function refreshMaterials() {

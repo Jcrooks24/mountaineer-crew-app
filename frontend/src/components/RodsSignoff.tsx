@@ -38,9 +38,10 @@ function fmt12(hhmm: string): string {
 /** One driver's RODS: summary derived from that driver's DUTY events + trip
  * details + signature. Persists trip details/signature keyed by driver+date. */
 function RodsDriverSection({
-  date, driver, fallback, events, bolLink, units,
+  date, driver, fallback, events, bolLink, units, podsFiled, onNeedPods,
 }: {
   date: string; driver: string; fallback: string; events: MinEvent[]; bolLink: BolLink; units: string[];
+  podsFiled: boolean; onNeedPods: () => void;
 }) {
   const [day, setDay] = useState<RodsDay>(() => loadDay(date, driver) || newDay(date, driver, null));
   const [consent, setConsent] = useState(false);
@@ -127,6 +128,31 @@ function RodsDriverSection({
         ))}
       </div>
 
+      {/* Per-driver PODS confirmation for this driver. Auto-checks once a
+          PODS record with this driver name is on file for the trip. Tap
+          to file a PODS if not yet on file (opens /long-distance). */}
+      <label
+        style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: podsFiled ? "default" : "pointer", fontSize: 14, marginBottom: 12 }}
+        onClick={(e) => {
+          if (podsFiled) return;
+          e.preventDefault();
+          onNeedPods();
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={podsFiled}
+          onChange={() => { /* server owns state */ }}
+          style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0, cursor: podsFiled ? "default" : "pointer" }}
+        />
+        <span>
+          Prior On-Duty Statement filed for <strong>{driver || "this driver"}</strong>.
+          {!podsFiled && (
+            <span style={{ color: "var(--brand)", marginLeft: 6 }}>Tap to file →</span>
+          )}
+        </span>
+      </label>
+
       <div className="col" style={{ gap: 10, marginBottom: 12 }}>
         <div className="row wrap" style={{ gap: 10 }}>
           <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
@@ -137,6 +163,12 @@ function RodsDriverSection({
               {day.vehicle_number && !units.includes(day.vehicle_number) && <option value={day.vehicle_number}>{day.vehicle_number}</option>}
             </select>
           </label>
+        </div>
+        <div className="row wrap" style={{ gap: 10 }}>
+          <label className="col" style={{ gap: 4, flex: 1 }}><span className="small" style={{ color: "var(--muted)" }}>Origin</span><input value={day.origin || ""} onChange={(e) => patch({ origin: e.target.value })} placeholder="City, ST" /></label>
+          <label className="col" style={{ gap: 4, flex: 1 }}><span className="small" style={{ color: "var(--muted)" }}>Destination</span><input value={day.destination || ""} onChange={(e) => patch({ destination: e.target.value })} placeholder="City, ST" /></label>
+        </div>
+        <div className="row wrap" style={{ gap: 10 }}>
           <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Miles today</span>
             <div className="row" style={{ gap: 6 }}>
@@ -145,10 +177,6 @@ function RodsDriverSection({
             </div>
             {calcMsg && <span className="small" style={{ color: "var(--muted)" }}>{calcMsg}</span>}
           </label>
-        </div>
-        <div className="row wrap" style={{ gap: 10 }}>
-          <label className="col" style={{ gap: 4, flex: 1 }}><span className="small" style={{ color: "var(--muted)" }}>Origin</span><input value={day.origin || ""} onChange={(e) => patch({ origin: e.target.value })} placeholder="City, ST" /></label>
-          <label className="col" style={{ gap: 4, flex: 1 }}><span className="small" style={{ color: "var(--muted)" }}>Destination</span><input value={day.destination || ""} onChange={(e) => patch({ destination: e.target.value })} placeholder="City, ST" /></label>
         </div>
         <div className="col" style={{ gap: 4 }}>
           <span className="small" style={{ color: "var(--muted)" }}>Bill of Lading</span>
@@ -181,7 +209,18 @@ function RodsDriverSection({
  * who has duty events (multi-driver), plus an "Add RODS" control to add a
  * driver who needs one but hasn't logged yet. Renders bare (inside the LD tile).
  */
-export default function RodsSignoff({ events = [], bolLink }: { events?: MinEvent[]; bolLink?: BolLink }) {
+export default function RodsSignoff({
+  events = [],
+  bolLink,
+  podsDriverNames,
+  onNeedPods,
+}: {
+  events?: MinEvent[];
+  bolLink?: BolLink;
+  /** Lowercased names of drivers with a PODS on file for this trip. */
+  podsDriverNames?: Set<string>;
+  onNeedPods?: () => void;
+}) {
   const { user } = useAuth();
   const me = user?.name || user?.email || "";
   const date = todayLocal();
@@ -208,7 +247,17 @@ export default function RodsSignoff({ events = [], bolLink }: { events?: MinEven
   return (
     <>
       {drivers.map((dr) => (
-        <RodsDriverSection key={dr} date={date} driver={dr} fallback={me} events={events} bolLink={bolLink ?? null} units={units} />
+        <RodsDriverSection
+          key={dr}
+          date={date}
+          driver={dr}
+          fallback={me}
+          events={events}
+          bolLink={bolLink ?? null}
+          units={units}
+          podsFiled={!!podsDriverNames?.has(dr.trim().toLowerCase())}
+          onNeedPods={onNeedPods ?? (() => {})}
+        />
       ))}
 
       <div style={{ borderTop: drivers.length > 0 ? "1px solid var(--border)" : undefined, marginTop: drivers.length > 0 ? 14 : 0, paddingTop: drivers.length > 0 ? 14 : 0 }}>
