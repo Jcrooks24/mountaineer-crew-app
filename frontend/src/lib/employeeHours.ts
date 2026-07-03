@@ -1,0 +1,35 @@
+// Shared employee-hours types + billing math. Kept in lib/ (not inside
+// JobReport.tsx) so BillCalculator can consume them without an import
+// cycle back into its own parent.
+
+// Mirrors backend EmployeeHoursEntry. `hours` is the actual worked time;
+// the company billable total rounds quarter-by-quarter at display + sheet-
+// export time. `non_billable` rows show in the table but contribute 0 to
+// total man-hours and are excluded from the Bill Helper autopopulate.
+export type EmployeeHoursEntry = {
+  name: string;
+  start: string;
+  end: string;
+  break_hours: number;
+  hours: number;
+  non_billable?: boolean;
+  // Long-distance: this employee was out of town this day → $50 per-diem.
+  out_of_town?: boolean;
+};
+
+// Company billing rule: round to the next quarter-hour if the worked time
+// is ≥5 minutes into the current quarter; otherwise round down to that
+// quarter. Mirrored on the backend (_round_billable_quarter in
+// sheets_export.py) so the spreadsheet and the UI agree.
+export function roundBillableQuarter(hours: number): number {
+  if (hours <= 0) return 0;
+  const totalMin = Math.round(hours * 60);
+  const quarters = Math.floor(totalMin / 15);
+  const remainder = totalMin - quarters * 15;
+  const roundedMin = remainder >= 5 ? (quarters + 1) * 15 : quarters * 15;
+  return roundedMin / 60;
+}
+
+// Default hourly labor rate used when man-hours are auto-populated into
+// the Invoice Builder. Editable on the line-item once created.
+export const DEFAULT_LABOR_RATE = 80;

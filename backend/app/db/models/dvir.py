@@ -41,7 +41,7 @@ class DVIR(Base):
     #   block heater in winter, clean/free of debris)
     back_of_truck_confirmed = Column(Boolean, nullable=True)
     # Post-trip only: truck was left loaded overnight (client belongings or trash
-    # for disposal) — back-of-truck post-trip confirmation does not apply.
+    # for disposal) - back-of-truck post-trip confirmation does not apply.
     overnight_hold = Column(Boolean, nullable=True)
 
     # ── Driver authorization ─────────────────────────────────────────────────

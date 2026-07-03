@@ -15,7 +15,7 @@ import {
 } from "../lib/reimbursementStore";
 
 function todayLocalIso(): string {
-  // Local-day "YYYY-MM-DD" — toISOString would shift past midnight UTC for
+  // Local-day "YYYY-MM-DD" - toISOString would shift past midnight UTC for
   // crew on the western side of the country, putting "yesterday" in the
   // picker when they open the form first thing in the morning.
   const d = new Date();
@@ -52,7 +52,7 @@ export default function Reimbursement() {
 
   // Shared
   const [notes, setNotes] = useState("");
-  // Date the expense / mileage actually happened — defaults to today, but
+  // Date the expense / mileage actually happened - defaults to today, but
   // crew often log on a different day (e.g. submitting the next morning).
   const [expenseDate, setExpenseDate] = useState<string>(todayLocalIso());
   const odoStartRef = useRef<HTMLInputElement>(null);
@@ -105,7 +105,7 @@ export default function Reimbursement() {
     setOk(null);
 
     if (mode === "mileage") {
-      // Fields are all optional — crew can submit a partial request and
+      // Fields are all optional - crew can submit a partial request and
       // the admin follows up. Only block a completely empty form, and a
       // genuine reading inversion (both numbers present, end < start).
       const start = odoStart.trim() === "" ? null : Math.floor(Number(odoStart));
@@ -268,7 +268,7 @@ export default function Reimbursement() {
               onChange={(e) => setExpenseDate(e.target.value)}
             />
             <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
-              Defaults to today — change it if you're logging this for a different day.
+              Defaults to today - change it if you're logging this for a different day.
             </div>
           </div>
           {mode === "mileage" ? (
@@ -364,7 +364,7 @@ export default function Reimbursement() {
                   placeholder="e.g. Home Depot, Shell, U-Haul"
                 />
                 <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
-                  The store or business where the purchase was made — enter it as
+                  The store or business where the purchase was made - enter it as
                   it appears on the receipt.
                 </div>
               </div>
@@ -373,7 +373,7 @@ export default function Reimbursement() {
                 <div className="row" style={{ gap: 8, marginTop: 4 }}>
                   {([
                     { v: "personal" as PaymentMethod, label: "Personal card", sub: "request reimbursement" },
-                    { v: "company" as PaymentMethod, label: "Company card", sub: "log only — no reimbursement" },
+                    { v: "company" as PaymentMethod, label: "Company card", sub: "log only - no reimbursement" },
                   ]).map((opt) => (
                     <button
                       key={opt.v}
@@ -414,7 +414,7 @@ export default function Reimbursement() {
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
-              placeholder="Optional — what the trip / expense was for"
+              placeholder="Optional - what the trip / expense was for"
               style={{
                 width: "100%", padding: "8px 10px", borderRadius: 8,
                 border: "1px solid var(--border)", background: "var(--bg)",
@@ -434,7 +434,7 @@ export default function Reimbursement() {
                 : "Submit request"}
           </button>
           <div className="small" style={{ color: "var(--muted)" }}>
-            Works offline — queued submissions sync automatically when you're back online.
+            Works offline - queued submissions sync automatically when you're back online.
           </div>
         </form>
       </div>

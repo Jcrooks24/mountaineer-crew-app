@@ -1,5 +1,5 @@
 """
-Document Library — reference documents (COI, blank contract, BOL, estimate
+Document Library - reference documents (COI, blank contract, BOL, estimate
 templates, etc.) uploaded by admins for the crew to view or download.
 """
 

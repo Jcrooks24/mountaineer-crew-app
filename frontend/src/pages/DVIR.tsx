@@ -136,7 +136,7 @@ function newUUID() {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-// Shared with App.tsx — the currently-selected job is stored here. DVIR pulls
+// Shared with App.tsx - the currently-selected job is stored here. DVIR pulls
 // it directly from localStorage so a fresh DVIR auto-attaches to the job the
 // crew is on, which is what puts DVIRs on the Admin Job Summary.
 const ACTIVE_JOB_KEY = "crew_active_job_uuid_v1";
@@ -279,7 +279,7 @@ export default function DVIRPage() {
     if (!vehicleNumber) return setErr("Select a vehicle unit.");
     if (!odometer.trim()) return setErr("Odometer reading is required.");
     if (!driverName.trim()) return setErr("Driver name is required.");
-    if (hasDefects && !defectNotes.trim()) return setErr("Describe the defect(s) — defect notes are required when defects are checked.");
+    if (hasDefects && !defectNotes.trim()) return setErr("Describe the defect(s) - defect notes are required when defects are checked.");
     if (prevDVIR && !prevReviewed)
       return setErr("You must confirm you have reviewed the previous inspection report.");
     if (inspectionType === "pre-trip" && !backOfTruckConfirmed) {
@@ -292,7 +292,7 @@ export default function DVIRPage() {
         "Confirm the back of the truck has been reset for the next crew, or mark the truck as held loaded overnight."
       );
     }
-    if (sigRef.current?.isEmpty()) return setErr("Driver signature is required — please sign above.");
+    if (sigRef.current?.isEmpty()) return setErr("Driver signature is required - please sign above.");
     if (!eSignConsent) return setErr("You must accept the electronic signature consent to submit.");
 
     // If defects noted, warn before submitting
@@ -328,7 +328,7 @@ export default function DVIRPage() {
               color: submitted.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
             }}
           >
-            {submitted.condition === "satisfactory" ? "Satisfactory — No Defects" : "Defects Noted"}
+            {submitted.condition === "satisfactory" ? "Satisfactory - No Defects" : "Defects Noted"}
           </div>
           {submitted.condition === "defects_noted" && (
             <p className="small" style={{ color: "var(--muted)", marginBottom: 20 }}>
@@ -383,7 +383,7 @@ export default function DVIRPage() {
           marginBottom: 16,
         }}>
           <div style={{ fontWeight: 700, fontSize: 15, color: "var(--danger)", marginBottom: 6 }}>
-            ⚠ Vehicle Out of Service — Open Defect
+            ⚠ Vehicle Out of Service - Open Defect
           </div>
           <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.5 }}>
             <strong>{vehicleNumber}</strong> has an unresolved defect from the last inspection on{" "}
@@ -396,7 +396,7 @@ export default function DVIRPage() {
         {/* Previous defective DVIR summary */}
         <div className="card" style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>
-            Defective DVIR — {prevDVIR!.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} · {prevDVIR!.inspection_date}
+            Defective DVIR - {prevDVIR!.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} · {prevDVIR!.inspection_date}
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
             Driver: {prevDVIR!.driver_name}
@@ -413,7 +413,7 @@ export default function DVIRPage() {
           )}
         </div>
 
-        {/* Contact admin — no inline sign-off on crew form */}
+        {/* Contact admin - no inline sign-off on crew form */}
         <div className="card" style={{ textAlign: "center", padding: "20px 16px" }}>
           <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Mechanic review required</div>
           <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
@@ -464,7 +464,7 @@ export default function DVIRPage() {
             </div>
           ) : (
             <div className="small" style={{ color: "var(--muted)" }}>
-              No job attached — this DVIR will be filed as a standalone inspection.
+              No job attached - this DVIR will be filed as a standalone inspection.
               To attach, select a job on the home screen before starting the DVIR.
             </div>
           )}
@@ -505,7 +505,7 @@ export default function DVIRPage() {
             </div>
           </div>
 
-          {/* Date + Type — stack on phones (below ~360px column width) so
+          {/* Date + Type - stack on phones (below ~360px column width) so
               the Pre-Trip / Post-Trip buttons don't crowd the date input.
               minWidth:0 on the cells lets the native date input shrink
               to match its cell instead of pushing the cell wider than the tile. */}
@@ -565,7 +565,7 @@ export default function DVIRPage() {
                     defects that a mechanic has since signed off. (An unresolved
                     defect is intercepted by the out-of-service block above.)
                     So a defects-noted report here means "repaired & approved",
-                    not "open defect" — surface that explicitly. */}
+                    not "open defect" - surface that explicitly. */}
                 {(() => {
                   const resolvedByMechanic =
                     prevDVIR.defects.length > 0 && !!prevDVIR.mechanic_signature;
@@ -580,13 +580,13 @@ export default function DVIRPage() {
                       }}
                     >
                       <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 3 }}>
-                        Last inspection: {prevDVIR.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} — {prevDVIR.inspection_date}
+                        Last inspection: {prevDVIR.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} - {prevDVIR.inspection_date}
                       </div>
                       <div className="small" style={{ color: "var(--muted)", marginBottom: prevDVIR.defects.length > 0 ? 6 : 0 }}>
                         Driver: {prevDVIR.driver_name} ·{" "}
                         <span style={{ color: "var(--ok)", fontWeight: 600 }}>
                           {resolvedByMechanic
-                            ? `${prevDVIR.defects.length} defect${prevDVIR.defects.length !== 1 ? "s" : ""} — repaired & approved`
+                            ? `${prevDVIR.defects.length} defect${prevDVIR.defects.length !== 1 ? "s" : ""} - repaired & approved`
                             : "Satisfactory"}
                         </span>
                       </div>
@@ -723,8 +723,8 @@ export default function DVIRPage() {
             }}
           >
             {hasDefects
-              ? `${defects.size} defect${defects.size !== 1 ? "s" : ""} noted — mechanic review required`
-              : "No defects — vehicle in satisfactory condition"}
+              ? `${defects.size} defect${defects.size !== 1 ? "s" : ""} noted - mechanic review required`
+              : "No defects - vehicle in satisfactory condition"}
           </div>
 
           {hasDefects && (
@@ -755,7 +755,7 @@ export default function DVIRPage() {
             <input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Full name" required style={inputStyle} />
           </div>
 
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Driver Signature * — sign below</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Driver Signature * - sign below</div>
           <SignaturePad ref={sigRef} height={150} />
           <button
             type="button"
@@ -812,7 +812,7 @@ export default function DVIRPage() {
                 />
                 <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
                   Truck is being stowed overnight with a full load (client belongings to unload tomorrow
-                  or trash for the dump) — back-of-truck reset does not apply.
+                  or trash for the dump) - back-of-truck reset does not apply.
                 </span>
               </label>
             </>

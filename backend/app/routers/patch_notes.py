@@ -1,4 +1,4 @@
-"""Patch notes — admin authors, crew reads.
+"""Patch notes - admin authors, crew reads.
 
 Crew can list the notes; the "new notes since last read" indicator is tracked
 client-side via localStorage keyed on updated_at, so this router only needs to

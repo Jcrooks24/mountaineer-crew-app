@@ -1,11 +1,11 @@
 // App update helpers.
 //
 // vite-plugin-pwa is configured with `registerType: "prompt"`, so a newly
-// deployed build installs in the background and then *waits* — it does not
+// deployed build installs in the background and then *waits* - it does not
 // silently reload the page. Updates reach the crew two ways:
-//   • UpdateBanner — watches for the waiting worker, re-checks periodically
+//   • UpdateBanner - watches for the waiting worker, re-checks periodically
 //     and on focus, and shows a dismissible "new version" banner.
-//   • The Profile "Update app" button — an on-demand check via
+//   • The Profile "Update app" button - an on-demand check via
 //     checkForAppUpdate(), with explicit "you're on the latest" feedback.
 //
 // Apply flow (shared): if a SW is `waiting`, post SKIP_WAITING and reload on
@@ -18,13 +18,13 @@ export type UpdateResult =
   | { kind: "offline" }             // navigator.onLine === false
   | { kind: "error"; message: string };
 
-/** Build ID baked into the bundle at compile time — the precise identifier
+/** Build ID baked into the bundle at compile time - the precise identifier
  * (commit + timestamp), kept for support/debugging. */
 export const APP_BUILD_ID: string =
   typeof __APP_BUILD_ID__ !== "undefined" ? __APP_BUILD_ID__ : "dev";
 
 /** Friendly two-word version name derived from the build, e.g. "Brave Otter".
- * This is what we show the crew — far more memorable than the raw build id. */
+ * This is what we show the crew - far more memorable than the raw build id. */
 export const APP_VERSION_NAME: string =
   typeof __APP_VERSION_NAME__ !== "undefined" ? __APP_VERSION_NAME__ : "Local Build";
 
@@ -69,7 +69,7 @@ export async function checkForAppUpdate(timeoutMs = 8000): Promise<UpdateResult>
 }
 
 /**
- * Apply an update that's already waiting — used by the in-app "update
+ * Apply an update that's already waiting - used by the in-app "update
  * available" banner, where detection already happened and the user has
  * tapped to apply. Resolves as the page reloads.
  */
@@ -82,7 +82,7 @@ export async function applyWaitingUpdate(timeoutMs = 8000): Promise<UpdateResult
     if (reg?.waiting) {
       return await activateWaiting(reg.waiting, timeoutMs);
     }
-    // Nothing waiting — the worker may have already activated (e.g. another
+    // Nothing waiting - the worker may have already activated (e.g. another
     // tab applied it). A plain reload pulls the fresh shell either way.
     window.location.reload();
     return { kind: "updating" };
@@ -120,7 +120,7 @@ async function activateWaiting(
     const onController = () => {
       navigator.serviceWorker.removeEventListener("controllerchange", onController);
       // Give React a moment to unmount, then hard-reload so the new SW serves
-      // a fresh shell. location.reload() is enough — no need to bust caches
+      // a fresh shell. location.reload() is enough - no need to bust caches
       // manually; Workbox already evicted the old precache.
       window.setTimeout(() => window.location.reload(), 150);
       resolve({ kind: "updating" });

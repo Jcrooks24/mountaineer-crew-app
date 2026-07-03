@@ -18,6 +18,8 @@ import {
   fetchAndCache,
   type LiveMaterial,
 } from "../lib/materialsStore";
+import { roundBillableQuarter, DEFAULT_LABOR_RATE, type EmployeeHoursEntry } from "../lib/employeeHours";
+import BetaTag from "./BetaTag";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -30,7 +32,7 @@ type LineItem = {
   rate: number;
   unit: Unit;
   discount: number;   // per-line % (0–100)
-  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips";
+  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips" | "personal_vehicle";
 };
 
 type Bill = {
@@ -39,14 +41,9 @@ type Bill = {
   notes: string;
 };
 
-type SeedData = {
-  hours_lines: { created_by: string; label: string; hours: number }[];
-  material_lines: { name: string; qty: number; unit_price: number }[];
-};
-
 export type BillHandle = {
   /** Returns current bill data, or null if not loaded. The "reviewed"
-   * confirmation lives on the Report (after the M1 sliders) — not here. */
+   * confirmation lives on the Report (after the M1 sliders) - not here. */
   getData: () => { items: LineItem[]; globalDiscount: number; notes: string } | null;
   /** Discard the in-progress localStorage draft for the active job. Called
    * by JobReport after a successful submit so the next load reads the
@@ -86,8 +83,20 @@ function loadBillDraft(uuid: string): Bill | null {
 }
 function saveBillDraft(uuid: string, bill: Bill) {
   try {
-    localStorage.setItem(billDraftKey(uuid), JSON.stringify(bill));
+    localStorage.setItem(billDraftKey(uuid), JSON.stringify({ ...bill, savedAt: new Date().toISOString() }));
   } catch {}
+}
+// When the draft was last saved - used to resolve draft-vs-server on load so a
+// stale local draft can't hide a bill updated on another device.
+function loadBillDraftSavedAt(uuid: string): string {
+  try {
+    const raw = localStorage.getItem(billDraftKey(uuid));
+    if (!raw) return "";
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.savedAt === "string" ? parsed.savedAt : "";
+  } catch {
+    return "";
+  }
 }
 function clearBillDraftStorage(uuid: string) {
   try {
@@ -107,7 +116,7 @@ const COMPANY_CHARGES: ChargeCategory[] = [
       { label: "Mover (per hour)", unit: "hr", rate: 80 },
       { label: "Truck (per hour)", unit: "hr", rate: 90 },
       { label: "Crew transport vehicle", unit: "day", rate: 100 },
-      { label: "Overtime (labor only — 1.5 × #movers × $80/hr)", unit: "hr", rate: 0 },
+      { label: "Overtime (labor only - 1.5 × #movers × $80/hr)", unit: "hr", rate: 0 },
       { label: "Holiday rate (2×)", unit: "hr", rate: 0 },
       { label: "2-hour minimum charge", unit: "flat", rate: 0 },
     ],
@@ -117,7 +126,7 @@ const COMPANY_CHARGES: ChargeCategory[] = [
     items: [
       { label: "Fuel & mileage surcharge", unit: "mi", rate: 2.25 },
       { label: "Big Sky trip fee", unit: "flat", rate: 125 },
-      { label: "Dump fee (weight-based — enter rate charged by the dump)", unit: "flat", rate: 0 },
+      { label: "Dump fee (weight-based - enter rate charged by the dump)", unit: "flat", rate: 0 },
     ],
   },
 ];
@@ -150,7 +159,7 @@ function materialExt(m: LiveMaterial): number {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-// When `children` is supplied, the parent positions the three slots itself —
+// When `children` is supplied, the parent positions the three slots itself -
 // lets JobReport interleave M1 cards between Bill Helper and Discounts/Total
 // without exporting BillCalculator's internal state. Default render keeps the
 // original stacked layout for any caller that still uses BillCalculator as a
@@ -166,11 +175,18 @@ type Props = {
   jobName: string;
   dumpsterPct?: number;   // 0–100 from M1 estimate
   recyclingPct?: number;  // 0–100 from M1 estimate
+  // Employee hours entries from the Report tab. Billable rows auto-populate
+  // one labor line per employee at DEFAULT_LABOR_RATE; the crew can then
+  // edit the rate/qty per line. Non-billable rows are skipped.
+  employeeHours?: EmployeeHoursEntry[];
+  // Personal vehicles the crew flagged to bill as crew transport ($100/day).
+  // Number of vehicles; 0 means "don't bill". One line item per vehicle.
+  personalVehicleCount?: number;
   children?: (slots: BillSlots) => ReactNode;
 };
 
 const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
-  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, children },
+  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, employeeHours, personalVehicleCount, children },
   ref,
 ) {
   const { settings: themeSettings } = useTheme();
@@ -221,21 +237,28 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
 
     // Load order: server bill (or seed on 404), then the localStorage draft
     // wins if one exists. Drafts represent the user's most-recent typing on
-    // this device — clobbering them with stale server data on every refresh
+    // this device - clobbering them with stale server data on every refresh
     // was what made bill notes feel like they didn't autosave.
-    apiFetch<{ items: LineItem[]; global_discount: number; notes: string }>(
+    apiFetch<{ items: LineItem[]; global_discount: number; notes: string; updated_at?: string }>(
       `/api/bill?job_uuid=${encodeURIComponent(jobUuid)}`
     )
       .then((r) => {
+        // A local draft wins only when saved after the server's last update;
+        // otherwise the server bill (possibly edited on another device) wins.
         const draft = loadBillDraft(jobUuid);
-        setBill(
-          draft ?? { items: r.items, globalDiscount: r.global_discount, notes: r.notes ?? "" },
-        );
+        const serverUpdated = r.updated_at || "";
+        const draftWins = !!draft && (!serverUpdated || loadBillDraftSavedAt(jobUuid) >= serverUpdated);
+        if (draftWins && draft) {
+          setBill(draft);
+        } else {
+          if (draft) clearBillDraftStorage(jobUuid);
+          setBill({ items: r.items, globalDiscount: r.global_discount, notes: r.notes ?? "" });
+        }
         setLoaded(true);
       })
       .catch((e) => {
         // Real 404 = no saved bill yet, seed from events + M1 estimates.
-        // Network errors / 5xx must NOT fall through to the seed path —
+        // Network errors / 5xx must NOT fall through to the seed path -
         // the seed call would also fail, leaving us with no bill data
         // even though the user may have a perfectly good draft. Restore
         // the draft directly and bail.
@@ -246,27 +269,14 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           return;
         }
 
-        // 404 path — try to seed from events.
-        apiFetch<SeedData>(`/api/bill/seed?job_uuid=${encodeURIComponent(jobUuid)}`)
-          .then((seed) => {
-            const draft = loadBillDraft(jobUuid);
-            if (draft) {
-              setBill(draft);
-              return;
-            }
-            const items: LineItem[] = [];
-            for (const h of seed.hours_lines) {
-              items.push({ id: uuid(), label: h.label, qty: h.hours, rate: 0, unit: "hr", discount: 0, source: "hours" });
-            }
-            // Dumpster/recycling m1 lines are populated live from the sliders —
-            // see the dumpsterPct/recyclingPct sync effect below.
-            setBill({ items, globalDiscount: 0, notes: "" });
-          })
-          .catch(() => {
-            const draft = loadBillDraft(jobUuid);
-            if (draft) setBill(draft);
-          })
-          .finally(() => setLoaded(true));
+        // 404 path - no saved bill yet. Restore local draft if any, else
+        // start empty. Labor autopopulate was removed (the seeded hours
+        // lines had a sticky $0 rate placeholder that wouldn't clear on
+        // edit). Dumpster/recycling m1 lines are still driven live from
+        // the sliders - see the sync effect below.
+        const draft = loadBillDraft(jobUuid);
+        if (draft) setBill(draft);
+        setLoaded(true);
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobUuid]);
@@ -335,6 +345,91 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       return { ...prev, items };
     });
   }, [loaded, dumpsterPct, recyclingPct]);
+
+  // ── Keep labor line items in sync with the Report's Employee Hours ──
+  // One line per billable employee, defaulted to DEFAULT_LABOR_RATE/hr.
+  // Preserves any user-edited rate/discount on an existing matching line
+  // (matched by "Labor - {employee name}") so bumping someone's rate to
+  // $90 sticks even after they log another break. Skipped entirely when
+  // the parent hasn't provided employeeHours yet - otherwise the saved
+  // labor lines from the server would be wiped on load before the parent
+  // hydrates the array.
+  useEffect(() => {
+    if (!loaded || employeeHours === undefined) return;
+    const list = employeeHours;
+    setBill((prev) => {
+      const hoursLabel = (name: string) => `Labor - ${name}`;
+      const desired = list
+        .filter((e) => !e.non_billable && (e.name || "").trim().length > 0)
+        .map((e) => {
+          const label = hoursLabel(e.name.trim());
+          const existing = prev.items.find(
+            (it) => it.source === "hours" && it.label === label,
+          );
+          return {
+            id: existing?.id ?? uuid(),
+            label,
+            qty: roundBillableQuarter(e.hours || 0),
+            rate: existing ? existing.rate : DEFAULT_LABOR_RATE,
+            unit: "hr" as Unit,
+            discount: existing?.discount ?? 0,
+            source: "hours" as const,
+          };
+        });
+
+      const otherItems = prev.items.filter((it) => it.source !== "hours");
+      const nextItems = [...otherItems, ...desired];
+
+      // Bail out if nothing actually changed - keeps the debounced draft
+      // save quiet on renders that touched employeeHours reference only.
+      if (nextItems.length === prev.items.length) {
+        const same = nextItems.every((n, i) => {
+          const p = prev.items[i];
+          return p && p.id === n.id && p.label === n.label &&
+            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
+            p.discount === n.discount && p.source === n.source;
+        });
+        if (same) return prev;
+      }
+      return { ...prev, items: nextItems };
+    });
+  }, [loaded, employeeHours]);
+
+  // ── Personal vehicles billed as crew transport ($100/vehicle/day) ──
+  // Report tab checkbox drives the count; N vehicles ⇒ N line items so
+  // admin can see one row per vehicle in the sheet. Rate stays at 100
+  // unless the crew hand-edits it (mirrors the labor-line preservation).
+  useEffect(() => {
+    if (!loaded || personalVehicleCount === undefined) return;
+    setBill((prev) => {
+      const desired = [] as LineItem[];
+      for (let i = 1; i <= personalVehicleCount; i++) {
+        const label = `Crew transport vehicle #${i}`;
+        const existing = prev.items.find((it) => it.source === "personal_vehicle" && it.label === label);
+        desired.push({
+          id: existing?.id ?? uuid(),
+          label,
+          qty: 1,
+          rate: existing ? existing.rate : 100,
+          unit: "day",
+          discount: existing?.discount ?? 0,
+          source: "personal_vehicle",
+        });
+      }
+      const otherItems = prev.items.filter((it) => it.source !== "personal_vehicle");
+      const nextItems = [...otherItems, ...desired];
+      if (nextItems.length === prev.items.length) {
+        const same = nextItems.every((n, i) => {
+          const p = prev.items[i];
+          return p && p.id === n.id && p.label === n.label &&
+            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
+            p.discount === n.discount && p.source === n.source;
+        });
+        if (same) return prev;
+      }
+      return { ...prev, items: nextItems };
+    });
+  }, [loaded, personalVehicleCount]);
 
   // ── Materials: local cache + queue (offline-safe) ────────────────────────────
   function refreshMaterials() {
@@ -466,7 +561,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       setMatErr("Select a material"); return;
     }
 
-    // Queue the add locally — persists across refresh/offline.
+    // Queue the add locally - persists across refresh/offline.
     storeEnqueueAdd(jobUuid, jobName, { name: itemName, qty, unitPrice, baseCost, source });
     refreshMaterials();
     resetMatControls();
@@ -528,7 +623,10 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // fall back to the original stacked layout.
   const billHelperSlot = (
     <>
-      <div className="sectionTitle" style={{ marginBottom: 0 }}>Bill Helper</div>
+      <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 0 }}>
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Invoice Builder</div>
+        <BetaTag feature="autoLaborLines" style={{ marginTop: 0 }} />
+      </div>
       {jobName && (
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
           Bill for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>
@@ -546,9 +644,10 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
           minWidth: 430,
           gap: 6, padding: "10px 12px",
-          background: "rgba(255,255,255,0.04)",
+          background: "rgba(255,255,255,0.08)",
           borderBottom: "1px solid var(--border)",
-          fontSize: 11, fontWeight: 700, color: "var(--muted)",
+          fontSize: 11, fontWeight: 800, color: "var(--text)",
+          opacity: 0.85,
           textTransform: "uppercase", letterSpacing: "0.04em",
         }}>
           <span>Description</span>
@@ -561,7 +660,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
 
         {bill.items.length === 0 && (
           <div style={{ padding: "20px 14px", color: "var(--muted)", fontSize: 13, textAlign: "center" }}>
-            No line items — add some below.
+            No line items - add some below.
           </div>
         )}
 
@@ -595,7 +694,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           <div>
             {materials.map((m) => {
               const unit = m.unitPrice == null ? "TBD" : fmt(m.unitPrice);
-              const ext = m.unitPrice == null ? "—" : fmt(materialExt(m));
+              const ext = m.unitPrice == null ? "-" : fmt(materialExt(m));
               return (
                 <div key={m.submissionId} style={{
                   display: "grid",
@@ -622,7 +721,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           </div>
         )}
 
-        {/* Add material — collapsed toggle */}
+        {/* Add material - collapsed toggle */}
         <div style={{ padding: "10px 12px 10px 28px", borderBottom: "1px solid var(--border)" }}>
           {!showAddMaterial ? (
             <button
@@ -640,7 +739,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   <option value="">Select material…</option>
                   {MATERIAL_CATALOG.map((m) => (
                     <option key={m.name} value={m.name}>
-                      {m.name} — {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}
+                      {m.name} - {m.unitPrice != null ? fmt(m.unitPrice) : "TBD"}
                     </option>
                   ))}
                   <option value="__custom__">Custom item…</option>

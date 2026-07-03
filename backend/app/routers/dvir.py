@@ -88,7 +88,7 @@ def _apply_mechanic_signature(
     if not _needs_mechanic_review(dvir):
         raise HTTPException(
             status_code=400,
-            detail="DVIR has no defects — mechanic review is not required.",
+            detail="DVIR has no defects - mechanic review is not required.",
         )
 
     dvir.mechanic_id = mechanic_user_id
@@ -238,7 +238,7 @@ def mechanic_sign(
     return _to_response(dvir)
 
 
-# ── Remote mechanic sign-off — email a link to a mechanic without an account ──
+# ── Remote mechanic sign-off - email a link to a mechanic without an account ──
 
 @router.post("/{dvir_id}/request-mechanic-signature", response_model=DVIRResponse)
 def request_mechanic_signature(
@@ -257,7 +257,7 @@ def request_mechanic_signature(
     if not _needs_mechanic_review(dvir):
         raise HTTPException(
             status_code=400,
-            detail="DVIR has no defects — mechanic review is not required.",
+            detail="DVIR has no defects - mechanic review is not required.",
         )
 
     mechanic_email = (body.mechanic_email or "").strip()
@@ -277,7 +277,7 @@ def request_mechanic_signature(
     try:
         send_email(
             to_email=mechanic_email,
-            subject=f"Mechanic sign-off needed — {dvir.vehicle_number} (DVIR {dvir.inspection_date})",
+            subject=f"Mechanic sign-off needed - {dvir.vehicle_number} (DVIR {dvir.inspection_date})",
             text=(
                 f"{greeting}\n\n"
                 f"Mountaineer Moving needs a mechanic sign-off before vehicle "
@@ -291,7 +291,7 @@ def request_mechanic_signature(
                 f"Once you sign, the vehicle is automatically cleared for service."
             ),
         )
-        # Log the dvir id rather than the mechanic's email — Render logs are
+        # Log the dvir id rather than the mechanic's email - Render logs are
         # not the right place to record third-party contact information.
         print(f"[mechanic-sign] email sent OK for dvir {dvir.id}")
     except Exception as exc:
@@ -313,7 +313,7 @@ def mechanic_sign_review(
     token: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    """Public — no auth. Returns the DVIR a mechanic-sign token authorizes,
+    """Public - no auth. Returns the DVIR a mechanic-sign token authorizes,
     so the remote sign page can show the inspection facts for review."""
     try:
         dvir_id = decode_mechanic_sign_token(token)
@@ -348,7 +348,7 @@ def mechanic_sign_submit(
     token: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    """Public — no auth. A remote mechanic submits their signature via the
+    """Public - no auth. A remote mechanic submits their signature via the
     token-scoped link. Applies the sign-off and auto-clears the vehicle."""
     try:
         dvir_id = decode_mechanic_sign_token(token)

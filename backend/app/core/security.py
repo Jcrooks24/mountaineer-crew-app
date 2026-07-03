@@ -89,7 +89,7 @@ def create_reset_token() -> tuple[str, datetime]:
 
 
 # Mechanics who sign a DVIR remotely have no app account, so the e-signature
-# link carries a self-contained JWT instead of a session. 14-day expiry —
+# link carries a self-contained JWT instead of a session. 14-day expiry -
 # generous because a mechanic may not get to the truck right away. Reuse is
 # naturally blocked downstream: once a DVIR's mechanic_signature is set, the
 # submit endpoint rejects further attempts (409).

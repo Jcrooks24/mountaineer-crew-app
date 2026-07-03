@@ -57,7 +57,7 @@ export default function Login() {
 
         {didReset && (
           <div className="small" style={{ color: "var(--ok)", marginBottom: 14 }}>
-            Password updated — log in with your new password.
+            Password updated - log in with your new password.
           </div>
         )}
 

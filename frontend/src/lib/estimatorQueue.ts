@@ -1,5 +1,5 @@
 // Persistent queue for estimator item adds. The estimator uses an
-// optimistic-add UX — the modal hands a payload to the parent, which drops
+// optimistic-add UX - the modal hands a payload to the parent, which drops
 // a temp row into the UI immediately and fires the POST in the background.
 // Without a persistent queue, a user who navigates away (or loses network)
 // before the POST resolves silently loses the item. This queue survives
@@ -53,7 +53,7 @@ function saveAll(q: QueuedAdd[]): void {
   try {
     localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
   } catch {
-    /* quota — noop */
+    /* quota - noop */
   }
 }
 
@@ -93,7 +93,7 @@ export function pruneStale(): void {
 
 // Drain queued adds for one estimate. `onResolved` fires for each successful
 // POST so the caller can swap tempId → server id in its rendered state.
-// `onDropped` fires when the server permanently rejects an op (4xx) — the
+// `onDropped` fires when the server permanently rejects an op (4xx) - the
 // caller should remove the temp row. Network errors and 5xx leave the op
 // queued for next time.
 export async function drain(
@@ -120,13 +120,13 @@ export async function drain(
         e.status !== 401 &&
         e.status !== 403
       ) {
-        // Permanent rejection — drop op, let caller clean UI. 401/403 are
+        // Permanent rejection - drop op, let caller clean UI. 401/403 are
         // excluded: an expired token is transient, and dropping the op would
-        // silently lose queued field work — leave it for the next pass.
+        // silently lose queued field work - leave it for the next pass.
         removeOp(op.id);
         onDropped(op.tempId, e.message);
       } else {
-        // Network / 5xx / timeout / auth — leave queued, stop this pass.
+        // Network / 5xx / timeout / auth - leave queued, stop this pass.
         return;
       }
     }

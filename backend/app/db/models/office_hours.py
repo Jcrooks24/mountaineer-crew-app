@@ -7,7 +7,7 @@ start/end + break) so the same time-math logic can be reused on both sides
 of the app.
 
 One row per (user, work_date, entry_uuid). entry_uuid is generated on the
-device so offline-queued submissions are idempotent — duplicate posts hit
+device so offline-queued submissions are idempotent - duplicate posts hit
 the unique index and are silently no-op'd (same pattern as
 materials_submissions.submission_id).
 """
@@ -21,7 +21,7 @@ class OfficeHoursEntry(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # Device-generated UUID — used for idempotent upserts.
+    # Device-generated UUID - used for idempotent upserts.
     entry_uuid = Column(String, unique=True, index=True, nullable=False)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)

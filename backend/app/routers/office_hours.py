@@ -4,7 +4,7 @@ Office Hours router.
 Admin-only endpoints for office staff to log hours that aren't tied to a
 crew job. Lands in its own Google Sheet worksheet (configured via
 SHEETS_OFFICE_HOURS_TAB) so it doesn't pollute the per-job JobReports
-sheet — those rows are job-uuid-keyed and office hours have no job.
+sheet - those rows are job-uuid-keyed and office hours have no job.
 
 All endpoints require admin role. Idempotent on entry_uuid (same offline
 retry pattern as materials_submissions).
@@ -113,7 +113,7 @@ def upsert_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """Create or update an entry. Idempotent on entry_uuid — the offline
+    """Create or update an entry. Idempotent on entry_uuid - the offline
     retry path POSTs the same id; if the row already exists we treat it
     as an edit only when the submitter matches."""
     now = datetime.now(timezone.utc)
@@ -186,7 +186,7 @@ def delete_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """Delete an entry. Idempotent — returns ok even if absent. Sheet rows
+    """Delete an entry. Idempotent - returns ok even if absent. Sheet rows
     are append-only and aren't retro-deleted (matches the rest of the app:
     admins read the sheet, deletions are visible by their absence in DB
     and by the next export not refreshing them)."""

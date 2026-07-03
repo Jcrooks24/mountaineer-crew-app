@@ -26,9 +26,23 @@ from app.db.models import system_config  # noqa: F401,E402
 from app.db.models import materials     # noqa: F401,E402
 from app.db.models import calendar_job  # noqa: F401,E402
 from app.db.models import photo         # noqa: F401,E402
-# Add any other model modules that define tables:
-from app.db import sheet_exports  # noqa: F401,E402  (if this defines Base tables)
-from app.db.models import job_bill  # noqa: F401,E402
+from app.db.models import job_bill      # noqa: F401,E402
+from app.db import sheet_exports        # noqa: F401,E402
+# All the tables added after the initial round - each MUST be imported or
+# `alembic revision --autogenerate` will emit DROP TABLE ops on regenerate.
+from app.db.models import manual_job         # noqa: F401,E402
+from app.db.models import bol                # noqa: F401,E402
+from app.db.models import long_distance      # noqa: F401,E402
+from app.db.models import document           # noqa: F401,E402
+from app.db.models import estimate           # noqa: F401,E402
+from app.db.models import patch_note         # noqa: F401,E402
+from app.db.models import admin_note         # noqa: F401,E402
+from app.db.models import office_hours       # noqa: F401,E402
+from app.db.models import reimbursement      # noqa: F401,E402
+from app.db.models import availability       # noqa: F401,E402
+from app.db.models import availability_unlock  # noqa: F401,E402
+from app.db.models import employee_tag       # noqa: F401,E402
+from app.db.models import user_email_alias   # noqa: F401,E402
 target_metadata = Base.metadata
 
 

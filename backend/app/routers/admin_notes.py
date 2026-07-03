@@ -1,4 +1,4 @@
-"""Admin notes — admin authors, crew reads.
+"""Admin notes - admin authors, crew reads.
 
 Scope model:
 - job_uuid == NULL  → global: every crew member sees it.

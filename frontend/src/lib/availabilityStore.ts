@@ -10,7 +10,7 @@
  *     window. Persists across reloads so a tab close / phone lock doesn't
  *     lose the user's taps. Cleared on a successful Submit.
  *   - server (POST /api/availability): only written when the user explicitly
- *     hits Submit. There is intentionally NO autosave on this module — testers
+ *     hits Submit. There is intentionally NO autosave on this module - testers
  *     reported the autosave UX made it feel like selections vanished after
  *     each save (the active window was auto-advancing).
  *
@@ -170,7 +170,7 @@ export async function fetchState(): Promise<AvailabilityState | null> {
 
 /** POST the supplied draft to the backend. On success, returns + persists
  *  the new server state and clears the draft. Throws on network or
- *  validation error so the caller can show the message — the autosave path
+ *  validation error so the caller can show the message - the autosave path
  *  used to swallow these and the user lost the failure signal. */
 export async function submitDraft(draft: AvailabilityDraft): Promise<AvailabilityState> {
   const r = await apiFetch<AvailabilityState>("/api/availability", {
@@ -192,7 +192,7 @@ export async function submitDraft(draft: AvailabilityDraft): Promise<Availabilit
 // ── Horizon ────────────────────────────────────────────────────────────────
 
 /** True when the user's submitted horizon is less than 14 days out from
- *  `today` — the threshold at which the "submit the next 2 weeks" prompt
+ *  `today` - the threshold at which the "submit the next 2 weeks" prompt
  *  fires on Profile and inside the picker. */
 export function isHorizonLow(horizon: string | null, todayIso: string): boolean {
   if (!horizon) return true;

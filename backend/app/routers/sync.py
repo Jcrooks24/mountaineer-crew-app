@@ -5,14 +5,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.db.models.event import Event
 from app.db.models.calendar_job import CalendarJob
+from app.db.models.manual_job import ManualJob
 from app.integrations.sheets_export import (
+    delete_event_from_sheets,
     export_events_to_sheets,
     run_export_in_background,
     update_event_note_in_sheets,
@@ -59,7 +61,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             ts = datetime.fromisoformat(e.timestamp.replace("Z", "+00:00"))
         except Exception:
             errors += 1
-            # A malformed timestamp can't be fixed by retrying — permanent.
+            # A malformed timestamp can't be fixed by retrying - permanent.
             failed.append({
                 "event_id": e.event_id,
                 "reason": "bad_timestamp",
@@ -74,7 +76,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             job_id=e.job_id,
             type=e.type,
             # On insert, the editable event time and the immutable
-            # logged_at are the same — the crew member's device time at
+            # logged_at are the same - the crew member's device time at
             # capture. They diverge only after the user edits the
             # timestamp from the timeline.
             timestamp=ts,
@@ -120,7 +122,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
             db.rollback()
             errors += 1
             # A DB error here is almost always transient (connection blip,
-            # timeout, deadlock on the small Render instance) — the event
+            # timeout, deadlock on the small Render instance) - the event
             # never inserted, so the client must keep it queued and retry.
             # Marking it non-retryable would silently lose a logged event.
             failed.append({
@@ -129,7 +131,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
                 "retryable": True,
             })
 
-    # Export to Sheets in the bounded background pool — keeps the request
+    # Export to Sheets in the bounded background pool - keeps the request
     # thread from holding the events list + an in-flight googleapiclient call
     # at the same time. The reconciler is the safety net if a background
     # export fails. Returning sheets_exported=None preserves the response
@@ -143,7 +145,7 @@ def sync(payload: SyncIn, db: Session = Depends(get_db), current_user: User = De
         "duplicates": duplicates,
         "errors": errors,
         "failed": failed,
-        "sheets_exported": None,                # async — see reconciler
+        "sheets_exported": None,                # async - see reconciler
         "sheets_error": None,
     }
 
@@ -206,29 +208,15 @@ class EventPatch(BaseModel):
     timestamp: Optional[str] = None
 
 
-# Bounds on how far an editable timestamp can drift from logged_at. Future
-# is rejected outright (with a small clock-skew grace); past is capped so
-# year-typo accidents don't sprinkle events under the wrong job. Mirrors
-# the client-side guard.
-_TIMESTAMP_FUTURE_GRACE_S = 5 * 60       # 5 minutes
-_TIMESTAMP_PAST_LIMIT_S = 7 * 24 * 60 * 60  # 7 days
-
-
-def _validate_editable_timestamp(new_ts_iso: str, logged_at: datetime) -> datetime:
+def _validate_editable_timestamp(new_ts_iso: str) -> datetime:
     try:
         new_ts = datetime.fromisoformat(new_ts_iso.replace("Z", "+00:00"))
     except Exception:
         raise HTTPException(status_code=400, detail="bad_timestamp")
-    # Normalize to naive UTC so the comparison matches how /api/sync stores
-    # datetimes (the `timestamp` column is naive UTC).
+    # Normalize to naive UTC so the stored timestamp matches how /api/sync
+    # stores datetimes (the `timestamp` column is naive UTC).
     if new_ts.tzinfo is not None:
         new_ts = new_ts.astimezone(timezone.utc).replace(tzinfo=None)
-    now = datetime.utcnow()
-    if (new_ts - now).total_seconds() > _TIMESTAMP_FUTURE_GRACE_S:
-        raise HTTPException(status_code=400, detail="timestamp_in_future")
-    earliest = logged_at - timedelta(seconds=_TIMESTAMP_PAST_LIMIT_S)
-    if new_ts < earliest:
-        raise HTTPException(status_code=400, detail="timestamp_too_far_past")
     return new_ts
 
 
@@ -244,7 +232,7 @@ def patch_event(
     Currently `note` and `timestamp`. The row's `logged_at`, location, and
     author stay intact. Each PATCH commits Postgres first, then writes the
     same change into the Events sheet. If the event hasn't been exported
-    yet, the sheet call is a no-op — the row will ship via the normal sync
+    yet, the sheet call is a no-op - the row will ship via the normal sync
     path with the latest values.
     """
     row = db.query(Event).filter(Event.event_id == event_id).first()
@@ -262,7 +250,7 @@ def patch_event(
         note_changed = True
 
     if payload.timestamp is not None:
-        new_ts = _validate_editable_timestamp(payload.timestamp, row.logged_at)
+        new_ts = _validate_editable_timestamp(payload.timestamp)
         row.timestamp = new_ts
         timestamp_changed = True
 
@@ -273,7 +261,7 @@ def patch_event(
 
     # Run the sheet updates synchronously (not via the background pool) so
     # memory is bounded by uvicorn's worker count. A sheet failure must never
-    # fail the PATCH — Postgres is the source of truth; the reconciler /
+    # fail the PATCH - Postgres is the source of truth; the reconciler /
     # next edit catches up on missed sheet writes.
     sheet_error: Optional[str] = None
     try:
@@ -291,6 +279,30 @@ def patch_event(
         "timestamp": new_ts.isoformat() if timestamp_changed and new_ts else None,
         "sheet_error": sheet_error,
     }
+
+
+@router.delete("/events/{event_id}")
+def delete_event(
+    event_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete an event logged in error (removes the derived RODS duty change too
+    when it's a DUTY event). Idempotent: a missing event is a no-op. Postgres is
+    the source of truth; the sheet row is removed best-effort."""
+    row = db.query(Event).filter(Event.event_id == event_id).first()
+    if row is None:
+        return {"ok": True, "event_id": event_id, "noop": True}
+    db.delete(row)
+    db.commit()
+
+    sheet_error: Optional[str] = None
+    try:
+        delete_event_from_sheets(db, event_id)
+    except Exception as ex:  # a sheet failure must never fail the delete
+        sheet_error = str(ex)
+
+    return {"ok": True, "event_id": event_id, "sheet_error": sheet_error}
 
 
 @router.get("/jobs/resolve")
@@ -316,3 +328,110 @@ def resolve_calendar_job(
     db.add(row)
     db.commit()
     return {"ok": True, "job_uuid": new_uuid, "created": True}
+
+
+# ── Manual jobs ────────────────────────────────────────────────────────────
+# The "Other (enter manually)" option on the Timeline lets crew type a job
+# name that isn't on the Google Calendar. The client derives a deterministic
+# job_uuid from (normalized name, date) so any device typing the same name
+# on the same day gets the same UUID (their events auto-merge). These
+# endpoints persist the mapping so a manual entry shows up in other crew
+# members' dropdowns for that day.
+
+
+class ManualJobIn(BaseModel):
+    job_uuid: str
+    name: str
+    date: str  # YYYY-MM-DD
+
+
+@router.post("/jobs/manual")
+def upsert_manual_job(
+    payload: ManualJobIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Register a manual job so the (name, date) pair is visible to other
+    devices for that day. Idempotent: a client can POST the same entry any
+    number of times without side effects.
+
+    The client normalizes (trim + collapse whitespace + lowercase) before
+    deriving the deterministic job_uuid. We mirror that normalization when
+    looking for duplicates so `"The Job"` and `"the  job"` collapse to the
+    same row - otherwise the natural-key uniqueness only fires on exact
+    case matches and we end up with duplicate rows sharing a UUID.
+    """
+    raw_name = (payload.name or "").strip()
+    if not raw_name:
+        raise HTTPException(status_code=400, detail="name_required")
+    try:
+        job_date = datetime.strptime(payload.date, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad_date")
+
+    def _normalize(s: str) -> str:
+        return " ".join(s.split()).lower()
+
+    norm_name = _normalize(raw_name)
+
+    existing = db.query(ManualJob).filter(ManualJob.job_uuid == payload.job_uuid).first()
+    if existing:
+        # Keep the display name in sync if the crew fixes a typo; the UUID
+        # is what pins the job so we never touch it here.
+        if existing.name != raw_name or existing.job_date != job_date:
+            existing.name = raw_name
+            existing.job_date = job_date
+            db.commit()
+        return {"ok": True, "job_uuid": existing.job_uuid, "created": False}
+
+    # Case-insensitive duplicate check BEFORE insert so we return the
+    # earlier row's UUID instead of racing to an IntegrityError.
+    from sqlalchemy import func as _sa_func
+    dupe = (
+        db.query(ManualJob)
+        .filter(_sa_func.lower(ManualJob.name) == norm_name, ManualJob.job_date == job_date)
+        .first()
+    )
+    if dupe:
+        return {"ok": True, "job_uuid": dupe.job_uuid, "created": False}
+
+    row = ManualJob(job_uuid=payload.job_uuid, name=raw_name, job_date=job_date)
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Race: another device inserted the same (name, date) pair first.
+        # Whichever job_uuid wins the race is canonical — the client will
+        # re-derive its UUID from the deterministic hash on next load and
+        # they should match anyway.
+        db.rollback()
+        existing = (
+            db.query(ManualJob)
+            .filter(_sa_func.lower(ManualJob.name) == norm_name, ManualJob.job_date == job_date)
+            .first()
+        )
+        if existing:
+            return {"ok": True, "job_uuid": existing.job_uuid, "created": False}
+        raise
+    return {"ok": True, "job_uuid": row.job_uuid, "created": True}
+
+
+@router.get("/jobs/manual")
+def list_manual_jobs(
+    date: str = Query(..., description="YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all manual jobs for a given calendar date so the Timeline
+    dropdown can offer entries added by other crew members / devices."""
+    try:
+        job_date = datetime.strptime(date, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad_date")
+    rows = (
+        db.query(ManualJob)
+        .filter(ManualJob.job_date == job_date)
+        .order_by(ManualJob.created_at.asc())
+        .all()
+    )
+    return {"ok": True, "entries": [{"job_uuid": r.job_uuid, "name": r.name} for r in rows]}

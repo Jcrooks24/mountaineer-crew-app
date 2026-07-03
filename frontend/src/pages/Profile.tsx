@@ -59,7 +59,7 @@ export default function Profile() {
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Availability horizon — cache on mount, then refresh from server so the
+  // Availability horizon - cache on mount, then refresh from server so the
   // "you need to submit" badge is current. We only need to know whether the
   // horizon is below the 14-day threshold; the picker page itself owns the
   // full state.
@@ -159,7 +159,7 @@ export default function Profile() {
     cursor: "pointer", fontSize: 13, padding: "4px 8px",
   };
 
-  // ── My Profile sub-page — photo + account config ──────────────────────────
+  // ── My Profile sub-page - photo + account config ──────────────────────────
   if (view === "profile") {
     return (
       <div className="container" style={{ maxWidth: 480 }}>
@@ -209,7 +209,7 @@ export default function Profile() {
           {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
         </div>
 
-        {/* Account — read-only identity plus editable display name */}
+        {/* Account - read-only identity plus editable display name */}
         <div className="card">
           <div className="sectionTitle">Account</div>
           <div className="col" style={{ gap: 14 }}>
@@ -256,7 +256,7 @@ export default function Profile() {
         </button>
       </div>
 
-      {/* My Profile entry — tap to open photo + account config */}
+      {/* My Profile entry - tap to open photo + account config */}
       <div
         role="button"
         onClick={() => setView("profile")}
@@ -283,12 +283,12 @@ export default function Profile() {
         <span style={{ color: "var(--muted)", fontSize: 18, flexShrink: 0 }}>›</span>
       </div>
 
-      {/* App update — subdued so it doesn't dominate, but always in the same spot */}
+      {/* App update - subdued so it doesn't dominate, but always in the same spot */}
       <div className="card">
         <AppRefreshButton />
       </div>
 
-      {/* Tools & resources — nav links grouped into one card with consistent
+      {/* Tools & resources - nav links grouped into one card with consistent
           flat rows, so the page reads as a short list. */}
       <div className="card">
         <div className="sectionTitle">Tools & Resources</div>
@@ -297,7 +297,7 @@ export default function Profile() {
             label="Scheduling Availability"
             hint={
               availabilityHorizonLow
-                ? "Update needed — submit availability for the next 2 weeks"
+                ? "Update needed - submit availability for the next 2 weeks"
                 : "Tap days to set available / unavailable / conditional"
             }
             betaFeature="schedulingAvailability"
@@ -310,17 +310,13 @@ export default function Profile() {
             onClick={() => nav("/reimbursement")}
           />
           <ProfileNavRow
-            label="Long Distance Compliance"
-            onClick={() => nav("/long-distance")}
-          />
-          <ProfileNavRow
             label="Document Library"
             onClick={() => nav("/documents")}
           />
         </div>
       </div>
 
-      {/* Patch Notes — latest notes collapsed to a preview */}
+      {/* Patch Notes - latest notes collapsed to a preview */}
       <PatchNotesCard />
 
       {/* Sign out */}
@@ -342,7 +338,7 @@ export default function Profile() {
   );
 }
 
-// Flat, list-style navigation row — lighter than a default button so a card
+// Flat, list-style navigation row - lighter than a default button so a card
 // full of links doesn't read as a wall of buttons.
 function ProfileNavRow({
   label,
@@ -421,9 +417,9 @@ function AppRefreshButton() {
     ? result.kind === "latest"
       ? "You're on the latest version."
       : result.kind === "updating"
-        ? "Update found — reloading…"
+        ? "Update found - reloading…"
         : result.kind === "offline"
-          ? "You're offline — can't check for updates."
+          ? "You're offline - can't check for updates."
           : result.kind === "unsupported"
             ? "Updates can't be checked on this browser."
             : result.message

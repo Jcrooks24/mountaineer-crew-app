@@ -1,8 +1,8 @@
 """
-Application configuration — reads from environment variables with sensible defaults.
+Application configuration - reads from environment variables with sensible defaults.
 Set these on Render (or in a .env file locally):
-  JWT_SECRET                    — required in prod; keep it secret
-  ACCESS_TOKEN_EXPIRE_MINUTES   — default 129600 (90 days)
+  JWT_SECRET                    - required in prod; keep it secret
+  ACCESS_TOKEN_EXPIRE_MINUTES   - default 129600 (90 days)
 
 The 90-day default is deliberately long: crew work in the field, often at
 sites with no signal, and a bounced session that forces them back to the

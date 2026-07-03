@@ -7,8 +7,8 @@ Google Drive first; the resulting Drive ids/URLs are persisted on the
 reimbursement row and round-tripped to the Reimbursements worksheet.
 
 Two POSTs:
-- /api/reimbursements/mileage   — multipart with two odometer photos
-- /api/reimbursements/expense   — multipart with one receipt photo
+- /api/reimbursements/mileage   - multipart with two odometer photos
+- /api/reimbursements/expense   - multipart with one receipt photo
 
 Both are idempotent on reimbursement_uuid (offline retry path).
 """
@@ -168,7 +168,7 @@ def submit_mileage(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Fields are intentionally all optional — crew can submit a partial
+    # Fields are intentionally all optional - crew can submit a partial
     # request (e.g. only one odometer photo) and the admin follows up.
     # The only sanity guard is a reading inversion, and only when both
     # numbers are actually present.
@@ -185,7 +185,7 @@ def submit_mileage(
         .first()
     )
     if existing:
-        # Offline retry of an already-submitted request — return existing row.
+        # Offline retry of an already-submitted request - return existing row.
         return _to_out(existing)
 
     user_name = current_user.name or current_user.email or ""
@@ -202,7 +202,7 @@ def submit_mileage(
                 user_name=user_name,
                 reimbursement_uuid=reimbursement_uuid,
                 kind="odo_start",
-                caption=f"Start odometer: {odometer_start if odometer_start is not None else '—'}",
+                caption=f"Start odometer: {odometer_start if odometer_start is not None else '-'}",
             )
         if odometer_end_photo is not None:
             end_upload = upload_reimbursement_photo_to_drive(
@@ -213,7 +213,7 @@ def submit_mileage(
                 user_name=user_name,
                 reimbursement_uuid=reimbursement_uuid,
                 kind="odo_end",
-                caption=f"End odometer: {odometer_end if odometer_end is not None else '—'}",
+                caption=f"End odometer: {odometer_end if odometer_end is not None else '-'}",
             )
     except Exception as e:
         traceback.print_exc()
@@ -254,7 +254,7 @@ def submit_mileage(
         db.commit()
         db.refresh(row)
     except IntegrityError:
-        # Lost a race against another concurrent submit with the same uuid —
+        # Lost a race against another concurrent submit with the same uuid -
         # return whichever copy won.
         db.rollback()
         row = (
@@ -342,7 +342,7 @@ def submit_expense(
         vendor=vendor.strip() or None,
         receipt_photo_drive_id=upload["file_id"] if upload else None,
         receipt_photo_url=upload["url"] if upload else None,
-        # A receipt is a single file — the file link is the photo location.
+        # A receipt is a single file - the file link is the photo location.
         photos_drive_url=upload["url"] if upload else None,
         payment_method=method,
         notes=notes or None,

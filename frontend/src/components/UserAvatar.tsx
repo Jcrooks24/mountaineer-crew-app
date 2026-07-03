@@ -16,9 +16,9 @@ export default function UserAvatar({ displayName, size = 20 }: Props) {
   const [, force] = useState(0);
 
   useEffect(() => {
-    ensureDirectory().catch(() => { /* offline — skip */ });
+    ensureDirectory().catch(() => { /* offline - skip */ });
     return subscribeDirectory(() => force((n) => n + 1));
-    // re-run if the target name changes — listener fires on any directory update
+    // re-run if the target name changes - listener fires on any directory update
   }, [displayName]);
 
   // Touch currentDirectory so the memo recomputes after a refresh

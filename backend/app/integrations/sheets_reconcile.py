@@ -4,7 +4,7 @@ Reconciliation between the events table and the Events sheet tab.
 The /api/sync path writes to Postgres first and the Google Sheet best-effort.
 If the Sheets append fails (Google blip, expired creds, transient SSL error
 past _ssl_retry's budget), the event stays in `events` but never lands in
-`sheet_event_exports`, and nothing retries — the device drops the event from
+`sheet_event_exports`, and nothing retries - the device drops the event from
 its outbox the moment the server returns ok=True.
 
 This module finds those orphans and ships them through the existing exporter,
@@ -160,10 +160,10 @@ def reconcile_events(
             n = export_events_to_sheets(db, batch)
             exported += n
             # `n < len(batch)` here means some events were already in the
-            # dedupe table when the exporter re-checked — a benign race
+            # dedupe table when the exporter re-checked - a benign race
             # with a parallel /api/sync. Not an error.
         except Exception:
-            # Don't blow up the whole reconciliation on one bad batch — the
+            # Don't blow up the whole reconciliation on one bad batch - the
             # next run picks them up. Roll back so the session stays usable.
             try:
                 db.rollback()

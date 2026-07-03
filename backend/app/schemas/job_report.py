@@ -32,6 +32,7 @@ class EmployeeHoursEntry(BaseModel):
     break_hours: float = 0.0  # base-10 hours subtracted from worked time
     hours: float = 0.0        # actual worked hours, base-10
     non_billable: bool = False  # excluded from total man-hours when true
+    out_of_town: bool = False  # long-distance: $50 per-diem owed to this employee
 
 
 class JobReportUpsert(BaseModel):
@@ -45,6 +46,8 @@ class JobReportUpsert(BaseModel):
     hours_mismatch_reason: Optional[str] = None
     has_crew_feedback: Optional[bool] = None
     crew_feedback: Optional[str] = None
+    out_of_town: bool = False
+    bill_personal_vehicles: bool = False
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
 
     @field_validator("personal_vehicles")
@@ -83,6 +86,8 @@ class JobReportResponse(BaseModel):
     hours_mismatch_reason: Optional[str]
     has_crew_feedback: Optional[bool] = None
     crew_feedback: Optional[str] = None
+    out_of_town: bool = False
+    bill_personal_vehicles: bool = False
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime

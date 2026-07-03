@@ -4,9 +4,9 @@ Availability router.
 Crew submit forward-looking scheduling availability one 14-day window at a
 time. Endpoints:
 
-  GET  /api/availability                 — caller's own days + horizon
-  GET  /api/availability?all_users=true  — admin-only audit view
-  POST /api/availability                 — upsert a batch of (day, status)
+  GET  /api/availability                 - caller's own days + horizon
+  GET  /api/availability?all_users=true  - admin-only audit view
+  POST /api/availability                 - upsert a batch of (day, status)
 
 Upsert key is (user_id, day): a re-submission for the same day overwrites
 in place rather than stacking rows.
@@ -85,7 +85,7 @@ def _contiguous_horizon(day_strs: set[str], today: date) -> Optional[str]:
     absence (e.g. a vacation pre-submitted months out via "Plan a future
     absence") must not inflate the horizon past the near-term gap. If it
     did, isHorizonLow() would read false and the rolling 2-week submission
-    picker would stay hidden until that distant date entered the window —
+    picker would stay hidden until that distant date entered the window -
     the crew member couldn't submit their next two weeks. Anchoring on
     contiguous coverage from today keeps the rolling cadence prompting
     while still letting isolated future absences sit untouched in the data.
@@ -131,7 +131,7 @@ def _queue_window_export(
 ) -> None:
     """Refresh the sheet row for one (user, window) by reading the current
     state out of the DB and pushing it to AvailabilityStaging. Kept here so
-    the export captures the post-commit state — the background thread only
+    the export captures the post-commit state - the background thread only
     needs the prepared payload, not a live db handle.
     """
     rows = (
@@ -168,7 +168,7 @@ def get_state(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Caller's own availability state — horizon + all submitted days."""
+    """Caller's own availability state - horizon + all submitted days."""
     return _state_for_user(db, current_user.id)
 
 
@@ -177,7 +177,7 @@ def list_all(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    """Admin audit endpoint — every crew member's days, no horizon."""
+    """Admin audit endpoint - every crew member's days, no horizon."""
     rows = (
         db.query(AvailabilityDay)
         .order_by(AvailabilityDay.user_name.asc(), AvailabilityDay.day.asc())
@@ -220,7 +220,7 @@ def submit_batch(
     window_unlocked = body.window_start in unlocked_windows
 
     # Locked-day reject: any day that already exists on the server AND falls
-    # within LOCK_WINDOW_DAYS of today cannot be changed via this endpoint —
+    # within LOCK_WINDOW_DAYS of today cannot be changed via this endpoint -
     # unless admin has granted an unlock for this specific window. We reject
     # the entire batch (not per-day) so the device never half-commits a
     # window the user thought they submitted.
@@ -330,7 +330,7 @@ def list_unlocks(
     _: User = Depends(require_admin),
 ):
     """All active unlocks, or just one user's if user_id is supplied. There's
-    no expiration in the data model — admin revokes manually when the
+    no expiration in the data model - admin revokes manually when the
     exception window has passed."""
     q = db.query(AvailabilityUnlock)
     if user_id is not None:
@@ -358,7 +358,7 @@ def grant_unlock(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Idempotent grant — if an unlock already exists for (user, window),
+    # Idempotent grant - if an unlock already exists for (user, window),
     # patch the note + granted_by fields and return that row. Saves admins
     # from having to revoke + re-grant when adjusting the note.
     existing = (
@@ -420,7 +420,7 @@ admin_per_user_router = APIRouter(
 class AvailabilityRangeRow(BaseModel):
     """Compact (user, day, status) record returned by /range so the admin
     month view can build its matrix without an N+1 per-user fetch.
-    `note` is included because the month grid is read-only — anyone editing
+    `note` is included because the month grid is read-only - anyone editing
     individual days drops back into the per-user editor on the Availability
     page."""
     user_id: int
@@ -458,7 +458,7 @@ def admin_get_range(
     """Every (user_id, day, status, note) availability record + every
     scheduled job (from the Jobs calendar) within [start, end] inclusive.
     Powers the month-wide view in the admin Employees tab so admin sees
-    the whole crew at once — both their submitted availability and what
+    the whole crew at once - both their submitted availability and what
     they're already on the hook for."""
     try:
         date.fromisoformat(start)
@@ -486,7 +486,7 @@ def admin_get_range(
     ]
 
     # Scheduled jobs from the Jobs calendar over the same range. Failures
-    # here (calendar down, scope missing, etc) MUST NOT block availability —
+    # here (calendar down, scope missing, etc) MUST NOT block availability -
     # admin still wants to see the matrix. Log + return empty list.
     scheduled: List[ScheduledJobRow] = []
     try:
@@ -507,7 +507,7 @@ def admin_get_range(
             end_local = datetime.combine(
                 date.fromisoformat(end), time(0, 0, 0), tzinfo=LOCAL_TZ
             ) + timedelta(days=1)
-            # Paginate via nextPageToken — a busy month can easily exceed
+            # Paginate via nextPageToken - a busy month can easily exceed
             # 2500 (single page max). Without the loop, the tail of the
             # month would silently disappear from the matrix.
             items: List[dict] = []
@@ -594,7 +594,7 @@ def admin_upsert_user_state(
 ):
     """Bulk-upsert a crew member's availability days, bypassing the
     lock-window rule. Same input shape as the crew-facing POST but with
-    no 14-day-lock or window-bounds check — the office is trusted to
+    no 14-day-lock or window-bounds check - the office is trusted to
     enter correct data, and that's the whole point of the override.
 
     Sheet export still groups by (user, window_start), so admin should
@@ -635,7 +635,7 @@ def admin_upsert_user_state(
             existing.note = note
             existing.user_name = user_name
             # Preserve original window_start so the sheet row admin sees
-            # stays grouped where it was — body.window_start is only used
+            # stays grouped where it was - body.window_start is only used
             # as a fallback if the row is brand new.
             existing.updated_at = now
         else:
@@ -662,7 +662,7 @@ def admin_upsert_user_state(
         touched_window,
     )
 
-    # Log ids only — same PII-in-logs rule we apply to auth + dvir flows.
+    # Log ids only - same PII-in-logs rule we apply to auth + dvir flows.
     print(
         f"[availability] admin override: admin {admin.id} edited "
         f"{len(body.days)} day(s) for user {user_id}"

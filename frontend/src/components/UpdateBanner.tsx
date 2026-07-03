@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { applyWaitingUpdate } from "../lib/appUpdate";
 
 // How often to re-ask the service worker to check for a new build while the
-// app stays open — covers crew who leave the PWA running for days.
+// app stays open - covers crew who leave the PWA running for days.
 const PERIODIC_CHECK_MS = 20 * 60 * 1000; // 20 min
 // Minimum gap between focus-triggered checks, so flipping between apps a lot
 // doesn't hammer the network.
@@ -41,7 +41,7 @@ export default function UpdateBanner() {
     const statechangeAttachments: { worker: ServiceWorker; handler: () => void }[] = [];
 
     // A waiting worker counts as an *update* only if this page is already
-    // controlled by a worker — otherwise it's just the first-ever install.
+    // controlled by a worker - otherwise it's just the first-ever install.
     function announce() {
       if (cancelled) return;
       if (navigator.serviceWorker.controller) {
@@ -70,7 +70,7 @@ export default function UpdateBanner() {
       r.addEventListener("updatefound", updatefoundHandler);
 
       interval = window.setInterval(() => {
-        r.update().catch(() => { /* offline / transient — retry next tick */ });
+        r.update().catch(() => { /* offline / transient - retry next tick */ });
       }, PERIODIC_CHECK_MS);
     });
 

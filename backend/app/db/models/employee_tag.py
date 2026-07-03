@@ -6,7 +6,7 @@ Admin-managed list of role / skill tags an admin can attach to crew members
 plus whatever else admin creates). The tag list itself lives in the Settings
 tab; per-user assignment lives in the Employees tab.
 
-Join table is a plain Table (no model class) — we only ever read/write the
+Join table is a plain Table (no model class) - we only ever read/write the
 pair, never any join-row metadata.
 """
 

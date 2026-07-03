@@ -31,7 +31,7 @@ class AvailabilityDayIn(BaseModel):
 
 class AvailabilityBatchIn(BaseModel):
     """A single submission from the device. `window_start` should be the
-    first day of the 14-day window the crew filled in — the sheet aggregator
+    first day of the 14-day window the crew filled in - the sheet aggregator
     groups all days that share a window_start into one admin-readable row.
 
     `days` is the full list the crew touched in this submission. Each entry

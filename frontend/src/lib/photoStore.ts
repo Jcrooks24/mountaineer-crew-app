@@ -15,7 +15,7 @@ export type StoredPhoto = {
 };
 
 const DB_NAME = "crew_app_db";
-// Shared crew_app_db version — MUST stay in sync with reimbursementStore.ts.
+// Shared crew_app_db version - MUST stay in sync with reimbursementStore.ts.
 // IndexedDB rejects opening a DB with a version lower than its current one,
 // so every module that opens crew_app_db must use the same number and its
 // upgrade handler must create the full schema.

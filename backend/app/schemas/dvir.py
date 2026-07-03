@@ -41,7 +41,7 @@ class MechanicSignatureEmailRequest(BaseModel):
 class MechanicReviewResponse(BaseModel):
     """Trimmed DVIR view returned to a remote mechanic over the token-scoped
     public endpoint. Deliberately omits driver/mechanic signature images and
-    internal ids — the mechanic only needs the inspection facts to decide."""
+    internal ids - the mechanic only needs the inspection facts to decide."""
     dvir_id: str
     vehicle_number: str
     trailer_number: Optional[str]

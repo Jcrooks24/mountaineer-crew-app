@@ -1,5 +1,89 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
+import { fetchRemoteBol, listOpenBols, type OpenBol } from "../lib/bolStore";
+import RodsSignoff from "./RodsSignoff";
+import RosterTypeahead from "./RosterTypeahead";
+
+// Multi-day LD trips: each day is its own calendar event / job_uuid, so the
+// driver can link a day to the trip's in-progress BOL. The link is the trip's
+// anchor job; PODS + BOL + BOL# resolve against it.
+const TRIP_LINK_PREFIX = "crew_ld_trip_link_v1:";
+type TripLink = { trip_job_uuid: string; bol_id: string; label: string };
+function loadTripLink(jobUuid: string): TripLink | null {
+  try {
+    const raw = localStorage.getItem(TRIP_LINK_PREFIX + jobUuid);
+    return raw ? (JSON.parse(raw) as TripLink) : null;
+  } catch {
+    return null;
+  }
+}
+function saveTripLink(jobUuid: string, link: TripLink | null) {
+  try {
+    if (link) localStorage.setItem(TRIP_LINK_PREFIX + jobUuid, JSON.stringify(link));
+    else localStorage.removeItem(TRIP_LINK_PREFIX + jobUuid);
+  } catch {}
+}
+function bolRefOf(bol: { bol_id?: string; id?: string } | null): string {
+  const id = bol?.bol_id || bol?.id || "";
+  return id ? `BOL-${id.slice(0, 8)}` : "";
+}
+// The crew can defer the BOL so it isn't a submit blocker. We track WHICH
+// stage they're deferring for ("load" = origin loading still in progress,
+// "unload" = at destination, unload still in progress) so the deferred
+// state is meaningful on a follow-up read. Legacy "1" values from the
+// pre-split boolean flag are read back as "load" for back-compat.
+type BolDeferredReason = "" | "load" | "unload";
+
+// Per-driver PODS "already filed" self-attestation. One PODS covers the
+// whole multi-day trip (§395.8(j)(2)), but the app only searches for a
+// PODS matching this specific day's job_uuid - which would falsely make
+// day-2 look non-compliant. This override lets the crew confirm the
+// PODS is on file without duplicating the submission.
+const PODS_OVERRIDE_PREFIX = "crew_pods_override_v1:";
+function podsOverrideKey(tripJob: string, driver: string): string {
+  return `${PODS_OVERRIDE_PREFIX}${tripJob}:${driver.trim().toLowerCase()}`;
+}
+export function loadPodsOverride(tripJob: string, driver: string): boolean {
+  if (!tripJob || !driver) return false;
+  try { return localStorage.getItem(podsOverrideKey(tripJob, driver)) === "1"; } catch { return false; }
+}
+export function savePodsOverride(tripJob: string, driver: string, on: boolean): void {
+  if (!tripJob || !driver) return;
+  try {
+    if (on) localStorage.setItem(podsOverrideKey(tripJob, driver), "1");
+    else localStorage.removeItem(podsOverrideKey(tripJob, driver));
+  } catch { /* noop */ }
+}
+// Per-job "ignore this job's own BOL" flag. When the crew hits Detach BOL
+// on an auto-attached (no tripLink) BOL, we stop treating the server's
+// bol-for-this-job as attached so the picker + Start New buttons come
+// back. Cleared as soon as they pick another BOL via linkTrip.
+const BOL_DETACHED_PREFIX = "crew_ld_bol_detached_v1:";
+function loadBolDetached(jobUuid: string): boolean {
+  try { return localStorage.getItem(BOL_DETACHED_PREFIX + jobUuid) === "1"; } catch { return false; }
+}
+function saveBolDetached(jobUuid: string, on: boolean) {
+  try {
+    if (on) localStorage.setItem(BOL_DETACHED_PREFIX + jobUuid, "1");
+    else localStorage.removeItem(BOL_DETACHED_PREFIX + jobUuid);
+  } catch { /* noop */ }
+}
+const BOL_DEFER_PREFIX = "crew_ld_bol_deferred_v1:";
+function loadBolDeferred(jobUuid: string): BolDeferredReason {
+  try {
+    const raw = localStorage.getItem(BOL_DEFER_PREFIX + jobUuid) || "";
+    if (raw === "load" || raw === "unload") return raw;
+    if (raw === "1") return "load"; // pre-split value
+    return "";
+  } catch { return ""; }
+}
+function saveBolDeferred(jobUuid: string, reason: BolDeferredReason) {
+  try {
+    if (reason) localStorage.setItem(BOL_DEFER_PREFIX + jobUuid, reason);
+    else localStorage.removeItem(BOL_DEFER_PREFIX + jobUuid);
+  } catch {}
+}
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime } from "../lib/time";
@@ -7,33 +91,14 @@ import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
 
-// Mirrors backend EmployeeHoursEntry. `hours` is the actual worked time;
-// the company billable total rounds quarter-by-quarter (≥5 min → up, else
-// down) at display + sheet-export time. `non_billable` rows still show in
-// the table but contribute 0 to total man-hours.
-export type EmployeeHoursEntry = {
-  name: string;
-  start: string;
-  end: string;
-  break_hours: number;
-  hours: number;
-  non_billable?: boolean;
-};
+// Type + billing-math helpers live in lib/employeeHours so BillCalculator
+// can consume them without importing back through this parent. Re-exported
+// here for backward compatibility with existing callers (Admin, etc.).
+export { roundBillableQuarter, type EmployeeHoursEntry } from "../lib/employeeHours";
+import type { EmployeeHoursEntry } from "../lib/employeeHours";
+import { roundBillableQuarter } from "../lib/employeeHours";
 
-// Company billing rule: round to the next quarter-hour if the worked time
-// is ≥5 minutes into the current quarter; otherwise round down to that
-// quarter. Mirrored on the backend (_round_billable_quarter in
-// sheets_export.py) so the spreadsheet and the UI agree.
-export function roundBillableQuarter(hours: number): number {
-  if (hours <= 0) return 0;
-  const totalMin = Math.round(hours * 60);
-  const quarters = Math.floor(totalMin / 15);
-  const remainder = totalMin - quarters * 15;
-  const roundedMin = remainder >= 5 ? (quarters + 1) * 15 : quarters * 15;
-  return roundedMin / 60;
-}
-
-// Compact subset of EventRecord — enough to populate the Employee Hours
+// Compact subset of EventRecord - enough to populate the Employee Hours
 // dropdowns without leaking the rest of App.tsx's offline state into
 // JobReport. `note` surfaces in the dropdown labels (truncated to one line)
 // so crew can disambiguate which "ARRIVED" they're picking when a job has
@@ -54,11 +119,11 @@ type BillingMethod =
   | "end_of_job";
 
 const BILLING_OPTIONS: { value: BillingMethod; label: string }[] = [
-  { value: "crew_cash",           label: "Crew collected — cash" },
-  { value: "crew_check",          label: "Crew collected — check" },
+  { value: "crew_cash",           label: "Crew collected - cash" },
+  { value: "crew_check",          label: "Crew collected - check" },
   { value: "office_invoice",      label: "Office sends invoice" },
-  { value: "office_arrange_cash", label: "Office arranges pick-up / drop-off — cash" },
-  { value: "office_arrange_check",label: "Office arranges pick-up / drop-off — check" },
+  { value: "office_arrange_cash", label: "Office arranges pick-up / drop-off - cash" },
+  { value: "office_arrange_check",label: "Office arranges pick-up / drop-off - check" },
   { value: "end_of_job",          label: "Bill at end of job (multi-day)" },
 ];
 
@@ -70,6 +135,9 @@ type ReviewCandidate = "yes" | "no" | "na";
 type ReportData = {
   has_personal_vehicles: boolean | null;
   personal_vehicles: number;
+  // Bill the personal vehicles as crew transport vehicles ($100/vehicle/day).
+  // Local-only for now (draft-persisted) - backend column can follow.
+  bill_personal_vehicles: boolean;
   has_dumpster_use: boolean | null;
   dumpster_pct: number;
   has_recycling_use: boolean | null;
@@ -80,6 +148,8 @@ type ReportData = {
   hours_mismatch_reason: string;
   has_crew_feedback: boolean | null;
   crew_feedback: string;
+  // Long-distance: submitter started AND ended the day out of town ($50 per-diem).
+  out_of_town: boolean;
   employee_hours: EmployeeHoursEntry[];
 };
 
@@ -96,10 +166,14 @@ function coerceReviewCandidate(v: unknown): ReviewCandidate | null {
 // In-progress draft persisted to localStorage so partially filled reports
 // survive tab switches (the JobReport component unmounts when the user
 // navigates away from the Report tab) and full page reloads. Cleared on
-// successful submit. Keyed by job_uuid; per-device only — drafts are not
+// successful submit. Keyed by job_uuid; per-device only - drafts are not
 // synced cross-device.
 const REPORT_DRAFT_PREFIX = "crew_report_draft_v1:";
-type ReportDraft = { data: ReportData; billReviewed: boolean };
+// savedAt lets us resolve draft-vs-server on load: a draft only wins over the
+// server report when it was saved AFTER the server's last update (i.e. it holds
+// newer in-progress edits). A server report updated on another device since
+// this device's draft was saved wins (cross-device continuity).
+type ReportDraft = { data: ReportData; billReviewed: boolean; savedAt?: string };
 
 function reportDraftKey(uuid: string) {
   return `${REPORT_DRAFT_PREFIX}${uuid || "none"}`;
@@ -117,7 +191,7 @@ function loadReportDraft(uuid: string): ReportDraft | null {
 }
 function saveReportDraft(uuid: string, draft: ReportDraft) {
   try {
-    localStorage.setItem(reportDraftKey(uuid), JSON.stringify(draft));
+    localStorage.setItem(reportDraftKey(uuid), JSON.stringify({ ...draft, savedAt: new Date().toISOString() }));
   } catch {}
 }
 function clearReportDraft(uuid: string) {
@@ -130,16 +204,208 @@ type Props = {
   jobUuid: string;
   jobName: string;
   events?: ReportEvent[];
+  longDistance?: boolean;
+  // Long-distance drive-only day: skip the billing/eval questions that don't
+  // apply when the crew only drove (no labor to bill).
+  driveOnly?: boolean;
+  // Long-distance day with BOTH labor and driving: LD docs are required to submit.
+  mixedLd?: boolean;
 };
 
-export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
+function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: string; hint?: string; onGo: () => void }) {
+  return (
+    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <span
+          style={{
+            width: 22, height: 22, flexShrink: 0, borderRadius: 6, display: "grid", placeItems: "center",
+            background: done ? "var(--ok)" : "transparent",
+            border: done ? "none" : "1.5px solid var(--border)",
+            color: "#0b1f14", fontWeight: 800, fontSize: 14,
+          }}
+        >
+          {done ? "✓" : ""}
+        </span>
+        <span style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, color: done ? "var(--muted)" : "var(--text)" }}>{label}</div>
+          {hint && <div className="small" style={{ color: "var(--muted)" }}>{hint}</div>}
+        </span>
+      </span>
+      {/* Always openable so the driver can VIEW a completed PODS/BOL at any
+          time (FMCSR), or complete an outstanding one. */}
+      <button
+        type="button"
+        onClick={onGo}
+        className={done ? "" : "btnPrimary"}
+        style={{ fontSize: 12, padding: "6px 12px", flexShrink: 0 }}
+      >
+        {done ? "View" : "Complete"}
+      </button>
+    </div>
+  );
+}
+
+export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false }: Props) {
+  const nav = useNavigate();
   const { user } = useAuth();
+
+  // Long-distance documents: PODS + BOL (with multi-day trip linking).
+  const [bolStatus, setBolStatus] = useState<string>("");
+  const [bolRef, setBolRef] = useState<string>("");
+  // Full bol_id of the currently-attached BOL. Kept alongside the display
+  // `bolRef` because the ChecklistItems now deep-link the crew straight
+  // into that specific BOL's editor - the truncated ref isn't usable.
+  const [attachedBolId, setAttachedBolId] = useState<string>("");
+  const [priorDone, setPriorDone] = useState<boolean>(false);
+  // Whether the currently signed-in user has a PODS for this trip's job.
+  // Drives the "As the driver, I've submitted my PODS" checkbox by the
+  // per-diem row so a driver can see their own compliance at a glance
+  // without conflating it with any other driver on a multi-driver trip.
+  const [podsForDriver, setPodsForDriver] = useState<boolean>(false);
+  // Manual "already filed" override for this driver on this trip -
+  // multi-day trips share one PODS so day-2 shouldn't fake-fail.
+  const [podsOverride, setPodsOverrideState] = useState<boolean>(false);
+  // Set of driver names (lowercased) with a PODS on file for this trip.
+  // Each RodsDriverSection reads its own driver to render its own PODS
+  // checkbox - the sign-in user's checkbox is above; this covers the
+  // added-on-behalf drivers.
+  const [podsDriverNames, setPodsDriverNames] = useState<Set<string>>(() => new Set());
+  // Bumped when the tab regains focus so the LD effect below refetches
+  // the BOL + PODS state. Without this a BOL auto-created on the
+  // Inventory tab wouldn't appear here until the whole component
+  // remounts.
+  const [ldRefresh, setLdRefresh] = useState<number>(0);
+  useEffect(() => {
+    function onVis() {
+      if (document.visibilityState === "visible") setLdRefresh((n) => n + 1);
+    }
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+    };
+  }, []);
+  const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
+  const [openBols, setOpenBols] = useState<OpenBol[]>([]);
+  const [bolDeferred, setBolDeferred] = useState<BolDeferredReason>(() => (jobUuid ? loadBolDeferred(jobUuid) : ""));
+  const [bolDetached, setBolDetachedState] = useState<boolean>(() => (jobUuid ? loadBolDetached(jobUuid) : false));
+
+  useEffect(() => {
+    setTripLink(jobUuid ? loadTripLink(jobUuid) : null);
+    setBolDeferred(jobUuid ? loadBolDeferred(jobUuid) : "");
+    setBolDetachedState(jobUuid ? loadBolDetached(jobUuid) : false);
+  }, [jobUuid]);
+
+  // Hydrate manual PODS override once we know the trip anchor + driver.
+  const meName = user?.name || user?.email || "";
+  useEffect(() => {
+    const tj = tripLink?.trip_job_uuid || jobUuid;
+    setPodsOverrideState(loadPodsOverride(tj, meName));
+  }, [tripLink, jobUuid, meName]);
+
+  // The trip's anchor job: the linked in-progress BOL's job, or this job.
+  const tripJob = tripLink?.trip_job_uuid || jobUuid;
+
+  useEffect(() => {
+    if (!longDistance || !jobUuid) return;
+    let cancelled = false;
+    (async () => {
+      const bol = await fetchRemoteBol(tripJob);
+      if (!cancelled) {
+        // When the crew has explicitly detached this job's own BOL, don't
+        // auto-attach it back on refetch. bolDetached only applies to the
+        // job-itself case (no tripLink) - a real tripLink to another
+        // trip's anchor overrides it.
+        const respectDetach = bolDetached && !tripLink;
+        // Preserve any optimistic bolStatus set by linkTrip when the linked
+        // BOL is local-only and hasn't synced yet - fetchRemoteBol would
+        // return null in that case and would otherwise wipe the attached
+        // state right after the user picked a BOL.
+        if (bol && !respectDetach) {
+          setBolStatus(bol.status || "");
+          setBolRef(bolRefOf(bol));
+          setAttachedBolId(bol.bol_id || bol.id || "");
+        }
+        if (respectDetach) { setBolStatus(""); setBolRef(""); setAttachedBolId(""); }
+      }
+      try {
+        const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(tripJob)}`);
+        // Robust: only count statements that EXACTLY match the trip job, so a
+        // statement from another trip (or an unfiltered response) can't
+        // false-positive the "done" state.
+        const forJob = (Array.isArray(prior) ? prior : []).filter((p) => (p?.job_uuid || "") === tripJob);
+        if (!cancelled) setPriorDone(forJob.length > 0);
+        // Per-driver check: does the *current user's* PODS exist for this
+        // trip? A multi-driver trip needs each driver to file their own.
+        const mine = user?.id
+          ? forJob.filter((p) => Number(p?.driver_id) === Number(user.id))
+          : [];
+        if (!cancelled) setPodsForDriver(mine.length > 0);
+        // Names (lowercased) so RodsDriverSection can flag each driver's
+        // PODS status. Includes driver_name from every PODS record.
+        const names = new Set<string>();
+        for (const p of forJob) {
+          const n = String(p?.driver_name || "").trim().toLowerCase();
+          if (n) names.add(n);
+        }
+        if (!cancelled) setPodsDriverNames(names);
+      } catch {
+        if (!cancelled) { setPriorDone(false); setPodsForDriver(false); setPodsDriverNames(new Set()); }
+      }
+      const open = await listOpenBols();
+      if (!cancelled) setOpenBols(open);
+    })();
+    return () => { cancelled = true; };
+  }, [longDistance, jobUuid, tripJob, ldRefresh, bolDetached, tripLink]);
+
+  function setBolDeferredFlag(reason: BolDeferredReason) {
+    setBolDeferred(reason);
+    saveBolDeferred(jobUuid, reason);
+  }
+  function linkTrip(o: OpenBol | null) {
+    if (o) {
+      const link: TripLink = { trip_job_uuid: o.job_uuid, bol_id: o.bol_id, label: `${o.job_name || "Untitled"}${o.job_date ? " · " + o.job_date : ""}` };
+      saveTripLink(jobUuid, link);
+      setTripLink(link);
+      setBolDeferredFlag("");
+      // Actively picking a new BOL revokes the earlier detach flag - the
+      // crew clearly wants this trip attached to something now.
+      saveBolDetached(jobUuid, false);
+      setBolDetachedState(false);
+      // Optimistically flip the render into the "attached" branch. Without
+      // this, a local-only BOL (not yet synced to the server) would leave
+      // bolStatus empty after fetchRemoteBol returns null - the render
+      // stays on the dropdown and the click appears to do nothing.
+      setBolStatus(o.status || "draft");
+      setBolRef(o.bol_id || "");
+      setAttachedBolId(o.bol_id || "");
+    } else {
+      saveTripLink(jobUuid, null);
+      setTripLink(null);
+      setBolStatus("");
+      setBolRef("");
+      setAttachedBolId("");
+    }
+  }
+  function detachOwnBol() {
+    // Persist so a later mount / visibility refresh doesn't re-attach the
+    // same server row. Cleared automatically the next time linkTrip runs
+    // with a real BOL.
+    saveBolDetached(jobUuid, true);
+    setBolDetachedState(true);
+    setBolStatus("");
+    setBolRef("");
+    setAttachedBolId("");
+  }
+
   const { settings: themeSettings } = useTheme();
   const ht = themeSettings.helpTexts;
 
   const [data, setData] = useState<ReportData>({
     has_personal_vehicles: null,
     personal_vehicles: 0,
+    bill_personal_vehicles: false,
     has_dumpster_use: null,
     dumpster_pct: 0,
     has_recycling_use: null,
@@ -150,6 +416,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     hours_mismatch_reason: "",
     has_crew_feedback: null,
     crew_feedback: "",
+    out_of_town: false,
     employee_hours: [],
   });
 
@@ -165,7 +432,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   const pendingSaveRef = useRef<(() => Promise<void>) | null>(null);
   const billRef = useRef<BillHandle>(null);
 
-  // Draft autosave state — see REPORT_DRAFT_PREFIX above for the persistence
+  // Draft autosave state - see REPORT_DRAFT_PREFIX above for the persistence
   // contract. Pill mirrors the global notes pattern: "Saving…" → "✓ Draft saved".
   type DraftStatus = "idle" | "saving" | "saved";
   const [draftStatus, setDraftStatus] = useState<DraftStatus>("idle");
@@ -174,6 +441,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   // the autosave effect skips writing back the just-loaded values (which
   // would flip the pill to "Saving" on mount for no reason).
   const skipNextDraftSaveRef = useRef<boolean>(false);
+  // Server report's updated_at from the last GET, to resolve draft-vs-server.
+  const serverUpdatedAtRef = useRef<string>("");
 
   // Load existing report when job_uuid changes
   useEffect(() => {
@@ -181,12 +450,37 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     setLoaded(false);
     setSaved(false);
     setBillReviewed(false);
+
+    // Safety net: force `loaded` true after 15 seconds even if the fetch is
+    // stuck. Previously a hung /api/job-report request could leave the tab
+    // on the "Loading…" placeholder indefinitely. The .finally() below is
+    // still the primary path; this timer just bails out of any edge case
+    // that would otherwise strand the crew on a spinner.
+    const bail = window.setTimeout(() => {
+      setLoaded((prev) => {
+        if (prev) return prev;
+        // Try the local draft as a last resort so the crew doesn't lose
+        // in-progress typing on a stall.
+        const draft = loadReportDraft(jobUuid);
+        if (draft) {
+          setData({
+            ...draft.data,
+            review_candidate: coerceReviewCandidate(draft.data.review_candidate),
+          });
+          setBillReviewed(draft.billReviewed);
+        }
+        skipNextDraftSaveRef.current = true;
+        return true;
+      });
+    }, 15000);
+
     apiFetch<ReportData & { id: number; employee_hours: EmployeeHoursEntry[] | null }>(`/api/job-report?job_uuid=${encodeURIComponent(jobUuid)}`)
       .then((r) => {
         setData({
-          // Existing reports — infer answers from saved values
+          // Existing reports - infer answers from saved values
           has_personal_vehicles: r.personal_vehicles > 0,
           personal_vehicles: r.personal_vehicles,
+          bill_personal_vehicles: !!(r as any).bill_personal_vehicles,
           has_dumpster_use: r.dumpster_pct > 0,
           dumpster_pct: r.dumpster_pct,
           has_recycling_use: r.recycling_pct > 0,
@@ -197,13 +491,15 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           hours_mismatch_reason: r.hours_mismatch_reason ?? "",
           has_crew_feedback: r.has_crew_feedback ?? null,
           crew_feedback: r.crew_feedback ?? "",
+          out_of_town: !!(r as any).out_of_town,
           employee_hours: r.employee_hours ?? [],
         });
+        serverUpdatedAtRef.current = (r as any).updated_at || "";
         setSaved(true);
       })
       .catch((e) => {
         // ONLY reset to empty defaults on a real 404 (no report exists yet).
-        // Network errors / 5xx must preserve whatever's in memory — wiping
+        // Network errors / 5xx must preserve whatever's in memory - wiping
         // on a transient "Failed to fetch" was the cause of crew losing
         // a partly-edited report after a backend hiccup. The .finally()
         // below still tries to recover from the localStorage draft.
@@ -211,6 +507,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           setData({
             has_personal_vehicles: null,
             personal_vehicles: 0,
+            bill_personal_vehicles: false,
             has_dumpster_use: null,
             dumpster_pct: 0,
             has_recycling_use: null,
@@ -221,17 +518,23 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
             hours_mismatch_reason: "",
             has_crew_feedback: null,
             crew_feedback: "",
+            out_of_town: false,
             employee_hours: [],
           });
+          serverUpdatedAtRef.current = "";
         }
       })
       .finally(() => {
-        // After the server load (or 404 fallback), check for an in-progress
-        // draft. Drafts represent the user's most-recent typing on this
-        // device, so they win over a stale server snapshot from a previous
-        // submit. Cleared on successful Save below.
+        window.clearTimeout(bail);
+        // Resolve draft vs. server. A local draft holds this device's most-recent
+        // typing, so it wins ONLY when it was saved after the server's last
+        // update. If the server report was updated on another device since this
+        // draft was saved (or the draft predates the savedAt stamp), the server
+        // wins so a stale local draft can't hide a newer report (cross-device).
         const draft = loadReportDraft(jobUuid);
-        if (draft) {
+        const serverUpdated = serverUpdatedAtRef.current;
+        const draftWins = !!draft && (!serverUpdated || String(draft.savedAt || "") >= serverUpdated);
+        if (draftWins && draft) {
           setData({
             ...draft.data,
             review_candidate: coerceReviewCandidate(draft.data.review_candidate),
@@ -239,11 +542,16 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           setBillReviewed(draft.billReviewed);
           setDraftStatus("saved");
         } else {
+          // Server is authoritative; drop the stale draft so autosave doesn't
+          // resurrect it.
+          if (draft) clearReportDraft(jobUuid);
           setDraftStatus("idle");
         }
         skipNextDraftSaveRef.current = true;
         setLoaded(true);
       });
+
+    return () => { window.clearTimeout(bail); };
   }, [jobUuid]);
 
   // Debounced draft autosave. Triggers on every change to `data` or
@@ -286,6 +594,9 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   const sortedEvents = useMemo(
     () =>
       events
+        // Drive-time (RODS duty changes) is not paid hourly, so DUTY events must
+        // not appear as options when recording employee hours.
+        .filter((e) => e.type !== "DUTY")
         .slice()
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
     [events],
@@ -323,7 +634,9 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   const [editName, setEditName] = useState<string>("");
   const [editStart, setEditStart] = useState<SlotPick>(emptySlot);
   const [editEnd, setEditEnd] = useState<SlotPick>(emptySlot);
-  type BreakDraft = { start: SlotPick; end: SlotPick };
+  // uid is a stable React key so removing a middle break doesn't reuse
+  // the wrong slot picker's DOM (index-as-key was subtly wrong here).
+  type BreakDraft = { uid: string; start: SlotPick; end: SlotPick };
   const [editBreaks, setEditBreaks] = useState<BreakDraft[]>([]);
   // null when adding; index of the saved row when editing it. Flips Save to
   // "replace at index" semantics and surfaces a banner so the crew sees they
@@ -333,8 +646,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   const editorInitializedRef = useRef<boolean>(false);
 
   // One-shot: as soon as defaults are knowable (events arrived from App.tsx),
-  // populate start + end. Subsequent edits to either slot — including the
-  // user clearing it — won't be clobbered because the flag stops the effect.
+  // populate start + end. Subsequent edits to either slot - including the
+  // user clearing it - won't be clobbered because the flag stops the effect.
   useEffect(() => {
     if (editorInitializedRef.current) return;
     if (defaultStart.selection || defaultEnd.selection) {
@@ -344,7 +657,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     }
   }, [defaultStart, defaultEnd]);
 
-  // Drop-down label for an event. Truncates the note onto one line — long
+  // Drop-down label for an event. Truncates the note onto one line - long
   // notes are clipped with "…" so the option width stays bounded; shorter
   // notes show in full. Newlines are collapsed so multi-line notes don't
   // wrap inside the <option>.
@@ -353,7 +666,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     const rawNote = (ev.note || "").replace(/\s+/g, " ").trim();
     const NOTE_MAX = 40;
     const note = rawNote.length > NOTE_MAX ? rawNote.slice(0, NOTE_MAX - 1) + "…" : rawNote;
-    return note ? `${ev.type} — ${time} — ${note}` : `${ev.type} — ${time}`;
+    return note ? `${ev.type} - ${time} - ${note}` : `${ev.type} - ${time}`;
   }
 
   function fmtHHMM(iso: string): string {
@@ -485,7 +798,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   }, [editStart, editEnd, editBreaks, eventById]);
 
   function addBreakDraft() {
-    setEditBreaks((prev) => [...prev, { start: emptySlot, end: emptySlot }]);
+    const uid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setEditBreaks((prev) => [...prev, { uid, start: emptySlot, end: emptySlot }]);
   }
   function updateBreakStart(i: number, slot: SlotPick) {
     setEditBreaks((prev) => prev.map((b, idx) => (idx === i ? { ...b, start: slot } : b)));
@@ -529,7 +843,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     };
     setData((prev) => {
       if (editingIndex !== null && editingIndex < prev.employee_hours.length) {
-        // Preserve the existing non_billable flag — that toggle lives on the
+        // Preserve the existing non_billable flag - that toggle lives on the
         // saved tile, not in the editor, and shouldn't reset on edit.
         const next = prev.employee_hours.slice();
         next[editingIndex] = {
@@ -546,7 +860,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
 
   // Pre-fill the editor with a saved row's contents so the crew can correct a
   // mistake without removing + re-adding. Start/end load as MANUAL_SENTINEL
-  // with the stored HH:MM — we don't store the source event ids, so manual
+  // with the stored HH:MM - we don't store the source event ids, so manual
   // mode is the only way to surface the original time exactly. Breaks load
   // as a single manual-time pair when there was any break time recorded.
   function editEmployee(i: number) {
@@ -583,7 +897,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     if (editingIndex === i) resetEditor();
   }
 
-  // Sum actuals first, round once at the end — per the company rule. Each
+  // Sum actuals first, round once at the end - per the company rule. Each
   // row's display stays unrounded so users can see the raw math.
   const totalActualHours = useMemo(
     () =>
@@ -601,7 +915,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   async function doSave() {
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
-    if (billData !== null && billData !== undefined && !billReviewed) {
+    if (!driveOnly && billData !== null && billData !== undefined && !billReviewed) {
       return setErr("Please confirm you have reviewed the auto-populated bill items before saving.");
     }
 
@@ -621,7 +935,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
 
     // Clear the stale "✓ Report saved" banner from the previous load/save
     // before we start. Otherwise a failed update shows the success banner
-    // and the error banner together, which reads as nonsense — the user
+    // and the error banner together, which reads as nonsense - the user
     // can't tell if anything actually saved.
     setSaved(false);
     setErr(null);
@@ -635,13 +949,17 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           personal_vehicles: data.personal_vehicles,
           dumpster_pct: data.dumpster_pct,
           recycling_pct: data.recycling_pct,
-          billing_method: data.billing_method,
-          review_candidate: data.review_candidate,
-          hours_match: data.hours_match,
+          // Drive-only days skip the billing/eval questions; send backend-valid
+          // placeholders so the required columns still satisfy the schema.
+          billing_method: driveOnly ? (data.billing_method || "end_of_job") : data.billing_method,
+          review_candidate: driveOnly ? (data.review_candidate || "na") : data.review_candidate,
+          hours_match: driveOnly ? (data.hours_match ?? true) : data.hours_match,
           hours_mismatch_reason: data.hours_mismatch_reason.trim() || null,
           has_crew_feedback: data.has_crew_feedback,
           // "No" answer keeps a null body; "Yes" sends the trimmed text.
           crew_feedback: data.has_crew_feedback ? (data.crew_feedback.trim() || null) : null,
+          out_of_town: !!data.out_of_town,
+          bill_personal_vehicles: !!data.bill_personal_vehicles,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
           employee_hours: data.employee_hours
@@ -653,6 +971,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
               break_hours: Number(e.break_hours) || 0,
               hours: Number(e.hours) || 0,
               non_billable: !!e.non_billable,
+              out_of_town: !!e.out_of_town,
             })),
         }),
       });
@@ -671,7 +990,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       }
 
       setSaved(true);
-      // Submit succeeded — discard the in-progress drafts (report + bill).
+      // Submit succeeded - discard the in-progress drafts (report + bill).
       // The server is now authoritative; further edits start fresh drafts.
       clearReportDraft(jobUuid);
       billRef.current?.clearDraft?.();
@@ -679,12 +998,12 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     } catch (e: any) {
       // "Failed to fetch" is the browser's generic for any network failure
       // including a Render cold start that exceeded the fetch timeout. The
-      // POST may have actually committed server-side — turn the message
+      // POST may have actually committed server-side - turn the message
       // into something actionable so the crew knows to verify on refresh
       // instead of re-typing everything.
       const raw = e?.message ?? "Save failed. Please try again.";
       const friendlier = /failed to fetch|network/i.test(raw)
-        ? `${raw} — your data is preserved locally; refresh the page to see if the save went through, then retry if not.`
+        ? `${raw} - your data is preserved locally; refresh the page to see if the save went through, then retry if not.`
         : raw;
       setErr(friendlier);
     } finally {
@@ -697,21 +1016,29 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
     setErr(null);
 
     if (!jobUuid) return setErr("No job selected.");
-    if (data.has_personal_vehicles === null) return setErr("Indicate whether personal vehicles were at the job site.");
-    if (data.has_personal_vehicles && data.personal_vehicles < 1) return setErr("Enter how many personal vehicles were at the job site.");
-    if (data.has_dumpster_use === null) return setErr("Indicate whether the M1 dumpster was used on this job.");
-    if (data.has_dumpster_use && data.dumpster_pct <= 0) return setErr("Select the M1 dumpster fill percentage.");
-    if (data.has_recycling_use === null) return setErr("Indicate whether the M1 recycling bin was used on this job.");
-    if (data.has_recycling_use && data.recycling_pct <= 0) return setErr("Select the M1 recycling bin fill percentage.");
-    if (!data.billing_method) return setErr("Select a billing method.");
-    if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
-    if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
-    if (!data.hours_match && !data.hours_mismatch_reason.trim())
-      return setErr("Please explain why the hours don't match.");
-    if (data.has_crew_feedback === null)
-      return setErr("Indicate whether you have any feedback for the office.");
-    if (data.has_crew_feedback && !data.crew_feedback.trim())
-      return setErr("Please share your feedback or change your answer to No.");
+    // Mixed LD days (labor + driving): the long-distance documents are required.
+    if (mixedLd) {
+      if (!priorDone) return setErr("Complete the driver's Prior On-Duty statement before submitting.");
+      if (!bolStatus && !bolDeferred) return setErr("Attach the trip's Bill of Lading (or mark not at destination yet) before submitting.");
+    }
+    // Drive-only LD days skip the billing/eval questions (no labor to bill).
+    if (!driveOnly) {
+      if (data.has_personal_vehicles === null) return setErr("Indicate whether personal vehicles were at the job site.");
+      if (data.has_personal_vehicles && data.personal_vehicles < 1) return setErr("Enter how many personal vehicles were at the job site.");
+      if (data.has_dumpster_use === null) return setErr("Indicate whether the M1 dumpster was used on this job.");
+      if (data.has_dumpster_use && data.dumpster_pct <= 0) return setErr("Select the M1 dumpster fill percentage.");
+      if (data.has_recycling_use === null) return setErr("Indicate whether the M1 recycling bin was used on this job.");
+      if (data.has_recycling_use && data.recycling_pct <= 0) return setErr("Select the M1 recycling bin fill percentage.");
+      if (!data.billing_method) return setErr("Select a billing method.");
+      if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
+      if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
+      if (!data.hours_match && !data.hours_mismatch_reason.trim())
+        return setErr("Please explain why the hours don't match.");
+      if (data.has_crew_feedback === null)
+        return setErr("Indicate whether you have any feedback for the office.");
+      if (data.has_crew_feedback && !data.crew_feedback.trim())
+        return setErr("Please share your feedback or change your answer to No.");
+    }
 
     // Show DVIR reminder before saving
     pendingSaveRef.current = doSave;
@@ -727,7 +1054,15 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
   }
 
   if (!loaded) {
-    return <div className="card small" style={{ color: "var(--muted)" }}>Loading…</div>;
+    return (
+      <div className="card" style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6 }}>
+        <div>Loading report…</div>
+        <div style={{ marginTop: 6 }}>
+          If this stays visible for more than a few seconds, refresh the app —
+          the fetch may have stalled.
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -752,6 +1087,8 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
       jobName={jobName}
       dumpsterPct={data.dumpster_pct}
       recyclingPct={data.recycling_pct}
+      employeeHours={loaded ? data.employee_hours : undefined}
+      personalVehicleCount={loaded && data.bill_personal_vehicles ? data.personal_vehicles : 0}
     >
       {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -778,7 +1115,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         </div>
       )}
 
-      {/* Report header — surfaced at the top so crew confirm at a glance
+      {/* Report header - surfaced at the top so crew confirm at a glance
           which job they're reporting on before filling anything out. */}
       {jobName && (
         <div
@@ -794,87 +1131,22 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         </div>
       )}
 
-      {/* Bill Helper line items (slot from BillCalculator). Opens
-          auto-populated from events + M1 sliders, so crew see the bill
-          "ready" the moment they reach the Report tab. */}
-      {billSlots.billHelper}
-
-      {/* ── Dumpster & Recycling (sit under the Bill Helper because the
-             sliders drive bill line items) ── */}
+      {/* ── Job data (employee hours + M1 equipment + personal vehicles) ──
+          Employee hours drive one auto-populated $80/hr labor line per
+          billable employee in the Invoice Builder above, and also land
+          in the admin/payroll sheet column. Personal vehicles can be
+          billed as crew transport ($100/vehicle/day) via the checkbox
+          below. */}
+      {!driveOnly && (
       <div className="card">
-        <div className="sectionTitle">M1 Dumpster Use *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Was the M1 dumpster (trash) used on this job?
+        <div className="sectionTitle">Job data</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Hours, equipment, and vehicles - the data used to build the invoice line items.
         </div>
-        <YesNo
-          value={data.has_dumpster_use}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_dumpster_use: v,
-              dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_dumpster_use && (
-          <div style={{ marginTop: 14 }}>
-            <PctSlider
-              label="Dumpster fill estimate"
-              value={data.dumpster_pct}
-              onChange={(v) => set("dumpster_pct", v)}
-              color="var(--danger)"
-            />
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">M1 Recycling Use *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Was the M1 recycling bin used on this job?
+        <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>Employee hours</span>
+          <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
         </div>
-        <YesNo
-          value={data.has_recycling_use}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_recycling_use: v,
-              recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_recycling_use && (
-          <div style={{ marginTop: 14 }}>
-            <PctSlider
-              label="Recycling bin fill estimate"
-              value={data.recycling_pct}
-              onChange={(v) => set("recycling_pct", v)}
-              color="var(--ok)"
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Bill totals + notes slots from BillCalculator. Placed after the M1
-          sliders so their line items have already populated by the time the
-          crew sees the running total and the bill notes textarea. */}
-      {billSlots.totals}
-      {billSlots.notes}
-
-      {/* ── Employee Hours ──
-          Sits after the bill flow because employee hours are a parallel
-          record (sheet column for admin/payroll) — they don't feed the
-          bill calculation. Crew opens the tab to the auto-populated
-          bill above; this section captures the per-employee breakdown
-          on its own. */}
-      <div className="card">
-        <div className="sectionTitle">Employee Hours</div>
 
         {sortedEvents.length < 2 ? (
           <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
@@ -914,11 +1186,10 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                   Editing entry #{editingIndex + 1}. Save replaces the row; Cancel keeps the original.
                 </div>
               )}
-              <input
-                type="text"
+              <RosterTypeahead
                 placeholder="Employee name"
                 value={editName}
-                onChange={(e) => { setEditName(e.target.value); setEditError(null); }}
+                onChange={(v) => { setEditName(v); setEditError(null); }}
                 style={{ width: "100%" }}
               />
 
@@ -934,7 +1205,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                   subtracted from hours worked):
                 </div>
                 {editBreaks.map((b, i) => (
-                  <div key={i} className="row wrap" style={{ gap: 6, alignItems: "center" }}>
+                  <div key={b.uid} className="row wrap" style={{ gap: 6, alignItems: "center" }}>
                     {renderSlotPicker(b.start, (s) => updateBreakStart(i, s), "Out at…")}
                     <span className="small">→</span>
                     {renderSlotPicker(b.end, (s) => updateBreakEnd(i, s), "Back at…")}
@@ -1114,13 +1385,82 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
             </div>
           </div>
         )}
-      </div>
 
-      {/* ── Bill auto-populate review ──
-          Placed here so the crew sees the M1 sliders drive new bill
-          line items before confirming them. */}
+        {/* M1 equipment (dumpster + recycling; the sliders drive invoice lines) */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>M1 equipment *</div>
+        <div style={{ fontWeight: 700, fontSize: 12, marginTop: 8 }}>Dumpster (trash)</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Was the M1 dumpster used on this job?</div>
+        <YesNo
+          value={data.has_dumpster_use}
+          onChange={(v) => { setData((prev) => ({ ...prev, has_dumpster_use: v, dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0 })); setSaved(false); }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_dumpster_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider label="Dumpster fill estimate" value={data.dumpster_pct} onChange={(v) => set("dumpster_pct", v)} color="var(--danger)" />
+          </div>
+        )}
+        <div style={{ fontWeight: 700, fontSize: 12, marginTop: 14 }}>Recycling bin</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Was the M1 recycling bin used on this job?</div>
+        <YesNo
+          value={data.has_recycling_use}
+          onChange={(v) => { setData((prev) => ({ ...prev, has_recycling_use: v, recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0 })); setSaved(false); }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_recycling_use && (
+          <div style={{ marginTop: 14 }}>
+            <PctSlider label="Recycling bin fill estimate" value={data.recycling_pct} onChange={(v) => set("recycling_pct", v)} color="var(--ok)" />
+          </div>
+        )}
+
+        {/* Personal vehicles at the job site */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Personal vehicles at job site *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Were any crew personal vehicles at the job site?</div>
+        <YesNo
+          value={data.has_personal_vehicles}
+          onChange={(v) => { setData((prev) => ({ ...prev, has_personal_vehicles: v, personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0 })); setSaved(false); }}
+          yesLabel="Yes"
+          noLabel="No"
+        />
+        {data.has_personal_vehicles && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
+              <button type="button" onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))} style={stepBtnStyle} aria-label="Decrease">−</button>
+              <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>{data.personal_vehicles}</span>
+              <button type="button" onClick={() => set("personal_vehicles", data.personal_vehicles + 1)} style={stepBtnStyle} aria-label="Increase">+</button>
+              <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
+            </div>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 12 }}>
+              <input
+                type="checkbox"
+                checked={data.bill_personal_vehicles}
+                onChange={(e) => set("bill_personal_vehicles", e.target.checked)}
+                style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+              />
+              <span>
+                Bill these as <strong>crew transport vehicles</strong> ($100 / vehicle / day) - adds one line per vehicle to the Invoice Builder.
+              </span>
+            </label>
+          </>
+        )}
+      </div>
+      )}
+
+      {/* Drive-only LD days skip auto-populate review, billing method,
+          personal vehicles, review candidate, and hours reconciliation. */}
+      {!driveOnly && (
+      <>
+      {/* ── Billing (bill helper + totals + notes + review + method in one tile) ── */}
       <div className="card">
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+        <div className="sectionTitle">Billing</div>
+        <div style={{ marginBottom: 12 }}>
+          {billSlots.billHelper}
+          {billSlots.totals}
+          {billSlots.notes}
+        </div>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
           <input
             type="checkbox"
             checked={billReviewed}
@@ -1129,15 +1469,11 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
           />
           <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
             I have reviewed and confirmed the correctness of the auto-populated line items
-            in the Bill Helper above (including any dumpster / recycling charges from the
-            sliders).
+            in the Invoice Builder above (labor lines from Employee Hours plus any
+            dumpster / recycling charges from the sliders).
           </span>
         </label>
-      </div>
-
-      {/* ── Billing method ── */}
-      <div className="card">
-        <div className="sectionTitle">Billing Method *</div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
           {BILLING_OPTIONS.map(({ value, label }) => {
             const active = data.billing_method === value;
@@ -1150,7 +1486,7 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
                   padding: "11px 14px",
                   borderRadius: 10,
                   border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.1)" : "transparent",
+                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 400,
                   fontSize: 13,
@@ -1169,70 +1505,23 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
 
       {/* ── Personal vehicles ── */}
       <div className="card">
-        <div className="sectionTitle">Personal Vehicles at Job Site *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Were any crew personal vehicles at the job site?
-        </div>
-        <YesNo
-          value={data.has_personal_vehicles}
-          onChange={(v) => {
-            setData((prev) => ({
-              ...prev,
-              has_personal_vehicles: v,
-              personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0,
-            }));
-            setSaved(false);
-          }}
-          yesLabel="Yes"
-          noLabel="No"
-        />
-        {data.has_personal_vehicles && (
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={() => set("personal_vehicles", Math.max(1, data.personal_vehicles - 1))}
-              style={stepBtnStyle}
-              aria-label="Decrease"
-            >
-              −
-            </button>
-            <span style={{ fontSize: 28, fontWeight: 700, minWidth: 36, textAlign: "center" }}>
-              {data.personal_vehicles}
-            </span>
-            <button
-              type="button"
-              onClick={() => set("personal_vehicles", data.personal_vehicles + 1)}
-              style={stepBtnStyle}
-              aria-label="Increase"
-            >
-              +
-            </button>
-            <span className="small" style={{ color: "var(--muted)" }}>vehicle{data.personal_vehicles !== 1 ? "s" : ""}</span>
-          </div>
-        )}
-      </div>
-
-      {/* ── Review candidate ── */}
-      <div className="card">
-        <div className="sectionTitle">Review Candidate *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        <div className="sectionTitle">Job wrap-up</div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Review candidate *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
         <ThreeWay
           value={data.review_candidate}
           onChange={(v) => set("review_candidate", v)}
           options={[
-            { value: "yes", label: "Yes — reach out", tone: "ok" },
+            { value: "yes", label: "Yes - reach out", tone: "ok" },
             { value: "no",  label: "No",              tone: "danger" },
             { value: "na",  label: "N/A",             tone: "muted" },
           ]}
         />
-      </div>
 
-      {/* ── Hours reconciliation ── */}
-      <div className="card">
-        <div className="sectionTitle">Hours Reconciliation *</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Hours reconciliation *</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Do hours worked match hours billed?
         </div>
         <YesNo
@@ -1255,13 +1544,12 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
             />
           </div>
         )}
-      </div>
 
-      {/* ── Crew feedback ── */}
-      <div className="card">
-        <div className="sectionTitle">Crew Feedback *</div>
-        <BetaTag feature="crewFeedback" />
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        {/* Crew feedback folded into the wrap-up tile, kept at the bottom. */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          Crew feedback *<BetaTag feature="crewFeedback" />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Would you like to submit any general feedback or feedback about this job in particular to the office?
         </div>
         <YesNo
@@ -1280,18 +1568,161 @@ export default function JobReport({ jobUuid, jobName, events = [] }: Props) {
         {data.has_crew_feedback && (
           <div style={{ marginTop: 12 }}>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
-              Share your feedback * — the more detail, the better we can address it
+              Share your feedback * - the more detail, the better we can address it
             </div>
             <textarea
               value={data.crew_feedback}
               onChange={(e) => set("crew_feedback", e.target.value)}
-              placeholder="What happened, what the client said, what we should know — be as specific as you can."
+              placeholder="What happened, what the client said, what we should know - be as specific as you can."
               rows={4}
               style={textareaStyle}
             />
           </div>
         )}
       </div>
+      </>
+      )}
+
+      {/* ── Long-distance (interstate): documents + per-diem + RODS in one
+          tile. Positioned last; on mixed labor+driving days the documents are
+          required to submit. */}
+      {longDistance && (
+        <div className="card" style={{ borderColor: "var(--brand)" }}>
+          <div className="sectionTitle">Long-distance</div>
+
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+            Required for this interstate trip. Each driver's PODS is tracked in the Driver PODS section below. Complete or attach the Bill of Lading; multi-day trips link this day to the trip's BOL.
+          </div>
+          <div className="col" style={{ gap: 12 }}>
+            {bolStatus ? (
+              <div className="col" style={{ gap: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` (${bolRef})` : ""}
+                </div>
+                <ChecklistItem
+                  done={bolStatus === "origin_signed" || bolStatus === "delivered"}
+                  label="BOL signed at origin"
+                  hint="Shipper + carrier, before loading"
+                  onGo={() => nav(`/long-distance?section=bol${attachedBolId ? `&bol_id=${encodeURIComponent(attachedBolId)}` : ""}`)}
+                />
+                <ChecklistItem
+                  done={bolStatus === "delivered"}
+                  label="BOL signed at destination"
+                  hint="Shipper + carrier, on delivery"
+                  onGo={() => nav(`/long-distance?section=bol${attachedBolId ? `&bol_id=${encodeURIComponent(attachedBolId)}` : ""}`)}
+                />
+                {tripLink ? (
+                  <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>
+                ) : (
+                  <button type="button" onClick={detachOwnBol} style={{ fontSize: 12, alignSelf: "flex-start" }}>Detach this BOL - pick or start another</button>
+                )}
+              </div>
+            ) : bolDeferred ? (
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 700 }}>Bill of Lading</div>
+                  <div className="small" style={{ color: "var(--muted)" }}>
+                    {bolDeferred === "load"
+                      ? "Load not completed yet - no signed BOL to attach."
+                      : bolDeferred === "unload"
+                        ? "Unload not completed yet - no signed BOL to attach."
+                        : "Marked as not yet complete - no signed BOL to attach."}
+                  </div>
+                </div>
+                <button type="button" onClick={() => setBolDeferredFlag("")} style={{ fontSize: 12 }}>Attach BOL</button>
+              </div>
+            ) : (
+              <div className="col" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div style={{ fontWeight: 700 }}>Bill of Lading</div>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  Save inventory on the <strong>Inventory</strong> tab to auto-create and attach a
+                  BOL for this job. Or pick / start one here:
+                </div>
+                <label className="col" style={{ gap: 4 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Select in-progress BOL</span>
+                  <select value="" onChange={(e) => { const o = openBols.find((b) => b.bol_id === e.target.value); if (o) linkTrip(o); }}>
+                    <option value="">Select an in-progress BOL...</option>
+                    {openBols.map((b) => (<option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " (" + b.job_date + ")" : ""}</option>))}
+                  </select>
+                </label>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button type="button" className="btnPrimary" onClick={() => nav("/long-distance?section=bol")} style={{ fontSize: 13 }}>Start a new BOL</button>
+                  <button type="button" onClick={() => setBolDeferredFlag("load")} style={{ fontSize: 13 }}>Load not completed yet</button>
+                </div>
+              </div>
+            )}
+
+            {/* Per-diem sits next to the BOL selector so the crew rep
+                confirming which BOL is attached also flags whether the
+                crew was out of town for that day's charge. */}
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
+              <span>The <strong>crew</strong> started and ended the day out of town ($50 per-diem, per crew member)</span>
+            </label>
+          </div>
+
+          {/* Per-driver PODS check */}
+          <div className="row" style={{ alignItems: "center", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Driver PODS</div>
+            <BetaTag feature="podsPerDriver" style={{ marginTop: 0 }} />
+          </div>
+
+          {/* Per-driver PODS self-verification. Auto-checks when the current
+              user has a PODS filed for this trip. On a multi-day trip the
+              same PODS covers subsequent days - the crew can manually check
+              the box to attest without re-filing. The "Complete PODS →"
+              link stays available for the actual filing flow. */}
+          {(() => {
+            const checked = podsForDriver || podsOverride;
+            const anchorJob = tripLink?.trip_job_uuid || jobUuid;
+            const toggle = () => {
+              if (podsForDriver) return; // server truth wins; nothing to toggle
+              const next = !podsOverride;
+              setPodsOverrideState(next);
+              savePodsOverride(anchorJob, meName, next);
+            };
+            return (
+              <>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: podsForDriver ? "default" : "pointer", fontSize: 14, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={toggle}
+                    style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0, cursor: podsForDriver ? "default" : "pointer" }}
+                  />
+                  <span>
+                    As the <strong>driver</strong>, I have submitted my Prior On-Duty Statement for this trip.
+                    {podsOverride && !podsForDriver && (
+                      <span className="small" style={{ color: "var(--muted)", marginLeft: 6 }}>(self-attested)</span>
+                    )}
+                  </span>
+                </label>
+                {!podsForDriver && !podsOverride && (
+                  <div className="small" style={{ marginLeft: 28, marginTop: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => nav("/long-distance?section=prior")}
+                      style={{ background: "none", border: "none", color: "var(--brand)", padding: 0, cursor: "pointer", textDecoration: "underline", fontSize: 13 }}
+                    >
+                      Complete PODS →
+                    </button>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {/* Driver RODS sign-off (renders bare; self-hides when no driving). */}
+          <RodsSignoff
+            events={events}
+            bolLink={bolRef ? { ref: bolRef, onOpen: () => nav(`/long-distance?section=bol${attachedBolId ? `&bol_id=${encodeURIComponent(attachedBolId)}` : ""}`) } : null}
+            podsDriverNames={podsDriverNames}
+            onNeedPods={() => nav("/long-distance?section=prior")}
+            tripJob={tripLink?.trip_job_uuid || jobUuid}
+          />
+        </div>
+      )}
 
       {err && (
         <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
@@ -1375,8 +1806,8 @@ function ThreeWay<T extends string>({
           tone === "danger" ? "var(--danger)" :
           "var(--muted)";
         const accentBg =
-          tone === "ok" ? "rgba(93,214,194,0.1)" :
-          tone === "danger" ? "rgba(255,107,107,0.08)" :
+          tone === "ok" ? "rgba(93,214,194,0.18)" :
+          tone === "danger" ? "rgba(255,107,107,0.16)" :
           "rgba(148,163,184,0.12)";
         return (
           <button
@@ -1434,7 +1865,7 @@ function YesNo({
                 ? `2px solid ${v ? "var(--brand)" : "var(--danger)"}`
                 : "1px solid var(--border)",
               background: active
-                ? v ? "rgba(93,214,194,0.1)" : "rgba(255,107,107,0.08)"
+                ? v ? "rgba(93,214,194,0.18)" : "rgba(255,107,107,0.16)"
                 : "transparent",
               color: active
                 ? v ? "var(--brand)" : "var(--danger)"

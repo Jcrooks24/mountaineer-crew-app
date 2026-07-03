@@ -31,7 +31,7 @@ Base = declarative_base()
 
 
 def get_db():
-    """Dependency for FastAPI routes — opens a DB session and closes it after the request."""
+    """Dependency for FastAPI routes - opens a DB session and closes it after the request."""
     db = SessionLocal()
     try:
         yield db

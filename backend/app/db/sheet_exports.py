@@ -22,7 +22,7 @@ def ensure_sheet_exports_tables(engine: Engine) -> None:
         """))
 
         # Generic dedup table for any other sheet export.
-        # Key is (kind, export_key) — e.g. ("job_report", "<job_uuid>:<updated_at>").
+        # Key is (kind, export_key) - e.g. ("job_report", "<job_uuid>:<updated_at>").
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS sheet_generic_exports (
             kind TEXT NOT NULL,

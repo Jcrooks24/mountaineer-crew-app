@@ -2,9 +2,9 @@
 Bill router.
 
 Endpoints:
-- GET  /api/bill/seed?job_uuid=...  — auto-populate line items from events + materials
-- GET  /api/bill?job_uuid=...       — load saved bill (404 if none)
-- POST /api/bill                    — upsert bill
+- GET  /api/bill/seed?job_uuid=...  - auto-populate line items from events + materials
+- GET  /api/bill?job_uuid=...       - load saved bill (404 if none)
+- POST /api/bill                    - upsert bill
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def _to_response(b: JobBill) -> BillResponse:
     )
 
 
-# ── Seed — auto-populate from events + materials ─────────────────────────────
+# ── Seed - auto-populate from events + materials ─────────────────────────────
 
 @router.get("/seed")
 def get_bill_seed(
@@ -105,7 +105,34 @@ def get_bill_seed(
                     "hours": hours,
                 })
 
-    # Materials are no longer seeded into the bill's line items — they live
+    # Long-distance: hourly labor is the LOAD span + the UNLOAD span, kept
+    # separate so the multi-day drive between them is NOT billed hourly (drive
+    # time is paid a fixed amount). Only emitted when LOAD_/UNLOAD_ events exist,
+    # so local jobs (START/FINISH only) are unaffected.
+    def _span_lines(start_type: str, finish_type: str, label: str) -> list[dict]:
+        s: dict[str, datetime] = {}
+        f: dict[str, datetime] = {}
+        for e in events:
+            person = e.created_by or "Unknown"
+            et = (e.type or "").lower()
+            if et == start_type:
+                if person not in s:
+                    s[person] = e.timestamp
+            elif et == finish_type:
+                f[person] = e.timestamp  # keep latest
+        out: list[dict] = []
+        for person, start_ts in s.items():
+            if person in f and f[person] > start_ts:
+                hrs = round((f[person] - start_ts).total_seconds() / 3600, 2)
+                out.append({"created_by": person, "label": label, "hours": hrs})
+        return out
+
+    hours_lines += _span_lines("pack_start", "pack_finish", "Packing labor (per hour)")
+    hours_lines += _span_lines("load_start", "load_finish", "Load labor (per hour)")
+    hours_lines += _span_lines("unload_start", "unload_finish", "Unload labor (per hour)")
+    hours_lines += _span_lines("unpack_start", "unpack_finish", "Unpacking labor (per hour)")
+
+    # Materials are no longer seeded into the bill's line items - they live
     # in a dedicated live-shared panel inside the bill helper (see
     # /api/materials). Keep the field in the response for frontend compat.
     material_lines: list[dict] = []

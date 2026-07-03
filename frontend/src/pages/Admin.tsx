@@ -34,6 +34,7 @@ type AdminUser = {
   id: number;
   email: string;
   name: string | null;
+  phone: string | null;
   role: string;
   is_active: boolean;
   tag_ids: number[];
@@ -99,7 +100,7 @@ export default function Admin() {
   // Desktop mode widens the outer container so tables, calendars, and
   // wide tools stop being squeezed by the mobile-first 860px cap. Persists
   // in localStorage so admin doesn't have to flip it every page load.
-  // crew_* prefix means clearCrewState() will reset it on logout — that's
+  // crew_* prefix means clearCrewState() will reset it on logout - that's
   // fine; re-toggling is one click on the next login.
   const [desktopMode, setDesktopMode] = useState<boolean>(() => {
     try { return localStorage.getItem(DESKTOP_MODE_KEY) === "1"; } catch { return false; }
@@ -124,18 +125,55 @@ export default function Admin() {
       : "← Dashboard";
 
   return (
+    <>
+    {/* Admin-only background image (fixed, behind content; overlay keeps cards
+        + text readable). */}
+    <div
+      aria-hidden
+      style={{
+        position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none",
+        backgroundImage: "linear-gradient(rgba(28,40,52,0.55), rgba(28,40,52,0.55)), url('/admin-bg.jpg')",
+        backgroundSize: "cover", backgroundPosition: "center",
+      }}
+    />
     <div
       className="container"
-      style={{ maxWidth: desktopMode ? 1500 : 860 }}
+      style={{ maxWidth: desktopMode ? 1500 : 860, position: "relative", zIndex: 1 }}
     >
-      {/* Header */}
-      <div className="topbar" style={{ marginBottom: 12 }}>
-        <span style={{ fontWeight: 700, fontSize: 16 }}>{TAB_TITLES[tab]}</span>
+      {/* Header - overridden background because the default .topbar 0.03
+          alpha vanishes over the admin background image. Text color is
+          hard-coded (not --text) because the backdrop is always dark
+          regardless of the active theme; on a light theme --text would
+          be near-black and disappear. */}
+      <div
+        className="topbar"
+        style={{
+          marginBottom: 12,
+          background: "rgba(10,16,22,0.78)",
+          border: "1px solid rgba(255,255,255,0.20)",
+          backdropFilter: "blur(4px)",
+          WebkitBackdropFilter: "blur(4px)",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
+        }}
+      >
+        <span style={{ fontWeight: 800, fontSize: 17, color: "#f6f9ff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
+          {TAB_TITLES[tab]}
+        </span>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <DesktopModeToggle on={desktopMode} onChange={setDesktopMode} />
           <button
             onClick={() => (isHome ? nav(-1) : setTab(backTo))}
-            style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
+            style={{
+              background: "rgba(255,255,255,0.14)",
+              border: "1px solid rgba(255,255,255,0.28)",
+              borderRadius: 999,
+              color: "#f6f9ff",
+              cursor: "pointer",
+              fontSize: 13,
+              padding: "4px 12px",
+              fontWeight: 700,
+              textShadow: "0 1px 2px rgba(0,0,0,0.5)",
+            }}
           >
             {backLabel}
           </button>
@@ -163,6 +201,7 @@ export default function Admin() {
       {tab === "advanced" && <AdvancedSettingsPage />}
       {tab === "appearance" && <ThemeAppearancePage />}
     </div>
+    </>
   );
 }
 
@@ -183,16 +222,20 @@ function DesktopModeToggle({
       role="switch"
       aria-checked={on}
       aria-label={on ? "Switch to mobile sizing" : "Switch to desktop sizing"}
-      title={on ? "Desktop sizing — click for mobile" : "Mobile sizing — click for desktop"}
+      title={on ? "Desktop sizing - click for mobile" : "Mobile sizing - click for desktop"}
       style={{
         display: "inline-flex", alignItems: "center", gap: 8,
-        background: "none", padding: "3px 8px",
-        border: "1px solid var(--border)", borderRadius: 999,
+        // Solid card background + brand border so the pill reads over
+        // the admin background image (previously transparent + muted
+        // border made it disappear into the overlay).
+        background: "var(--card)", padding: "4px 10px",
+        border: "1px solid var(--brand)", borderRadius: 999,
         cursor: "pointer", fontSize: 11, lineHeight: 1,
-        color: "var(--muted)",
+        color: "var(--text)",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
       }}
     >
-      <span style={{ fontWeight: 600 }}>{on ? "Desktop" : "Mobile"}</span>
+      <span style={{ fontWeight: 700 }}>{on ? "Desktop" : "Mobile"}</span>
       <span
         aria-hidden="true"
         style={{
@@ -219,7 +262,7 @@ function DesktopModeToggle({
   );
 }
 
-// Dashboard home menu — list-style links to each admin tool. The Map is the
+// Dashboard home menu - list-style links to each admin tool. The Map is the
 // home itself, so it isn't listed here.
 function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
   const tools: { tab: Tab; label: string; hint: string }[] = [
@@ -263,6 +306,7 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
 // Employees tab
 // ─────────────────────────────────────────
 function EmployeesTab() {
+  const nav = useNavigate();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [tags, setTags] = useState<EmployeeTag[]>([]);
   const [loading, setLoading] = useState(true);
@@ -321,6 +365,23 @@ function EmployeesTab() {
     }
   }
 
+  async function editPhone(u: AdminUser) {
+    const next = window.prompt(`Contact phone for ${u.name || u.email}:`, u.phone || "");
+    if (next === null) return;
+    setBusy(u.id);
+    try {
+      const updated = await apiFetch<AdminUser>(`/api/admin/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ phone: next.trim() }),
+      });
+      setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Failed to update");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function saveUserTags(userId: number, tagIds: number[]) {
     const updated = await apiFetch<number[]>(`/api/admin/users/${userId}/employee-tags`, {
       method: "PUT",
@@ -370,6 +431,16 @@ function EmployeesTab() {
       {subview === "month" && <MonthScheduleView users={users} tags={tags} />}
       {subview === "roster" && (
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        {/* Clean, consistent ghost-pill action buttons. */}
+        <style>{`
+          .roster-btn { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; transition: background .12s, border-color .12s; }
+          .roster-btn:hover:not(:disabled) { background: rgba(93,214,194,0.10); border-color: var(--brand); }
+          .roster-btn:disabled { opacity: .45; cursor: default; }
+          .roster-btn.danger { color: var(--danger); border-color: rgba(255,107,107,0.35); }
+          .roster-btn.danger:hover:not(:disabled) { background: rgba(255,107,107,0.12); border-color: var(--danger); }
+          .roster-btn.ok { color: var(--ok); border-color: rgba(45,212,191,0.35); }
+          .roster-btn.ok:hover:not(:disabled) { background: rgba(45,212,191,0.12); border-color: var(--ok); }
+        `}</style>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
           <thead>
@@ -388,8 +459,11 @@ function EmployeesTab() {
                   opacity: u.is_active ? 1 : 0.45,
                 }}
               >
-                <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>—</span>}</td>
-                <td style={{ padding: "10px 14px", color: "var(--muted)" }}>{u.email}</td>
+                <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>-</span>}</td>
+                <td style={{ padding: "10px 14px", color: "var(--muted)" }}>
+                  <div>{u.email}</div>
+                  {u.phone && <div className="small" style={{ color: "var(--text)" }}>{u.phone}</div>}
+                </td>
                 <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role}</td>
                 <td style={{ padding: "10px 14px" }}>
                   <span style={{
@@ -403,7 +477,7 @@ function EmployeesTab() {
                 <td style={{ padding: "10px 14px" }}>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                     {u.tag_ids.length === 0 ? (
-                      <span className="small" style={{ color: "var(--muted)" }}>—</span>
+                      <span className="small" style={{ color: "var(--muted)" }}>-</span>
                     ) : (
                       u.tag_ids
                         .map((tid) => tagsById.get(tid))
@@ -413,11 +487,12 @@ function EmployeesTab() {
                           <span
                             key={t.id}
                             style={{
-                              fontSize: 11, fontWeight: 600,
+                              fontSize: 11, fontWeight: 700,
                               padding: "2px 8px", borderRadius: 999,
-                              background: "rgba(93,214,194,0.12)",
-                              color: "var(--brand)",
-                              border: "1px solid rgba(93,214,194,0.4)",
+                              // Theme-text label keeps tags legible on light themes.
+                              background: "var(--tag-bg, rgba(93,214,194,0.16))",
+                              color: "var(--text)",
+                              border: "1px solid var(--brand)",
                             }}
                           >
                             {t.name}
@@ -427,7 +502,7 @@ function EmployeesTab() {
                     <button
                       onClick={() => {
                         setEditingTagsFor(u);
-                        // Refetch the tag list — admin may have added or
+                        // Refetch the tag list - admin may have added or
                         // renamed tags in Settings since this page mounted.
                         // Failure is silent; we fall back to the cached list.
                         apiFetch<EmployeeTag[]>("/api/admin/employee-tags")
@@ -447,38 +522,47 @@ function EmployeesTab() {
                 <td style={{ padding: "10px 14px" }}>
                   <div className="row" style={{ gap: 6 }}>
                     <button
+                      className={`roster-btn ${u.is_active ? "danger" : "ok"}`}
                       disabled={busy === u.id}
                       onClick={() => toggleAccess(u)}
-                      style={{
-                        fontSize: 12, padding: "4px 10px",
-                        background: u.is_active ? "rgba(255,107,107,0.2)" : "rgba(45,212,191,0.2)",
-                        border: `1px solid ${u.is_active ? "var(--danger)" : "var(--ok)"}`,
-                        color: u.is_active ? "var(--danger)" : "var(--ok)",
-                        borderRadius: 8,
-                      }}
                     >
                       {u.is_active ? "Revoke" : "Restore"}
                     </button>
                     <button
+                      className="roster-btn"
                       disabled={busy === u.id}
                       onClick={() => toggleRole(u)}
-                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
                     >
-                      → {u.role === "admin" ? "User" : "Admin"}
+                      {u.role === "admin" ? "Make user" : "Make admin"}
                     </button>
                     <button
+                      className="roster-btn"
                       onClick={() => setEditingUnlocksFor(u)}
-                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
                       title="Unlock an availability window for this user"
                     >
                       Unlocks
                     </button>
                     <button
+                      className="roster-btn"
                       onClick={() => setEditingAliasesFor(u)}
-                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8 }}
                       title="Manage alternate email addresses for Crew Resources matching"
                     >
                       Emails{u.alias_count > 0 ? ` (${u.alias_count})` : ""}
+                    </button>
+                    <button
+                      className="roster-btn"
+                      disabled={busy === u.id}
+                      onClick={() => editPhone(u)}
+                      title="Set the contact phone shown on the scheduling header"
+                    >
+                      Phone
+                    </button>
+                    <button
+                      className="roster-btn"
+                      onClick={() => nav(`/availability?admin_user=${u.id}`)}
+                      title="Open this employee's availability (admin view)"
+                    >
+                      Availability
                     </button>
                   </div>
                 </td>
@@ -512,7 +596,7 @@ function EmployeesTab() {
           user={editingAliasesFor}
           onClose={() => {
             setEditingAliasesFor(null);
-            // Re-fetch the user list — primary email may have changed via
+            // Re-fetch the user list - primary email may have changed via
             // promote-to-primary, and alias_count almost certainly did.
             apiFetch<AdminUser[]>("/api/admin/users")
               .then(setUsers)
@@ -754,7 +838,7 @@ function EmailAliasesPicker({
 }
 
 // Admin modal for granting / revoking availability-window unlocks. Each
-// (user, window_start) pair can hold at most one unlock — the POST is
+// (user, window_start) pair can hold at most one unlock - the POST is
 // idempotent so re-granting just refreshes the note + granted_by stamp.
 type AdminAvailabilityUnlock = {
   id: number;
@@ -852,7 +936,7 @@ function AvailabilityUnlocksPicker({
         <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
           Granting an unlock lets the crew member edit one locked 14-day
           window starting on the date below. The unlock persists until you
-          revoke it — recommend revoking once the crew member submits.
+          revoke it - recommend revoking once the crew member submits.
         </div>
 
         <div className="col" style={{ gap: 8 }}>
@@ -970,13 +1054,30 @@ type AvailabilityRangeResponse = {
   scheduled: ScheduledJobRow[];
 };
 
-const MONTH_STATUS_COLORS: Record<AvailabilityRangeRow["status"], { bg: string; fg: string; label: string }> = {
+type StatusColor = { bg: string; fg: string; label: string };
+type MonthStatusPalette = Record<AvailabilityRangeRow["status"], StatusColor>;
+type MonthScheduledPalette = { bg: string; fg: string; label: string };
+
+const MONTH_STATUS_COLORS: MonthStatusPalette = {
   available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
   unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
   conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
 };
 
-const SCHEDULED_COLORS = { bg: "var(--scheduled-bg)", fg: "var(--scheduled)", label: "Scheduled" };
+const SCHEDULED_COLORS: MonthScheduledPalette = { bg: "var(--scheduled-bg)", fg: "var(--scheduled)", label: "Scheduled" };
+
+// High-contrast palette: saturated Google-workspace fills (matches the
+// spreadsheet colors the business partner uses). Cell text stays legible
+// on every bg so job titles print cleanly on the Scheduled cells.
+const HC_MONTH_STATUS_COLORS: MonthStatusPalette = {
+  available:   { bg: "#34a853", fg: "#ffffff", label: "Available" },
+  unavailable: { bg: "#ea4335", fg: "#ffffff", label: "Unavailable" },
+  conditional: { bg: "#fbbc04", fg: "#111111", label: "Conditional" },
+};
+
+const HC_SCHEDULED_COLORS: MonthScheduledPalette = { bg: "#4285f4", fg: "#ffffff", label: "Scheduled" };
+
+const HC_MONTH_KEY = "crew_admin_hc_month_v1";
 
 function MonthScheduleView({
   users,
@@ -1035,19 +1136,55 @@ function MonthScheduleView({
     return () => { cancelled = true; };
   }, [monthStart, monthEnd]);
 
-  // Active employees only, sorted by display name.
-  const activeUsers = useMemo(
-    () => users
-      .filter((u) => u.is_active)
-      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email)),
-    [users],
-  );
-
   const tagsById = useMemo(() => {
     const m = new Map<number, EmployeeTag>();
     for (const t of tags) m.set(t.id, t);
     return m;
   }, [tags]);
+
+  // Column ordering: by crew tier (I far left … IV far right) by default, or
+  // pull a chosen tag's holders to the left ("compatibility highest on left").
+  const [orderTagId, setOrderTagId] = useState<number | null>(null);
+
+  // High-contrast palette toggle for the color-forward variant of this view.
+  // Persists per-device (localStorage) so an admin who prefers the vibrant
+  // Google-Sheets-style fills sees them by default on their machine.
+  const [highContrast, setHighContrast] = useState<boolean>(() => {
+    try { return localStorage.getItem(HC_MONTH_KEY) === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(HC_MONTH_KEY, highContrast ? "1" : "0"); } catch { /* noop */ }
+  }, [highContrast]);
+  const statusPalette = highContrast ? HC_MONTH_STATUS_COLORS : MONTH_STATUS_COLORS;
+  const scheduledPalette = highContrast ? HC_SCHEDULED_COLORS : SCHEDULED_COLORS;
+  const [reminderCopied, setReminderCopied] = useState(false);
+  const AVAILABILITY_REMINDER =
+    "Hi! Please update your crew availability in the app for the next two weeks. Open the Mountaineer app, go to Availability, and mark each day (available, unavailable, or conditional). This helps us schedule jobs around you. Thanks!";
+  const activeUsers = useMemo(() => {
+    type U = (typeof users)[number];
+    const tierRank = (u: U): number => {
+      const map: Record<string, number> = { i: 1, ii: 2, iii: 3, iv: 4, "1": 1, "2": 2, "3": 3, "4": 4 };
+      for (const tid of u.tag_ids) {
+        const t = tagsById.get(tid);
+        if (!t) continue;
+        const m = t.name.match(/tier\s*(iv|iii|ii|i|4|3|2|1)\b/i);
+        if (m) return map[m[1].toLowerCase()] ?? 99;
+      }
+      return 99; // untiered sinks to the right
+    };
+    const name = (u: U) => (u.name || u.email).toLowerCase();
+    const list = users.filter((u) => u.is_active);
+    return list.sort((a, b) => {
+      if (orderTagId != null) {
+        const ah = a.tag_ids.includes(orderTagId) ? 0 : 1;
+        const bh = b.tag_ids.includes(orderTagId) ? 0 : 1;
+        if (ah !== bh) return ah - bh;
+      }
+      const t = tierRank(a) - tierRank(b);
+      if (t) return t;
+      return name(a).localeCompare(name(b));
+    });
+  }, [users, orderTagId, tagsById]);
 
   // (user_id, day) → record map for O(1) cell lookup.
   const matrix = useMemo(() => {
@@ -1096,6 +1233,14 @@ function MonthScheduleView({
 
   return (
     <>
+      {/* Row hover highlight. HC mode uses a bright inset ring + darker
+          tint because the plain dark overlay is invisible against the
+          saturated blue Scheduled cells (#4285f4). Non-HC keeps the
+          cheap dark tint since the muted fills read fine with it. */}
+      <style>{highContrast
+        ? `.month-row:hover td { box-shadow: inset 0 0 0 3px rgba(255,255,255,0.75), inset 0 0 0 9999px rgba(0,0,0,0.30); }`
+        : `.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.22); }`
+      }</style>
       <div
         className="card"
         style={{
@@ -1135,6 +1280,29 @@ function MonthScheduleView({
         </button>
       </div>
 
+      {/* Column ordering + display options. */}
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="small" style={{ color: "var(--muted)" }}>Order columns by</span>
+          <select
+            value={orderTagId ?? ""}
+            onChange={(e) => setOrderTagId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">Tier (I → IV)</option>
+            {tags.map((t) => <option key={t.id} value={t.id}>{t.name} first</option>)}
+          </select>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={highContrast}
+            onChange={(e) => setHighContrast(e.target.checked)}
+            style={{ accentColor: "var(--brand)", width: 16, height: 16 }}
+          />
+          <span>High contrast (saturated fills)</span>
+        </label>
+      </div>
+
       {err && (
         <div className="card" style={{ color: "var(--danger)" }}>
           {err}
@@ -1148,7 +1316,7 @@ function MonthScheduleView({
       ) : (
         // Burst out of the parent container's max-width on wide displays.
         // `width: 100vw` + `marginLeft: calc(50% - 50vw)` is the standard
-        // "full-bleed" trick — the card spans the full viewport while
+        // "full-bleed" trick - the card spans the full viewport while
         // staying centered on the container's axis. The 24px side padding
         // keeps the table off the viewport edges so scrollbars and window
         // chrome don't crowd it. Inner overflow:auto keeps the horizontal
@@ -1205,7 +1373,7 @@ function MonthScheduleView({
                       key={u.id}
                       // Surface the crew member's persistent scheduling notes
                       // as a native tooltip on hover. The native `title=` is
-                      // intentional (vs a custom popover) — it works on the
+                      // intentional (vs a custom popover) - it works on the
                       // wide-desktop admin views where this view shines and
                       // doesn't fight the sticky-header z-index layering.
                       title={notes || undefined}
@@ -1216,11 +1384,10 @@ function MonthScheduleView({
                         borderRight: "1px solid var(--border)",
                         padding: "6px 8px", textAlign: "left",
                         verticalAlign: "top",
-                        // Tightened from 110 to 80 so more employees fit per
-                        // viewport on standard desktop AND ultra-wide.
-                        // Scheduled job cells still wrap-break their text so
-                        // narrower cells stay legible.
-                        minWidth: 80,
+                        // Tightened to 60 so more employees fit per viewport on
+                        // standard desktop AND ultra-wide. Scheduled job cells
+                        // still wrap-break their text so narrow cells stay legible.
+                        minWidth: 60,
                         cursor: notes ? "help" : "default",
                       }}
                     >
@@ -1251,6 +1418,12 @@ function MonthScheduleView({
                           </span>
                         )}
                       </div>
+                      {/* Contact info so admin can reach the crew member without
+                          leaving the schedule. */}
+                      <div className="small" style={{ color: "var(--muted)", fontSize: 10, marginTop: 2, lineHeight: 1.35, wordBreak: "break-word" }}>
+                        {u.phone && <div style={{ color: "var(--text)" }}>{u.phone}</div>}
+                        <div>{u.email}</div>
+                      </div>
                       {userTags.length > 0 && (
                         <div
                           style={{
@@ -1262,11 +1435,14 @@ function MonthScheduleView({
                             <span
                               key={t.id}
                               style={{
-                                fontSize: 9, fontWeight: 600,
+                                fontSize: 9, fontWeight: 700,
                                 padding: "1px 5px", borderRadius: 3,
-                                background: "rgba(93,214,194,0.12)",
-                                color: "var(--brand)",
-                                border: "1px solid rgba(93,214,194,0.35)",
+                                // Theme-text label (not --brand) so tags stay
+                                // legible on light themes; brand border keeps
+                                // the identity.
+                                background: "var(--tag-bg, rgba(93,214,194,0.16))",
+                                color: "var(--text)",
+                                border: "1px solid var(--brand)",
                                 whiteSpace: "nowrap",
                               }}
                             >
@@ -1288,7 +1464,7 @@ function MonthScheduleView({
                 const isToday = dIso === today;
                 const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
                 return (
-                  <tr key={dIso}>
+                  <tr key={dIso} className="month-row">
                     <td
                       style={{
                         position: "sticky", left: 0, zIndex: 1,
@@ -1308,23 +1484,23 @@ function MonthScheduleView({
                       const record = matrix.get(u.id)?.get(dIso) ?? null;
                       const jobs = scheduledMatrix.get(u.id)?.get(dIso);
                       const isScheduled = !!(jobs && jobs.length > 0);
-                      const availColors = record ? MONTH_STATUS_COLORS[record.status] : null;
+                      const availColors = record ? statusPalette[record.status] : null;
 
-                      // Scheduled takes precedence — it's the most actionable
+                      // Scheduled takes precedence - it's the most actionable
                       // signal. Availability still surfaces via the cell border
                       // so admin can spot conflicts (e.g. scheduled but marked
                       // unavailable would show a red border around a yellow
                       // cell).
                       const cellBg = isScheduled
-                        ? SCHEDULED_COLORS.bg
+                        ? scheduledPalette.bg
                         : (availColors?.bg ?? "transparent");
 
-                      const noteSuffix = record?.note ? ` — ${record.note}` : "";
+                      const noteSuffix = record?.note ? ` - ${record.note}` : "";
                       const availSummary = record
                         ? `${record.status}${noteSuffix}`
                         : "not submitted";
                       const title = isScheduled
-                        ? `${u.name || u.email} on ${dIso}: scheduled — ${jobs!.join(", ")} | availability: ${availSummary}`
+                        ? `${u.name || u.email} on ${dIso}: scheduled - ${jobs!.join(", ")} | availability: ${availSummary}`
                         : `${u.name || u.email} on ${dIso}: ${availSummary}`;
 
                       return (
@@ -1340,19 +1516,29 @@ function MonthScheduleView({
                             // Highlight a conflict (scheduled cell on a
                             // submitted-availability day) with the
                             // availability color as a tinted outline.
+                            // Conflict outline: HC saturated bg + white fg
+                            // needs a two-tone stroke that reads on ALL four
+                            // Google fills. A dashed pure-white outline
+                            // paired with a small inset dark ring gives
+                            // visible edges over yellow, red, green, and
+                            // blue alike.
                             outline:
                               isScheduled && availColors
-                                ? `2px solid ${availColors.fg}`
+                                ? (highContrast ? `2px dashed #ffffff` : `2px solid ${availColors.fg}`)
                                 : undefined,
                             outlineOffset:
                               isScheduled && availColors ? "-2px" : undefined,
+                            boxShadow:
+                              isScheduled && availColors && highContrast
+                                ? "inset 0 0 0 3px rgba(0,0,0,0.35)"
+                                : undefined,
                             verticalAlign: "top",
                           }}
                         >
                           {isScheduled && (
                             <div
                               style={{
-                                color: SCHEDULED_COLORS.fg,
+                                color: scheduledPalette.fg,
                                 fontSize: 11,
                                 fontWeight: 600,
                                 lineHeight: 1.25,
@@ -1402,7 +1588,7 @@ function MonthScheduleView({
       >
         <span className="small" style={{ color: "var(--muted)" }}>Legend:</span>
         {(["available", "unavailable", "conditional"] as const).map((st) => {
-          const c = MONTH_STATUS_COLORS[st];
+          const c = statusPalette[st];
           return (
             <span key={st} style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span
@@ -1419,11 +1605,11 @@ function MonthScheduleView({
           <span
             style={{
               width: 14, height: 14, borderRadius: 3,
-              background: SCHEDULED_COLORS.bg,
-              border: `1px solid ${SCHEDULED_COLORS.fg}`,
+              background: scheduledPalette.bg,
+              border: `1px solid ${scheduledPalette.fg}`,
             }}
           />
-          <span>{SCHEDULED_COLORS.label}</span>
+          <span>{scheduledPalette.label}</span>
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span
@@ -1435,11 +1621,55 @@ function MonthScheduleView({
           <span>Not submitted</span>
         </span>
       </div>
+
+      {/* Copy-pasteable reminder for Google Voice SMS. Lists who hasn't
+          submitted availability for the visible window so admin knows who to
+          nudge. No em dashes (per house style). */}
+      <div className="card">
+        <div className="sectionTitle">Availability reminder</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+          Copy this into Google Voice to remind crew to set their availability.
+        </div>
+        {(() => {
+          const notSubmitted = activeUsers.filter((u) => !matrix.has(u.id));
+          return (
+            <>
+              <textarea
+                readOnly
+                value={AVAILABILITY_REMINDER}
+                rows={4}
+                style={{ width: "100%", resize: "vertical", fontSize: 13, padding: 10, borderRadius: 8, border: "1px solid var(--border)", background: "rgba(255,255,255,0.03)", color: "var(--text)" }}
+              />
+              <div className="row" style={{ gap: 10, alignItems: "center", marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="btnPrimary"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(AVAILABILITY_REMINDER).then(
+                      () => { setReminderCopied(true); window.setTimeout(() => setReminderCopied(false), 2500); },
+                      () => {},
+                    );
+                  }}
+                >
+                  Copy reminder
+                </button>
+                {reminderCopied && <span className="small" style={{ color: "var(--ok)" }}>Copied</span>}
+              </div>
+              {notSubmitted.length > 0 && (
+                <div className="small" style={{ color: "var(--muted)", marginTop: 10 }}>
+                  Not submitted for this month ({notSubmitted.length}):{" "}
+                  <span style={{ color: "var(--text)" }}>{notSubmitted.map((u) => u.name || u.email).join(", ")}</span>
+                </div>
+              )}
+            </>
+          );
+        })()}
+      </div>
     </>
   );
 }
 
-// Tag picker modal — checkbox grid keyed off the admin-managed tag list.
+// Tag picker modal - checkbox grid keyed off the admin-managed tag list.
 function EmployeeTagsPicker({
   user,
   allTags,
@@ -1861,7 +2091,7 @@ function CalendarTab() {
 }
 
 // ─────────────────────────────────────────
-// Settings tab — lean landing page. Theme/style controls live on the
+// Settings tab - lean landing page. Theme/style controls live on the
 // Theme & Appearance sub-page so this screen stays uncluttered.
 // ─────────────────────────────────────────
 function SettingsTab({
@@ -1892,7 +2122,7 @@ function SettingsTab({
   );
 }
 
-// Admin CRUD for the employee tag list. Inline add / rename / delete —
+// Admin CRUD for the employee tag list. Inline add / rename / delete -
 // admin can also drag-style reorder via the sort-order input, but most
 // reordering is rare enough not to warrant a fancier UI.
 function EmployeeTagsManagerCard() {
@@ -2093,7 +2323,7 @@ function SettingsNavCard({
 }
 
 // ─────────────────────────────────────────
-// Theme & Appearance sub-page — every look-and-feel control.
+// Theme & Appearance sub-page - every look-and-feel control.
 // ─────────────────────────────────────────
 function ThemeAppearancePage() {
   const { settings, update, reset } = useTheme();
@@ -2120,7 +2350,7 @@ function ThemeAppearancePage() {
       });
       setApplyMsg({ ok: true, text: "Theme applied to all users." });
     } catch {
-      setApplyMsg({ ok: false, text: "Failed to save — try again." });
+      setApplyMsg({ ok: false, text: "Failed to save - try again." });
     } finally {
       setApplyBusy(false);
     }
@@ -2222,7 +2452,7 @@ function ThemeAppearancePage() {
             );
           })}
 
-          {/* Custom (device-local) presets — same tile, plus a delete control.
+          {/* Custom (device-local) presets - same tile, plus a delete control.
               A div, not a button, so the delete control can nest inside it. */}
           {customPresets.map((c) => {
             const v = styleVars(c.style);
@@ -2350,7 +2580,7 @@ function ThemeAppearancePage() {
           })}
         </div>
         <div className="small" style={{ color: "var(--text)", marginTop: 12 }}>
-          Sample body text at this setting — a quick brown fox jumps over the lazy dog.
+          Sample body text at this setting - a quick brown fox jumps over the lazy dog.
         </div>
       </div>
 
@@ -2598,7 +2828,7 @@ function ThemeAppearancePage() {
 
           {/* Pin size */}
           <div className="col" style={{ gap: 8 }}>
-            <label className="small">Pin size — {settings.pinSize * 2}px</label>
+            <label className="small">Pin size - {settings.pinSize * 2}px</label>
             <div className="row" style={{ gap: 10, alignItems: "center" }}>
               <input
                 type="range" min={5} max={16} step={1}
@@ -2649,7 +2879,7 @@ function ThemeAppearancePage() {
       {/* ── Apply to all users ── */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="small" style={{ color: "var(--muted)" }}>
-          Save your current theme settings as the global default — all crew members will see this theme on their next page load.
+          Save your current theme settings as the global default - all crew members will see this theme on their next page load.
         </div>
         {applyMsg && (
           <div style={{ fontSize: 13, color: applyMsg.ok ? "var(--ok)" : "var(--danger)" }}>
@@ -2670,7 +2900,7 @@ function ThemeAppearancePage() {
 }
 
 // ─────────────────────────────────────────
-// Sheet sync — admin "Refresh" button. Picks up events that landed in
+// Sheet sync - admin "Refresh" button. Picks up events that landed in
 // Postgres but never reached the sheet (Sheets API blip on the live sync
 // path swallows the error silently). The endpoint is idempotent.
 // ─────────────────────────────────────────
@@ -2695,7 +2925,7 @@ function SheetSyncCard() {
       const secs = (r.duration_ms / 1000).toFixed(1);
       const text =
         r.found === 0
-          ? `Sheet is in sync — nothing to recover (${secs}s)`
+          ? `Sheet is in sync - nothing to recover (${secs}s)`
           : `Recovered ${r.exported}/${r.found} event(s)` +
             (r.errors > 0 ? `, ${r.errors} error(s)` : "") +
             ` (${secs}s)`;
@@ -2713,7 +2943,7 @@ function SheetSyncCard() {
       <div className="sectionTitle">Sheet Sync</div>
       <div className="small" style={{ color: "var(--muted)" }}>
         Re-export any events that are durable in the app database but missing from the Google Sheet.
-        Safe to run any time — duplicates are skipped automatically.
+        Safe to run any time - duplicates are skipped automatically.
       </div>
       {msg && (
         <div style={{ fontSize: 13, color: msg.ok ? "var(--ok)" : "var(--danger)" }}>
@@ -2733,13 +2963,13 @@ function SheetSyncCard() {
 }
 
 // ─────────────────────────────────────────
-// App Health — quick read on the moving parts: client outbox state, server
+// App Health - quick read on the moving parts: client outbox state, server
 // reachability, Google API access, sheet drift, event freshness, env vars.
 // Plain-text summary in a collapsible block so an admin can paste it into a
 // support thread.
 //
 // LocalStorage keys must match App.tsx. Keeping them as string literals
-// (rather than imports) so this card stays self-contained — App.tsx is the
+// (rather than imports) so this card stays self-contained - App.tsx is the
 // source of truth, and a future rename there is a one-line search away.
 // ─────────────────────────────────────────
 const HC_QUEUE_KEY = "crew_event_queue_v1";
@@ -2781,7 +3011,7 @@ function AppHealthCard() {
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div className="sectionTitle">App Health</div>
       <div className="small" style={{ color: "var(--muted)" }}>
-        Snapshot of critical functions — sync state, network, Google API access, data drift. Plain text so you can copy/paste it.
+        Snapshot of critical functions - sync state, network, Google API access, data drift. Plain text so you can copy/paste it.
       </div>
       <button
         onClick={runCheck}
@@ -2829,7 +3059,7 @@ function collectClientChecks(): HealthCheck[] {
     detail: navigator.onLine ? "yes" : "device is offline",
   });
 
-  // localStorage availability — Safari private mode and some kiosk profiles
+  // localStorage availability - Safari private mode and some kiosk profiles
   // throw on write. Catch and report so admins see why a queue might be lost.
   try {
     const probe = "__hc_probe__";
@@ -2840,7 +3070,7 @@ function collectClientChecks(): HealthCheck[] {
     out.push({
       name: "localStorage",
       status: "fail",
-      detail: `not writable — offline queue won't persist (${(e as Error).message})`,
+      detail: `not writable - offline queue won't persist (${(e as Error).message})`,
     });
   }
 
@@ -2865,11 +3095,11 @@ function describeQueue(name: string, key: string, unit: string): HealthCheck {
     const data: unknown = JSON.parse(raw);
     if (Array.isArray(data)) parsed = data as QueuedItem[];
   } catch {
-    return { name, status: "warn", detail: "queue payload is not JSON — manual cleanup may be needed" };
+    return { name, status: "warn", detail: "queue payload is not JSON - manual cleanup may be needed" };
   }
   if (parsed.length === 0) return { name, status: "ok", detail: `0 ${unit}` };
 
-  // Oldest item — events use "timestamp", note patches use "enqueued_at"
+  // Oldest item - events use "timestamp", note patches use "enqueued_at"
   const ages = parsed
     .map((it) => Date.parse(it?.timestamp || it?.enqueued_at || ""))
     .filter((t: number) => Number.isFinite(t));
@@ -2885,7 +3115,7 @@ function describeQueue(name: string, key: string, unit: string): HealthCheck {
     ageMin > 60 * 24 * 7 ? "fail" :
     ageMin > 60 * 24 ? "warn" :
     "ok";
-  return { name, status, detail: `${parsed.length} ${unit} — oldest ${ageDesc}` };
+  return { name, status, detail: `${parsed.length} ${unit} - oldest ${ageDesc}` };
 }
 
 function formatReport(
@@ -2952,14 +3182,14 @@ function AdvancedSettingsPage() {
 
       <DataManagementCard />
 
-      {/* Sheet Sync and App Health moved here from the Settings tab — both
+      {/* Sheet Sync and App Health moved here from the Settings tab - both
           are admin-troubleshooting tools that don't need to surface on
           every visit to Settings. Order: action card (Sheet Sync) before
           read-only health snapshot, then collapsible Diagnostics. */}
       <SheetSyncCard />
       <AppHealthCard />
 
-      {/* Diagnostics last and collapsed by default — admin only goes here
+      {/* Diagnostics last and collapsed by default - admin only goes here
           when something looks off. Keeps the operational cards above it
           uncluttered. */}
       <DiagnosticsCard />
@@ -3081,7 +3311,7 @@ function CrewResourcesCard() {
           )}
           {result.succeeded === result.days && result.days > 0 && (
             <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
-              Open the Resources calendar in Google Calendar — events should
+              Open the Resources calendar in Google Calendar - events should
               be present for the next {result.days} day(s) at 5–6 AM.
             </div>
           )}
@@ -3093,7 +3323,7 @@ function CrewResourcesCard() {
 }
 
 // ─────────────────────────────────────────
-// Diagnostics — collapsible nested card under Advanced Settings. One home
+// Diagnostics - collapsible nested card under Advanced Settings. One home
 // for every read-only "is this feature wired correctly?" check. Sits below
 // the operational cards so admin doesn't see it unless they go looking
 // for it.
@@ -3216,7 +3446,7 @@ function CrewResourcesDiagnostic() {
             }`}
           />
           <DiagLine ok={!!diag.oauth.has_calendar_write}
-            label={`calendar.events write scope ${diag.oauth.has_calendar_write ? "present" : "MISSING — re-authorize OAuth"}`}
+            label={`calendar.events write scope ${diag.oauth.has_calendar_write ? "present" : "MISSING - re-authorize OAuth"}`}
           />
           {diag.oauth.scopes && diag.oauth.scopes.length > 0 && (
             <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11, wordBreak: "break-all" }}>
@@ -3304,7 +3534,7 @@ function HelpTextCard() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DVIR Review Tab — mechanic signs off on inspections
+// DVIR Review Tab - mechanic signs off on inspections
 // ─────────────────────────────────────────────────────────────────────────────
 
 type DVIRRecord = {
@@ -3620,7 +3850,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Remote signature request — email a sign-off link to a mechanic.
+  // Remote signature request - email a sign-off link to a mechanic.
   const [reqEmail, setReqEmail] = useState("");
   const [reqName, setReqName] = useState("");
   const [reqBusy, setReqBusy] = useState(false);
@@ -3631,7 +3861,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
   const [requestedEmail, setRequestedEmail] = useState<string | null>(
     dvir.mechanic_signature_requested_email,
   );
-  // Remote sign-off is the secondary path — collapsed by default so the
+  // Remote sign-off is the secondary path - collapsed by default so the
   // review screen isn't two big stacked forms. Auto-expanded when a request
   // is already out, so its "awaiting signature" status stays in view.
   const [remoteOpen, setRemoteOpen] = useState<boolean>(
@@ -3723,7 +3953,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
               color: dvir.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
             }}
           >
-            {dvir.condition === "satisfactory" ? "Satisfactory — No Defects" : "Defects Noted"}
+            {dvir.condition === "satisfactory" ? "Satisfactory - No Defects" : "Defects Noted"}
           </span>
         </div>
 
@@ -3767,7 +3997,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? formatMountainDateTime(dvir.mechanic_signed_at) : ""}
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-            Repairs made: {dvir.repairs_made ? "Yes" : "No — no repair needed"}
+            Repairs made: {dvir.repairs_made ? "Yes" : "No - no repair needed"}
           </div>
           {dvir.mechanic_notes && <div style={{ fontSize: 13, marginBottom: 8 }}>{dvir.mechanic_notes}</div>}
           <img
@@ -3782,12 +4012,12 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             ✓ No Mechanic Review Required
           </div>
           <div className="small" style={{ color: "var(--muted)" }}>
-            Driver reported no defects — vehicle auto-cleared as satisfactory.
+            Driver reported no defects - vehicle auto-cleared as satisfactory.
           </div>
         </div>
       ) : (
         <>
-        {/* Remote signature request — secondary path, collapsed by default */}
+        {/* Remote signature request - secondary path, collapsed by default */}
         <div className="card" style={{ marginBottom: 14 }}>
           <button
             type="button"
@@ -3804,7 +4034,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
 
           {requestedAt && !remoteOpen && (
             <div className="small" style={{ color: "#f0c040", marginTop: 6 }}>
-              Request sent to {requestedEmail} — awaiting signature. Tap to resend.
+              Request sent to {requestedEmail} - awaiting signature. Tap to resend.
             </div>
           )}
 
@@ -3824,7 +4054,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
                   }}
                 >
                   Request sent to <strong>{requestedEmail}</strong> on{" "}
-                  {formatMountainDateTime(requestedAt)} — awaiting signature. You can resend below.
+                  {formatMountainDateTime(requestedAt)} - awaiting signature. You can resend below.
                 </div>
               )}
 
@@ -3859,7 +4089,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
           )}
         </div>
 
-        {/* Mechanic sign form — in-person sign-off on this device */}
+        {/* Mechanic sign form - in-person sign-off on this device */}
         <div className="card">
           <div className="label" style={{ fontWeight: 700, marginBottom: 4 }}>Sign Off In Person</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
@@ -3918,7 +4148,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             </div>
 
             <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Mechanic Signature * — sign below</div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>Mechanic Signature * - sign below</div>
               <SignaturePad ref={sigRef} height={140} />
               <button
                 type="button"
@@ -3958,7 +4188,7 @@ const mechInputStyle: React.CSSProperties = {
 };
 
 // ─────────────────────────────────────────
-// Notes tab — Patch Notes authoring
+// Notes tab - Patch Notes authoring
 // ─────────────────────────────────────────
 
 type PatchNoteRecord = {
@@ -4054,7 +4284,7 @@ function NotesTab() {
         </div>
         <div className="col" style={{ gap: 10 }}>
           <input
-            placeholder="Title (e.g. v1.4 — Faster Estimator)"
+            placeholder="Title (e.g. v1.4 - Faster Estimator)"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
@@ -4125,7 +4355,7 @@ function NotesTab() {
 }
 
 // ─────────────────────────────────────────
-// Admin Notes section — global or per-job messages to crew
+// Admin Notes section - global or per-job messages to crew
 // ─────────────────────────────────────────
 
 type AdminNoteRecord = {
@@ -4146,7 +4376,7 @@ function AdminNotesSection() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [jobUuid, setJobUuid] = useState("");
-  const [jobDisplay, setJobDisplay] = useState("");  // "Customer — YYYY-MM-DD" once picked
+  const [jobDisplay, setJobDisplay] = useState("");  // "Customer - YYYY-MM-DD" once picked
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -4182,7 +4412,7 @@ function AdminNotesSection() {
   function attachJob(c: JobCandidate) {
     setJobUuid(c.job_uuid);
     const dateLabel = c.dates.length ? c.dates[c.dates.length - 1] : "";
-    setJobDisplay(`${c.job_name || "(unnamed)"}${dateLabel ? ` — ${dateLabel}` : ""}`);
+    setJobDisplay(`${c.job_name || "(unnamed)"}${dateLabel ? ` - ${dateLabel}` : ""}`);
     setPickerOpen(false);
     setPickerResults(null);
     setPickerDate("");
@@ -4270,7 +4500,7 @@ function AdminNotesSection() {
         <div className="sectionTitle">{editingId == null ? "New Admin Note" : "Edit Admin Note"}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Leave "Attached job" empty for a global note (shown to every crew member).
-          Attach a job to scope the note — it only surfaces when that job is selected.
+          Attach a job to scope the note - it only surfaces when that job is selected.
         </div>
         <div className="col" style={{ gap: 10 }}>
           <input
@@ -4279,7 +4509,7 @@ function AdminNotesSection() {
             onChange={(e) => setTitle(e.target.value)}
           />
 
-          {/* Attached-job row — chip + picker */}
+          {/* Attached-job row - chip + picker */}
           <div className="col" style={{ gap: 6 }}>
             <div className="small" style={{ color: "var(--muted)" }}>Attached job</div>
             {jobUuid ? (
@@ -4434,7 +4664,7 @@ function AdminNotesSection() {
 }
 
 // ─────────────────────────────────────────
-// Job Summary tab — one-page view of every source for a job
+// Job Summary tab - one-page view of every source for a job
 // ─────────────────────────────────────────
 
 type JobSummary = {
@@ -4609,7 +4839,7 @@ function JobSummaryTab() {
 
   const materialsTotal = summary?.materials.reduce((s, m) => s + (m.total || 0), 0) ?? 0;
 
-  // Plain-text invoice block — admin office assistant pastes this into invoice
+  // Plain-text invoice block - admin office assistant pastes this into invoice
   // software, so the layout favors easy copy-paste over visual polish.
   // Excludes the JOB_NOTES sentinel rows used for the global-notes textarea
   // (they aren't crew activity, just a transport for the Notes field).
@@ -4671,14 +4901,14 @@ function JobSummaryTab() {
         // Always show both rounded and actual on every row, billable or
         // not, so the office assistant has the full picture even when no
         // rounding occurred. Total still rounds the *summed actuals*
-        // once at the end — invoice off the totals line, not by adding
+        // once at the end - invoice off the totals line, not by adding
         // rows. Non-billable rows display the same way but are excluded
         // from the total sum.
         const tail = `${rounded.toFixed(2)}h (actual ${actual.toFixed(2)}h)`;
         if (emp.non_billable) {
-          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → non-billable ${tail}`);
+          lines.push(`  ${emp.name || "-"}: ${span}${breakStr} → non-billable ${tail}`);
         } else {
-          lines.push(`  ${emp.name || "—"}: ${span}${breakStr} → ${tail}`);
+          lines.push(`  ${emp.name || "-"}: ${span}${breakStr} → ${tail}`);
           totalActual += actual;
         }
       }
@@ -4697,7 +4927,7 @@ function JobSummaryTab() {
       setInvoiceCopied(true);
       window.setTimeout(() => setInvoiceCopied(false), 1800);
     } catch {
-      // Clipboard API blocked (HTTP, permissions) — fall back to selecting the
+      // Clipboard API blocked (HTTP, permissions) - fall back to selecting the
       // textarea so the user can Cmd/Ctrl-C manually.
       const ta = document.getElementById("invoice-copy-text") as HTMLTextAreaElement | null;
       ta?.select();
@@ -4857,7 +5087,7 @@ function JobSummaryTab() {
                         </div>
                         {wasEdited && e.logged_at && (
                           <div className="small" style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>
-                            edited — logged at {formatMountainDateTime(e.logged_at)}
+                            edited - logged at {formatMountainDateTime(e.logged_at)}
                           </div>
                         )}
                         {e.note && <div style={{ fontSize: 13 }}>{e.note}</div>}
@@ -4950,7 +5180,7 @@ function JobSummaryTab() {
                             >
                               <div style={{ minWidth: 0 }}>
                                 <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                                  <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name || "—"}</div>
+                                  <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name || "-"}</div>
                                   {emp.non_billable && (
                                     <span
                                       className="chip"
@@ -5083,7 +5313,7 @@ function JobSummaryTab() {
               <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
             ) : (
               <div className="col" style={{ gap: 4 }}>
-                <div className="small"><strong>Submitted by:</strong> {summary.job_report.submitted_by_name ?? "—"}</div>
+                <div className="small"><strong>Submitted by:</strong> {summary.job_report.submitted_by_name ?? "-"}</div>
                 <div className="small"><strong>Personal vehicles:</strong> {summary.job_report.personal_vehicles}</div>
                 <div className="small"><strong>M1 dumpster:</strong> {summary.job_report.dumpster_pct}%</div>
                 <div className="small"><strong>M1 recycling:</strong> {summary.job_report.recycling_pct}%</div>
@@ -5092,12 +5322,12 @@ function JobSummaryTab() {
                   summary.job_report.review_candidate === "yes" ? "Yes" :
                   summary.job_report.review_candidate === "no"  ? "No"  :
                   summary.job_report.review_candidate === "na"  ? "N/A" :
-                  "—"
+                  "-"
                 }</div>
                 <div className="small">
                   <strong>Hours match:</strong> {summary.job_report.hours_match ? "Yes" : "No"}
                   {!summary.job_report.hours_match && summary.job_report.hours_mismatch_reason
-                    ? ` — ${summary.job_report.hours_mismatch_reason}`
+                    ? ` - ${summary.job_report.hours_mismatch_reason}`
                     : ""}
                 </div>
               </div>
@@ -5117,7 +5347,7 @@ function JobSummaryTab() {
               <div className="small" style={{ color: "var(--muted)" }}>No bill saved.</div>
             ) : (
               <div className="col" style={{ gap: 4 }}>
-                <div className="small"><strong>Saved by:</strong> {summary.bill.saved_by_name ?? "—"}</div>
+                <div className="small"><strong>Saved by:</strong> {summary.bill.saved_by_name ?? "-"}</div>
                 <div className="small"><strong>Global discount:</strong> {summary.bill.global_discount}%</div>
                 {summary.bill.items.map((it, i) => (
                   <div key={i} className="small">
@@ -5217,7 +5447,7 @@ function JobSummaryTab() {
             )}
             {summary.entry_status && (
               <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-                Last updated by {summary.entry_status.updated_by_name || "—"}
+                Last updated by {summary.entry_status.updated_by_name || "-"}
                 {summary.entry_status.updated_at ? ` on ${formatMountainDateTime(summary.entry_status.updated_at)}` : ""}
               </div>
             )}

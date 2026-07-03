@@ -59,7 +59,7 @@ class MaterialsSubmissionIn(BaseModel):
 def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Store a materials submission and export to Google Sheets.
-    Idempotent — duplicate submission_id is silently ignored.
+    Idempotent - duplicate submission_id is silently ignored.
     """
     try:
         ts = datetime.fromisoformat(payload.created_at.replace("Z", "+00:00"))
@@ -87,7 +87,7 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
         db.commit()
         inserted = True
     except IntegrityError:
-        # Duplicate submission_id — the row is already in the DB from an
+        # Duplicate submission_id - the row is already in the DB from an
         # earlier successful POST. Common on the offline retry path: the
         # first POST committed but the response never made it back to the
         # device, so the queue retries with the same id.
@@ -100,7 +100,7 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
     # Always queue the sheet exports, even when inserted=False. The exports
     # are idempotent (Materials sheet dedupes per submission_id:item_id;
     # Bills sheet replaces by submission_id), so a re-run can't double-write.
-    # Crucially, this gives previously-failed exports another shot — the
+    # Crucially, this gives previously-failed exports another shot - the
     # original code skipped re-export on inserted=False, which permanently
     # stranded any submission whose first export attempt died (e.g. during
     # the SSL race that crashed the worker mid-export).
@@ -146,7 +146,7 @@ def get_materials(
     returns only submissions for that job.
 
     Streams the response and splices `items_json` through as raw JSON
-    instead of parse/reserialize — the per-row dict tree was the peak
+    instead of parse/reserialize - the per-row dict tree was the peak
     memory pressure when concurrent fetches stacked on the 512MB worker.
     """
     q = db.query(MaterialsSubmission)
@@ -185,13 +185,13 @@ def delete_material(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a single materials submission (used to remove one item from
-    the live per-job materials list). Idempotent — returns ok even if absent."""
+    the live per-job materials list). Idempotent - returns ok even if absent."""
     row = (
         db.query(MaterialsSubmission)
         .filter(MaterialsSubmission.submission_id == submission_id)
         .first()
     )
-    # Capture job_uuid before the delete commits — needed to recompute the
+    # Capture job_uuid before the delete commits - needed to recompute the
     # Bills aggregate row even if no DB row remains here (offline retry path).
     job_uuid = row.job_uuid if row is not None else ""
 

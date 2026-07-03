@@ -3,7 +3,7 @@ AvailabilityDay model.
 
 Crew submit forward-looking availability one 14-day window at a time
 (see project_scheduling_availability_design memory for the locked rules).
-The DB shape is normalized — one row per (crew, calendar day) — so admin
+The DB shape is normalized - one row per (crew, calendar day) - so admin
 queries like "who's free Tuesday?" stay simple, and sheet export can still
 aggregate up into one row per (crew, window) for human reading.
 

@@ -69,7 +69,7 @@ function newUUID() {
 }
 
 async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Promise<Blob> {
-  // Always resolves — never rejects, never hangs. Falls back to the original
+  // Always resolves - never rejects, never hangs. Falls back to the original
   // file on any failure (decode error, canvas OOM, unsupported MIME). The
   // 30s safety timer is load-bearing: a synchronous throw inside `onload`
   // (e.g. `getContext("2d")` is null on a low-RAM phone) would otherwise
@@ -85,7 +85,7 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
       resolve(out);
     };
     const timeout = window.setTimeout(() => {
-      console.warn("[estimator-photo] resize timed out — uploading original");
+      console.warn("[estimator-photo] resize timed out - uploading original");
       finish(file);
     }, 30_000);
     img.onload = () => {
@@ -102,7 +102,7 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
         ctx.drawImage(img, 0, 0, w, h);
         canvas.toBlob((blob) => finish(blob ?? file), "image/jpeg", quality);
       } catch (e) {
-        console.warn("[estimator-photo] resize failed — uploading original", e);
+        console.warn("[estimator-photo] resize failed - uploading original", e);
         finish(file);
       }
     };
@@ -328,7 +328,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     } catch (e: any) {
       if (!isMounted.current) return;
       setSaveState("error");
-      setErr(e instanceof ApiError ? e.message : "Auto-save failed — check connection");
+      setErr(e instanceof ApiError ? e.message : "Auto-save failed - check connection");
     }
   }
 
@@ -339,7 +339,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
       isMounted.current = false;
       if (metaSaveTimer.current) {
         clearTimeout(metaSaveTimer.current);
-        // Fire-and-forget — component is gone so we can't update state
+        // Fire-and-forget - component is gone so we can't update state
         const l = localRef.current;
         apiFetch(`/api/estimates/${l.estimate_uuid}`, {
           method: "PATCH",
@@ -389,7 +389,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
-  // Resolve a successful POST for a temp id — swap the temp row for the
+  // Resolve a successful POST for a temp id - swap the temp row for the
   // server row in rendered state. Used by both the live submit path and
   // the on-mount drain of the persistent queue.
   function resolveTempItem(tempId: number, server: EstimateItem) {
@@ -410,7 +410,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
   // / offline, then fire the POST in the background. On success: clear the
   // queue op and swap tempId for the server row. On 4xx: drop the op and
   // the temp row (server permanently rejected). On 5xx / network: leave
-  // the op queued — the drain effect below retries on next mount / reload.
+  // the op queued - the drain effect below retries on next mount / reload.
   function submitItemOptimistic(payload: ItemPayload) {
     const tempId = -(Date.now() + Math.floor(Math.random() * 1000));
     const opId = newOpId();
@@ -442,13 +442,13 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
           dropTempItem(tempId);
           setErr(e instanceof ApiError ? e.message : "Add failed");
         }
-        // else: network / 5xx — leave queued, drain will retry
+        // else: network / 5xx - leave queued, drain will retry
       });
   }
 
   // Called from ItemRow when the user tries to delete a still-syncing
   // (negative id) row. Cancelling the queued op prevents the POST from
-  // running; if the POST already fired, this is a best-effort — the
+  // running; if the POST already fired, this is a best-effort - the
   // server row may still exist, and the next refreshEstimate will show it.
   function cancelTempItem(tempId: number) {
     cancelQueuedAdd(tempId);
@@ -578,7 +578,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
               {saveState === "pending" && "Unsaved…"}
               {saveState === "saving" && "Saving…"}
               {saveState === "saved" && "✓ Saved"}
-              {saveState === "error" && "Save failed — check connection"}
+              {saveState === "error" && "Save failed - check connection"}
             </span>
             <button type="button" onClick={deleteEstimate} style={{ color: "var(--danger)", borderColor: "var(--danger)" }}>
               Delete estimate
@@ -587,7 +587,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
         </div>
       </div>
 
-      {/* Inventory — rooms */}
+      {/* Inventory - rooms */}
       <div className="card">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
           <div>
@@ -646,7 +646,7 @@ function Field({ label, children, flex }: { label: string; children: React.React
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// RoomTile — one room, its subcategories, and its items
+// RoomTile - one room, its subcategories, and its items
 // ─────────────────────────────────────────────────────────────────────────
 
 function RoomTile({
@@ -680,7 +680,7 @@ function RoomTile({
       else hasUncategorized = true;
     }
     const out = [...set].sort((a, b) => a.localeCompare(b));
-    if (hasUncategorized && items.length > 0) out.unshift("—");
+    if (hasUncategorized && items.length > 0) out.unshift("-");
     return out;
   }, [items]);
 
@@ -727,12 +727,12 @@ function RoomTile({
       {subcategories.map((sub) => {
         const subItems = items.filter((it) => {
           const s = (it.subcategory ?? "").trim();
-          return sub === "—" ? !s : s === sub;
+          return sub === "-" ? !s : s === sub;
         });
         return (
           <div key={sub}>
             <div className="small" style={{ color: "var(--brand)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>
-              {sub === "—" ? "Items" : sub}
+              {sub === "-" ? "Items" : sub}
             </div>
             <div className="col" style={{ gap: 0 }}>
               {subItems.map((it) => (
@@ -773,7 +773,7 @@ function RoomTile({
         <AddItemDialog
           room={isUnassigned ? "" : room}
           subcategory={preSubcategory ?? ""}
-          knownSubcategories={subcategories.filter((s) => s !== "—")}
+          knownSubcategories={subcategories.filter((s) => s !== "-")}
           onClose={() => { setAddingItem(false); setPreSubcategory(null); }}
           onAdd={(payload) => {
             onAddItem(payload);
@@ -787,7 +787,7 @@ function RoomTile({
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// ItemRow — editable row with inline edit + notes
+// ItemRow - editable row with inline edit + notes
 // ─────────────────────────────────────────────────────────────────────────
 
 function ItemRow({
@@ -856,7 +856,7 @@ function ItemRow({
 
   // Flush immediately when a field loses focus so values are saved even
   // if the user taps away before the debounce fires. Only flush when
-  // "pending" — if already "saving" the in-flight request is handling it
+  // "pending" - if already "saving" the in-flight request is handling it
   // and a second concurrent PATCH would race against it.
   function handleBlur() {
     if (itemSaveState === "pending") {
@@ -1024,7 +1024,7 @@ function ItemRow({
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// AddItemDialog — typeahead autocomplete + custom item with optional
+// AddItemDialog - typeahead autocomplete + custom item with optional
 // "save to app database" checkbox
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -1179,7 +1179,7 @@ function AddItemDialog({
         style={{ maxWidth: 460, width: "100%", maxHeight: "90vh", overflowY: "auto", marginTop: 0 }}
       >
         <div className="sectionTitle">
-          Add Item{room ? ` — ${room}` : ""}
+          Add Item{room ? ` - ${room}` : ""}
         </div>
 
         <form onSubmit={submit} className="col" style={{ gap: 10 }}>
@@ -1220,7 +1220,7 @@ function AddItemDialog({
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); setSelected(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } }}
-                placeholder="Start typing — e.g. Sofa, Dresser, Box…"
+                placeholder="Start typing - e.g. Sofa, Dresser, Box…"
                 style={{ flex: 1 }}
               />
               <div className="col" style={{ gap: 2, flexShrink: 0 }}>
@@ -1242,7 +1242,7 @@ function AddItemDialog({
             </div>
             {query && !exactMatch && !selected && (
               <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                No exact match — press Enter or tap "Add to inventory" to add as custom.
+                No exact match - press Enter or tap "Add to inventory" to add as custom.
               </div>
             )}
           </label>

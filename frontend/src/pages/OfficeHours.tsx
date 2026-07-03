@@ -43,7 +43,7 @@ function emptyForm(): FormState {
 }
 
 /**
- * Office Hours entry panel — embedded as a tab in the Admin dashboard.
+ * Office Hours entry panel - embedded as a tab in the Admin dashboard.
  * Admin-only; the Admin page already gates on role so no extra check here.
  *
  * Time entry mirrors the Report tab's employee-hours editor: a start and an
@@ -98,7 +98,7 @@ export default function OfficeHoursPanel() {
     setEditing(true);
     // Saved rows only persist a break-hours total, not the individual
     // periods. Surface a single representative period if there was any
-    // break time, so the editor stays consistent — the admin can re-split
+    // break time, so the editor stays consistent - the admin can re-split
     // it if they want different math.
     const breaks: BreakPeriod[] =
       e.break_hours > 0 ? [{ start: "", end: "" }] : [];
@@ -214,7 +214,7 @@ export default function OfficeHoursPanel() {
             </div>
           </div>
 
-          {/* Breaks — clocked-out periods, entered as start/end pairs to
+          {/* Breaks - clocked-out periods, entered as start/end pairs to
               match the Report tab's employee-hours editor. */}
           <div>
             <div className="label">Breaks / clocked-out time</div>

@@ -29,7 +29,7 @@ def upload_photo(
 
     # Idempotent: if this photo_id is already stored, skip the Drive upload
     # and return the existing record. The offline queue retries with the same
-    # photo_id, and Drive uploads are NOT idempotent — re-uploading would
+    # photo_id, and Drive uploads are NOT idempotent - re-uploading would
     # orphan a duplicate public file.
     existing = db.query(Photo).filter(Photo.id == photo_id).first()
     if existing:

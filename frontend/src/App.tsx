@@ -3,6 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
+import BolInventoryTab from "./components/BolInventoryTab";
+import RodsRecorder from "./components/RodsRecorder";
+import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
@@ -17,12 +20,11 @@ import {
   mountainDateYYYYMMDD,
 } from "./lib/time";
 import AdminNotesBanner from "./components/AdminNotesBanner";
+import BetaTag from "./components/BetaTag";
 import { getToken, clearToken } from "./auth/token";
 import {
-  renderedForJob as materialsRenderedForJob,
   syncQueue as syncMaterialsQueue,
   fetchAndCache as fetchAndCacheMaterials,
-  type LiveMaterial,
 } from "./lib/materialsStore";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -31,7 +33,7 @@ const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 // Caps the longest side at 1920px and encodes as JPEG at 80% quality.
 // Typical mobile photo: 8MB → ~600KB after this.
 async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Promise<Blob> {
-  // Always resolves — never rejects, never hangs. Falls back to the original
+  // Always resolves - never rejects, never hangs. Falls back to the original
   // file on any failure (decode error, OOM on canvas, unsupported MIME).
   // The 30s safety timer is the load-bearing piece: without it, an `onload`
   // that throws synchronously (e.g. `getContext("2d")` returns null on a
@@ -48,7 +50,7 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
       resolve(out);
     };
     const timeout = window.setTimeout(() => {
-      console.warn("[photo] resize timed out — uploading original");
+      console.warn("[photo] resize timed out - uploading original");
       finish(file);
     }, 30_000);
     img.onload = () => {
@@ -65,7 +67,7 @@ async function resizeImage(file: File | Blob, maxPx = 1920, quality = 0.8): Prom
         ctx.drawImage(img, 0, 0, w, h);
         canvas.toBlob((blob) => finish(blob ?? file), "image/jpeg", quality);
       } catch (e) {
-        console.warn("[photo] resize failed — uploading original", e);
+        console.warn("[photo] resize failed - uploading original", e);
         finish(file);
       }
     };
@@ -82,7 +84,7 @@ const LOG_KEY = "crew_event_log_v1"; // full job activity log (synced + queued)
 // reach Postgres + the Events sheet.
 const NOTE_PATCH_KEY = "crew_event_note_patch_queue_v1";
 
-// Retention — the Google Sheet is the long-term record; the client log is a
+// Retention - the Google Sheet is the long-term record; the client log is a
 // working buffer for the offline-first UX. Trim anything older than the
 // retention window (and cap length as a hard ceiling) on boot so
 // localStorage doesn't silently blow out its quota after months of use.
@@ -98,6 +100,10 @@ function withinRetention(iso: string | undefined, days: number): boolean {
 }
 const JOB_KEY = "crew_active_job_uuid_v1";
 const JOB_STATUS_KEY = "crew_job_status_v1"; // "active" | "closed"
+// Local vs long-distance mode - a device-global toggle (persists across
+// restarts) that reshapes the Timeline + Report tabs for multi-day interstate
+// jobs. Defaults to "local".
+const MODE_KEY = "crew_mode_v1"; // "local" | "long_distance"
 const COMMENTS_PREFIX = "crew_job_comments_v1:"; // per job_uuid
 
 // Maps job_uuid → event_id of the JOB_NOTES sentinel event we created for it.
@@ -106,7 +112,7 @@ const JOB_NOTES_EVENT_PREFIX = "crew_job_notes_event_v1:"; // per job_uuid
 
 // Per-job snapshot of the notes text that was last accepted into the sync
 // pipeline. Compared against the live `jobComments` to decide whether the
-// debounce should fire — survives across reloads and job switches so a save
+// debounce should fire - survives across reloads and job switches so a save
 // pending at the moment of switch eventually flushes when the user returns.
 const NOTES_SYNCED_PREFIX = "crew_job_notes_synced_v1:"; // per job_uuid
 
@@ -118,7 +124,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "report";
+type Tab = "timeline" | "photos" | "report" | "inventory";
 
 type EventRecord = {
   event_id: string;
@@ -142,11 +148,13 @@ type EventRecord = {
 // Patch ops carry whichever fields the user changed. Either or both of
 // `note` / `timestamp` may be present. Storage key keeps its historical
 // "note_patch" name to preserve already-queued ops on devices upgrading
-// in place — the shape is a strict superset.
+// in place - the shape is a strict superset.
 type EventPatchOp = {
   event_id: string;
   note?: string | null;
   timestamp?: string;
+  // Offline-safe delete: drained as a DELETE instead of a PATCH.
+  deleted?: boolean;
   enqueued_at: string;
 };
 
@@ -179,7 +187,7 @@ type ServerPhoto = {
 
 // `<input type="time">` round-tripping. The element's value is "HH:mm" in
 // the user's local time. We keep the event's existing date intact and only
-// rewrite hours/minutes — crew typically just need to nudge minutes within
+// rewrite hours/minutes - crew typically just need to nudge minutes within
 // a shift; a date change usually means the event is a much bigger mistake
 // and should be re-logged.
 function toTimeValue(iso: string): string {
@@ -202,16 +210,12 @@ function applyTimeToIso(localTime: string, baseIso: string): string | null {
   return d.toISOString();
 }
 
-// Mirrors the server-side bounds in /api/events PATCH. Returns null when
-// valid, or a short reason when the user picked an invalid time.
-function validateEditableTimestamp(newIso: string, loggedAtIso: string | undefined): string | null {
+// Returns null when valid, or a short reason when the user picked an
+// unparseable time. Any real timestamp is allowed — crew can set event
+// time to any time, past or future.
+function validateEditableTimestamp(newIso: string, _loggedAtIso: string | undefined): string | null {
   const newT = Date.parse(newIso);
   if (!Number.isFinite(newT)) return "Invalid date.";
-  const now = Date.now();
-  if (newT - now > 5 * 60 * 1000) return "Time can't be in the future.";
-  const baseline = loggedAtIso ? Date.parse(loggedAtIso) : now;
-  const earliest = (Number.isFinite(baseline) ? baseline : now) - 7 * 24 * 60 * 60 * 1000;
-  if (newT < earliest) return "Time can't be more than 7 days before the event was logged.";
   return null;
 }
 
@@ -222,16 +226,11 @@ function todayLocalYYYYMMDD() {
   return mountainDateYYYYMMDD();
 }
 
-function money(n: number) {
-  return `$${n.toFixed(2)}`;
-}
-
 /**
- * Derive a deterministic UUID v4 from a Google Calendar event ID.
- * Any device calling this with the same calId gets the same UUID,
- * so all crew members on the same job share a single job_uuid.
+ * Derive a deterministic UUID v4 from any string.
+ * Same input always produces the same UUID across devices.
  */
-function calEventToJobUuid(calId: string): string {
+function stringToJobUuid(seedStr: string): string {
   // FNV-1a 32-bit with different seeds to produce 128 bits total
   const fnv = (s: string, seed: number): number => {
     let h = seed >>> 0;
@@ -241,10 +240,10 @@ function calEventToJobUuid(calId: string): string {
     }
     return h >>> 0;
   };
-  const a = fnv(calId, 2166136261);
-  const b = fnv(calId + "\x00", 2166136261);
-  const c = fnv(calId + "\x01", 2166136261);
-  const d = fnv(calId + "\x02", 2166136261);
+  const a = fnv(seedStr, 2166136261);
+  const b = fnv(seedStr + "\x00", 2166136261);
+  const c = fnv(seedStr + "\x01", 2166136261);
+  const d = fnv(seedStr + "\x02", 2166136261);
   const hex = [a, b, c, d].map((n) => n.toString(16).padStart(8, "0")).join("");
   return [
     hex.slice(0, 8),
@@ -253,6 +252,42 @@ function calEventToJobUuid(calId: string): string {
     ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0") + hex.slice(18, 20),
     hex.slice(20, 32),
   ].join("-");
+}
+
+/**
+ * Derive a deterministic UUID v4 from a Google Calendar event ID.
+ * All devices calling this with the same calId get the same UUID.
+ */
+function calEventToJobUuid(calId: string): string {
+  return stringToJobUuid(calId);
+}
+
+/**
+ * Derive a deterministic UUID v4 for a manually-entered job. Any device
+ * that types the same (normalized) name on the same date resolves to the
+ * same job_uuid, so their events auto-merge without a round-trip to the
+ * backend. Whitespace and case are collapsed to keep "The Smith Job" and
+ * " The  Smith Job " on the same UUID.
+ */
+function manualJobToJobUuid(name: string, date: string): string {
+  const normalized = (name || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return stringToJobUuid(`manual:${date}:${normalized}`);
+}
+
+// Manual entries persisted locally so they survive refresh (sessionStorage
+// used to drop them). Keyed by jobDate; each entry is { id, summary, date }.
+const MANUAL_ENTRIES_KEY = "crew_manual_entries_v1";
+type ManualEntry = { id: string; summary: string; date: string };
+function loadManualEntries(): ManualEntry[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(MANUAL_ENTRIES_KEY) || "[]");
+    return Array.isArray(arr) ? arr.filter((e) => e && e.id && e.summary && e.date) : [];
+  } catch {
+    return [];
+  }
+}
+function saveManualEntries(entries: ManualEntry[]) {
+  try { localStorage.setItem(MANUAL_ENTRIES_KEY, JSON.stringify(entries)); } catch {}
 }
 
 /** Build a fetch-compatible headers object, adding Authorization if a token is present. */
@@ -285,13 +320,31 @@ export default function App() {
     () => (localStorage.getItem(JOB_STATUS_KEY) as any) || "active"
   );
 
+  const [mode, setMode] = useState<"local" | "long_distance">(
+    () => (localStorage.getItem(MODE_KEY) as any) || "local"
+  );
+  const longDistance = mode === "long_distance";
+  function setPersistedMode(val: "local" | "long_distance") {
+    setMode(val);
+    localStorage.setItem(MODE_KEY, val);
+  }
+
+  // Long-distance day plan - drives whether the timeline shows the labor Actions
+  // buttons (packing/loading/unloading/unpacking) or the RODS recorder (driving).
+  const {
+    plan: ldPlan,
+    driving: ldDriving,
+    laborSelected: ldLabor,
+    toggleActivity: ldToggleActivity,
+  } = useLdPlan(todayLocalYYYYMMDD());
+
   const [status, setStatus] = useState<string>("");
 
 
   const [queueLen, setQueueLen] = useState<number>(0);
   const [activityLog, setActivityLog] = useState<EventRecord[]>([]);
 
-  const [clockText, setClockText] = useState<string>("—");
+  const [clockText, setClockText] = useState<string>("-");
   const [patchNotesUnseen, setPatchNotesUnseen] = useState<boolean>(false);
 
   useEffect(() => {
@@ -300,10 +353,10 @@ export default function App() {
         const latest = rows[0]?.updated_at ?? null;
         setPatchNotesUnseen(hasUnseenPatchNotes(latest));
       })
-      .catch(() => {/* non-fatal — no indicator */});
+      .catch(() => {/* non-fatal - no indicator */});
   }, []);
 
-  // Retention prune on boot — drop stale log entries and stuck queue ops
+  // Retention prune on boot - drop stale log entries and stuck queue ops
   // so localStorage stays well clear of its per-origin quota. The Google
   // Sheet is authoritative long-term; this buffer only needs a couple of
   // weeks of history.
@@ -328,7 +381,7 @@ export default function App() {
         }
       }
     } catch {
-      /* corrupted JSON — ignore; next write will overwrite */
+      /* corrupted JSON - ignore; next write will overwrite */
     }
   }, []);
 
@@ -346,7 +399,7 @@ export default function App() {
 
   // Sync status for the global Notes textarea. Drives the small status pill
   // shown next to the Notes header so crew can confirm their text reached the
-  // queue (the previous behavior wrote to localStorage only — sheets never saw
+  // queue (the previous behavior wrote to localStorage only - sheets never saw
   // it, so admin couldn't read the notes off-device).
   type NotesSyncStatus = "idle" | "saving" | "saved" | "offline";
   const [notesStatus, setNotesStatus] = useState<NotesSyncStatus>("idle");
@@ -378,7 +431,6 @@ export default function App() {
   const [dvirPending, setDvirPending] = useState<{ type: string } | null>(null);
   const [serverEvents, setServerEvents] = useState<EventRecord[]>([]);
   const [serverPhotos, setServerPhotos] = useState<ServerPhoto[]>([]);
-  const [materialsSummary, setMaterialsSummary] = useState<LiveMaterial[]>([]);
   // event_id of the timeline row whose timestamp is currently being edited.
   // null when nothing is open. Only one row can edit at a time.
   const [editingTimeFor, setEditingTimeFor] = useState<string | null>(null);
@@ -390,13 +442,11 @@ export default function App() {
 
   // Calendar "Other" option
   const [calOtherName, setCalOtherName] = useState<string>("");
-  // Manual job entries created this session — shown as dropdown options so
-  // users can re-select them without re-typing. Persisted to sessionStorage
-  // so they survive navigation within the same tab.
-  const [manualCalEntries, setManualCalEntries] = useState<{ id: string; summary: string }[]>(() => {
-    try { return JSON.parse(sessionStorage.getItem("crew_session_manualEntries") || "[]"); }
-    catch { return []; }
-  });
+  // Manual job entries shown as dropdown options so the crew can re-select
+  // them without re-typing. Persisted to localStorage (survives refresh) and
+  // synced to the backend so a name typed on one device appears on other
+  // devices working the same date - see /api/jobs/manual.
+  const [manualEntries, setManualEntries] = useState<ManualEntry[]>(() => loadManualEntries());
 
 
   // -----------------------
@@ -416,7 +466,7 @@ export default function App() {
     try {
       localStorage.setItem(key, JSON.stringify(val));
     } catch {
-      // Quota exceeded or similar — surface once so the problem isn't silent.
+      // Quota exceeded or similar - surface once so the problem isn't silent.
       // Retention pruning on boot should keep us well clear of this.
       console.warn(`[storage] failed to write ${key}; log retention may need review`);
     }
@@ -444,7 +494,7 @@ export default function App() {
   }
 
   function saveLog(log: EventRecord[]) {
-    // Defensive cap — saveLog is called from many paths; enforce the ceiling
+    // Defensive cap - saveLog is called from many paths; enforce the ceiling
     // on every write rather than trusting each caller to prune.
     const capped = log.length > LOG_MAX_ENTRIES
       ? log.slice(0, LOG_MAX_ENTRIES)
@@ -629,7 +679,7 @@ export default function App() {
 
   function computeClockHoursText(log: EventRecord[]) {
     const uuid = jobUuid.trim();
-    if (!uuid) return "—";
+    if (!uuid) return "-";
 
     const jobLog = log.filter((e) => e.job_uuid === uuid);
 
@@ -639,7 +689,7 @@ export default function App() {
       .filter((t) => Number.isFinite(t))
       .sort((a, b) => a - b)[0];
 
-    if (!Number.isFinite(start)) return "—";
+    if (!Number.isFinite(start)) return "-";
 
     const finishTs = jobLog
       .filter((e) => e.type === "FINISH")
@@ -661,6 +711,15 @@ export default function App() {
     const remaining: EventPatchOp[] = [];
     for (const op of q) {
       try {
+        if (op.deleted) {
+          const res = await fetch(`${API}/api/events/${encodeURIComponent(op.event_id)}`, {
+            method: "DELETE",
+            headers: makeAuthHeaders(token),
+          });
+          if (res.ok || res.status === 404) continue; // 404 = already gone
+          remaining.push(op);
+          continue;
+        }
         // Send only the fields the user actually changed. Older queue
         // items predating editable timestamps just have `note`.
         const body: Record<string, unknown> = {};
@@ -672,7 +731,7 @@ export default function App() {
           body: JSON.stringify(body),
         });
         if (res.ok) continue;
-        // 4xx that's specifically about a malformed timestamp is permanent —
+        // 4xx that's specifically about a malformed timestamp is permanent -
         // dropping the op prevents a wedged queue. 404 means the event hasn't
         // synced from another device yet; keep retrying on later drains.
         if (res.status === 400) continue;
@@ -690,7 +749,7 @@ export default function App() {
     const log = loadLog();
     const logIdx = log.findIndex((x) => x.event_id === eventId);
     // If this device still has the event queued for sync, just rewrite the
-    // note in-place — it will ride the normal sync and the server will insert
+    // note in-place - it will ride the normal sync and the server will insert
     // it with the correct note on first arrival. No PATCH needed.
     const queuedLocally = logIdx >= 0 && log[logIdx].sync_status === "queued";
     if (logIdx >= 0) {
@@ -721,6 +780,39 @@ export default function App() {
     else nextPatchQueue.push(op);
     saveNotePatchQueue(nextPatchQueue);
 
+    drainNotePatchQueue();
+  }
+
+  // Delete an event logged in error (also removes the derived RODS duty change
+  // when it's a DUTY event). Offline-safe: drops it from local state + the
+  // outbox, and queues a DELETE for the server if it had already synced.
+  async function deleteEvent(eventId: string) {
+    const log = loadLog();
+    const logIdx = log.findIndex((x) => x.event_id === eventId);
+    const queuedLocally = logIdx >= 0 && log[logIdx].sync_status === "queued";
+    if (logIdx >= 0) {
+      const next = log.slice();
+      next.splice(logIdx, 1);
+      saveLog(next);
+      setActivityLog(next);
+    }
+    // Drop from the outbox (an as-yet-unsynced event needs no server delete).
+    const q = loadQueue();
+    const qIdx = q.findIndex((x) => x.event_id === eventId);
+    if (qIdx >= 0) {
+      const nq = q.slice();
+      nq.splice(qIdx, 1);
+      saveQueue(nq);
+    }
+    setServerEvents((prev) => prev.filter((e) => e.event_id !== eventId));
+    // Drop any pending edit for this event, then delete server-side if synced.
+    const patchQueue = loadNotePatchQueue().filter((p) => p.event_id !== eventId);
+    if (queuedLocally) {
+      saveNotePatchQueue(patchQueue);
+      return;
+    }
+    patchQueue.push({ event_id: eventId, deleted: true, enqueued_at: new Date().toISOString() });
+    saveNotePatchQueue(patchQueue);
     drainNotePatchQueue();
   }
 
@@ -865,11 +957,11 @@ export default function App() {
 
       const json = await res.json();
 
-      // An event the server "handled" — inserted, deduped, or *permanently*
-      // rejected (e.g. a malformed timestamp) — leaves the queue; retrying it
+      // An event the server "handled" - inserted, deduped, or *permanently*
+      // rejected (e.g. a malformed timestamp) - leaves the queue; retrying it
       // would just wedge the queue. But a `retryable` failure (a transient
       // server-side DB error means the event never persisted) must stay
-      // queued — dropping it silently loses a logged field event.
+      // queued - dropping it silently loses a logged field event.
       if (json?.ok === true) {
         const failed: { event_id: string; reason?: string; retryable?: boolean }[] =
           json.failed ?? [];
@@ -894,9 +986,9 @@ export default function App() {
           );
         }
         if (remaining.length > 0) {
-          setStatus(`Synced — ${remaining.length} will retry`);
+          setStatus(`Synced - ${remaining.length} will retry`);
         } else if (permanentFailed.length > 0) {
-          setStatus(`Synced — ${permanentFailed.length} rejected`);
+          setStatus(`Synced - ${permanentFailed.length} rejected`);
         } else {
           setStatus("Synced");
         }
@@ -928,7 +1020,7 @@ export default function App() {
       job_uuid: jobUuid.trim(),
       type,
       // On capture, the editable event time and the immutable logged_at are
-      // the same — both reflect the device clock at the moment of the tap.
+      // the same - both reflect the device clock at the moment of the tap.
       // They diverge only after the user edits `timestamp` from the timeline.
       timestamp: nowIso,
       logged_at: nowIso,
@@ -965,10 +1057,14 @@ export default function App() {
     setCalWarning("");
     setCalLoading(true);
     setCalEvents([]);
-    // Do NOT clear calSelectedId here — callers own that decision.
+    // Do NOT clear calSelectedId here - callers own that decision.
     // The date-change effect clears it before calling; the first-mount
     // guard intentionally preserves the sessionStorage-restored value.
     setCalLoaded(false);
+
+    // Pull manual entries for this date in parallel so cross-device names
+    // land in the dropdown alongside the calendar events.
+    void fetchManualEntriesForDate(jobDate);
 
     try {
       const token = getToken();
@@ -1003,39 +1099,84 @@ export default function App() {
     }
   }
 
-  // Called on blur of the manual-entry input. Promotes the typed name from
-  // the hidden "__other__" sentinel to a real named dropdown option so the
-  // user can re-select this job without re-typing the description.
+  async function fetchManualEntriesForDate(date: string) {
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/api/jobs/manual?date=${encodeURIComponent(date)}`, {
+        headers: makeAuthHeaders(token),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const remote: { job_uuid: string; name: string }[] = json?.entries ?? [];
+      if (!Array.isArray(remote) || remote.length === 0) return;
+      setManualEntries((prev) => {
+        const byId = new Map(prev.map((e) => [e.id, e]));
+        for (const r of remote) {
+          byId.set(r.job_uuid, { id: r.job_uuid, summary: r.name, date });
+        }
+        const next = Array.from(byId.values());
+        saveManualEntries(next);
+        return next;
+      });
+    } catch { /* offline is fine */ }
+  }
+
+  // Called on blur of the manual-entry input. Derives the canonical job_uuid
+  // deterministically from (name, jobDate) so any device typing the same
+  // name for the same day gets the same UUID and their events auto-merge.
+  // Persists to localStorage + best-effort POSTs to the backend so the entry
+  // shows up in other crew members' dropdowns for that date.
   function confirmManualEntry() {
     const name = calOtherName.trim();
-    if (!name || !jobUuid) return;
-    const entry = { id: jobUuid, summary: name };
-    setManualCalEntries((prev) => {
-      const idx = prev.findIndex((e) => e.id === jobUuid);
+    if (!name) return;
+    const canonicalUuid = manualJobToJobUuid(name, jobDate);
+
+    setPersistedJobUuid(canonicalUuid);
+    setPersistedJobStatus("active");
+    setJobName(name);
+    setStatus("Job selected");
+    saveJobMeta({ job_uuid: canonicalUuid, jobName: name, jobDate, source: "manual", updated_at: new Date().toISOString() });
+
+    const entry: ManualEntry = { id: canonicalUuid, summary: name, date: jobDate };
+    setManualEntries((prev) => {
+      const idx = prev.findIndex((e) => e.id === canonicalUuid);
       const next = idx >= 0 ? prev.map((e, i) => (i === idx ? entry : e)) : [...prev, entry];
-      sessionStorage.setItem("crew_session_manualEntries", JSON.stringify(next));
+      saveManualEntries(next);
       return next;
     });
-    setCalSelectedId(jobUuid); // switch dropdown value to the real UUID
+    setCalSelectedId(canonicalUuid);
+    fetchJobEvents(canonicalUuid);
+    fetchServerPhotos(canonicalUuid);
+
+    // Best-effort backend upsert. If it fails (offline / 5xx), the local
+    // entry still works; the next successful call reconciles.
+    (async () => {
+      try {
+        const token = getToken();
+        await fetch(`${API}/api/jobs/manual`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...makeAuthHeaders(token) },
+          body: JSON.stringify({ job_uuid: canonicalUuid, name, date: jobDate }),
+        });
+      } catch { /* offline is fine - retried next confirm or by list-fetch */ }
+    })();
   }
 
   async function onSelectCalendarEvent(calId: string) {
     setCalSelectedId(calId);
 
     if (calId === "__other__") {
-      const newUuid = crypto.randomUUID();
+      // Don't create a UUID yet - it's derived from the name on blur so
+      // two devices typing the same name land on the same UUID.
       setCalOtherName("");
-      setPersistedJobUuid(newUuid);
-      setPersistedJobStatus("active");
+      setPersistedJobUuid("");
       setJobName("");
-      setStatus("Manual job — enter description below");
-      fetchJobEvents(newUuid);
-      fetchServerPhotos(newUuid);
+      setStatus("Manual job - enter description below");
       return;
     }
 
-    // Re-selecting a previously confirmed manual entry — restore same UUID + name.
-    const manualEntry = manualCalEntries.find((e) => e.id === calId);
+    // Re-selecting a previously confirmed manual entry - restore UUID + name.
+    const manualEntry = manualEntries.find((e) => e.id === calId);
     if (manualEntry) {
       setPersistedJobUuid(calId);
       setPersistedJobStatus("active");
@@ -1163,7 +1304,7 @@ export default function App() {
       const data = await apiFetch<{ ok: boolean; events: EventRecord[] }>(`/api/events?job_uuid=${encodeURIComponent(uuid)}`);
       if (data?.events) setServerEvents(data.events);
     } catch {
-      // offline or error — server events unavailable, local queue still shown
+      // offline or error - server events unavailable, local queue still shown
     }
   }
 
@@ -1173,7 +1314,7 @@ export default function App() {
       const data = await apiFetch<{ ok: boolean; photos: ServerPhoto[] }>(`/api/photos?job_uuid=${encodeURIComponent(uuid)}`);
       if (data?.photos) setServerPhotos(data.photos);
     } catch {
-      // offline — server photos unavailable
+      // offline - server photos unavailable
     }
   }
 
@@ -1187,10 +1328,10 @@ export default function App() {
   async function readPhotoUploadResponse(res: Response): Promise<{ error: string | null; body: any }> {
     if (res.status === 401) {
       // Token expired or revoked. Wipe it so the next render kicks the user
-      // back to the login screen — otherwise they keep tapping Retry and seeing
+      // back to the login screen - otherwise they keep tapping Retry and seeing
       // "HTTP 401" without any explanation of what to do.
       clearToken();
-      return { error: "Session expired — log out and sign in again to upload photos", body: null };
+      return { error: "Session expired - log out and sign in again to upload photos", body: null };
     }
     if (res.status === 413) {
       return { error: "Photo too large to upload (server limit is 100 MB)", body: null };
@@ -1199,11 +1340,11 @@ export default function App() {
       return { error: "Server rejected the upload (not authorized)", body: null };
     }
     if (res.status >= 500) {
-      return { error: `Server error (HTTP ${res.status}) — try again in a moment`, body: null };
+      return { error: `Server error (HTTP ${res.status}) - try again in a moment`, body: null };
     }
     let body: any = null;
     try { body = await res.json(); }
-    catch { return { error: "Upload failed — server returned an unreadable response", body: null }; }
+    catch { return { error: "Upload failed - server returned an unreadable response", body: null }; }
     if (body && body.ok === false) {
       const msg = body.error ? `Drive upload failed: ${body.error}` : "Drive upload failed";
       return { error: msg, body };
@@ -1212,7 +1353,7 @@ export default function App() {
       return { error: `Upload failed (HTTP ${res.status})`, body };
     }
     if (!body || !body.drive_url) {
-      return { error: "Drive upload didn't complete — please retry", body };
+      return { error: "Drive upload didn't complete - please retry", body };
     }
     return { error: null, body };
   }
@@ -1259,7 +1400,7 @@ export default function App() {
       setPendingPhotoFile(null);
       setPendingCaption("");
       await refreshPhotos();
-      setStatus("Photo saved — uploading to Drive…");
+      setStatus("Photo saved - uploading to Drive…");
     } catch (e: any) {
       setPhotoError(e?.message ?? "Photo save failed");
       setPhotoBusy(false);
@@ -1297,8 +1438,8 @@ export default function App() {
     } catch (uploadErr: any) {
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
       const msg = offline
-        ? "Offline — photo will retry when you're back online"
-        : (uploadErr?.message ?? "Network error — tap Retry");
+        ? "Offline - photo will retry when you're back online"
+        : (uploadErr?.message ?? "Network error - tap Retry");
       await updatePhoto(photoId, { drive_status: "failed", drive_error: msg });
       await refreshPhotos();
       setPhotoError(msg);
@@ -1340,8 +1481,8 @@ export default function App() {
     } catch (uploadErr: any) {
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
       const msg = offline
-        ? "Offline — photo will retry when you're back online"
-        : (uploadErr?.message ?? "Network error — tap Retry");
+        ? "Offline - photo will retry when you're back online"
+        : (uploadErr?.message ?? "Network error - tap Retry");
       await updatePhoto(photo.id, { drive_status: "failed", drive_error: msg });
       setPhotoError(msg);
     }
@@ -1367,21 +1508,14 @@ export default function App() {
     }
   }
 
-  // -----------------------
-  // Materials summary — read from the offline-capable materialsStore cache,
-  // then fire a background sync + refetch.
-  // -----------------------
-  function refreshMaterialsSummary(uuid: string) {
-    setMaterialsSummary(materialsRenderedForJob(uuid.trim()));
-  }
-
-  async function loadMaterialsSummary(uuid: string) {
+  // Drain offline-queued materials + warm the cache so the Invoice Builder
+  // opens with fresh data. No render — the visible summary lives only in
+  // the Invoice Builder on the Report tab.
+  async function syncMaterialsInBackground(uuid: string) {
     const trimmed = uuid.trim();
-    refreshMaterialsSummary(trimmed);
     if (!trimmed) return;
     await syncMaterialsQueue();
-    const ok = await fetchAndCacheMaterials(trimmed);
-    if (ok) refreshMaterialsSummary(trimmed);
+    await fetchAndCacheMaterials(trimmed);
   }
 
   // -----------------------
@@ -1402,7 +1536,7 @@ export default function App() {
     setJobComments(loadCommentsForJob(jobUuid));
 
     // Rehydrate the active job's name on boot, but leave jobDate at today
-    // (the useState initializer). Crews log in to work today's jobs — showing
+    // (the useState initializer). Crews log in to work today's jobs - showing
     // last session's date in the Timeline filter was confusing.
     const meta = loadJobMeta(jobUuid);
     if (meta) {
@@ -1413,13 +1547,13 @@ export default function App() {
 
     // Restore history from backend so mobile devices aren't empty on first load
     loadHistoryFromBackend();
-    loadMaterialsSummary(jobUuid);
+    syncMaterialsInBackground(jobUuid);
 
     // Fetch the user directory so we can show crew members' profile photos in
     // activity entries and photo attributions.
-    ensureDirectory().catch(() => { /* offline — fall back to initials */ });
+    ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); loadMaterialsSummary(jobUuid); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
@@ -1485,7 +1619,7 @@ export default function App() {
   // When the server-events fetch returns a JOB_NOTES row for the active job,
   // mirror it into local state so a fresh device/install sees notes typed
   // on another device. Only hydrate when the user hasn't typed anything
-  // locally yet — otherwise their unsaved keystrokes would be clobbered.
+  // locally yet - otherwise their unsaved keystrokes would be clobbered.
   useEffect(() => {
     const uuid = jobUuid.trim();
     if (!uuid) return;
@@ -1504,7 +1638,7 @@ export default function App() {
       saveSyncedNotes(uuid, serverText);
       setJobComments(serverText);
     } else if (localText && localText === serverText) {
-      // Local and server agree — record the sync baseline so the autosave
+      // Local and server agree - record the sync baseline so the autosave
       // effect doesn't fire a needless re-flush.
       saveSyncedNotes(uuid, serverText);
     }
@@ -1525,7 +1659,7 @@ export default function App() {
   useEffect(() => { sessionStorage.setItem("crew_session_calId", calSelectedId); }, [calSelectedId]);
 
   // When date changes, calendar results are stale. On first mount we're
-  // restoring session state — skip the clear so the restored calSelectedId
+  // restoring session state - skip the clear so the restored calSelectedId
   // survives until the events reload and the dropdown can match it.
   useEffect(() => {
     if (isFirstDateEffect.current) {
@@ -1549,23 +1683,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, jobUuid]);
 
-  // Refresh materials summary when the user returns to the Timeline tab
-  // or re-focuses the window so they see other crew members' additions.
-  useEffect(() => {
-    if (tab !== "timeline") return;
-    loadMaterialsSummary(jobUuid);
-    function onVis() {
-      if (document.visibilityState === "visible") loadMaterialsSummary(jobUuid);
-    }
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("focus", onVis);
-    return () => {
-      document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("focus", onVis);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, jobUuid]);
-
   // Select visibility on dark theme
   const selectStyle: React.CSSProperties = {
     width: "100%",
@@ -1586,12 +1703,12 @@ export default function App() {
     const serverById = new Map(serverByJob.map((e) => [e.event_id, e]));
     const localIds = new Set(localByJob.map((e) => e.event_id));
 
-    // For events already synced to the server, prefer the server's copy —
+    // For events already synced to the server, prefer the server's copy -
     // it carries the latest note and editable timestamp regardless of which
     // device made the edit. The local cache can be stale (was populated on
     // an earlier history sync, before another device added a note); without
     // this preference, the stale local row hides the updated note forever.
-    // Local wins only when an event is still queued locally — the server
+    // Local wins only when an event is still queued locally - the server
     // doesn't have that one yet.
     const reconciled = localByJob.map((e) =>
       e.sync_status === "queued" ? e : (serverById.get(e.event_id) ?? e)
@@ -1605,19 +1722,19 @@ export default function App() {
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, [activityLog, serverEvents, jobUuid]);
 
-  // Aggregate totals for the current job's materials (populated from the
-  // backend via loadMaterialsSummary)
-  const materialsTotal = useMemo(
-    () => materialsSummary.reduce((s, m) => s + (m.unitPrice == null ? 0 : m.unitPrice * m.qty), 0),
-    [materialsSummary],
-  );
-
   const calPlaceholder = useMemo(() => {
     if (calLoading) return "Loading…";
     if (!calLoaded) return "Load calendar first";
     if (calEvents.length > 0) return "Select…";
     return "No jobs found (try another date)";
   }, [calLoading, calLoaded, calEvents.length]);
+
+  // Manual entries relevant to the currently-viewed date - fed into the
+  // Select Job dropdown alongside Google Calendar events.
+  const manualCalEntries = useMemo(
+    () => manualEntries.filter((e) => e.date === jobDate),
+    [manualEntries, jobDate],
+  );
 
   return (
     <div className="container">
@@ -1629,7 +1746,7 @@ export default function App() {
             src={logo}
             alt="Logo"
             style={{
-              // Inversion is only applied to the "light" variant — the
+              // Inversion is only applied to the "light" variant - the
               // placeholder file is the original dark-pixel logo, so inverting
               // makes it readable on dark backgrounds. The "dark" variant
               // renders as-is for use on light backgrounds. When real
@@ -1640,7 +1757,7 @@ export default function App() {
           />
           <div>
             <div className="title">Mountaineer Moving Co.</div>
-            <div className="small">{clockText === "—" ? "Clock starts at Start" : `Clock: ${clockText}`}</div>
+            <div className="small">{clockText === "-" ? "Clock starts at Start" : `Clock: ${clockText}`}</div>
           </div>
         </div>
 
@@ -1678,7 +1795,7 @@ export default function App() {
             Profile
             {patchNotesUnseen && (
               <span
-                title="New patch notes — view on Profile"
+                title="New patch notes - view on Profile"
                 style={{
                   position: "absolute",
                   top: -2,
@@ -1695,7 +1812,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Admin notes — global, then per-job when a job is selected */}
+      {/* Admin notes - global, then per-job when a job is selected */}
       <AdminNotesBanner scope="global" />
       {jobUuid && <AdminNotesBanner key={jobUuid} scope={jobUuid} />}
 
@@ -1707,13 +1824,18 @@ export default function App() {
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
         </button>
+        {longDistance && ldLabor.includes("loading") && (
+          <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
+            Inventory
+          </button>
+        )}
         <button
           className={"tab " + (tab === "report" ? "active" : "")}
           onClick={() => setTab("report")}
           style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.1, gap: 2 }}
         >
           <span>Report</span>
-          <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>Complete at end of job</span>
+          <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>{longDistance ? "Complete at end of trip" : "Complete at end of job"}</span>
         </button>
       </div>
 
@@ -1724,19 +1846,21 @@ export default function App() {
             <div className="sectionTitle">Job</div>
 
             <div className="col" style={{ gap: 12 }}>
-              {/* 1 — Date */}
+              {/* 1 - Date */}
               <div className="col">
                 <div className="label">Date</div>
                 <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
               </div>
 
-              {/* 2 — Calendar job selector */}
+              {/* 2 - Calendar job selector */}
               <div className="col">
-                <div className="label">
-                  Select Job{" "}
-                  <span className="small" style={{ marginLeft: 8 }}>
-                    {calLoading ? "Loading…" : calEvents.length > 0 ? `(${calEvents.length} found)` : calLoaded ? "(none found)" : ""}
+                <div className="label" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span>Select Job{" "}
+                    <span className="small" style={{ marginLeft: 4 }}>
+                      {calLoading ? "Loading…" : calEvents.length > 0 ? `(${calEvents.length} found)` : calLoaded ? "(none found)" : ""}
+                    </span>
                   </span>
+                  <BetaTag feature="manualJobsCrossDevice" style={{ marginTop: 0 }} />
                 </div>
                 <select
                   value={calSelectedId}
@@ -1786,7 +1910,7 @@ export default function App() {
                 ) : null}
               </div>
 
-              {/* 3 — Job name display */}
+              {/* 3 - Job name display */}
               {jobName && (
                 <div className="col">
                   <div className="label">Job Name</div>
@@ -1794,7 +1918,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 4 — Job ID (auto, read-only) */}
+              {/* 4 - Job ID (auto, read-only) */}
               {jobUuid && (
                 <div className="col">
                   <div className="label">Job ID</div>
@@ -1805,13 +1929,33 @@ export default function App() {
               {status && <div className="small" style={{ color: "var(--brand)" }}>{status}</div>}
               {historyStatus && <div className="small" style={{ color: "var(--muted)" }}>{historyStatus}</div>}
             </div>
+
+            {/* Job type toggle + LD day plan live in the Job tile. */}
+            <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                <span className="label" style={{ marginBottom: 0 }}>Job type</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={longDistance}
+                  onClick={() => setPersistedMode(longDistance ? "local" : "long_distance")}
+                  style={{ position: "relative", width: 52, height: 28, borderRadius: 999, border: "none", cursor: "pointer", background: longDistance ? "var(--brand)" : "var(--border)", transition: "background .15s", flexShrink: 0 }}
+                >
+                  <span style={{ position: "absolute", top: 3, left: longDistance ? 27 : 3, width: 22, height: 22, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
+                </button>
+                <span style={{ fontWeight: 700, fontSize: 13 }}>{longDistance ? "Long-distance (interstate)" : "Local"}</span>
+              </label>
+              {longDistance && (
+                <div style={{ marginTop: 12 }}>
+                  <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="card">
-            <div className="sectionTitle">Actions</div>
-
-            <div className="col" style={{ gap: 10 }}>
-              <div className="row wrap">
+          {(() => {
+            const coreActions = (
+              <>
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("ARRIVE")}>
                   {sendingType === "ARRIVE" ? "..." : "Arrive"}
                 </button>
@@ -1824,34 +1968,58 @@ export default function App() {
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => setDvirPending({ type: "FINISH" })}>
                   {sendingType === "FINISH" ? "..." : "Finish"}
                 </button>
-                <button
-                  disabled={!canSend || sendingType !== null}
-                  onClick={async () => {
-                    const text = window.prompt("Note:", "");
-                    if (!text || !text.trim()) return;
-                    await recordEvent("NOTE", text.trim());
-                  }}
-                >
-                  {sendingType === "NOTE" ? "..." : "Note"}
-                </button>
-              </div>
-
-              <div className="row wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                <button disabled={queueLen === 0} onClick={syncQueueNow}>
-                  {queueLen > 0 ? `Sync (${queueLen} pending)` : "Sync"}
-                </button>
-                <button
-                  disabled={!jobUuid.trim() || !isOnline}
-                  onClick={() => {
-                    loadHistoryFromBackend();
-                    if (jobUuid.trim()) fetchJobEvents(jobUuid.trim());
-                  }}
-                >
-                  Refresh
-                </button>
-              </div>
-            </div>
-          </div>
+              </>
+            );
+            const noteButton = (
+              <button
+                disabled={!canSend || sendingType !== null}
+                onClick={async () => {
+                  const text = window.prompt("Note:", "");
+                  if (!text || !text.trim()) return;
+                  await recordEvent("NOTE", text.trim());
+                }}
+              >
+                {sendingType === "NOTE" ? "..." : "Note"}
+              </button>
+            );
+            // Drive-only LD day: the RODS duty logger replaces the Actions tile.
+            if (longDistance && ldDriving && ldLabor.length === 0) {
+              return <RodsRecorder events={mergedLog} onLogEvent={recordEvent} />;
+            }
+            // Mixed LD day (driving + labor): RODS + Actions as two labeled
+            // subsections in one flow, sharing a single Note button (RODS's).
+            if (longDistance && ldDriving && ldLabor.length > 0) {
+              return (
+                <RodsRecorder
+                  events={mergedLog}
+                  onLogEvent={recordEvent}
+                  actionsSlot={
+                    <>
+                      <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                        Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is recorded by the RODS above.
+                      </div>
+                      <div className="row wrap">{coreActions}</div>
+                    </>
+                  }
+                />
+              );
+            }
+            // Local, or LD labor-only day: the normal Actions tile.
+            if (!longDistance || ldLabor.length > 0) {
+              return (
+                <div className="card">
+                  <div className="sectionTitle">Actions</div>
+                  {longDistance && (
+                    <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+                      Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is handled by the RODS on drive days.
+                    </div>
+                  )}
+                  <div className="row wrap">{coreActions}{noteButton}</div>
+                </div>
+              );
+            }
+            return null;
+          })()}
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -1872,7 +2040,7 @@ export default function App() {
                 >
                   {notesStatus === "saving" && "Saving…"}
                   {notesStatus === "saved" && "✓ Saved"}
-                  {notesStatus === "offline" && "Saved offline — will sync"}
+                  {notesStatus === "offline" && "Saved offline - will sync"}
                 </span>
               ) : null}
             </div>
@@ -1931,7 +2099,7 @@ export default function App() {
                           </span>
                         )}
                       </div>
-                      {/* Time + date — wrap independently so the date can
+                      {/* Time + date - wrap independently so the date can
                           drop to its own line on narrow phones instead of
                           running off the tile. Tap the time to edit it;
                           logged_at is preserved separately as the audit
@@ -2012,7 +2180,29 @@ export default function App() {
                             hour: "2-digit", minute: "2-digit",
                           })}.
                         </div>
-                        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+                        <div className="row" style={{ gap: 8, justifyContent: "space-between", alignItems: "center" }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm("Delete this event? This can't be undone.")) {
+                                deleteEvent(e.event_id);
+                                setEditingTimeFor(null);
+                                setEditingTimeError(null);
+                              }
+                            }}
+                            style={{
+                              fontSize: 12,
+                              padding: "6px 12px",
+                              background: "transparent",
+                              border: "1px solid var(--danger)",
+                              color: "var(--danger)",
+                              borderRadius: 6,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Delete
+                          </button>
+                          <div className="row" style={{ gap: 8 }}>
                           <button
                             type="button"
                             onClick={() => {
@@ -2057,6 +2247,7 @@ export default function App() {
                           >
                             Save
                           </button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -2115,40 +2306,13 @@ export default function App() {
             )}
           </div>
 
-          {materialsSummary.length > 0 && (
-            <div className="card">
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-                <div className="sectionTitle">Materials ({materialsSummary.length})</div>
-                <div style={{ fontWeight: 700 }}>{money(materialsTotal)}</div>
-              </div>
-              <div className="col" style={{ gap: 4, marginTop: 8 }}>
-                {materialsSummary.map((m, i) => {
-                  const ext = m.unitPrice == null ? null : m.unitPrice * m.qty;
-                  return (
-                    <div key={`${m.submissionId}:${i}`} className="row small" style={{ justifyContent: "space-between", color: "var(--text)", opacity: m.pending ? 0.7 : 1 }}>
-                      <span>
-                        {m.qty}× {m.name}
-                        {m.pending && <span style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
-                      </span>
-                      <span style={{ color: "var(--muted)" }}>
-                        {ext != null ? money(ext) : "—"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-                Manage via the Report tab · Bill Helper · Materials
-              </div>
-            </div>
-          )}
         </>
       )}
 
       {/* Photos */}
       {tab === "photos" && (
         <>
-          {/* Pending photo — caption + save */}
+          {/* Pending photo - caption + save */}
           {pendingPhotoFile ? (
             <div className="card">
               <div className="sectionTitle">Add Photo</div>
@@ -2243,7 +2407,7 @@ export default function App() {
                           ) : driveFail ? (
                             <>
                               <span style={{ fontSize: 11, color: "var(--danger)" }} title={p.drive_error}>
-                                Drive upload failed{p.drive_error ? ` — ${p.drive_error}` : ""}
+                                Drive upload failed{p.drive_error ? ` - ${p.drive_error}` : ""}
                               </span>
                               <button onClick={() => onRetryPhotoUpload(p)} disabled={photoBusy}
                                 style={{ fontSize: 11, padding: "2px 8px" }}>
@@ -2300,12 +2464,25 @@ export default function App() {
         </>
       )}
 
-      {/* Report */}
-      {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} />
+      {/* Inventory (LD+ load/unload days) */}
+      {tab === "inventory" && (
+        jobUuid ? (
+          <BolInventoryTab jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+        ) : (
+          <div className="card">
+            <div className="small" style={{ color: "var(--muted)" }}>
+              Select a job on the Timeline tab before adding inventory.
+            </div>
+          </div>
+        )
       )}
 
-      {/* DVIR reminder modal — shown before START or FINISH */}
+      {/* Report */}
+      {tab === "report" && (
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} />
+      )}
+
+      {/* DVIR reminder modal - shown before START or FINISH */}
       {dvirPending && (
         <DVIRReminderModal
           trigger={dvirPending.type === "START" ? "pre-trip" : "post-trip"}

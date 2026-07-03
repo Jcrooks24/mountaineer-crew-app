@@ -4,7 +4,7 @@
 // (via <BetaTag feature="..." />). The tag persists until the next manual
 // APP_VERSION bump, at which point graduated features are removed from the
 // set. APP_VERSION is the user-facing milestone the crew sees in patch notes
-// (e.g. "1.4", "1.5") — not the per-deploy build id.
+// (e.g. "1.4", "1.5") - not the per-deploy build id.
 //
 // On version bump:
 //   1. Bump APP_VERSION below.
@@ -15,11 +15,11 @@
 //   1. Add its key to BETA_FEATURES.
 //   2. Drop <BetaTag feature="<key>" /> next to the feature's section header.
 
-export const APP_VERSION = "1.6";
+export const APP_VERSION = "1.7";
 
-// All v1.5 betas graduated at the v1.6 bump:
-//   crewFeedback, reimbursementPhotoLibrary, reimbursementExpenseDate,
-//   schedulingAvailability, schedulingNotes.
+// All v1.6 betas graduated at the v1.7 bump:
+//   digitalBOL, rosterTypeahead, manualJobsCrossDevice, autoLaborLines,
+//   podsPerDriver, bolInventoryTab.
 // Add the next round of beta keys here as new features ship.
 export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([]);
 

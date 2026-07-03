@@ -44,6 +44,8 @@ def _to_response(r: JobReport) -> JobReportResponse:
         hours_mismatch_reason=r.hours_mismatch_reason,
         has_crew_feedback=r.has_crew_feedback,
         crew_feedback=r.crew_feedback,
+        out_of_town=bool(r.out_of_town),
+        bill_personal_vehicles=bool(r.bill_personal_vehicles),
         employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
         updated_at=r.updated_at,
@@ -51,7 +53,7 @@ def _to_response(r: JobReport) -> JobReportResponse:
 
 
 def _job_name_for(db: Session, job_uuid: str) -> str:
-    """Best-effort job name lookup — grab the most recent non-empty job_name from events."""
+    """Best-effort job name lookup - grab the most recent non-empty job_name from events."""
     row = (
         db.query(Event.job_name)
         .filter(Event.job_uuid == job_uuid, Event.job_name.isnot(None), Event.job_name != "")
@@ -79,6 +81,8 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "hours_mismatch_reason": report.hours_mismatch_reason,
         "has_crew_feedback": report.has_crew_feedback,
         "crew_feedback": report.crew_feedback,
+        "out_of_town": bool(report.out_of_town),
+        "bill_personal_vehicles": bool(report.bill_personal_vehicles),
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
         "updated_at": report.updated_at,
@@ -113,6 +117,8 @@ def upsert_job_report(
         existing.hours_mismatch_reason = body.hours_mismatch_reason
         existing.has_crew_feedback = body.has_crew_feedback
         existing.crew_feedback = body.crew_feedback
+        existing.out_of_town = body.out_of_town
+        existing.bill_personal_vehicles = body.bill_personal_vehicles
         existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
         db.commit()
@@ -133,6 +139,8 @@ def upsert_job_report(
         hours_mismatch_reason=body.hours_mismatch_reason,
         has_crew_feedback=body.has_crew_feedback,
         crew_feedback=body.crew_feedback,
+        out_of_town=body.out_of_town,
+        bill_personal_vehicles=body.bill_personal_vehicles,
         employee_hours_json=employee_hours_json,
         created_at=now,
         updated_at=now,

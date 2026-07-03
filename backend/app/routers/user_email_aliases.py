@@ -7,7 +7,7 @@ insert so the matching code in crew_resources_calendar.py doesn't have
 to worry about casing.
 
 Promote-to-primary is a single transaction that swaps the alias's email
-with the user's current primary email on users.email — useful when the
+with the user's current primary email on users.email - useful when the
 crew member updates their preferred address.
 """
 from __future__ import annotations
@@ -157,7 +157,7 @@ def promote_alias(
     # Sequence: delete the alias row first so the new_primary is no longer
     # in the alias table, THEN update users.email. Otherwise the unique
     # constraint on alias.email would block step 2 (the alias still owns it
-    # at that point — both as alias and primary). Insert the old primary
+    # at that point - both as alias and primary). Insert the old primary
     # as a new alias last so it stays accessible for next time.
     db.delete(alias)
     db.flush()
@@ -172,7 +172,7 @@ def promote_alias(
         db.add(new_alias)
     db.commit()
 
-    # Return the row representing the OLD primary that's now an alias —
+    # Return the row representing the OLD primary that's now an alias -
     # the just-promoted alias no longer has a row of its own; the user
     # row holds it.
     if old_primary:

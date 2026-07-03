@@ -24,13 +24,6 @@ import {
   type AvailabilityUnlock,
 } from "../lib/availabilityStore";
 
-type AdminUserLite = {
-  id: number;
-  email: string;
-  name: string | null;
-  is_active: boolean;
-};
-
 function formatHuman(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
   if (!y || !m || !d) return iso;
@@ -82,22 +75,18 @@ export default function Availability() {
   const today = useMemo(() => todayLocalIso(), []);
 
   // viewingUserId: null = looking at your own data; otherwise an admin is
-  // viewing/editing another crew member. Drives both the data source and
+  // viewing/editing another crew member (opened from the roster as its own
+  // page, e.g. /availability?admin_user=42). Drives both the data source and
   // whether History cells become editable.
-  const [viewingUserId, setViewingUserId] = useState<number | null>(null);
+  const [viewingUserId, setViewingUserId] = useState<number | null>(() => {
+    const raw = new URLSearchParams(window.location.search).get("admin_user");
+    const id = raw ? Number(raw) : NaN;
+    return Number.isFinite(id) ? id : null;
+  });
   const isViewingSelf = viewingUserId === null;
 
-  // Admin-only user list for the "View as" picker. Lazy-loaded once on mount.
-  const [adminUsers, setAdminUsers] = useState<AdminUserLite[]>([]);
-  useEffect(() => {
-    if (!isAdmin) return;
-    apiFetch<AdminUserLite[]>("/api/admin/users")
-      .then(setAdminUsers)
-      .catch(() => { /* silently ignore — picker just stays empty */ });
-  }, [isAdmin]);
-
   const [cache, setCache] = useState<AvailabilityState>(() => loadCache());
-  // Discard any draft whose window_start has already passed — otherwise a
+  // Discard any draft whose window_start has already passed - otherwise a
   // returning user who tested months ago lands on a stale draft they can't
   // realistically submit (the window's already in the past).
   const [draft, setDraft] = useState<AvailabilityDraft | null>(() => {
@@ -110,7 +99,7 @@ export default function Availability() {
   });
   const [tab, setTab] = useState<Tab>("submit");
 
-  // Sticky active window — initialized from draft / cache, then stays put.
+  // Sticky active window - initialized from draft / cache, then stays put.
   // Submitting the current window advances it explicitly to the next one
   // rather than being recomputed from the new horizon. Clamps to >= today
   // so a stale cached horizon doesn't drop the user on a past window.
@@ -140,8 +129,8 @@ export default function Availability() {
   // (horizon + 1, clamped to today) whenever fresh server state arrives and
   // the user isn't mid-edit. activeWindowStart is otherwise only seeded once
   // (from the cached horizon) and advanced explicitly on submit, so a stale
-  // cache — e.g. one whose horizon was inflated by an old far-future absence
-  // before the contiguous-horizon backend fix — would leave the picker stuck
+  // cache - e.g. one whose horizon was inflated by an old far-future absence
+  // before the contiguous-horizon backend fix - would leave the picker stuck
   // on the wrong window even after correct state loads. An in-progress draft
   // for this window, or an intentionally-opened admin-unlocked window, is
   // preserved so this never yanks the user out of an active edit.
@@ -188,7 +177,7 @@ export default function Availability() {
     return () => { cancelled = true; };
   }, [viewingUserId]);
 
-  // Switching to another user — clear any active draft and reset the
+  // Switching to another user - clear any active draft and reset the
   // active window so admin starts fresh in the History tab.
   useEffect(() => {
     if (viewingUserId !== null) {
@@ -226,7 +215,7 @@ export default function Availability() {
       alert(
         e instanceof ApiError
           ? `Edit failed: ${e.message}`
-          : "Edit failed — check connection and try again.",
+          : "Edit failed - check connection and try again.",
       );
     }
   }
@@ -248,7 +237,7 @@ export default function Availability() {
         m.set(d.day, { day: d.day, status: d.status, note: d.note ?? null, fromServer: true });
       }
     }
-    // Draft entries overlay server data — but only for this window. A stale
+    // Draft entries overlay server data - but only for this window. A stale
     // draft from another window shouldn't bleed in.
     if (draft && draft.window_start === activeWindowStart) {
       for (const d of draft.days) {
@@ -259,7 +248,7 @@ export default function Availability() {
   }, [cache, draft, windowDays, activeWindowStart]);
 
   // Set of days that have an existing server-side record. The lock only
-  // applies to those — a brand-new user with no prior submissions has
+  // applies to those - a brand-new user with no prior submissions has
   // activeWindowStart = today, putting every day in the 14-day "lock"
   // range; without this guard their first-ever window would be
   // un-editable. Mirrors the backend rule (existing record AND within
@@ -275,7 +264,7 @@ export default function Availability() {
   // Helper: produce a new draft from the current one by patching a set of
   // (day, status, note) tuples atomically. The naive setDay-in-a-loop
   // version had a closure-stale `draft` so successive setDay calls
-  // overwrote each other and only the last one stuck — which is why the
+  // overwrote each other and only the last one stuck - which is why the
   // bulkFill bug looked like "the buttons don't change color".
   const patchDays = useCallback(
     (patches: { day: string; status: AvailabilityStatus; note: string | null }[]) => {
@@ -327,14 +316,14 @@ export default function Availability() {
   const setNote = useCallback((day: string, note: string) => {
     if (isEffectivelyLocked(day)) return;
     const current = merged.get(day);
-    // Letting note edits create the day defaults the status to available —
+    // Letting note edits create the day defaults the status to available -
     // matches the "if you bothered to leave a note, you're probably available"
     // heuristic and avoids stranding the cell with a note but no status.
     patchDays([{ day, status: current?.status ?? "available", note }]);
   }, [merged, patchDays, isEffectivelyLocked]);
 
   // Quick-fill: 7 buttons (Sun–Sat). Each button owns an independent cycle
-  // status (quickFillStatus[dow]) — calendar cell changes don't shift it,
+  // status (quickFillStatus[dow]) - calendar cell changes don't shift it,
   // and tapping the button cycles its own state forward then writes that
   // status to every matching unlocked day in the window IN ONE SHOT.
   const bulkFill = useCallback((targetDow: number) => {
@@ -389,11 +378,11 @@ export default function Availability() {
       const s = await submitDraft(draft);
       setCache(s);
       // Clear local draft AFTER the server has the data and our cache
-      // reflects it — otherwise a transient render between clearDraft and
+      // reflects it - otherwise a transient render between clearDraft and
       // setCache would flash empty cells.
       setDraft(null);
       clearDraft();
-      // Reset activeWindowStart to the natural next window — horizon+1 or
+      // Reset activeWindowStart to the natural next window - horizon+1 or
       // today, whichever is later. This drops the user back into the
       // standard flow after both normal submissions and admin-unlocked
       // edits (so editing a past unlocked window doesn't leave them
@@ -407,8 +396,8 @@ export default function Availability() {
         e instanceof ApiError
           ? typeof e.message === "string"
             ? e.message
-            : "Submit failed — please try again."
-          : "Submit failed — check your connection and try again.";
+            : "Submit failed - please try again."
+          : "Submit failed - check your connection and try again.";
       setSubmitError(msg);
     } finally {
       setSubmitting(false);
@@ -445,20 +434,23 @@ export default function Availability() {
         </button>
       </div>
 
-      {/* Admin-only "View as" picker. Collapsed by default so the page
-          reads the same way for admins on a normal day. The viewed-user
-          name surfaces in the collapsed header as a hint when admin is
-          acting on someone else's data. */}
-      {isAdmin && (
-        <AdminViewToggle
-          users={adminUsers}
-          currentUserId={user?.id ?? null}
-          viewingUserId={viewingUserId}
-          onChange={setViewingUserId}
-        />
+      {/* Admin view banner - this page is opened per-employee from the roster
+          (Employees → Availability), so there's no in-page "view as" dropdown.
+          The banner just confirms whose availability is being edited. */}
+      {isAdmin && viewingUserId !== null && (
+        <div className="card" style={{ borderColor: "var(--brand)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>Admin view</div>
+            <div className="small" style={{ color: "var(--muted)" }}>Editing this employee's availability - tap a History day to set it.</div>
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <button type="button" onClick={() => setViewingUserId(null)}>My availability</button>
+            <button type="button" onClick={() => nav("/admin")}>Back to roster</button>
+          </div>
+        </div>
       )}
 
-      {/* Tab switcher — Submit hidden when an admin is viewing another user
+      {/* Tab switcher - Submit hidden when an admin is viewing another user
           (Submit is for the crew member's own flow; admins edit via History). */}
       <div className="card" style={{ padding: 6 }}>
         <div className="row" style={{ gap: 6 }}>
@@ -484,11 +476,11 @@ export default function Availability() {
         </div>
       </div>
 
-      {/* Plan a future absence — pre-submit a known stretch of dates
+      {/* Plan a future absence - pre-submit a known stretch of dates
           15+ days out (vacation, family event, etc). Lives outside the
           rolling cadence so crew can lock in known absences early
           without having to wait for the cadence to roll around. Hidden
-          when admin is viewing another user — the modal posts as the
+          when admin is viewing another user - the modal posts as the
           current account, not the viewed crew member. */}
       {isViewingSelf && (
         <div className="card">
@@ -514,7 +506,7 @@ export default function Availability() {
         </div>
       )}
 
-      {/* Scheduling notes — persistent ongoing constraints. Self-only;
+      {/* Scheduling notes - persistent ongoing constraints. Self-only;
           admins viewing another user can read the note via the monthly
           schedule view's hover tooltip. Collapsed by default. */}
       {isViewingSelf && <SchedulingNotesCard />}
@@ -549,7 +541,7 @@ export default function Availability() {
               Tap each day to set its status: available → unavailable → conditional.
               Use the quick-fill row to bulk-set both matching weekdays at once.
               Submit once every day is filled in. Once submitted, days within the
-              next 2 weeks lock — contact the office to change a locked day.
+              next 2 weeks lock - contact the office to change a locked day.
               Once submitted, if you're scheduled on an available day you're
               expected to work it (exception: scheduled with 3 or fewer days' notice).
             </div>
@@ -568,7 +560,7 @@ export default function Availability() {
                   ? <> (granted by <strong>{unlockForActiveWindow.granted_by_name}</strong>)</>
                   : null}
                 {unlockForActiveWindow.note
-                  ? <> — <em>"{unlockForActiveWindow.note}"</em></>
+                  ? <> - <em>"{unlockForActiveWindow.note}"</em></>
                   : null}
                 . Edit and resubmit; the office will revoke the unlock once
                 they've confirmed your update.
@@ -584,14 +576,14 @@ export default function Availability() {
                 }}
               >
                 You're submitting availability for this window only. Once it's
-                in, you're set — the next window will open here when your
+                in, you're set - the next window will open here when your
                 submitted horizon dips below 2 weeks. If you need to change a
                 window that's already locked, contact the office.
               </div>
             )}
           </div>
 
-          {/* Quick fill — full 7-day week, independent state per button. */}
+          {/* Quick fill - full 7-day week, independent state per button. */}
           <div className="card">
             <div className="sectionTitle">Quick fill</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
@@ -649,8 +641,8 @@ export default function Availability() {
                     type="button"
                     onClick={() => cycleDay(day)}
                     disabled={locked}
-                    aria-label={`${day} ${st ?? "unset"}${locked ? " (locked)" : ""}${hasNote ? ` — ${noteText}` : ""}`}
-                    title={hasNote ? noteText : (locked ? "Locked — contact the office to change this day" : undefined)}
+                    aria-label={`${day} ${st ?? "unset"}${locked ? " (locked)" : ""}${hasNote ? ` - ${noteText}` : ""}`}
+                    title={hasNote ? noteText : (locked ? "Locked - contact the office to change this day" : undefined)}
                     style={{
                       display: "flex", flexDirection: "column",
                       alignItems: "center", justifyContent: "flex-start",
@@ -699,7 +691,7 @@ export default function Availability() {
             </div>
           </div>
 
-          {/* Notes — collapsed by default. */}
+          {/* Notes - collapsed by default. */}
           <div className="card">
             <div className="sectionTitle">Notes</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 8 }}>
@@ -897,95 +889,6 @@ export default function Availability() {
   );
 }
 
-// ── Admin "View as" toggle ───────────────────────────────────────────────────
-
-function AdminViewToggle({
-  users,
-  currentUserId,
-  viewingUserId,
-  onChange,
-}: {
-  users: AdminUserLite[];
-  currentUserId: number | null;
-  viewingUserId: number | null;
-  onChange: (id: number | null) => void;
-}) {
-  // Auto-expand when admin is already acting on someone else, so they can
-  // see + change/clear the selection without hunting for the toggle.
-  const [open, setOpen] = useState<boolean>(viewingUserId !== null);
-  useEffect(() => {
-    if (viewingUserId !== null) setOpen(true);
-  }, [viewingUserId]);
-
-  const viewingUser =
-    viewingUserId !== null ? users.find((u) => u.id === viewingUserId) : null;
-
-  return (
-    <div
-      className="card"
-      style={{ padding: open ? undefined : "6px 10px" }}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          width: "100%", gap: 8,
-          background: "none", border: "none", padding: 0,
-          color: "var(--muted)", fontSize: 12, cursor: "pointer",
-          textAlign: "left",
-        }}
-      >
-        <span>
-          Admin view
-          {viewingUser && (
-            <span style={{ color: "var(--brand)", fontWeight: 700 }}>
-              {" · acting as "}{viewingUser.name || viewingUser.email}
-            </span>
-          )}
-        </span>
-        <span style={{ fontSize: 13 }}>{open ? "▾" : "▸"}</span>
-      </button>
-
-      {open && (
-        <div
-          className="row"
-          style={{
-            alignItems: "center", gap: 10, flexWrap: "wrap",
-            marginTop: 10,
-          }}
-        >
-          <div className="small" style={{ color: "var(--muted)", flex: "1 1 220px" }}>
-            Tap a cell in History to cycle status. Edits bypass the 2-week lock.
-          </div>
-          <select
-            value={viewingUserId === null ? "" : String(viewingUserId)}
-            onChange={(e) => {
-              const v = e.target.value;
-              onChange(v === "" ? null : Number(v));
-            }}
-            style={{
-              flex: "1 1 200px", padding: "8px 10px",
-              borderRadius: 8, border: "1px solid var(--border)",
-              background: "var(--bg)", color: "var(--text)", fontSize: 13,
-            }}
-          >
-            <option value="">Yourself (default)</option>
-            {users
-              .filter((u) => u.is_active && u.id !== currentUserId)
-              .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email))
-              .map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name || u.email}
-                </option>
-              ))}
-          </select>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Caught-up view ───────────────────────────────────────────────────────────
 
@@ -1065,7 +968,7 @@ function CaughtUpView({
         <div className="small" style={{ color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
           {horizon
             ? <>Your submitted availability extends through <strong style={{ color: "var(--text)" }}>{formatHuman(horizon)}</strong>. The next window opens here automatically once your horizon drops below 2 weeks.</>
-            : <>You haven't submitted any availability yet. Come back later — there's nothing to submit right now.</>}
+            : <>You haven't submitted any availability yet. Come back later - there's nothing to submit right now.</>}
           {" "}If you need to change a window that's already locked, ask the office to unlock it for you.
         </div>
         <div className="small" style={{ marginTop: 12, color: "var(--muted)" }}>
@@ -1098,7 +1001,7 @@ function HistoryView({
   const windows = useMemo(() => {
     const byWindow = new Map<string, AvailabilityDay[]>();
     for (const d of state.days) {
-      // Skip the active (currently-editable) window — that's owned by the
+      // Skip the active (currently-editable) window - that's owned by the
       // Submit tab. Only show what's already been committed in the past.
       if (d.window_start === activeWindowStart) continue;
       if (!byWindow.has(d.window_start)) byWindow.set(d.window_start, []);
@@ -1188,7 +1091,7 @@ function HistoryView({
                       key={day}
                       type="button"
                       onClick={() => onAdminCycle(d)}
-                      aria-label={`${day} ${st ?? "unset"}${hasNote ? ` — ${noteText}` : ""} (admin click to cycle)`}
+                      aria-label={`${day} ${st ?? "unset"}${hasNote ? ` - ${noteText}` : ""} (admin click to cycle)`}
                       title={hasNote ? noteText : "Click to cycle status"}
                       style={{ ...cellStyle, cursor: "pointer" }}
                     >
@@ -1199,7 +1102,7 @@ function HistoryView({
                 return (
                   <div
                     key={day}
-                    aria-label={`${day} ${st ?? "unset"}${hasNote ? ` — ${noteText}` : ""}`}
+                    aria-label={`${day} ${st ?? "unset"}${hasNote ? ` - ${noteText}` : ""}`}
                     title={hasNote ? noteText : undefined}
                     style={cellStyle}
                   >
@@ -1215,7 +1118,7 @@ function HistoryView({
                     <strong style={{ color: "var(--text)" }}>
                       {dayOfWeekShort(d.day)} {formatHuman(d.day)}
                     </strong>
-                    {" — "}
+                    {" - "}
                     {d.note}
                   </div>
                 ))}
@@ -1264,7 +1167,7 @@ function ConfirmModal({
         <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
           You're submitting availability for the window starting{" "}
           <strong style={{ color: "var(--text)" }}>{formatHuman(windowStart)}</strong>.
-          Once submitted, days within the next 2 weeks become locked — you'll
+          Once submitted, days within the next 2 weeks become locked - you'll
           need to contact the office to change them. Make sure your selections
           are correct.
         </div>
@@ -1287,7 +1190,7 @@ function ConfirmModal({
             onClick={onConfirm}
             style={{ padding: "8px 14px" }}
           >
-            Yes — submit
+            Yes - submit
           </button>
         </div>
       </div>
@@ -1311,7 +1214,7 @@ function FuturePeriodModal({
   // Earliest legal Start is today + 14: anything earlier is the rolling
   // cadence's job and the backend's lock check would 409 anyway.
   const minStart = useMemo(() => addDaysIso(today, 14), [today]);
-  // Soft cap of 1 year out — discourages typos that submit decades of
+  // Soft cap of 1 year out - discourages typos that submit decades of
   // unavailability. The backend's 100-day batch limit is a separate
   // safety net.
   const maxEnd = useMemo(() => addDaysIso(today, 365), [today]);
@@ -1354,7 +1257,7 @@ function FuturePeriodModal({
       return;
     }
     if (totalDays > 100) {
-      setErr("Range is too long — split into shorter submissions (max 100 days each).");
+      setErr("Range is too long - split into shorter submissions (max 100 days each).");
       return;
     }
 
@@ -1404,7 +1307,7 @@ function FuturePeriodModal({
         onSubmitted(lastState, summary);
       }
     } catch (e: any) {
-      setErr(e instanceof ApiError ? e.message : "Submit failed — check connection and try again.");
+      setErr(e instanceof ApiError ? e.message : "Submit failed - check connection and try again.");
     } finally {
       setBusy(false);
       setProgress("");
@@ -1434,7 +1337,7 @@ function FuturePeriodModal({
       >
         <div style={{ fontSize: 16, fontWeight: 800 }}>Plan a future absence</div>
         <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
-          Pre-submit availability for a known future period — vacation, family
+          Pre-submit availability for a known future period - vacation, family
           event, anything fixed in your calendar. Start date must be at least
           14 days out; closer dates go through your regular 2-week submission.
         </div>
@@ -1559,7 +1462,7 @@ function FuturePeriodModal({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SchedulingNotesCard — persistent per-user text field for ongoing scheduling
+// SchedulingNotesCard - persistent per-user text field for ongoing scheduling
 // constraints ("no Saturdays until July", "back to full availability after the
 // 15th"). One note per user, independent of any window. Collapsed by default so
 // it stays out of the way; expanded shows a textarea with debounced autosave.
@@ -1583,7 +1486,7 @@ function SchedulingNotesCard() {
   const ht = themeSettings.helpTexts;
   const userId = user?.id;
   const initial = useMemo(() => {
-    // Prefer a locally saved draft over the server-side value on mount —
+    // Prefer a locally saved draft over the server-side value on mount -
     // if the user typed something while offline and reloaded, we want to
     // resume their unsaved edit, not silently drop it. Empty draft falls
     // back to whatever /me carried in.
@@ -1628,7 +1531,7 @@ function SchedulingNotesCard() {
   }, [user?.scheduling_notes]);
 
   // Debounced autosave. 1.2s after the last keystroke we flush the PATCH.
-  // No explicit submit button — matches the autosave pattern already used
+  // No explicit submit button - matches the autosave pattern already used
   // elsewhere in the app for free-form text fields.
   useEffect(() => {
     if (value === lastSavedRef.current) return;
@@ -1649,7 +1552,7 @@ function SchedulingNotesCard() {
         setUser(updated);
         setStatus("saved");
         setErrorMsg(null);
-        // Local draft can go now — server has the canonical value.
+        // Local draft can go now - server has the canonical value.
         const key = schedNotesDraftKey(userId);
         if (key) { try { localStorage.removeItem(key); } catch {} }
         // Flash "Saved" briefly then return to idle so the pill doesn't
@@ -1665,13 +1568,13 @@ function SchedulingNotesCard() {
           setStatus("offline");
           setErrorMsg(null);
         } else {
-          // Real server/network failure while online — surface it instead of
+          // Real server/network failure while online - surface it instead of
           // pretending the save succeeded. The local draft persists either
           // way so the user's text isn't lost.
           setStatus("error");
           const msg = e instanceof ApiError
             ? `Save failed: ${e.message}`
-            : "Save failed — try again";
+            : "Save failed - try again";
           setErrorMsg(msg);
         }
       }
@@ -1702,7 +1605,7 @@ function SchedulingNotesCard() {
   const pill = (() => {
     if (status === "saving") return { text: "Saving…", color: "var(--muted)" };
     if (status === "saved") return { text: "Saved", color: "var(--ok)" };
-    if (status === "offline") return { text: "Offline — saves when back online", color: "var(--warn)" };
+    if (status === "offline") return { text: "Offline - saves when back online", color: "var(--warn)" };
     if (status === "error") return { text: errorMsg || "Save failed", color: "var(--danger)" };
     return null;
   })();

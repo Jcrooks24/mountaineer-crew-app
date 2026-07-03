@@ -10,7 +10,7 @@ from sqlalchemy import bindparam, text
 
 from app.core.google_cal_oauth import _build_authorized_http, _ssl_retry, _get_creds
 
-# Bounded pool — at most 2 export threads run concurrently. Additional tasks
+# Bounded pool - at most 2 export threads run concurrently. Additional tasks
 # queue internally and drain as workers free up. Prevents a sync burst from
 # spawning unlimited threads and blowing Render's 512 MB memory limit.
 _EXPORT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sheets-export")
@@ -28,7 +28,7 @@ _EXPORT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sheets-expo
 #
 # Thread-local caching gives both: at most `pool_workers + 1` svcs in memory
 # (currently 3) instead of N-per-call, and each thread owns its own httplib2
-# socket — no cross-thread SSL races.
+# socket - no cross-thread SSL races.
 #
 # AuthorizedHttp refreshes the underlying creds in place on 401, so a cached
 # svc stays valid across token expiry without rebuilding. Admin-driven token
@@ -74,13 +74,13 @@ _estimate_export_lock = threading.Lock()
 # Serialize note-cell updates per event_id so rapid edits on the same event
 # (or client retries) can't stack multiple in-memory googleapiclient instances
 # in the pool queue. Bounded so the dict can't grow forever as new event_ids
-# arrive — without a cap this is a slow leak that eventually OOMs the worker.
+# arrive - without a cap this is a slow leak that eventually OOMs the worker.
 _event_note_locks: Dict[str, threading.Lock] = {}
 _event_note_locks_guard = threading.Lock()
 
 # Mirror dict for editable-timestamp cell updates. Kept separate from the
 # note locks so a timestamp edit and a note edit on the same event don't
-# block each other — they target different cells in the same sheet row.
+# block each other - they target different cells in the same sheet row.
 _event_timestamp_locks: Dict[str, threading.Lock] = {}
 _event_timestamp_locks_guard = threading.Lock()
 
@@ -107,7 +107,7 @@ def _bounded_lock(
                     evicted = True
                     break
             if not evicted:
-                # Every lock is currently held — bail out and let the dict
+                # Every lock is currently held - bail out and let the dict
                 # exceed the cap temporarily rather than block forever.
                 break
         lock = threading.Lock()
@@ -226,7 +226,7 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
         ).execute()
         return list(headers)
 
-    # Tab exists — read current header row
+    # Tab exists - read current header row
     result = svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=f"{tab}!1:1",
@@ -262,7 +262,7 @@ def _write_rows_top(
     """Insert `rows` immediately below the header row so the tab reads
     newest-first. Two API calls (insertDimension + values.update) instead
     of one for `.values().append()`, which is the cost of putting most
-    recent activity at the top — what admins actually want when they open
+    recent activity at the top - what admins actually want when they open
     the sheet looking for what just happened.
 
     Late arrivals from the reconciler land at the top regardless of their
@@ -270,7 +270,7 @@ def _write_rows_top(
     order drifts.
 
     No-op for empty `rows`. Falls back to plain append if the tab can't
-    be found in metadata (defensive — _ensure_tab should have created it).
+    be found in metadata (defensive - _ensure_tab should have created it).
     """
     if not rows:
         return
@@ -299,7 +299,7 @@ def _write_rows_top(
                 "range": {
                     "sheetId": sheet_numeric_id,
                     "dimension": "ROWS",
-                    "startIndex": 1,        # row 2 (0-based) — directly below header
+                    "startIndex": 1,        # row 2 (0-based) - directly below header
                     "endIndex": 1 + n,
                 },
                 # Don't pull header formatting (bold, frozen, etc.) onto the
@@ -385,7 +385,7 @@ def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
         }
         rows.append(_build_row(row_data, actual_headers))
 
-    # 4) Insert at top — newest activity above older rows
+    # 4) Insert at top - newest activity above older rows
     _write_rows_top(svc, spreadsheet_id, tab, rows)
 
     # 5) Mark exported (dedupe)
@@ -497,14 +497,14 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
     Serialized per event_id so concurrent retries for the same event don't
     pile up redundant Sheet API round-trips for the same row. The non-blocking
     lock acquire skips the update entirely when another worker is already
-    handling this event — the queued retry will catch the latest value.
+    handling this event - the queued retry will catch the latest value.
     """
     if not event_id:
         return 0
 
     lock = _lock_for_event_note(event_id)
     if not lock.acquire(blocking=False):
-        # Another worker is already syncing this event_id — skip. The client's
+        # Another worker is already syncing this event_id - skip. The client's
         # patch queue will re-issue the latest value if this call failed to
         # land.
         return 0
@@ -556,6 +556,48 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
         return 1
     finally:
         lock.release()
+
+
+def delete_event_from_sheets(db: Session, event_id: str) -> int:
+    """Remove the Events-tab row for a deleted event. Returns rows deleted (0/1).
+    No-op when the event was never exported."""
+    if not event_id:
+        return 0
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
+    svc = _get_sheets_svc(db)
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    props = next(
+        (s["properties"] for s in meta.get("sheets", []) if s["properties"]["title"] == tab),
+        None,
+    )
+    if not props:
+        return 0
+    sheet_numeric_id = props["sheetId"]
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!1:1",
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0]
+    if "event_id" not in headers_row:
+        return 0
+    col_letter = _col_letter(headers_row.index("event_id"))
+    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}",
+    ).execute())
+    col_values = col.get("values") or []
+    target_indices = [i for i, row in enumerate(col_values) if i > 0 and (row[0] if row else "") == event_id]
+    if not target_indices:
+        return 0
+    requests = [
+        {"deleteDimension": {"range": {
+            "sheetId": sheet_numeric_id, "dimension": "ROWS", "startIndex": idx, "endIndex": idx + 1,
+        }}}
+        for idx in sorted(target_indices, reverse=True)
+    ]
+    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id, body={"requests": requests},
+    ).execute())
+    return len(target_indices)
 
 
 def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str) -> int:
@@ -627,7 +669,7 @@ def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
     cleanly. Returns the number of sheet rows deleted.
 
     Sheet writes were previously append-only, which left ghost rows after a
-    crew member removed a material from a job — admins reading the sheet for
+    crew member removed a material from a job - admins reading the sheet for
     cost analysis would see items that no longer exist in the app.
     """
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
@@ -778,10 +820,11 @@ def _review_candidate_label(value: Any) -> str:
 
 JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
+    "bill_personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
     "review_candidate", "hours_match", "hours_mismatch_reason",
     "has_crew_feedback", "crew_feedback",
-    "employee_hours", "has_non_billable_hours",
+    "employee_hours", "has_non_billable_hours", "per_diem_total",
     "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
@@ -811,6 +854,18 @@ def _has_non_billable(entries: Optional[list]) -> str:
     return "No"
 
 
+def _per_diem_total(report: Dict[str, Any]) -> Any:
+    """Total per-diem owed for this report: $50 per crew member when the report's
+    out_of_town flag is set (the whole crew is out of town for the day). Crew
+    size comes from the named employee-hours rows; floors at 1 so a drive-only
+    day with no hours rows still records the driver's per-diem."""
+    if not report.get("out_of_town"):
+        return 0
+    entries = report.get("employee_hours") or []
+    n = sum(1 for e in entries if isinstance(e, dict) and (e.get("name") or "").strip())
+    return 50 * max(1, n)
+
+
 def _round_billable_quarter(hours: float) -> float:
     """Company rounding: ≥5 min into the current quarter rounds UP, else DOWN.
 
@@ -837,7 +892,7 @@ def _format_employee_hours(entries: Optional[list]) -> str:
     invoice copy-paste block so the same string can be transcribed either way.
 
     Each row shows the company's quarter-hour rounded value with the actual
-    worked hours in parens — both billable and non-billable, always shown
+    worked hours in parens - both billable and non-billable, always shown
     even when no rounding was needed. The total still rounds the *summed
     actuals* once at the end so the totals line is what gets invoiced;
     non-billable rows are excluded from the total sum.
@@ -849,7 +904,7 @@ def _format_employee_hours(entries: Optional[list]) -> str:
     for e in entries:
         if not isinstance(e, dict):
             continue
-        name = (e.get("name") or "").strip() or "—"
+        name = (e.get("name") or "").strip() or "-"
         start = (e.get("start") or "").strip()
         end = (e.get("end") or "").strip()
         try:
@@ -906,6 +961,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "job_name": report.get("job_name", ""),
         "submitted_by": report.get("submitted_by_name", "") or "",
         "personal_vehicles": report.get("personal_vehicles", ""),
+        "bill_personal_vehicles": _yes_no_blank(report.get("bill_personal_vehicles")),
         "dumpster_pct": report.get("dumpster_pct", ""),
         "recycling_pct": report.get("recycling_pct", ""),
         "billing_method": report.get("billing_method", ""),
@@ -916,6 +972,8 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "crew_feedback": report.get("crew_feedback", "") or "",
         "employee_hours": _format_employee_hours(report.get("employee_hours")),
         "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
+        # Per-diem: $50/day per crew member when the whole crew is out of town.
+        "per_diem_total": _per_diem_total(report),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,
@@ -1021,13 +1079,13 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
     (in which case any prior row is still removed).
 
     Called on every materials POST and DELETE so the Bills view always
-    reflects the current sum — invoiced as a single line, not a stack of
+    reflects the current sum - invoiced as a single line, not a stack of
     per-add rows.
     """
     if not job_uuid:
         return 0
 
-    from app.db.models.materials import MaterialsSubmission  # local import — avoid module-load cycle
+    from app.db.models.materials import MaterialsSubmission  # local import - avoid module-load cycle
 
     rows = (
         db.query(MaterialsSubmission.total)
@@ -1051,7 +1109,7 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
     _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", marker)
 
     if total <= 0:
-        # No materials left for this job — leave the Bills sheet without a
+        # No materials left for this job - leave the Bills sheet without a
         # zero-value "Materials" row. Itemized history still lives in the
         # Materials sheet for audit.
         return 0
@@ -1206,15 +1264,16 @@ RODS_HEADERS = [
 
 def export_rods_to_sheets(db: Session, rods: Dict[str, Any]) -> int:
     tab = os.getenv("SHEETS_RODS_TAB", "RODS").strip() or "RODS"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
     key = rods.get("rods_id", "")
-    if not key or _generic_already_exported(db, "rods", key):
+    if not key:
         return 0
 
     changes = rods.get("duty_changes") or []
     duty_str = " | ".join(
         f"{c.get('time','')} {c.get('status','')}"
         + (f" @ {c.get('location','')}" if c.get("location") else "")
-        + (f" — {c.get('remarks','')}" if c.get("remarks") else "")
+        + (f" - {c.get('remarks','')}" if c.get("remarks") else "")
         for c in changes
     )
 
@@ -1240,10 +1299,65 @@ def export_rods_to_sheets(db: Session, rods: Dict[str, Any]) -> int:
         "signed_at": _iso(rods.get("signed_at")),
         "created_at": _iso(rods.get("created_at")),
     }
-    written = _append_rows(db, tab, RODS_HEADERS, [row])
-    if written:
-        _generic_mark_exported(db, "rods", [key])
-    return written
+
+    # Replace strategy: a RODS day is upserted (the recorder appends changes and
+    # re-submits through the day), so delete any existing row for this rods_id
+    # and write the current state, guaranteeing exactly one row per day.
+    svc = _get_sheets_svc(db)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "rods_id", key)
+    db.execute(
+        text("DELETE FROM sheet_generic_exports WHERE kind = 'rods' AND export_key = :k"),
+        {"k": key},
+    )
+    db.commit()
+
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, RODS_HEADERS))
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, actual_headers)])
+    _generic_mark_exported(db, "rods", [key])
+    return 1
+
+
+# ── Long-distance per-diem / drive-day (payroll) ─────────────────────────────
+
+LD_DAY_HEADERS = [
+    "day_id", "date", "driver_name", "job_name", "job_uuid",
+    "out_of_town", "drive_day", "per_diem", "updated_at",
+]
+
+
+def export_ld_day_to_sheets(db: Session, day: Dict[str, Any]) -> int:
+    """One row per driver/day (replace-style, upserted). Admin tallies per-diem
+    ($50 × out-of-town days) and drive days per employee from this tab."""
+    tab = os.getenv("SHEETS_LD_PAY_TAB", "LongDistancePay").strip() or "LongDistancePay"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    key = day.get("day_id", "")
+    if not key:
+        return 0
+
+    row = {
+        "day_id": key,
+        "date": day.get("date", ""),
+        "driver_name": day.get("driver_name", ""),
+        "job_name": day.get("job_name", "") or "",
+        "job_uuid": day.get("job_uuid", "") or "",
+        "out_of_town": "Yes" if day.get("out_of_town") else "No",
+        "drive_day": "Yes" if day.get("drive_day") else "No",
+        "per_diem": day.get("per_diem", 0),
+        "updated_at": _iso(day.get("updated_at")),
+    }
+
+    svc = _get_sheets_svc(db)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "day_id", key)
+    db.execute(
+        text("DELETE FROM sheet_generic_exports WHERE kind = 'ld_day' AND export_key = :k"),
+        {"k": key},
+    )
+    db.commit()
+
+    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, LD_DAY_HEADERS))
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, actual_headers)])
+    _generic_mark_exported(db, "ld_day", [key])
+    return 1
 
 
 # ── Estimates ────────────────────────────────────────────────────────────────
@@ -1261,6 +1375,22 @@ ESTIMATE_ITEM_HEADERS = [
     "estimate_uuid", "customer_name", "item_id", "room", "subcategory",
     "item_name", "qty", "weight_lbs_each", "cubic_ft_each",
     "total_weight_lbs", "total_cubic_ft", "notes", "exported_at",
+]
+
+# Digital Bill of Lading - one summary row per BOL, one row per item. Replace
+# strategy (delete-before-write by bol_id), same as estimates.
+BOL_HEADERS = [
+    "bol_id", "created_by", "job_uuid", "job_name", "job_date",
+    "status", "item_count",
+    "inventory_verified", "inventory_note",
+    "origin_signed_at", "dest_signed_at", "final_charges",
+    "walkthrough_notes", "signed_pdf_url",
+    "created_at", "updated_at",
+]
+
+BOL_ITEM_HEADERS = [
+    "bol_id", "job_name", "job_date", "item_no", "item_name",
+    "qty", "packed_by", "condition_notes", "photo_links", "exported_at",
 ]
 
 
@@ -1335,7 +1465,7 @@ def _delete_estimate_sheet_rows(
 
 def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
     """Writes one summary row to Estimates and one row per item to EstimateItems,
-    always reflecting the current state of the estimate (replace strategy —
+    always reflecting the current state of the estimate (replace strategy -
     existing rows for this estimate_uuid are deleted before writing fresh ones).
     This guarantees exactly 1 summary row and N item rows per estimate regardless
     of how many times it is saved."""
@@ -1393,7 +1523,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
     _generic_mark_exported(db, "estimate", [summary_key])
     total_written += 1
 
-    # Item rows — one per current item
+    # Item rows - one per current item
     if items:
         customer_name = estimate.get("customer_name", "")
         item_rows: List[Dict[str, Any]] = []
@@ -1425,6 +1555,110 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
 
         _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
         _generic_mark_exported(db, "estimate_item", item_keys)
+        total_written += len(item_rows)
+
+    return total_written
+
+
+def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
+    """Write one summary row to the BOLs tab and one row per item to the
+    BOLItems tab, always reflecting the current state of the BOL. Replace
+    strategy - existing rows for this bol_id are deleted before writing fresh
+    ones - so re-submits (photo-link backfill, later signing) never duplicate.
+    Modeled on export_estimate_to_sheets."""
+    summary_tab = os.getenv("SHEETS_BOLS_TAB", "BOLs").strip() or "BOLs"
+    items_tab = os.getenv("SHEETS_BOL_ITEMS_TAB", "BOLItems").strip() or "BOLItems"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    bol_id = bol.get("bol_id") or bol.get("id") or ""
+    if not bol_id:
+        return 0
+    updated_at = _iso(bol.get("updated_at"))
+
+    svc = _get_sheets_svc(db)
+
+    # Delete existing rows for this bol_id from both tabs so we end with exactly
+    # one summary row and one row per current item.
+    for tab in (summary_tab, items_tab):
+        _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "bol_id", bol_id)
+
+    # Clear dedup entries so the fresh rows are accepted.
+    db.execute(
+        text(
+            "DELETE FROM sheet_generic_exports "
+            "WHERE kind IN ('bol', 'bol_item') AND export_key LIKE :prefix"
+        ),
+        {"prefix": f"{bol_id}:%"},
+    )
+    db.commit()
+
+    total_written = 0
+    items = bol.get("items") or []
+
+    # Summary row
+    summary_row = {
+        "bol_id": bol_id,
+        "created_by": bol.get("created_by", "") or "",
+        "job_uuid": bol.get("job_uuid", "") or "",
+        "job_name": bol.get("job_name", "") or "",
+        "job_date": bol.get("job_date", "") or "",
+        "status": bol.get("status", "") or "",
+        "item_count": sum(int(it.get("qty", 1) or 1) for it in items),
+        "inventory_verified": (
+            "yes" if bol.get("inventory_verified") is True
+            else "no" if bol.get("inventory_verified") is False
+            else ""
+        ),
+        "inventory_note": bol.get("inventory_note", "") or "",
+        "origin_signed_at": _iso(bol.get("origin_signed_at")) if bol.get("origin_signed_at") else "",
+        "dest_signed_at": _iso(bol.get("dest_signed_at")) if bol.get("dest_signed_at") else "",
+        "final_charges": bol.get("final_charges") if bol.get("final_charges") is not None else "",
+        "walkthrough_notes": bol.get("walkthrough_notes", "") or "",
+        "signed_pdf_url": bol.get("signed_pdf_url", "") or "",
+        "created_at": _iso(bol.get("created_at")),
+        "updated_at": updated_at,
+    }
+    actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, BOL_HEADERS))
+    _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, actual_summary_headers)])
+    _generic_mark_exported(db, "bol", [f"{bol_id}:{updated_at}"])
+    total_written += 1
+
+    # Item rows - one per current item
+    if items:
+        job_name = bol.get("job_name", "") or ""
+        job_date = bol.get("job_date", "") or ""
+        item_rows: List[Dict[str, Any]] = []
+        item_keys: List[str] = []
+        for it in items:
+            item_id = it.get("id", "")
+            photos = it.get("photos") or []
+            photo_links = ", ".join(
+                p.get("drive_url", "") for p in photos if p.get("drive_url")
+            )
+            packed_by_raw = str(it.get("packed_by", "") or "").lower()
+            packed_by_label = (
+                "CP" if packed_by_raw == "cp"
+                else "PBO" if packed_by_raw == "pbo"
+                else ""
+            )
+            item_rows.append({
+                "bol_id": bol_id,
+                "job_name": job_name,
+                "job_date": job_date,
+                "item_no": it.get("item_no", ""),
+                "item_name": it.get("name", ""),
+                "qty": it.get("qty", 0) or 0,
+                "packed_by": packed_by_label,
+                "condition_notes": it.get("condition_notes", "") or "",
+                "photo_links": photo_links,
+                "exported_at": updated_at,
+            })
+            item_keys.append(f"{bol_id}:{item_id}:{updated_at}")
+
+        actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, BOL_ITEM_HEADERS))
+        item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
+        _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
+        _generic_mark_exported(db, "bol_item", item_keys)
         total_written += len(item_rows)
 
     return total_written
@@ -1498,7 +1732,7 @@ def _estimate_export_worker(estimate_uuid: str) -> None:
 def schedule_estimate_export(estimate_uuid: str) -> None:
     """Coalesce repeated export requests for the same estimate into a single
     in-flight worker with at most one pending rerun. Safe to call on every
-    autosave keystroke — the worker re-reads the DB when it runs so the
+    autosave keystroke - the worker re-reads the DB when it runs so the
     final export always reflects the latest committed state."""
     if not estimate_uuid:
         return
@@ -1563,7 +1797,7 @@ def _sweep_sheet_entry_status(
 
     data: List[Dict[str, Any]] = []
     if entered_by_idx + 1 == entered_on_idx:
-        # Adjacent columns — single contiguous range per row, half the API calls.
+        # Adjacent columns - single contiguous range per row, half the API calls.
         for r in target_rows:
             data.append({
                 "range": f"{tab}!{entered_by_letter}{r}:{entered_on_letter}{r}",
@@ -1632,7 +1866,7 @@ def export_office_hours_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
 
     Worksheet name read from SHEETS_OFFICE_HOURS_TAB so staging
     (OfficeHoursStaging) and prod (OfficeHours) land in distinct tabs
-    inside the same spreadsheet — never hardcoded."""
+    inside the same spreadsheet - never hardcoded."""
     tab = os.getenv("SHEETS_OFFICE_HOURS_TAB", "OfficeHours").strip() or "OfficeHours"
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
     entry_uuid = entry.get("entry_uuid", "") or ""
@@ -1758,7 +1992,7 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
 
 # ── Availability ─────────────────────────────────────────────────────────────
 
-# 14 day-cells per window — each cell carries the date + status (+ optional
+# 14 day-cells per window - each cell carries the date + status (+ optional
 # note) inline so admins can read a window without cross-referencing column
 # indexes back to a date. Window key (user_name + window_start) gates the
 # replace-style upsert: re-submits overwrite the row in place.
@@ -1772,12 +2006,12 @@ AVAILABILITY_HEADERS = [
 def _format_availability_cell(day: str, status: str, note: str) -> str:
     base = f"{day}: {status}"
     if note:
-        return f"{base} — {note}"
+        return f"{base} - {note}"
     return base
 
 
 def _sheet_numeric_id(svc: Any, spreadsheet_id: str, tab: str) -> Optional[int]:
-    """Resolve a tab name to its numeric sheetId — required for
+    """Resolve a tab name to its numeric sheetId - required for
     deleteDimension batchUpdate requests."""
     meta = _ssl_retry(
         lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
@@ -1853,14 +2087,14 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
         lambda: _ensure_tab(svc, spreadsheet_id, tab, AVAILABILITY_HEADERS)
     )
 
-    # Compound dedupe key — _delete_sheet_rows_by_value only takes one column
+    # Compound dedupe key - _delete_sheet_rows_by_value only takes one column
     # so we walk the values manually and delete rows that match both
     # user_name and window_start.
     try:
         user_col = actual_headers.index("user_name")
         win_col = actual_headers.index("window_start")
     except ValueError:
-        user_col = win_col = None  # Tab malformed — skip delete, just append.
+        user_col = win_col = None  # Tab malformed - skip delete, just append.
 
     if user_col is not None and win_col is not None:
         result = _ssl_retry(

@@ -3,9 +3,9 @@ Background auto-reconciler for events → Sheets drift.
 
 The /api/sync path inserts the event into Postgres synchronously and fires
 the Sheets export on a background thread (see run_export_in_background).
-That thread can die before completing — worker recycling via
+That thread can die before completing - worker recycling via
 `--limit-max-requests`, OOM kill, an mid-flight network drop past the
-_ssl_retry budget — leaving the event in `events` but not in
+_ssl_retry budget - leaving the event in `events` but not in
 `sheet_event_exports`. Admin used to recover by clicking the Refresh
 button in Settings; this module makes that automatic.
 
@@ -27,14 +27,14 @@ import threading
 import time
 from typing import Optional
 
-# Advisory-lock key — arbitrary 32-bit integer, picked once and kept
+# Advisory-lock key - arbitrary 32-bit integer, picked once and kept
 # stable. If multiple subsystems start using pg_advisory_lock, give each
-# its own key from app.integrations._advisory_locks (not built yet — for
+# its own key from app.integrations._advisory_locks (not built yet - for
 # now, a magic number is fine, with this comment as the documentation).
 _ADVISORY_LOCK_KEY = 0x7C8E0001
 
 # Tuning. Off the request path, so we err on the side of "small bites,
-# often" rather than "big bites, rarely" — keeps memory low.
+# often" rather than "big bites, rarely" - keeps memory low.
 RECONCILE_INTERVAL_S = 300   # 5 minutes
 BATCH_SIZE = 100
 MAX_EVENTS_PER_CYCLE = 500
@@ -45,7 +45,7 @@ _started_lock = threading.Lock()
 
 
 def start_auto_reconciler() -> None:
-    """Start the daemon thread. Idempotent — safe to call multiple times.
+    """Start the daemon thread. Idempotent - safe to call multiple times.
     No-op if the loop is already running in this process."""
     global _started
     with _started_lock:
@@ -71,7 +71,7 @@ def _try_acquire_advisory_lock(db) -> bool:
         ).scalar()
         return bool(row)
     except Exception as exc:
-        # If the lock query itself fails (DB blip), don't run reconcile —
+        # If the lock query itself fails (DB blip), don't run reconcile -
         # the next cycle will retry.
         print(f"[auto-reconcile] advisory-lock check failed: {exc}")
         return False
@@ -90,7 +90,7 @@ def _run_once() -> None:
             batch_size=BATCH_SIZE,
             max_events=MAX_EVENTS_PER_CYCLE,
         )
-        # Only log when we actually moved data — silent otherwise so the
+        # Only log when we actually moved data - silent otherwise so the
         # log isn't noisy in steady state.
         if result.get("found", 0) > 0 or result.get("errors", 0) > 0:
             print(
@@ -108,7 +108,7 @@ def _run_once() -> None:
 def _loop() -> None:
     print(f"[auto-reconcile] starting (interval {RECONCILE_INTERVAL_S}s)")
     while True:
-        # Sleep FIRST — gives a cold worker its boot window before we
+        # Sleep FIRST - gives a cold worker its boot window before we
         # start pulling on the Sheets API.
         try:
             time.sleep(RECONCILE_INTERVAL_S)

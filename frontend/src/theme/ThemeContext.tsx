@@ -151,7 +151,7 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--brand2": "#6366f1",
       "--danger": "#ef4444",
       "--ok": "#22c55e",
-      // Light theme needs a notably darker warn so the text reads — the
+      // Light theme needs a notably darker warn so the text reads - the
       // amber-500 used on dark themes washes out against a white card.
       "--warn": "#b45309",
       "--warn-bg": "rgba(180,83,9,0.12)",
@@ -241,7 +241,7 @@ export interface HelpTexts {
   hoursMismatchPlaceholder: string;
   jobDescriptionPlaceholder: string;
   photosHint: string;
-  // Scheduling-related — added after the Scheduling Availability + future
+  // Scheduling-related - added after the Scheduling Availability + future
   // absence + persistent notes features landed. Admin can swap the wording
   // for org-specific phrasing without a redeploy.
   schedulingNotesPlaceholder: string;
@@ -418,7 +418,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           helpTexts: { ...DEFAULT_HELP_TEXTS, ...(serverSettings.helpTexts ?? {}) },
         }));
       })
-      .catch(() => { /* network unavailable — use localStorage fallback */ });
+      .catch(() => { /* network unavailable - use localStorage fallback */ });
   }, []);
 
   useEffect(() => {
@@ -468,12 +468,12 @@ export function useResolvedLogo(): { src: string; variant: "light" | "dark" } {
 //
 // Admins can snapshot the current look as a named preset that then shows up in
 // the Theme Template grid next to the built-ins. These live in localStorage on
-// that device only — no backend. To push a custom look to every crew member,
+// that device only - no backend. To push a custom look to every crew member,
 // select it and use "Apply to all users", which saves the resolved settings to
 // the server config the same way a built-in selection does.
 
 // A theme preset captures everything visual *except* the editable help-text
-// copy — help text is content, not look-and-feel, and shouldn't ride along
+// copy - help text is content, not look-and-feel, and shouldn't ride along
 // when someone picks a different palette.
 export type ThemeStyle = Omit<ThemeSettings, "helpTexts">;
 
@@ -531,12 +531,12 @@ export function persistCustomPresets(list: CustomPreset[]) {
   try {
     localStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify(list));
   } catch {
-    /* storage unavailable (private mode / quota) — non-fatal */
+    /* storage unavailable (private mode / quota) - non-fatal */
   }
 }
 
 // Swatch colors for a style snapshot: the preset palette with brand overrides
-// applied on top — matches what applySettings() would render.
+// applied on top - matches what applySettings() would render.
 export function styleVars(
   style: Pick<ThemeStyle, "themeId" | "brandOverride" | "brand2Override">,
 ): ThemeVars {

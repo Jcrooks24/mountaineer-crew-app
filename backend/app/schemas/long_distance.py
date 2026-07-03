@@ -15,6 +15,9 @@ class PriorOnDutyCreate(BaseModel):
     statement_id: str
     driver_name: str
     statement_date: str           # YYYY-MM-DD
+    job_uuid: str | None = None
+    job_name: str | None = None
+    bol_id: str | None = None
     daily_hours: List[DailyHours]
     hours_last_24: float
     signature: str                # base64 PNG data URL
@@ -26,6 +29,9 @@ class PriorOnDutyResponse(BaseModel):
     statement_id: str
     driver_id: int | None
     driver_name: str
+    job_uuid: str | None = None
+    job_name: str | None = None
+    bol_id: str | None = None
     statement_date: str
     daily_hours: List[DailyHours]
     hours_last_24: float
@@ -66,8 +72,10 @@ class RodsCreate(BaseModel):
     total_sleeper: str | None = None
     total_driving: str | None = None
     total_on_duty: str | None = None
-    signature: str
-    signed_at: datetime
+    # Optional: in-progress days are autosaved to the server unsigned for
+    # continuity/backup; the signature is attached when the driver signs.
+    signature: str | None = None
+    signed_at: datetime | None = None
 
 
 class RodsResponse(BaseModel):
@@ -91,8 +99,8 @@ class RodsResponse(BaseModel):
     total_sleeper: str | None
     total_driving: str | None
     total_on_duty: str | None
-    signature: str
-    signed_at: datetime
+    signature: str | None
+    signed_at: datetime | None
     created_at: datetime
 
     class Config:

@@ -1,4 +1,4 @@
-"""Request-size limit middleware — defense in depth against OOMs.
+"""Request-size limit middleware - defense in depth against OOMs.
 
 A single misbehaving endpoint that does `await request.body()` or
 `await file.read()` without streaming can pull a multi-GB request body
@@ -7,9 +7,9 @@ into RAM and OOM-kill the worker. Render has done this to us repeatedly.
 This middleware rejects oversized requests at the door so the body
 never reaches a router. It enforces the limit two ways:
 
-1. `Content-Length` header check — fast, catches every well-formed
+1. `Content-Length` header check - fast, catches every well-formed
    client (browsers always send Content-Length on multipart uploads).
-2. Streaming receive wrapper — for chunked / no-Content-Length requests,
+2. Streaming receive wrapper - for chunked / no-Content-Length requests,
    tracks bytes as they arrive and aborts past the cap. Required to
    protect against deliberately-chunked oversize uploads.
 
@@ -66,7 +66,7 @@ class BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # 1) Fast path — reject upfront based on Content-Length.
+        # 1) Fast path - reject upfront based on Content-Length.
         headers = dict(scope.get("headers") or [])
         cl_raw = headers.get(b"content-length")
         if cl_raw is not None:
@@ -80,7 +80,7 @@ class BodySizeLimitMiddleware:
                 await self._drain(receive)
                 return
 
-        # 2) Streaming path — wrap receive to count bytes and abort if a
+        # 2) Streaming path - wrap receive to count bytes and abort if a
         #    chunked / no-Content-Length request goes over.
         seen = 0
         limit = self.max_bytes
@@ -99,7 +99,7 @@ class BodySizeLimitMiddleware:
         async def short_circuit_send(message: Message) -> None:
             # If the body went over while the app was reading, the app may
             # have already started a response. We can't preempt it, but we
-            # also don't want to silently let the request succeed — flip
+            # also don't want to silently let the request succeed - flip
             # the status so the client knows something was wrong.
             if over and message["type"] == "http.response.start":
                 message = dict(message)
