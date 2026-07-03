@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { apiFetch } from "../api/client";
 import { BetaTag } from "./BetaTag";
 import SignaturePad, { type SignaturePadHandle } from "./SignaturePad";
 import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
@@ -293,6 +294,15 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   const carrierSigRef = useRef<SignaturePadHandle>(null);
   const [pickupDate, setPickupDate] = useState(draft.actual_pickup_date || todayLocal());
   const [vehicle, setVehicle] = useState(draft.vehicle || "");
+  // Vehicle units list - same source as DVIR + RODS so the BOL vehicle
+  // field shows the fleet's canonical units in a dropdown instead of a
+  // free-text input. Preserves any pre-existing custom entry.
+  const [units, setUnits] = useState<string[]>([]);
+  useEffect(() => {
+    apiFetch<{ units: string[] }>("/api/dvir/units")
+      .then((r) => setUnits(Array.isArray(r?.units) ? r.units : []))
+      .catch(() => { /* offline is fine - the input still accepts a saved custom value */ });
+  }, []);
   const [walkNotes, setWalkNotes] = useState(draft.walkthrough_notes || "");
   const [finalCharges, setFinalCharges] = useState(draft.final_charges != null ? String(draft.final_charges) : "");
   const [shipperName, setShipperName] = useState("");
@@ -799,8 +809,14 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                 <input type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} />
               </label>
               <label className="col" style={{ gap: 4, flex: "1 1 150px" }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Vehicle (unit / plate)</span>
-                <input value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="Truck 1 / ABC-123" />
+                <span className="small" style={{ color: "var(--muted)" }}>Vehicle (unit)</span>
+                <select value={vehicle} onChange={(e) => setVehicle(e.target.value)}>
+                  <option value="">Select&hellip;</option>
+                  {units.map((u) => <option key={u} value={u}>{u}</option>)}
+                  {vehicle && !units.includes(vehicle) && (
+                    <option value={vehicle}>{vehicle}</option>
+                  )}
+                </select>
               </label>
             </div>
           )}
