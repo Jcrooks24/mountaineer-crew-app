@@ -141,20 +141,22 @@ export default function Admin() {
       style={{ maxWidth: desktopMode ? 1500 : 860, position: "relative", zIndex: 1 }}
     >
       {/* Header - overridden background because the default .topbar 0.03
-          alpha vanishes over the admin background image and takes the tab
-          title / back button with it. */}
+          alpha vanishes over the admin background image. Text color is
+          hard-coded (not --text) because the backdrop is always dark
+          regardless of the active theme; on a light theme --text would
+          be near-black and disappear. */}
       <div
         className="topbar"
         style={{
           marginBottom: 12,
-          background: "rgba(10,16,22,0.72)",
-          border: "1px solid rgba(255,255,255,0.14)",
+          background: "rgba(10,16,22,0.78)",
+          border: "1px solid rgba(255,255,255,0.20)",
           backdropFilter: "blur(4px)",
           WebkitBackdropFilter: "blur(4px)",
-          boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
         }}
       >
-        <span style={{ fontWeight: 800, fontSize: 17, color: "var(--text)", textShadow: "0 1px 2px rgba(0,0,0,0.5)" }}>
+        <span style={{ fontWeight: 800, fontSize: 17, color: "#f6f9ff", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
           {TAB_TITLES[tab]}
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -162,14 +164,15 @@ export default function Admin() {
           <button
             onClick={() => (isHome ? nav(-1) : setTab(backTo))}
             style={{
-              background: "rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.16)",
+              background: "rgba(255,255,255,0.14)",
+              border: "1px solid rgba(255,255,255,0.28)",
               borderRadius: 999,
-              color: "var(--text)",
+              color: "#f6f9ff",
               cursor: "pointer",
               fontSize: 13,
               padding: "4px 12px",
-              fontWeight: 600,
+              fontWeight: 700,
+              textShadow: "0 1px 2px rgba(0,0,0,0.5)",
             }}
           >
             {backLabel}
@@ -1230,10 +1233,14 @@ function MonthScheduleView({
 
   return (
     <>
-      {/* Row hover highlight - dark inset overlay reads on both the muted
-          default fills and the saturated HC fills. The previous brand-tint
-          overlay disappeared entirely under Google-vibrant reds/greens. */}
-      <style>{`.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.22); }`}</style>
+      {/* Row hover highlight. HC mode uses a bright inset ring + darker
+          tint because the plain dark overlay is invisible against the
+          saturated blue Scheduled cells (#4285f4). Non-HC keeps the
+          cheap dark tint since the muted fills read fine with it. */}
+      <style>{highContrast
+        ? `.month-row:hover td { box-shadow: inset 0 0 0 3px rgba(255,255,255,0.75), inset 0 0 0 9999px rgba(0,0,0,0.30); }`
+        : `.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.22); }`
+      }</style>
       <div
         className="card"
         style={{

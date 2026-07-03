@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
@@ -41,7 +41,29 @@ function datesBefore(baseDate: string, days: number): string[] {
 
 export default function LongDistance() {
   const nav = useNavigate();
-  const [section, setSection] = useState<Section>("menu");
+  // Deep-link support: /long-distance?section=prior|bol|hos|trala jumps
+  // straight to the target sub-page. Report tab links now use these so the
+  // crew doesn't have to bounce through the menu.
+  const [params, setParams] = useSearchParams();
+  const initialSection: Section = (() => {
+    const raw = params.get("section");
+    if (raw === "prior" || raw === "bol" || raw === "hos" || raw === "trala") return raw;
+    return "menu";
+  })();
+  const [section, setSectionState] = useState<Section>(initialSection);
+  function setSection(next: Section) {
+    setSectionState(next);
+    if (next === "menu") {
+      // Clean up the query string when the crew backs out of a sub-page.
+      const p = new URLSearchParams(params);
+      p.delete("section");
+      setParams(p, { replace: true });
+    } else {
+      const p = new URLSearchParams(params);
+      p.set("section", next);
+      setParams(p, { replace: true });
+    }
+  }
 
   if (section === "prior") return <PriorOnDutyForm onBack={() => setSection("menu")} />;
   if (section === "bol") return <BillOfLadingForm onBack={() => setSection("menu")} />;

@@ -55,6 +55,20 @@ export function savePodsOverride(tripJob: string, driver: string, on: boolean): 
     else localStorage.removeItem(podsOverrideKey(tripJob, driver));
   } catch { /* noop */ }
 }
+// Per-job "ignore this job's own BOL" flag. When the crew hits Detach BOL
+// on an auto-attached (no tripLink) BOL, we stop treating the server's
+// bol-for-this-job as attached so the picker + Start New buttons come
+// back. Cleared as soon as they pick another BOL via linkTrip.
+const BOL_DETACHED_PREFIX = "crew_ld_bol_detached_v1:";
+function loadBolDetached(jobUuid: string): boolean {
+  try { return localStorage.getItem(BOL_DETACHED_PREFIX + jobUuid) === "1"; } catch { return false; }
+}
+function saveBolDetached(jobUuid: string, on: boolean) {
+  try {
+    if (on) localStorage.setItem(BOL_DETACHED_PREFIX + jobUuid, "1");
+    else localStorage.removeItem(BOL_DETACHED_PREFIX + jobUuid);
+  } catch { /* noop */ }
+}
 const BOL_DEFER_PREFIX = "crew_ld_bol_deferred_v1:";
 function loadBolDeferred(jobUuid: string): BolDeferredReason {
   try {
@@ -271,10 +285,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [bolDeferred, setBolDeferred] = useState<BolDeferredReason>(() => (jobUuid ? loadBolDeferred(jobUuid) : ""));
+  const [bolDetached, setBolDetachedState] = useState<boolean>(() => (jobUuid ? loadBolDetached(jobUuid) : false));
 
   useEffect(() => {
     setTripLink(jobUuid ? loadTripLink(jobUuid) : null);
     setBolDeferred(jobUuid ? loadBolDeferred(jobUuid) : "");
+    setBolDetachedState(jobUuid ? loadBolDetached(jobUuid) : false);
   }, [jobUuid]);
 
   // Hydrate manual PODS override once we know the trip anchor + driver.
@@ -293,11 +309,17 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     (async () => {
       const bol = await fetchRemoteBol(tripJob);
       if (!cancelled) {
+        // When the crew has explicitly detached this job's own BOL, don't
+        // auto-attach it back on refetch. bolDetached only applies to the
+        // job-itself case (no tripLink) - a real tripLink to another
+        // trip's anchor overrides it.
+        const respectDetach = bolDetached && !tripLink;
         // Preserve any optimistic bolStatus set by linkTrip when the linked
         // BOL is local-only and hasn't synced yet - fetchRemoteBol would
         // return null in that case and would otherwise wipe the attached
         // state right after the user picked a BOL.
-        if (bol) { setBolStatus(bol.status || ""); setBolRef(bolRefOf(bol)); }
+        if (bol && !respectDetach) { setBolStatus(bol.status || ""); setBolRef(bolRefOf(bol)); }
+        if (respectDetach) { setBolStatus(""); setBolRef(""); }
       }
       try {
         const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(tripJob)}`);
@@ -327,7 +349,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       if (!cancelled) setOpenBols(open);
     })();
     return () => { cancelled = true; };
-  }, [longDistance, jobUuid, tripJob, ldRefresh]);
+  }, [longDistance, jobUuid, tripJob, ldRefresh, bolDetached, tripLink]);
 
   function setBolDeferredFlag(reason: BolDeferredReason) {
     setBolDeferred(reason);
@@ -339,6 +361,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       saveTripLink(jobUuid, link);
       setTripLink(link);
       setBolDeferredFlag("");
+      // Actively picking a new BOL revokes the earlier detach flag - the
+      // crew clearly wants this trip attached to something now.
+      saveBolDetached(jobUuid, false);
+      setBolDetachedState(false);
       // Optimistically flip the render into the "attached" branch. Without
       // this, a local-only BOL (not yet synced to the server) would leave
       // bolStatus empty after fetchRemoteBol returns null - the render
@@ -351,6 +377,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       setBolStatus("");
       setBolRef("");
     }
+  }
+  function detachOwnBol() {
+    // Persist so a later mount / visibility refresh doesn't re-attach the
+    // same server row. Cleared automatically the next time linkTrip runs
+    // with a real BOL.
+    saveBolDetached(jobUuid, true);
+    setBolDetachedState(true);
+    setBolStatus("");
+    setBolRef("");
   }
 
   const { settings: themeSettings } = useTheme();
@@ -1549,9 +1584,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 <div className="small" style={{ color: "var(--muted)" }}>
                   {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` (${bolRef})` : ""}
                 </div>
-                <ChecklistItem done={bolStatus === "origin_signed" || bolStatus === "delivered"} label="BOL signed at origin" hint="Shipper + carrier, before loading" onGo={() => nav("/long-distance")} />
-                <ChecklistItem done={bolStatus === "delivered"} label="BOL signed at destination" hint="Shipper + carrier, on delivery" onGo={() => nav("/long-distance")} />
-                {tripLink && <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>}
+                <ChecklistItem done={bolStatus === "origin_signed" || bolStatus === "delivered"} label="BOL signed at origin" hint="Shipper + carrier, before loading" onGo={() => nav("/long-distance?section=bol")} />
+                <ChecklistItem done={bolStatus === "delivered"} label="BOL signed at destination" hint="Shipper + carrier, on delivery" onGo={() => nav("/long-distance?section=bol")} />
+                {tripLink ? (
+                  <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>
+                ) : (
+                  <button type="button" onClick={detachOwnBol} style={{ fontSize: 12, alignSelf: "flex-start" }}>Detach this BOL - pick or start another</button>
+                )}
               </div>
             ) : bolDeferred ? (
               <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
@@ -1582,7 +1621,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   </select>
                 </label>
                 <div className="row wrap" style={{ gap: 8 }}>
-                  <button type="button" className="btnPrimary" onClick={() => nav("/long-distance")} style={{ fontSize: 13 }}>Start a new BOL</button>
+                  <button type="button" className="btnPrimary" onClick={() => nav("/long-distance?section=bol")} style={{ fontSize: 13 }}>Start a new BOL</button>
                   <button type="button" onClick={() => setBolDeferredFlag("load")} style={{ fontSize: 13 }}>Load not completed yet</button>
                 </div>
               </div>
@@ -1637,7 +1676,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   <div className="small" style={{ marginLeft: 28, marginTop: 4 }}>
                     <button
                       type="button"
-                      onClick={() => nav("/long-distance")}
+                      onClick={() => nav("/long-distance?section=prior")}
                       style={{ background: "none", border: "none", color: "var(--brand)", padding: 0, cursor: "pointer", textDecoration: "underline", fontSize: 13 }}
                     >
                       Complete PODS →
@@ -1651,9 +1690,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           {/* Driver RODS sign-off (renders bare; self-hides when no driving). */}
           <RodsSignoff
             events={events}
-            bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null}
+            bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance?section=bol") } : null}
             podsDriverNames={podsDriverNames}
-            onNeedPods={() => nav("/long-distance")}
+            onNeedPods={() => nav("/long-distance?section=prior")}
             tripJob={tripLink?.trip_job_uuid || jobUuid}
           />
         </div>
