@@ -26,6 +26,7 @@ import {
   saveDraft,
   syncQueue,
 } from "../lib/bolStore";
+import { BOL_CONTRACT_SECTIONS } from "../lib/bolContract";
 
 /** Hand the shipper their dated copy: Web Share (with file) if available,
  * otherwise a download. Works offline. */
@@ -301,6 +302,10 @@ function BolEditor({ initialDraft, onBack, onFilePods }: { initialDraft: BOLDraf
   // Inventory list controls
   const [invSearch, setInvSearch] = useState("");
   const [invExpanded, setInvExpanded] = useState(false);
+
+  // Contract-clauses toggle - preview text is always visible; full 16 CFR
+  // §375.505 text expands on click.
+  const [showContract, setShowContract] = useState(false);
 
   // Autosave the draft on every change.
   useEffect(() => {
@@ -680,6 +685,43 @@ function BolEditor({ initialDraft, onBack, onFilePods }: { initialDraft: BOLDraf
           <button onClick={async () => { if (draft.items.length > 0) await save(); onBack(); }}>Save &amp; finish later</button>
           <button className="btnPrimary" onClick={save}>Save Inventory</button>
         </div>
+      </div>
+
+      {/* Contract clauses + required disclosures - preview is always visible;
+          expand to review the full 16 CFR §375.505 text before signing. */}
+      <div className="card">
+        <div className="sectionTitle">Contract clauses &amp; required disclosures</div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.6, marginBottom: 8 }}>
+          This Bill of Lading incorporates the 16 CFR §375.505 clauses below (valuation,
+          right to rescind, claims, arbitration, and required federal publications). By
+          signing at origin and destination, the shipper acknowledges each clause.
+        </div>
+        {!showContract && BOL_CONTRACT_SECTIONS.length > 0 && (
+          <div className="small" style={{ color: "var(--text)", lineHeight: 1.6, marginBottom: 8 }}>
+            <strong>{BOL_CONTRACT_SECTIONS[0].n}. {BOL_CONTRACT_SECTIONS[0].title}.</strong>{" "}
+            {BOL_CONTRACT_SECTIONS[0].body}{" "}
+            <span style={{ color: "var(--muted)" }}>…</span>
+          </div>
+        )}
+        {showContract && (
+          <div className="col" style={{ gap: 10, marginBottom: 8 }}>
+            {BOL_CONTRACT_SECTIONS.map((s) => (
+              <div key={s.n}>
+                <div className="small" style={{ fontWeight: 700 }}>{s.n}. {s.title}</div>
+                {s.body.split("\n").map((line, i) => (
+                  <div key={i} className="small" style={{ color: "var(--muted)", marginTop: 2, lineHeight: 1.5 }}>{line}</div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setShowContract((v) => !v)}
+          style={{ background: "none", border: "none", color: "var(--brand)", padding: 0, cursor: "pointer", fontSize: 13 }}
+        >
+          {showContract ? "Hide full contract text" : "Show full contract text"}
+        </button>
       </div>
 
       {/* Signing */}

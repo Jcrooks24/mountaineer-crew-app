@@ -78,5 +78,12 @@ class DigitalBOL(Base):
     signed_pdf_drive_id = Column(String, nullable=True)
     signed_pdf_url = Column(String, nullable=True)
 
+    # Crew rep's attestation that the inventory list is a complete record.
+    # Captured on the Inventory tab before origin signing. If not verified,
+    # `inventory_note` should carry the reason (loading in progress, second
+    # stop pending, etc.).
+    inventory_verified = Column(Integer, nullable=True)  # 0/1 flag - nullable so pre-migration rows stay untouched
+    inventory_note = Column(Text, nullable=True)
+
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)

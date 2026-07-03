@@ -1380,6 +1380,7 @@ ESTIMATE_ITEM_HEADERS = [
 BOL_HEADERS = [
     "bol_id", "created_by", "job_uuid", "job_name", "job_date",
     "status", "item_count",
+    "inventory_verified", "inventory_note",
     "origin_signed_at", "dest_signed_at", "final_charges",
     "walkthrough_notes", "signed_pdf_url",
     "created_at", "updated_at",
@@ -1601,6 +1602,12 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
         "job_date": bol.get("job_date", "") or "",
         "status": bol.get("status", "") or "",
         "item_count": sum(int(it.get("qty", 1) or 1) for it in items),
+        "inventory_verified": (
+            "yes" if bol.get("inventory_verified") is True
+            else "no" if bol.get("inventory_verified") is False
+            else ""
+        ),
+        "inventory_note": bol.get("inventory_note", "") or "",
         "origin_signed_at": _iso(bol.get("origin_signed_at")) if bol.get("origin_signed_at") else "",
         "dest_signed_at": _iso(bol.get("dest_signed_at")) if bol.get("dest_signed_at") else "",
         "final_charges": bol.get("final_charges") if bol.get("final_charges") is not None else "",

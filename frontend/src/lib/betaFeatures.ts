@@ -28,6 +28,7 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   "manualJobsCrossDevice",   // Manual "Other" jobs sync across devices
   "autoLaborLines",          // Employee hours auto-populate labor lines in Invoice Builder
   "podsPerDriver",           // Per-driver PODS checkbox on the Report tab
+  "bolInventoryTab",         // Standalone Inventory tab on LD+ load/unload days
 ]);
 
 export function isBeta(feature: string): boolean {

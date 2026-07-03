@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
+import BolInventoryTab from "./components/BolInventoryTab";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
@@ -123,7 +124,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "report";
+type Tab = "timeline" | "photos" | "report" | "inventory";
 
 type EventRecord = {
   event_id: string;
@@ -1827,6 +1828,11 @@ export default function App() {
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
         </button>
+        {longDistance && (ldLabor.includes("loading") || ldLabor.includes("unloading")) && (
+          <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
+            Inventory
+          </button>
+        )}
         <button
           className={"tab " + (tab === "report" ? "active" : "")}
           onClick={() => setTab("report")}
@@ -2460,6 +2466,19 @@ export default function App() {
             )}
           </div>
         </>
+      )}
+
+      {/* Inventory (LD+ load/unload days) */}
+      {tab === "inventory" && (
+        jobUuid ? (
+          <BolInventoryTab jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+        ) : (
+          <div className="card">
+            <div className="small" style={{ color: "var(--muted)" }}>
+              Select a job on the Timeline tab before adding inventory.
+            </div>
+          </div>
+        )
       )}
 
       {/* Report */}

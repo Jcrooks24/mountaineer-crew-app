@@ -44,6 +44,10 @@ class BOLIn(BaseModel):
     carrier: Optional[Dict[str, Any]] = None      # static carrier block
     shipment: Optional[Dict[str, Any]] = None      # autofilled shipment details
     items: List[Dict[str, Any]] = []               # list of BOL items
+    # Crew inventory attestation (Inventory tab). None = untouched; True =
+    # complete record; False = incomplete with a required `inventory_note`.
+    inventory_verified: Optional[bool] = None
+    inventory_note: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -95,6 +99,8 @@ def _to_dict(row: DigitalBOL) -> Dict[str, Any]:
         "walkthrough_notes": row.walkthrough_notes or "",
         "final_charges": float(row.final_charges) if row.final_charges is not None else None,
         "signed_pdf_url": row.signed_pdf_url or "",
+        "inventory_verified": bool(row.inventory_verified) if row.inventory_verified is not None else None,
+        "inventory_note": row.inventory_note or "",
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else "",
     }
@@ -118,10 +124,14 @@ def submit_bol(
 
     now = datetime.now(timezone.utc)
     created_by = current_user.name or current_user.email or ""
-    status = payload.status if payload.status in ("draft", "origin_signed", "delivered") else "draft"
 
     row = db.query(DigitalBOL).filter(DigitalBOL.bol_id == payload.id).first()
     if row is None:
+        # A brand-new BOL is always "draft". Status only advances via PATCH
+        # /sign; trusting the client's status field on POST caused a race
+        # where the submit-op raced ahead of the sign-op and the row landed
+        # in the "origin_signed" or "delivered" state with no signatures -
+        # the Report tab then showed a false-positive completion check.
         row = DigitalBOL(
             bol_id=payload.id,
             created_by=created_by,
@@ -129,10 +139,12 @@ def submit_bol(
             job_uuid=payload.job_uuid or "",
             job_name=payload.job_name or "",
             job_date=payload.job_date or "",
-            status=status,
+            status="draft",
             carrier_json=json.dumps(payload.carrier) if payload.carrier else None,
             shipment_json=json.dumps(payload.shipment) if payload.shipment else None,
             items_json=json.dumps(payload.items or []),
+            inventory_verified=(1 if payload.inventory_verified else 0) if payload.inventory_verified is not None else None,
+            inventory_note=payload.inventory_note,
             created_at=ts,
             updated_at=now,
         )
@@ -140,15 +152,21 @@ def submit_bol(
     else:
         # Upsert - refresh the mutable fields. created_by / created_at / driver
         # stay as first written so the record of who started it is preserved.
+        # `status` is NOT touched here - it's owned by PATCH /sign, and the
+        # existing row's status already reflects whichever signing phases
+        # have been captured.
         row.job_uuid = payload.job_uuid or row.job_uuid
         row.job_name = payload.job_name or row.job_name
         row.job_date = payload.job_date or row.job_date
-        row.status = status
         if payload.carrier is not None:
             row.carrier_json = json.dumps(payload.carrier)
         if payload.shipment is not None:
             row.shipment_json = json.dumps(payload.shipment)
         row.items_json = json.dumps(payload.items or [])
+        if payload.inventory_verified is not None:
+            row.inventory_verified = 1 if payload.inventory_verified else 0
+        if payload.inventory_note is not None:
+            row.inventory_note = payload.inventory_note
         row.updated_at = now
 
     try:

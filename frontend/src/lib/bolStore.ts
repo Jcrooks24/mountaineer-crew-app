@@ -77,6 +77,10 @@ export type BOLDraft = {
   walkthrough_notes?: string;
   final_charges?: number | null;
   signed_pdf_url?: string;
+  // Crew inventory attestation (Inventory tab). undefined = untouched;
+  // true = complete record; false = incomplete with an inventory_note.
+  inventory_verified?: boolean;
+  inventory_note?: string;
 };
 
 export type SignInput = {
@@ -360,6 +364,8 @@ function draftFromServer(s: any, job: { job_uuid: string; job_name: string; job_
     walkthrough_notes: s.walkthrough_notes || undefined,
     final_charges: s.final_charges ?? null,
     signed_pdf_url: s.signed_pdf_url || undefined,
+    inventory_verified: typeof s.inventory_verified === "boolean" ? s.inventory_verified : undefined,
+    inventory_note: s.inventory_note || undefined,
   };
 }
 
@@ -448,6 +454,8 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
         .filter((p) => p.drive_url)
         .map((p) => ({ photo_id: p.photo_id, drive_url: p.drive_url, thumb_url: p.thumb_url, caption: p.caption || "" })),
     })),
+    inventory_verified: d.inventory_verified ?? null,
+    inventory_note: d.inventory_note || "",
   };
 }
 
