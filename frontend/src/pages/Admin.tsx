@@ -1425,15 +1425,15 @@ function MonthScheduleView({
                         <div>{u.email}</div>
                       </div>
                       {userTags.length > 0 && (
-                        // Two-column grid so tags stack 2-per-row instead
+                        // Three-column grid so tags stack 3-per-row instead
                         // of forcing the column wide enough to fit the
                         // longest tag on a single line. Ellipsis on
                         // overflow so a very long tag name still fits
-                        // its half-width slot.
+                        // its third-width slot.
                         <div
                           style={{
                             display: "grid",
-                            gridTemplateColumns: "1fr 1fr",
+                            gridTemplateColumns: "1fr 1fr 1fr",
                             gap: 3, marginTop: 4,
                           }}
                         >
