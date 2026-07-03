@@ -1384,10 +1384,10 @@ function MonthScheduleView({
                         borderRight: "1px solid var(--border)",
                         padding: "6px 8px", textAlign: "left",
                         verticalAlign: "top",
-                        // Tightened to 60 so more employees fit per viewport on
-                        // standard desktop AND ultra-wide. Scheduled job cells
-                        // still wrap-break their text so narrow cells stay legible.
-                        minWidth: 60,
+                        // Column width is now driven by the email (nowrap
+                        // below) - no explicit minWidth so short-email
+                        // employees tighten right down. Name + tags flow
+                        // within that width.
                         cursor: notes ? "help" : "default",
                       }}
                     >
@@ -1418,22 +1418,22 @@ function MonthScheduleView({
                           </span>
                         )}
                       </div>
-                      {/* Contact info so admin can reach the crew member without
-                          leaving the schedule. */}
-                      <div className="small" style={{ color: "var(--muted)", fontSize: 10, marginTop: 2, lineHeight: 1.35, wordBreak: "break-word" }}>
-                        {u.phone && <div style={{ color: "var(--text)" }}>{u.phone}</div>}
-                        <div>{u.email}</div>
+                      {/* Contact info so admin can reach the crew member
+                          without leaving the schedule. Email is nowrap so
+                          it drives the column width - name and tags below
+                          wrap to whatever the email dictates. */}
+                      <div className="small" style={{ color: "var(--muted)", fontSize: 10, marginTop: 2, lineHeight: 1.35 }}>
+                        {u.phone && <div style={{ color: "var(--text)", whiteSpace: "nowrap" }}>{u.phone}</div>}
+                        <div style={{ whiteSpace: "nowrap" }}>{u.email}</div>
                       </div>
                       {userTags.length > 0 && (
-                        // Three-column grid so tags stack 3-per-row instead
-                        // of forcing the column wide enough to fit the
-                        // longest tag on a single line. Ellipsis on
-                        // overflow so a very long tag name still fits
-                        // its third-width slot.
+                        // Tags flow within the email-driven column width -
+                        // as many per row as fit, wrapping to the next row
+                        // when they don't. Long tag names ellipsis with a
+                        // native title tooltip so the column stays tight.
                         <div
                           style={{
-                            display: "grid",
-                            gridTemplateColumns: "1fr 1fr 1fr",
+                            display: "flex", flexWrap: "wrap",
                             gap: 3, marginTop: 4,
                           }}
                         >
@@ -1450,6 +1450,7 @@ function MonthScheduleView({
                                 whiteSpace: "nowrap",
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
+                                maxWidth: "100%",
                                 minWidth: 0,
                               }}
                             >
