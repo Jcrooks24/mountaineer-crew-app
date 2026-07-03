@@ -140,14 +140,37 @@ export default function Admin() {
       className="container"
       style={{ maxWidth: desktopMode ? 1500 : 860, position: "relative", zIndex: 1 }}
     >
-      {/* Header */}
-      <div className="topbar" style={{ marginBottom: 12 }}>
-        <span style={{ fontWeight: 700, fontSize: 16 }}>{TAB_TITLES[tab]}</span>
+      {/* Header - overridden background because the default .topbar 0.03
+          alpha vanishes over the admin background image and takes the tab
+          title / back button with it. */}
+      <div
+        className="topbar"
+        style={{
+          marginBottom: 12,
+          background: "rgba(10,16,22,0.72)",
+          border: "1px solid rgba(255,255,255,0.14)",
+          backdropFilter: "blur(4px)",
+          WebkitBackdropFilter: "blur(4px)",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+        }}
+      >
+        <span style={{ fontWeight: 800, fontSize: 17, color: "var(--text)", textShadow: "0 1px 2px rgba(0,0,0,0.5)" }}>
+          {TAB_TITLES[tab]}
+        </span>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <DesktopModeToggle on={desktopMode} onChange={setDesktopMode} />
           <button
             onClick={() => (isHome ? nav(-1) : setTab(backTo))}
-            style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
+            style={{
+              background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.16)",
+              borderRadius: 999,
+              color: "var(--text)",
+              cursor: "pointer",
+              fontSize: 13,
+              padding: "4px 12px",
+              fontWeight: 600,
+            }}
           >
             {backLabel}
           </button>
