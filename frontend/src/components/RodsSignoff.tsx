@@ -22,6 +22,7 @@ import {
   syncQueue,
   todayLocal,
 } from "../lib/rodsStore";
+import { loadPodsOverride, savePodsOverride } from "./JobReport";
 
 type MinEvent = { type: string; note?: string | null; timestamp: string };
 type BolLink = { ref: string; onOpen: () => void } | null;
@@ -35,13 +36,67 @@ function fmt12(hhmm: string): string {
   return `${h}:${String(m).padStart(2, "0")}${ap}`;
 }
 
+/** Small clickable PODS checkbox for a given driver in this trip. Merges
+ * a server-truth podsFiled with a local "already filed elsewhere" override
+ * (multi-day trips share one PODS - the check needs to survive across
+ * different daily job_uuids). Tapping "File PODS" preseeds the target
+ * driver so a passenger logging on behalf files under the right name. */
+function RodsDriverPodsCheckbox({
+  driver, tripJob, podsFiled, onNeedPods,
+}: {
+  driver: string; tripJob: string; podsFiled: boolean; onNeedPods: () => void;
+}) {
+  const [override, setOverride] = useState<boolean>(() => loadPodsOverride(tripJob, driver));
+  useEffect(() => { setOverride(loadPodsOverride(tripJob, driver)); }, [tripJob, driver]);
+  const checked = podsFiled || override;
+  function toggle() {
+    if (podsFiled) return; // server truth wins
+    const next = !override;
+    setOverride(next);
+    savePodsOverride(tripJob, driver, next);
+  }
+  function filePods() {
+    try { if (driver) localStorage.setItem("crew_pods_preset_driver_v1", driver); } catch { /* noop */ }
+    onNeedPods();
+  }
+  return (
+    <>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: podsFiled ? "default" : "pointer", fontSize: 14, marginBottom: 6 }}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={toggle}
+          style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0, cursor: podsFiled ? "default" : "pointer" }}
+        />
+        <span>
+          Prior On-Duty Statement filed for <strong>{driver || "this driver"}</strong>.
+          {override && !podsFiled && (
+            <span className="small" style={{ color: "var(--muted)", marginLeft: 6 }}>(self-attested)</span>
+          )}
+        </span>
+      </label>
+      {!podsFiled && !override && (
+        <div className="small" style={{ marginLeft: 28, marginBottom: 12 }}>
+          <button
+            type="button"
+            onClick={filePods}
+            style={{ background: "none", border: "none", color: "var(--brand)", padding: 0, cursor: "pointer", textDecoration: "underline", fontSize: 13 }}
+          >
+            File PODS →
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** One driver's RODS: summary derived from that driver's DUTY events + trip
  * details + signature. Persists trip details/signature keyed by driver+date. */
 function RodsDriverSection({
-  date, driver, fallback, events, bolLink, units, podsFiled, onNeedPods,
+  date, driver, fallback, events, bolLink, units, podsFiled, onNeedPods, tripJob,
 }: {
   date: string; driver: string; fallback: string; events: MinEvent[]; bolLink: BolLink; units: string[];
-  podsFiled: boolean; onNeedPods: () => void;
+  podsFiled: boolean; onNeedPods: () => void; tripJob: string;
 }) {
   const [day, setDay] = useState<RodsDay>(() => loadDay(date, driver) || newDay(date, driver, null));
   const [consent, setConsent] = useState(false);
@@ -129,32 +184,16 @@ function RodsDriverSection({
       </div>
 
       {/* Per-driver PODS confirmation for this driver. Auto-checks once a
-          PODS record with this driver name is on file for the trip. Tap
-          to file a PODS if not yet on file (opens /long-distance). Preset
-          the target driver so a passenger logging on behalf files under
-          the right name instead of their own. */}
-      <label
-        style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: podsFiled ? "default" : "pointer", fontSize: 14, marginBottom: 12 }}
-        onClick={(e) => {
-          if (podsFiled) return;
-          e.preventDefault();
-          try { if (driver) localStorage.setItem("crew_pods_preset_driver_v1", driver); } catch { /* noop */ }
-          onNeedPods();
-        }}
-      >
-        <input
-          type="checkbox"
-          checked={podsFiled}
-          onChange={() => { /* server owns state */ }}
-          style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0, cursor: podsFiled ? "default" : "pointer" }}
-        />
-        <span>
-          Prior On-Duty Statement filed for <strong>{driver || "this driver"}</strong>.
-          {!podsFiled && (
-            <span style={{ color: "var(--brand)", marginLeft: 6 }}>Tap to file →</span>
-          )}
-        </span>
-      </label>
+          PODS record with this driver name is on file for the trip; the
+          crew can also self-attest via the checkbox on multi-day trips
+          (one PODS covers the whole trip). "File PODS →" link takes the
+          crew to /long-distance with this driver preseeded. */}
+      <RodsDriverPodsCheckbox
+        driver={driver}
+        tripJob={tripJob}
+        podsFiled={podsFiled}
+        onNeedPods={onNeedPods}
+      />
 
       <div className="col" style={{ gap: 10, marginBottom: 12 }}>
         <div className="row wrap" style={{ gap: 10 }}>
@@ -217,19 +256,49 @@ export default function RodsSignoff({
   bolLink,
   podsDriverNames,
   onNeedPods,
+  tripJob = "",
 }: {
   events?: MinEvent[];
   bolLink?: BolLink;
   /** Lowercased names of drivers with a PODS on file for this trip. */
   podsDriverNames?: Set<string>;
   onNeedPods?: () => void;
+  /** The trip's anchor job_uuid (tripLink or the current job). Used to
+   * key per-driver PODS "already filed" self-attestation so a multi-day
+   * trip doesn't fake-fail on day 2. */
+  tripJob?: string;
 }) {
   const { user } = useAuth();
   const me = user?.name || user?.email || "";
   const date = todayLocal();
   const [units, setUnits] = useState<string[]>([]);
   const [dir, setDir] = useState<DirectoryEntry[]>([]);
-  const [manual, setManual] = useState<string[]>([]);
+
+  // Added-on-behalf drivers survive a JobReport unmount by persisting to
+  // localStorage keyed by trip + date. Without this, tapping "+ Add RODS"
+  // and then navigating to another tab and back loses the driver.
+  const manualKey = `crew_rods_manual_drivers_v1:${tripJob || "no-trip"}:${date}`;
+  const [manual, setManual] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(manualKey);
+      const arr = raw ? JSON.parse(raw) : null;
+      return Array.isArray(arr) ? arr.filter((s) => typeof s === "string") : [];
+    } catch { return []; }
+  });
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(manualKey);
+      const arr = raw ? JSON.parse(raw) : null;
+      setManual(Array.isArray(arr) ? arr.filter((s) => typeof s === "string") : []);
+    } catch { setManual([]); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualKey]);
+  useEffect(() => {
+    try {
+      if (manual.length > 0) localStorage.setItem(manualKey, JSON.stringify(manual));
+      else localStorage.removeItem(manualKey);
+    } catch { /* noop */ }
+  }, [manual, manualKey]);
 
   useEffect(() => {
     apiFetch<{ units: string[] }>("/api/dvir/units").then((r) => setUnits(r.units || [])).catch(() => {});
@@ -260,6 +329,7 @@ export default function RodsSignoff({
           units={units}
           podsFiled={!!podsDriverNames?.has(dr.trim().toLowerCase())}
           onNeedPods={onNeedPods ?? (() => {})}
+          tripJob={tripJob}
         />
       ))}
 

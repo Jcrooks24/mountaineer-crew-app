@@ -1390,7 +1390,7 @@ BOL_HEADERS = [
 
 BOL_ITEM_HEADERS = [
     "bol_id", "job_name", "job_date", "item_no", "item_name",
-    "qty", "condition_notes", "photo_links", "exported_at",
+    "qty", "packed_by", "condition_notes", "photo_links", "exported_at",
 ]
 
 
@@ -1635,6 +1635,12 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
             photo_links = ", ".join(
                 p.get("drive_url", "") for p in photos if p.get("drive_url")
             )
+            packed_by_raw = str(it.get("packed_by", "") or "").lower()
+            packed_by_label = (
+                "CP" if packed_by_raw == "cp"
+                else "PBO" if packed_by_raw == "pbo"
+                else ""
+            )
             item_rows.append({
                 "bol_id": bol_id,
                 "job_name": job_name,
@@ -1642,6 +1648,7 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
                 "item_no": it.get("item_no", ""),
                 "item_name": it.get("name", ""),
                 "qty": it.get("qty", 0) or 0,
+                "packed_by": packed_by_label,
                 "condition_notes": it.get("condition_notes", "") or "",
                 "photo_links": photo_links,
                 "exported_at": updated_at,

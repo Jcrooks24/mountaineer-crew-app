@@ -48,7 +48,20 @@ export type BOLItem = {
   qty: number;
   condition_notes: string;
   photos: BOLPhoto[];
+  /** Only meaningful when the item is a box (name contains "box"). "cp" =
+   * Company Packed, "pbo" = Packed By Owner. "" = not yet indicated. FMCSA
+   * loss-and-damage liability differs between the two so this belongs on
+   * the BOL, not in condition notes. */
+  packed_by?: "cp" | "pbo" | "";
 };
+
+/** True when an item name should surface the CP/PBO selector. Matches
+ * anything with "box" in the name so both furniture-catalog entries
+ * ("Medium box", "Wardrobe box") and free-form entries ("Box of books")
+ * get the picker. */
+export function itemIsBox(name: string | undefined | null): boolean {
+  return /\bbox(es)?\b/i.test(String(name || ""));
+}
 
 export type BOLStatus = "draft" | "origin_signed" | "delivered";
 
@@ -358,6 +371,9 @@ export async function listOpenBols(): Promise<OpenBol[]> {
 // ── Cross-rep / cross-device loading ──────────────────────────────────────────
 
 function normalizeServerItem(it: any, i: number): BOLItem {
+  const rawPackedBy = String(it.packed_by ?? "").toLowerCase();
+  const packed_by: BOLItem["packed_by"] =
+    rawPackedBy === "cp" || rawPackedBy === "pbo" ? rawPackedBy : "";
   return {
     item_no: typeof it.item_no === "number" ? it.item_no : i + 1,
     id: String(it.id ?? newUUID()),
@@ -365,6 +381,7 @@ function normalizeServerItem(it: any, i: number): BOLItem {
     qty: Math.max(1, Math.floor(Number(it.qty) || 1)),
     condition_notes: String(it.condition_notes ?? ""),
     photos: Array.isArray(it.photos) ? it.photos : [],
+    packed_by,
   };
 }
 
@@ -478,6 +495,7 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
       name: it.name,
       qty: it.qty,
       condition_notes: it.condition_notes,
+      packed_by: it.packed_by || "",
       photos: it.photos
         .filter((p) => p.drive_url)
         .map((p) => ({ photo_id: p.photo_id, drive_url: p.drive_url, thumb_url: p.thumb_url, caption: p.caption || "" })),

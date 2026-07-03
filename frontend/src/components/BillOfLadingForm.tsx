@@ -14,6 +14,7 @@ import {
   captureItemPhoto,
   enqueueSubmit,
   fetchCalendarDay,
+  itemIsBox,
   listOpenBols,
   loadDraft,
   loadForJob,
@@ -345,7 +346,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     if (!name) return setErr("Enter an item name.");
     const qty = Math.max(1, Math.floor(itemQty || 1));
     const nextNo = draft.items.reduce((m, it) => Math.max(m, it.item_no), 0) + 1;
-    const item: BOLItem = { item_no: nextNo, id: newUUID(), name, qty, condition_notes: "", photos: [] };
+    const item: BOLItem = { item_no: nextNo, id: newUUID(), name, qty, condition_notes: "", photos: [], packed_by: "" };
     setDraft((prev) => ({ ...prev, items: [...prev.items, item], updated_at: new Date().toISOString() }));
     setItemName("");
     setItemQty(1);
@@ -522,6 +523,11 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       {/* Add item */}
       <div className="card">
         <div className="sectionTitle">Add Item</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
+          For boxes, indicate <strong>CP</strong> (Company Packed - carrier is
+          responsible for loss / damage of contents) or <strong>PBO</strong>{" "}
+          (Packed By Owner - carrier is not liable for the contents inside).
+        </div>
         <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
           <label className="col" style={{ gap: 4, flex: "2 1 200px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Item</span>
@@ -530,7 +536,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
               value={itemName}
               onChange={(e) => setItemName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addItem(); } }}
-              placeholder="Sofa, dresser, box…"
+              placeholder="Sofa, dresser, CP box, PBO box…"
             />
             <datalist id="bol-furniture">
               {FURNITURE_CATALOG.map((f) => (
@@ -615,6 +621,25 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                     />
                     <button type="button" onClick={() => adjustQty(it.item_no, 1)} style={qtyBtnStyle} aria-label="Increase quantity">+</button>
                   </div>
+
+                  {/* CP / PBO selector for boxes only. FMCSA liability
+                      splits along this axis (Company Packed is our
+                      responsibility; Packed By Owner shifts internal-
+                      contents liability to the shipper). */}
+                  {itemIsBox(it.name) && (
+                    <div className="row" style={{ gap: 6, alignItems: "center" }}>
+                      <span className="small" style={{ color: "var(--muted)" }}>Packed by</span>
+                      <select
+                        value={it.packed_by || ""}
+                        onChange={(e) => updateItem(it.item_no, { packed_by: (e.target.value as "cp" | "pbo" | "") })}
+                        style={{ fontSize: 13 }}
+                      >
+                        <option value="">Select…</option>
+                        <option value="cp">Company Packed (CP)</option>
+                        <option value="pbo">Packed By Owner (PBO)</option>
+                      </select>
+                    </div>
+                  )}
 
                   {/* Photo add */}
                   <PhotoButton

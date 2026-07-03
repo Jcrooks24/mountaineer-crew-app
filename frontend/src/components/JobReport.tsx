@@ -34,6 +34,27 @@ function bolRefOf(bol: { bol_id?: string; id?: string } | null): string {
 // state is meaningful on a follow-up read. Legacy "1" values from the
 // pre-split boolean flag are read back as "load" for back-compat.
 type BolDeferredReason = "" | "load" | "unload";
+
+// Per-driver PODS "already filed" self-attestation. One PODS covers the
+// whole multi-day trip (§395.8(j)(2)), but the app only searches for a
+// PODS matching this specific day's job_uuid - which would falsely make
+// day-2 look non-compliant. This override lets the crew confirm the
+// PODS is on file without duplicating the submission.
+const PODS_OVERRIDE_PREFIX = "crew_pods_override_v1:";
+function podsOverrideKey(tripJob: string, driver: string): string {
+  return `${PODS_OVERRIDE_PREFIX}${tripJob}:${driver.trim().toLowerCase()}`;
+}
+export function loadPodsOverride(tripJob: string, driver: string): boolean {
+  if (!tripJob || !driver) return false;
+  try { return localStorage.getItem(podsOverrideKey(tripJob, driver)) === "1"; } catch { return false; }
+}
+export function savePodsOverride(tripJob: string, driver: string, on: boolean): void {
+  if (!tripJob || !driver) return;
+  try {
+    if (on) localStorage.setItem(podsOverrideKey(tripJob, driver), "1");
+    else localStorage.removeItem(podsOverrideKey(tripJob, driver));
+  } catch { /* noop */ }
+}
 const BOL_DEFER_PREFIX = "crew_ld_bol_deferred_v1:";
 function loadBolDeferred(jobUuid: string): BolDeferredReason {
   try {
@@ -223,11 +244,30 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // per-diem row so a driver can see their own compliance at a glance
   // without conflating it with any other driver on a multi-driver trip.
   const [podsForDriver, setPodsForDriver] = useState<boolean>(false);
+  // Manual "already filed" override for this driver on this trip -
+  // multi-day trips share one PODS so day-2 shouldn't fake-fail.
+  const [podsOverride, setPodsOverrideState] = useState<boolean>(false);
   // Set of driver names (lowercased) with a PODS on file for this trip.
   // Each RodsDriverSection reads its own driver to render its own PODS
   // checkbox - the sign-in user's checkbox is above; this covers the
   // added-on-behalf drivers.
   const [podsDriverNames, setPodsDriverNames] = useState<Set<string>>(() => new Set());
+  // Bumped when the tab regains focus so the LD effect below refetches
+  // the BOL + PODS state. Without this a BOL auto-created on the
+  // Inventory tab wouldn't appear here until the whole component
+  // remounts.
+  const [ldRefresh, setLdRefresh] = useState<number>(0);
+  useEffect(() => {
+    function onVis() {
+      if (document.visibilityState === "visible") setLdRefresh((n) => n + 1);
+    }
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+    };
+  }, []);
   const [tripLink, setTripLink] = useState<TripLink | null>(() => (jobUuid ? loadTripLink(jobUuid) : null));
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [bolDeferred, setBolDeferred] = useState<BolDeferredReason>(() => (jobUuid ? loadBolDeferred(jobUuid) : ""));
@@ -236,6 +276,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setTripLink(jobUuid ? loadTripLink(jobUuid) : null);
     setBolDeferred(jobUuid ? loadBolDeferred(jobUuid) : "");
   }, [jobUuid]);
+
+  // Hydrate manual PODS override once we know the trip anchor + driver.
+  const meName = user?.name || user?.email || "";
+  useEffect(() => {
+    const tj = tripLink?.trip_job_uuid || jobUuid;
+    setPodsOverrideState(loadPodsOverride(tj, meName));
+  }, [tripLink, jobUuid, meName]);
 
   // The trip's anchor job: the linked in-progress BOL's job, or this job.
   const tripJob = tripLink?.trip_job_uuid || jobUuid;
@@ -280,7 +327,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       if (!cancelled) setOpenBols(open);
     })();
     return () => { cancelled = true; };
-  }, [longDistance, jobUuid, tripJob]);
+  }, [longDistance, jobUuid, tripJob, ldRefresh]);
 
   function setBolDeferredFlag(reason: BolDeferredReason) {
     setBolDeferred(reason);
@@ -1523,8 +1570,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             ) : (
               <div className="col" style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
                 <div style={{ fontWeight: 700 }}>Bill of Lading</div>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  Save inventory on the <strong>Inventory</strong> tab to auto-create and attach a
+                  BOL for this job. Or pick / start one here:
+                </div>
                 <label className="col" style={{ gap: 4 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Attach the trip's Bill of Lading</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>Select in-progress BOL</span>
                   <select value="" onChange={(e) => { const o = openBols.find((b) => b.bol_id === e.target.value); if (o) linkTrip(o); }}>
                     <option value="">Select an in-progress BOL...</option>
                     {openBols.map((b) => (<option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " (" + b.job_date + ")" : ""}</option>))}
@@ -1533,7 +1584,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 <div className="row wrap" style={{ gap: 8 }}>
                   <button type="button" className="btnPrimary" onClick={() => nav("/long-distance")} style={{ fontSize: 13 }}>Start a new BOL</button>
                   <button type="button" onClick={() => setBolDeferredFlag("load")} style={{ fontSize: 13 }}>Load not completed yet</button>
-                  <button type="button" onClick={() => setBolDeferredFlag("unload")} style={{ fontSize: 13 }}>Unload not completed yet</button>
                 </div>
               </div>
             )}
@@ -1554,31 +1604,49 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
 
           {/* Per-driver PODS self-verification. Auto-checks when the current
-              user has a PODS filed for this trip. Tapping the row when it's
-              unchecked opens /long-distance so the driver can file one -
-              server state remains the source of truth, so tapping never
-              force-checks locally. */}
-          <label
-            style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: podsForDriver ? "default" : "pointer", fontSize: 14, marginTop: 8 }}
-            onClick={(e) => {
-              if (podsForDriver) return;
-              e.preventDefault();
-              nav("/long-distance");
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={podsForDriver}
-              onChange={() => { /* server owns state - see label onClick */ }}
-              style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0, cursor: podsForDriver ? "default" : "pointer" }}
-            />
-            <span>
-              As the <strong>driver</strong>, I have submitted my Prior On-Duty Statement for this trip.
-              {!podsForDriver && (
-                <span style={{ color: "var(--brand)", marginLeft: 6 }}>Tap to complete PODS →</span>
-              )}
-            </span>
-          </label>
+              user has a PODS filed for this trip. On a multi-day trip the
+              same PODS covers subsequent days - the crew can manually check
+              the box to attest without re-filing. The "Complete PODS →"
+              link stays available for the actual filing flow. */}
+          {(() => {
+            const checked = podsForDriver || podsOverride;
+            const anchorJob = tripLink?.trip_job_uuid || jobUuid;
+            const toggle = () => {
+              if (podsForDriver) return; // server truth wins; nothing to toggle
+              const next = !podsOverride;
+              setPodsOverrideState(next);
+              savePodsOverride(anchorJob, meName, next);
+            };
+            return (
+              <>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: podsForDriver ? "default" : "pointer", fontSize: 14, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={toggle}
+                    style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0, cursor: podsForDriver ? "default" : "pointer" }}
+                  />
+                  <span>
+                    As the <strong>driver</strong>, I have submitted my Prior On-Duty Statement for this trip.
+                    {podsOverride && !podsForDriver && (
+                      <span className="small" style={{ color: "var(--muted)", marginLeft: 6 }}>(self-attested)</span>
+                    )}
+                  </span>
+                </label>
+                {!podsForDriver && !podsOverride && (
+                  <div className="small" style={{ marginLeft: 28, marginTop: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => nav("/long-distance")}
+                      style={{ background: "none", border: "none", color: "var(--brand)", padding: 0, cursor: "pointer", textDecoration: "underline", fontSize: 13 }}
+                    >
+                      Complete PODS →
+                    </button>
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
           {/* Driver RODS sign-off (renders bare; self-hides when no driving). */}
           <RodsSignoff
@@ -1586,6 +1654,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance") } : null}
             podsDriverNames={podsDriverNames}
             onNeedPods={() => nav("/long-distance")}
+            tripJob={tripLink?.trip_job_uuid || jobUuid}
           />
         </div>
       )}

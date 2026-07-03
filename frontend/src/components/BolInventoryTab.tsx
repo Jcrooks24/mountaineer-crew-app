@@ -4,6 +4,7 @@ import {
   type BOLDraft,
   type BOLItem,
   enqueueSubmit,
+  itemIsBox,
   loadForJob,
   newUUID,
   saveDraft,
@@ -94,6 +95,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
       name,
       qty,
       condition_notes: "",
+      packed_by: "",
       photos: [],
     };
     setDraft({ ...draft, items: [...draft.items, item], updated_at: new Date().toISOString() });
@@ -184,6 +186,12 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
           Items you add here compile into the trip's Bill of Lading and sync
           across crew devices. Add items as they go on the truck.
         </div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 6 }}>
+          For anything that's a <strong>box</strong>, indicate <strong>CP</strong>
+          {" "}(Company Packed - we packed the contents; carrier is responsible for
+          loss / damage) or <strong>PBO</strong> (Packed By Owner - shipper packed
+          the contents; carrier is not liable for the contents inside).
+        </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
           Job: <strong style={{ color: "var(--text)" }}>{draft.job_name || jobName || "Untitled"}</strong>
           {draft.job_date ? `  ·  ${draft.job_date}` : ""}
@@ -200,7 +208,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
               value={itemName}
               onChange={(e) => setItemName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addItem(); } }}
-              placeholder="Sofa, dresser, box…"
+              placeholder="Sofa, dresser, CP box, PBO box…"
             />
             <datalist id="bol-inv-tab-furniture">
               {FURNITURE_CATALOG.map((f) => (
@@ -288,6 +296,20 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
                       +
                     </button>
                   </div>
+                  {itemIsBox(it.name) && (
+                    <div className="row" style={{ gap: 6, alignItems: "center" }}>
+                      <span className="small" style={{ color: "var(--muted)" }}>Packed by</span>
+                      <select
+                        value={it.packed_by || ""}
+                        onChange={(e) => updateItem(it.item_no, { packed_by: (e.target.value as "cp" | "pbo" | "") })}
+                        style={{ fontSize: 13 }}
+                      >
+                        <option value="">Select…</option>
+                        <option value="cp">Company Packed (CP)</option>
+                        <option value="pbo">Packed By Owner (PBO)</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
                 <label className="col" style={{ gap: 4, marginTop: 8 }}>
                   <span className="small" style={{ color: "var(--muted)" }}>Condition notes</span>
