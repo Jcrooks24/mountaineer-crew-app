@@ -26,6 +26,7 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   // v1.6.x additions
   "rosterTypeahead",         // RODS driver + Employee Hours name typeahead
   "manualJobsCrossDevice",   // Manual "Other" jobs sync across devices
+  "autoLaborLines",          // Employee hours auto-populate labor lines in Invoice Builder
 ]);
 
 export function isBeta(feature: string): boolean {

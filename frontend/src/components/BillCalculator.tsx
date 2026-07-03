@@ -18,6 +18,8 @@ import {
   fetchAndCache,
   type LiveMaterial,
 } from "../lib/materialsStore";
+import { roundBillableQuarter, DEFAULT_LABOR_RATE, type EmployeeHoursEntry } from "../lib/employeeHours";
+import BetaTag from "./BetaTag";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -173,11 +175,15 @@ type Props = {
   jobName: string;
   dumpsterPct?: number;   // 0–100 from M1 estimate
   recyclingPct?: number;  // 0–100 from M1 estimate
+  // Employee hours entries from the Report tab. Billable rows auto-populate
+  // one labor line per employee at DEFAULT_LABOR_RATE; the crew can then
+  // edit the rate/qty per line. Non-billable rows are skipped.
+  employeeHours?: EmployeeHoursEntry[];
   children?: (slots: BillSlots) => ReactNode;
 };
 
 const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
-  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, children },
+  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, employeeHours, children },
   ref,
 ) {
   const { settings: themeSettings } = useTheme();
@@ -336,6 +342,55 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       return { ...prev, items };
     });
   }, [loaded, dumpsterPct, recyclingPct]);
+
+  // ── Keep labor line items in sync with the Report's Employee Hours ──
+  // One line per billable employee, defaulted to DEFAULT_LABOR_RATE/hr.
+  // Preserves any user-edited rate/discount on an existing matching line
+  // (matched by "Labor - {employee name}") so bumping someone's rate to
+  // $90 sticks even after they log another break. Skipped entirely when
+  // the parent hasn't provided employeeHours yet - otherwise the saved
+  // labor lines from the server would be wiped on load before the parent
+  // hydrates the array.
+  useEffect(() => {
+    if (!loaded || employeeHours === undefined) return;
+    const list = employeeHours;
+    setBill((prev) => {
+      const hoursLabel = (name: string) => `Labor - ${name}`;
+      const desired = list
+        .filter((e) => !e.non_billable && (e.name || "").trim().length > 0)
+        .map((e) => {
+          const label = hoursLabel(e.name.trim());
+          const existing = prev.items.find(
+            (it) => it.source === "hours" && it.label === label,
+          );
+          return {
+            id: existing?.id ?? uuid(),
+            label,
+            qty: roundBillableQuarter(e.hours || 0),
+            rate: existing ? existing.rate : DEFAULT_LABOR_RATE,
+            unit: "hr" as Unit,
+            discount: existing?.discount ?? 0,
+            source: "hours" as const,
+          };
+        });
+
+      const otherItems = prev.items.filter((it) => it.source !== "hours");
+      const nextItems = [...otherItems, ...desired];
+
+      // Bail out if nothing actually changed - keeps the debounced draft
+      // save quiet on renders that touched employeeHours reference only.
+      if (nextItems.length === prev.items.length) {
+        const same = nextItems.every((n, i) => {
+          const p = prev.items[i];
+          return p && p.id === n.id && p.label === n.label &&
+            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
+            p.discount === n.discount && p.source === n.source;
+        });
+        if (same) return prev;
+      }
+      return { ...prev, items: nextItems };
+    });
+  }, [loaded, employeeHours]);
 
   // ── Materials: local cache + queue (offline-safe) ────────────────────────────
   function refreshMaterials() {
@@ -529,7 +584,10 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // fall back to the original stacked layout.
   const billHelperSlot = (
     <>
-      <div className="sectionTitle" style={{ marginBottom: 0 }}>Invoice Builder</div>
+      <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 0 }}>
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Invoice Builder</div>
+        <BetaTag feature="autoLaborLines" style={{ marginTop: 0 }} />
+      </div>
       {jobName && (
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
           Bill for: <strong style={{ color: "var(--text)" }}>{jobName}</strong>

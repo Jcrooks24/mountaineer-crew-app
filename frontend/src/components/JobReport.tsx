@@ -43,33 +43,12 @@ import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
 
-// Mirrors backend EmployeeHoursEntry. `hours` is the actual worked time;
-// the company billable total rounds quarter-by-quarter (≥5 min → up, else
-// down) at display + sheet-export time. `non_billable` rows still show in
-// the table but contribute 0 to total man-hours.
-export type EmployeeHoursEntry = {
-  name: string;
-  start: string;
-  end: string;
-  break_hours: number;
-  hours: number;
-  non_billable?: boolean;
-  // Long-distance: this employee was out of town this day -> $50 per-diem.
-  out_of_town?: boolean;
-};
-
-// Company billing rule: round to the next quarter-hour if the worked time
-// is ≥5 minutes into the current quarter; otherwise round down to that
-// quarter. Mirrored on the backend (_round_billable_quarter in
-// sheets_export.py) so the spreadsheet and the UI agree.
-export function roundBillableQuarter(hours: number): number {
-  if (hours <= 0) return 0;
-  const totalMin = Math.round(hours * 60);
-  const quarters = Math.floor(totalMin / 15);
-  const remainder = totalMin - quarters * 15;
-  const roundedMin = remainder >= 5 ? (quarters + 1) * 15 : quarters * 15;
-  return roundedMin / 60;
-}
+// Type + billing-math helpers live in lib/employeeHours so BillCalculator
+// can consume them without importing back through this parent. Re-exported
+// here for backward compatibility with existing callers (Admin, etc.).
+export { roundBillableQuarter, type EmployeeHoursEntry } from "../lib/employeeHours";
+import type { EmployeeHoursEntry } from "../lib/employeeHours";
+import { roundBillableQuarter } from "../lib/employeeHours";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
 // dropdowns without leaking the rest of App.tsx's offline state into
@@ -932,6 +911,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       jobName={jobName}
       dumpsterPct={data.dumpster_pct}
       recyclingPct={data.recycling_pct}
+      employeeHours={loaded ? data.employee_hours : undefined}
     >
       {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
