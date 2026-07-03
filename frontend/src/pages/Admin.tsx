@@ -132,7 +132,7 @@ export default function Admin() {
       aria-hidden
       style={{
         position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none",
-        backgroundImage: "linear-gradient(rgba(10,16,22,0.82), rgba(10,16,22,0.82)), url('/admin-bg.jpg')",
+        backgroundImage: "linear-gradient(rgba(28,40,52,0.55), rgba(28,40,52,0.55)), url('/admin-bg.jpg')",
         backgroundSize: "cover", backgroundPosition: "center",
       }}
     />

@@ -5,7 +5,16 @@ import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import BillOfLadingForm from "../components/BillOfLadingForm";
 import { BetaTag } from "../components/BetaTag";
-import { listOpenBols, readActiveJob, type OpenBol } from "../lib/bolStore";
+import {
+  fetchCalendarDay,
+  fetchManualJobsForDate,
+  listOpenBols,
+  manualJobToJobUuid,
+  readActiveJob,
+  resolveJobUuid,
+  type CalEvent,
+  type OpenBol,
+} from "../lib/bolStore";
 
 type Section = "menu" | "prior" | "hos" | "trala" | "bol";
 
@@ -35,7 +44,7 @@ export default function LongDistance() {
   const [section, setSection] = useState<Section>("menu");
 
   if (section === "prior") return <PriorOnDutyForm onBack={() => setSection("menu")} />;
-  if (section === "bol") return <BillOfLadingForm onBack={() => setSection("menu")} onFilePods={() => setSection("prior")} />;
+  if (section === "bol") return <BillOfLadingForm onBack={() => setSection("menu")} />;
 
   return (
     <div className="container">
@@ -131,15 +140,77 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
 
   const [tripDate, setTripDate] = useState(todayLocal());
   const [driverName, setDriverName] = useState(user?.name || "");
-  // Prefill the job name from the active job so the PODS can be linked to a
-  // specific long-distance job; the driver can edit or clear it.
+  // Job selector - mirrors the Timeline: date + calendar dropdown + manual
+  // "Other" fallback. The picked calendar/manual entry drives both the
+  // display name and the canonical job_uuid sent with the PODS submission.
   const [jobName, setJobName] = useState(() => readActiveJob().job_name || "");
-  // Attach the PODS to a specific in-progress BOL (required before that BOL can
-  // be signed at origin).
+  const [jobUuid, setJobUuid] = useState<string>(() => readActiveJob().job_uuid || "");
+  const [calEvents, setCalEvents] = useState<CalEvent[]>([]);
+  const [calLoading, setCalLoading] = useState<boolean>(false);
+  const [manualEntries, setManualEntries] = useState<{ job_uuid: string; name: string }[]>([]);
+  const [pickerValue, setPickerValue] = useState<string>("");
+  const [manualName, setManualName] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setCalLoading(true);
+    setCalEvents([]);
+    setManualEntries([]);
+    (async () => {
+      try {
+        const [evs, manual] = await Promise.all([
+          fetchCalendarDay(tripDate),
+          fetchManualJobsForDate(tripDate),
+        ]);
+        if (cancelled) return;
+        setCalEvents(evs);
+        setManualEntries(manual);
+      } catch {
+        /* offline is fine */
+      } finally {
+        if (!cancelled) setCalLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tripDate]);
+
+  async function onPickJob(value: string) {
+    setPickerValue(value);
+    if (!value) return;
+    if (value === "__other__") {
+      setManualName("");
+      setJobUuid("");
+      setJobName("");
+      return;
+    }
+    const manual = manualEntries.find((m) => m.job_uuid === value);
+    if (manual) {
+      setJobUuid(manual.job_uuid);
+      setJobName(manual.name);
+      return;
+    }
+    const cal = calEvents.find((e) => e.id === value);
+    if (cal) {
+      const uuid = await resolveJobUuid(cal.id);
+      setJobUuid(uuid);
+      setJobName(cal.summary);
+    }
+  }
+
+  function confirmManualName() {
+    const name = manualName.trim();
+    if (!name) return;
+    const uuid = manualJobToJobUuid(name, tripDate);
+    setJobUuid(uuid);
+    setJobName(name);
+  }
+
+  // BOL attachment stays optional (surfaced as a separate control below).
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [bolId, setBolId] = useState("");
   useEffect(() => { listOpenBols().then(setOpenBols).catch(() => {}); }, []);
-  // If launched from a BOL ("File Prior On-Duty for this BOL"), pre-attach it.
+  // Legacy "File Prior On-Duty for this BOL" launcher used to pre-attach a
+  // BOL. Kept for back-compat if any stale localStorage entry remains.
   useEffect(() => {
     try {
       const raw = localStorage.getItem("crew_pods_attach_bol_v1");
@@ -190,16 +261,16 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
 
     setBusy(true);
     try {
-      const job = readActiveJob();
       const bol = openBols.find((b) => b.bol_id === bolId);
+      const active = readActiveJob();
       await apiFetch("/api/long-distance/prior-hours", {
         method: "POST",
         body: JSON.stringify({
           statement_id: newUUID(),
           driver_name: driverName.trim(),
           statement_date: tripDate,
-          job_uuid: bol?.job_uuid || job.job_uuid || null,
-          job_name: jobName.trim() || bol?.job_name || job.job_name || null,
+          job_uuid: jobUuid || bol?.job_uuid || active.job_uuid || null,
+          job_name: jobName.trim() || bol?.job_name || active.job_name || null,
           bol_id: bolId || null,
           daily_hours: priorDates.map((d) => ({ date: d, hours: Number(dailyHours[d] || 0) })),
           hours_last_24: last24,
@@ -259,12 +330,57 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver Name *</div>
             <input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Full name" />
           </div>
+
           <div>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Job name</div>
-            <input value={jobName} onChange={(e) => setJobName(e.target.value)} placeholder="Which long-distance job is this for?" />
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trip Start Date *</div>
+            <input type="date" value={tripDate} onChange={(e) => setTripDate(e.target.value)} />
           </div>
+
           <div>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Attach to Bill of Lading</div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
+              Job{" "}
+              <span className="small" style={{ marginLeft: 4 }}>
+                {calLoading ? "(loading…)" : calEvents.length > 0 ? `(${calEvents.length} found)` : "(none found)"}
+              </span>
+            </div>
+            <select value={pickerValue} onChange={(e) => onPickJob(e.target.value)} disabled={calLoading}>
+              <option value="">Select a job…</option>
+              {calEvents.map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.summary}</option>
+              ))}
+              {manualEntries.map((m) => (
+                <option key={m.job_uuid} value={m.job_uuid}>{m.name}</option>
+              ))}
+              <option value="__other__">Other (enter manually)</option>
+            </select>
+
+            {pickerValue === "__other__" && (
+              <div className="row wrap" style={{ gap: 8, alignItems: "flex-end", marginTop: 8 }}>
+                <label className="col" style={{ gap: 4, flex: "1 1 200px" }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Job name</span>
+                  <input
+                    value={manualName}
+                    onChange={(e) => setManualName(e.target.value)}
+                    onBlur={confirmManualName}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); confirmManualName(); } }}
+                    placeholder="Customer / job name"
+                  />
+                </label>
+                <button type="button" className="btnPrimary" onClick={confirmManualName} disabled={!manualName.trim()}>
+                  Confirm
+                </button>
+              </div>
+            )}
+
+            {jobName && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+                Selected: <strong style={{ color: "var(--text)" }}>{jobName}</strong>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Attach to Bill of Lading (optional)</div>
             <select
               value={bolId}
               onChange={(e) => {
@@ -272,20 +388,17 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
                 setBolId(id);
                 const b = openBols.find((x) => x.bol_id === id);
                 if (b && b.job_name) setJobName(b.job_name);
+                if (b && b.job_uuid) setJobUuid(b.job_uuid);
               }}
             >
-              <option value="">None (attach later)</option>
+              <option value="">None</option>
               {openBols.map((b) => (
                 <option key={b.bol_id} value={b.bol_id}>{b.job_name || "Untitled"}{b.job_date ? " (" + b.job_date + ")" : ""}</option>
               ))}
             </select>
             <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
-              A PODS on file for a BOL is required before that BOL can be signed at origin.
+              Attaching is optional - the PODS is filed per driver, per trip.
             </div>
-          </div>
-          <div>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trip Start Date *</div>
-            <input type="date" value={tripDate} onChange={(e) => setTripDate(e.target.value)} />
           </div>
 
           <div>

@@ -202,9 +202,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [bolStatus, setBolStatus] = useState<string>("");
   const [bolRef, setBolRef] = useState<string>("");
   const [priorDone, setPriorDone] = useState<boolean>(false);
-  // Whether a PODS is on file for the attached BOL specifically (item: PODS
-  // attaches to the BOL and is required to sign it).
-  const [podsForBol, setPodsForBol] = useState<boolean>(false);
   // Whether the currently signed-in user has a PODS for this trip's job.
   // Drives the "As the driver, I've submitted my PODS" checkbox by the
   // per-diem row so a driver can see their own compliance at a glance
@@ -228,16 +225,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     (async () => {
       const bol = await fetchRemoteBol(tripJob);
       if (!cancelled) { setBolStatus(bol?.status || ""); setBolRef(bolRefOf(bol)); }
-      // PODS attached to THIS BOL (required before it can be signed).
-      const bid = (bol as any)?.bol_id || (bol as any)?.id || tripLink?.bol_id || "";
-      if (bid) {
-        try {
-          const pb = await apiFetch<any[]>(`/api/long-distance/prior-hours?bol_id=${encodeURIComponent(bid)}`);
-          if (!cancelled) setPodsForBol(Array.isArray(pb) && pb.length > 0);
-        } catch { if (!cancelled) setPodsForBol(false); }
-      } else if (!cancelled) {
-        setPodsForBol(false);
-      }
       try {
         const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(tripJob)}`);
         // Robust: only count statements that EXACTLY match the trip job, so a
@@ -326,6 +313,30 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setLoaded(false);
     setSaved(false);
     setBillReviewed(false);
+
+    // Safety net: force `loaded` true after 15 seconds even if the fetch is
+    // stuck. Previously a hung /api/job-report request could leave the tab
+    // on the "Loading…" placeholder indefinitely. The .finally() below is
+    // still the primary path; this timer just bails out of any edge case
+    // that would otherwise strand the crew on a spinner.
+    const bail = window.setTimeout(() => {
+      setLoaded((prev) => {
+        if (prev) return prev;
+        // Try the local draft as a last resort so the crew doesn't lose
+        // in-progress typing on a stall.
+        const draft = loadReportDraft(jobUuid);
+        if (draft) {
+          setData({
+            ...draft.data,
+            review_candidate: coerceReviewCandidate(draft.data.review_candidate),
+          });
+          setBillReviewed(draft.billReviewed);
+        }
+        skipNextDraftSaveRef.current = true;
+        return true;
+      });
+    }, 15000);
+
     apiFetch<ReportData & { id: number; employee_hours: EmployeeHoursEntry[] | null }>(`/api/job-report?job_uuid=${encodeURIComponent(jobUuid)}`)
       .then((r) => {
         setData({
@@ -375,6 +386,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         }
       })
       .finally(() => {
+        window.clearTimeout(bail);
         // Resolve draft vs. server. A local draft holds this device's most-recent
         // typing, so it wins ONLY when it was saved after the server's last
         // update. If the server report was updated on another device since this
@@ -399,6 +411,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         skipNextDraftSaveRef.current = true;
         setLoaded(true);
       });
+
+    return () => { window.clearTimeout(bail); };
   }, [jobUuid]);
 
   // Debounced draft autosave. Triggers on every change to `data` or
@@ -897,7 +911,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   }
 
   if (!loaded) {
-    return <div className="card small" style={{ color: "var(--muted)" }}>Loading…</div>;
+    return (
+      <div className="card" style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6 }}>
+        <div>Loading report…</div>
+        <div style={{ marginTop: 6 }}>
+          If this stays visible for more than a few seconds, refresh the app —
+          the fetch may have stalled.
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -966,11 +988,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       )}
 
       {/* ── Job data (employee hours + M1 equipment + personal vehicles) ──
-          Sits after the bill flow because employee hours are a parallel
-          record (sheet column for admin/payroll) - they don't feed the
-          bill calculation. Crew opens the tab to the auto-populated
-          bill above; this section captures the per-employee breakdown
-          on its own. */}
+          Employee hours here feed the Invoice Builder above (one auto-
+          populated labor line per billable employee at the default rate)
+          and land in the admin/payroll sheet column. */}
       {!driveOnly && (
       <div className="card">
         <div className="sectionTitle">Job data</div>
@@ -1290,8 +1310,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           />
           <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
             I have reviewed and confirmed the correctness of the auto-populated line items
-            in the Invoice Builder above (including any dumpster / recycling charges from the
-            sliders).
+            in the Invoice Builder above (labor lines from Employee Hours plus any
+            dumpster / recycling charges from the sliders).
           </span>
         </label>
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
@@ -1427,8 +1447,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 <div className="small" style={{ color: "var(--muted)" }}>
                   {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` (${bolRef})` : ""}
                 </div>
-                {/* PODS is attached to the BOL: surface its status here too. */}
-                <ChecklistItem done={podsForBol} label="Prior On-Duty on file for this BOL" hint={podsForBol ? "PODS attached to this BOL" : "Required before this BOL can be signed"} onGo={() => nav("/long-distance")} />
                 <ChecklistItem done={bolStatus === "origin_signed" || bolStatus === "delivered"} label="BOL signed at origin" hint="Shipper + carrier, before loading" onGo={() => nav("/long-distance")} />
                 <ChecklistItem done={bolStatus === "delivered"} label="BOL signed at destination" hint="Shipper + carrier, on delivery" onGo={() => nav("/long-distance")} />
                 {tripLink && <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>}

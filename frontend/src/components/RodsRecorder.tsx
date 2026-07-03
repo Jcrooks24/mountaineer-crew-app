@@ -53,7 +53,12 @@ export default function RodsRecorder({
 
   return (
     <div className="card" style={{ borderColor: "var(--brand)" }}>
-      <div className="sectionTitle">Record of Duty Status - driver</div>
+      {/* Title changes when the tile also hosts the "Actions - job labor"
+          slot on mixed drive+labor days - "Record of Duty Status" alone is
+          misleading in that case. */}
+      <div className="sectionTitle">
+        {actionsSlot ? "Timeline actions" : "Record of Duty Status - driver"}
+      </div>
 
       {actionsSlot && (
         <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
@@ -116,13 +121,19 @@ export default function RodsRecorder({
       <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>RODS - tap the duty status</div>
       <div className="row wrap" style={{ gap: 8 }}>
         {DUTY_STATUSES.map((s) => (
-          <button key={s} className="btnPrimary" onClick={() => tap(s)} disabled={cur === s} style={{ flex: "1 1 45%", opacity: cur === s ? 0.55 : 1 }}>
+          <button
+            key={s}
+            type="button"
+            className="btnPrimary"
+            onClick={() => tap(s)}
+            disabled={cur === s}
+            style={{ opacity: cur === s ? 0.55 : 1 }}
+          >
             {STATUS_LABELS[s]}
           </button>
         ))}
+        <button type="button" onClick={addNote}>+ Note</button>
       </div>
-
-      <button type="button" onClick={addNote} style={{ width: "100%", marginTop: 10 }}>+ Add note</button>
     </div>
   );
 }

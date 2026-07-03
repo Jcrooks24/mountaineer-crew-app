@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models.bol import DigitalBOL
-from app.db.models.long_distance import PriorOnDutyStatement
 from app.integrations.sheets_export import export_bol_to_sheets, run_export_in_background
 from app.integrations.drive_upload import upload_bol_pdf_to_drive
 from app.core.deps import get_current_user
@@ -253,14 +252,10 @@ def sign_bol(
         shipment = {}
 
     if payload.phase == "origin":
-        # A Prior On-Duty statement must be on file for this BOL before it can be
-        # signed at origin (the PODS attaches to the BOL, not the job).
-        pods = db.query(PriorOnDutyStatement).filter(PriorOnDutyStatement.bol_id == bol_id).first()
-        if pods is None:
-            raise HTTPException(
-                status_code=400,
-                detail="A Prior On-Duty statement must be on file for this BOL before it can be signed at origin.",
-            )
+        # PODS is tracked per-driver on the Report tab (see the "As the
+        # driver, I have submitted my PODS" checkbox). Origin signing here
+        # no longer requires a PODS on file for the BOL - the two flows are
+        # decoupled.
         row.origin_shipper_sig = payload.shipper_sig
         row.origin_carrier_sig = payload.carrier_sig
         row.origin_signed_at = ts

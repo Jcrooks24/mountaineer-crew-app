@@ -234,6 +234,34 @@ export function calEventToJobUuid(calId: string): string {
   ].join("-");
 }
 
+/** Deterministic UUID for a manually-typed job name on a given date -
+ * mirrors the Timeline tab's manualJobToJobUuid so a PODS / BOL / event
+ * logged against the same (name, date) pair lands on the same job_uuid.
+ * Normalization collapses whitespace and case to keep " The Smith Job "
+ * and "the smith job" on one UUID. */
+export function manualJobToJobUuid(name: string, date: string): string {
+  const normalized = (name || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return calEventToJobUuid(`manual:${date}:${normalized}`);
+}
+
+/** Fetch the manual jobs registered for a date across devices, so a name
+ * typed on the Timeline appears in the PODS / BOL job pickers too. */
+export async function fetchManualJobsForDate(date: string): Promise<{ job_uuid: string; name: string }[]> {
+  if (!navigator.onLine) return [];
+  try {
+    const token = getToken();
+    const res = await fetch(`${API}/api/jobs/manual?date=${encodeURIComponent(date)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const entries = json?.entries;
+    return Array.isArray(entries) ? entries : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Resolve a calendar event to its canonical job_uuid (server), falling back to
  * the deterministic local hash offline - same as the Timeline. */
 export async function resolveJobUuid(calId: string): Promise<string> {

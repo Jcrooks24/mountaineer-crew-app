@@ -1508,13 +1508,9 @@ export default function App() {
     }
   }
 
-  // -----------------------
-  // Materials summary - read from the offline-capable materialsStore cache,
-  // then fire a background sync + refetch.
-  // -----------------------
   // Drain offline-queued materials + warm the cache so the Invoice Builder
-  // opens with fresh data. No render — the visible summary now lives only
-  // in the Invoice Builder on the Report tab.
+  // opens with fresh data. No render — the visible summary lives only in
+  // the Invoice Builder on the Report tab.
   async function syncMaterialsInBackground(uuid: string) {
     const trimmed = uuid.trim();
     if (!trimmed) return;
@@ -1828,7 +1824,7 @@ export default function App() {
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
         </button>
-        {longDistance && (ldLabor.includes("loading") || ldLabor.includes("unloading")) && (
+        {longDistance && ldLabor.includes("loading") && (
           <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
             Inventory
           </button>

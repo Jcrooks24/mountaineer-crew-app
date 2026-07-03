@@ -84,7 +84,7 @@ const STATUS_LABEL: Record<string, string> = {
 // ─────────────────────────────────────────────────────────────────────────
 // Hub - choose an open BOL to continue, or start a new one (job selector).
 // ─────────────────────────────────────────────────────────────────────────
-export default function BillOfLadingForm({ onBack, onFilePods }: { onBack: () => void; onFilePods?: () => void }) {
+export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
   const [editing, setEditing] = useState<BOLDraft | null>(null);
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [loadingList, setLoadingList] = useState(true);
@@ -168,7 +168,7 @@ export default function BillOfLadingForm({ onBack, onFilePods }: { onBack: () =>
   }
 
   if (editing) {
-    return <BolEditor initialDraft={editing} onBack={() => { setManualName(""); setEditing(null); }} onFilePods={onFilePods} />;
+    return <BolEditor initialDraft={editing} onBack={() => { setManualName(""); setEditing(null); }} />;
   }
 
   return (
@@ -269,7 +269,7 @@ export default function BillOfLadingForm({ onBack, onFilePods }: { onBack: () =>
   );
 }
 
-function BolEditor({ initialDraft, onBack, onFilePods }: { initialDraft: BOLDraft; onBack: () => void; onFilePods?: () => void }) {
+function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: () => void }) {
   const { user } = useAuth();
   const nav = useNavigate();
 
@@ -752,25 +752,6 @@ function BolEditor({ initialDraft, onBack, onFilePods }: { initialDraft: BOLDraf
           <div className="sectionTitle">
             {draft.status === "origin_signed" ? "Destination Signing - upon delivery" : "Origin Signing - before loading"}
           </div>
-
-          {draft.status !== "origin_signed" && onFilePods && (
-            <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(93,214,194,0.08)", border: "1px solid var(--brand)" }}>
-              <div className="small" style={{ marginBottom: 8 }}>
-                A <strong>Prior On-Duty statement</strong> for this BOL is required before it can be signed at origin.
-              </div>
-              <button
-                type="button"
-                className="btnPrimary"
-                onClick={() => {
-                  try { localStorage.setItem("crew_pods_attach_bol_v1", JSON.stringify({ bol_id: draft.bol_id, job_name: draft.job_name })); } catch {}
-                  onFilePods();
-                }}
-                style={{ fontSize: 13 }}
-              >
-                File Prior On-Duty for this BOL
-              </button>
-            </div>
-          )}
 
           {draft.status === "origin_signed" ? (
             <>

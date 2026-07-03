@@ -162,7 +162,9 @@ export function rodsDriverNames(events: MinEvent[], fallbackDriver = ""): string
 }
 
 /** Duty changes for ONE driver, derived from the DUTY events. Editing an
- * event's time in the activity log edits the RODS. Begins off-duty at midnight. */
+ * event's time in the activity log edits the RODS. Begins off-duty at
+ * midnight. Within a single minute, the LAST tap wins - lets the crew fix
+ * a misclick without leaving a stale earlier entry stuck on the log. */
 export function changesForDriver(events: MinEvent[], driver: string, fallbackDriver = ""): DutyChange[] {
   const duty = events
     .filter((e) => {
@@ -173,10 +175,31 @@ export function changesForDriver(events: MinEvent[], driver: string, fallbackDri
     .map((e) => {
       const p = parseDutyNote(e.note || "");
       const d = new Date(e.timestamp);
-      return { time: `${pad(d.getHours())}:${pad(d.getMinutes())}`, status: p.status as DutyStatus, location: "", remarks: "" } as DutyChange;
+      return {
+        _ts: e.timestamp,
+        time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+        status: p.status as DutyStatus,
+        location: "",
+        remarks: "",
+      };
     })
-    .sort((a, b) => minutesOfDay(a.time) - minutesOfDay(b.time));
-  return [{ time: "00:00", status: "off_duty", location: "", remarks: "" }, ...duty];
+    // Sort by full timestamp so same-minute events keep their true
+    // chronological order regardless of input order.
+    .sort((a, b) => String(a._ts).localeCompare(String(b._ts)));
+
+  // Collapse consecutive entries that share HH:MM - the latest tap in a
+  // given minute is the truth (user corrected a misclick).
+  const collapsed: DutyChange[] = [];
+  for (const c of duty) {
+    const entry: DutyChange = { time: c.time, status: c.status, location: c.location, remarks: c.remarks };
+    if (collapsed.length > 0 && collapsed[collapsed.length - 1].time === entry.time) {
+      collapsed[collapsed.length - 1] = entry;
+    } else {
+      collapsed.push(entry);
+    }
+  }
+
+  return [{ time: "00:00", status: "off_duty", location: "", remarks: "" }, ...collapsed];
 }
 
 // ── Per-day persistence ───────────────────────────────────────────────────────
