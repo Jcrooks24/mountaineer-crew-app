@@ -1427,10 +1427,14 @@ function MonthScheduleView({
                         <div style={{ whiteSpace: "nowrap" }}>{u.email}</div>
                       </div>
                       {userTags.length > 0 && (
-                        // Tags flow within the email-driven column width -
-                        // as many per row as fit, wrapping to the next row
-                        // when they don't. Long tag names ellipsis with a
-                        // native title tooltip so the column stays tight.
+                        // Tags flow within the email-driven column width.
+                        // overflowWrap:anywhere + wordBreak:break-word let
+                        // each tag break at ANY character if necessary, so
+                        // the tag's min-content width no longer forces the
+                        // <th> wider - the browser's table auto-layout
+                        // otherwise sizes every column to fit the widest
+                        // unbreakable child on one line, and a nowrap tag
+                        // was winning that fight over the email.
                         <div
                           style={{
                             display: "flex", flexWrap: "wrap",
@@ -1447,10 +1451,9 @@ function MonthScheduleView({
                                 background: "var(--tag-bg, rgba(93,214,194,0.16))",
                                 color: "var(--text)",
                                 border: "1px solid var(--brand)",
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                maxWidth: "100%",
+                                overflowWrap: "anywhere",
+                                wordBreak: "break-word",
+                                lineHeight: 1.25,
                                 minWidth: 0,
                               }}
                             >
