@@ -66,7 +66,17 @@ export default function LongDistance() {
   }
 
   if (section === "prior") return <PriorOnDutyForm onBack={() => setSection("menu")} />;
-  if (section === "bol") return <BillOfLadingForm onBack={() => setSection("menu")} />;
+  if (section === "bol") {
+    // Optional bol_id lets Report-tab links land straight in the editor
+    // for a specific BOL instead of the chooser hub.
+    const wantBolId = params.get("bol_id") || "";
+    return (
+      <BillOfLadingForm
+        onBack={() => setSection("menu")}
+        openBolId={wantBolId || undefined}
+      />
+    );
+  }
 
   return (
     <div className="container">

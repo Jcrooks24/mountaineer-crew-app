@@ -1996,7 +1996,7 @@ export default function App() {
                   actionsSlot={
                     <>
                       <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-                        Log labor, materials, and line items only. Driving is recorded by the RODS above and the Long-distance documents on the Report tab.
+                        Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is recorded by the RODS above.
                       </div>
                       <div className="row wrap">{coreActions}</div>
                     </>
@@ -2011,7 +2011,7 @@ export default function App() {
                   <div className="sectionTitle">Actions</div>
                   {longDistance && (
                     <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-                      Log labor, materials, and line items only. Driving is handled by the RODS and Long-distance documents on the Report tab.
+                      Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is handled by the RODS on drive days.
                     </div>
                   )}
                   <div className="row wrap">{coreActions}{noteButton}</div>

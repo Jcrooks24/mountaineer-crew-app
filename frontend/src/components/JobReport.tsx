@@ -252,6 +252,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // Long-distance documents: PODS + BOL (with multi-day trip linking).
   const [bolStatus, setBolStatus] = useState<string>("");
   const [bolRef, setBolRef] = useState<string>("");
+  // Full bol_id of the currently-attached BOL. Kept alongside the display
+  // `bolRef` because the ChecklistItems now deep-link the crew straight
+  // into that specific BOL's editor - the truncated ref isn't usable.
+  const [attachedBolId, setAttachedBolId] = useState<string>("");
   const [priorDone, setPriorDone] = useState<boolean>(false);
   // Whether the currently signed-in user has a PODS for this trip's job.
   // Drives the "As the driver, I've submitted my PODS" checkbox by the
@@ -318,8 +322,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         // BOL is local-only and hasn't synced yet - fetchRemoteBol would
         // return null in that case and would otherwise wipe the attached
         // state right after the user picked a BOL.
-        if (bol && !respectDetach) { setBolStatus(bol.status || ""); setBolRef(bolRefOf(bol)); }
-        if (respectDetach) { setBolStatus(""); setBolRef(""); }
+        if (bol && !respectDetach) {
+          setBolStatus(bol.status || "");
+          setBolRef(bolRefOf(bol));
+          setAttachedBolId(bol.bol_id || bol.id || "");
+        }
+        if (respectDetach) { setBolStatus(""); setBolRef(""); setAttachedBolId(""); }
       }
       try {
         const prior = await apiFetch<any[]>(`/api/long-distance/prior-hours?job_uuid=${encodeURIComponent(tripJob)}`);
@@ -371,11 +379,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       // stays on the dropdown and the click appears to do nothing.
       setBolStatus(o.status || "draft");
       setBolRef(o.bol_id || "");
+      setAttachedBolId(o.bol_id || "");
     } else {
       saveTripLink(jobUuid, null);
       setTripLink(null);
       setBolStatus("");
       setBolRef("");
+      setAttachedBolId("");
     }
   }
   function detachOwnBol() {
@@ -386,6 +396,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setBolDetachedState(true);
     setBolStatus("");
     setBolRef("");
+    setAttachedBolId("");
   }
 
   const { settings: themeSettings } = useTheme();
@@ -1118,9 +1129,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       )}
 
       {/* ── Job data (employee hours + M1 equipment + personal vehicles) ──
-          Employee hours here feed the Invoice Builder above (one auto-
-          populated labor line per billable employee at the default rate)
-          and land in the admin/payroll sheet column. */}
+          Employee hours drive one auto-populated $80/hr labor line per
+          billable employee in the Invoice Builder above, and also land
+          in the admin/payroll sheet column. Personal vehicles can be
+          billed as crew transport ($100/vehicle/day) via the checkbox
+          below. */}
       {!driveOnly && (
       <div className="card">
         <div className="sectionTitle">Job data</div>
@@ -1584,8 +1597,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 <div className="small" style={{ color: "var(--muted)" }}>
                   {tripLink ? <>Attached trip BOL: <strong>{tripLink.label}</strong></> : <>This job's BOL</>}{bolRef ? ` (${bolRef})` : ""}
                 </div>
-                <ChecklistItem done={bolStatus === "origin_signed" || bolStatus === "delivered"} label="BOL signed at origin" hint="Shipper + carrier, before loading" onGo={() => nav("/long-distance?section=bol")} />
-                <ChecklistItem done={bolStatus === "delivered"} label="BOL signed at destination" hint="Shipper + carrier, on delivery" onGo={() => nav("/long-distance?section=bol")} />
+                <ChecklistItem
+                  done={bolStatus === "origin_signed" || bolStatus === "delivered"}
+                  label="BOL signed at origin"
+                  hint="Shipper + carrier, before loading"
+                  onGo={() => nav(`/long-distance?section=bol${attachedBolId ? `&bol_id=${encodeURIComponent(attachedBolId)}` : ""}`)}
+                />
+                <ChecklistItem
+                  done={bolStatus === "delivered"}
+                  label="BOL signed at destination"
+                  hint="Shipper + carrier, on delivery"
+                  onGo={() => nav(`/long-distance?section=bol${attachedBolId ? `&bol_id=${encodeURIComponent(attachedBolId)}` : ""}`)}
+                />
                 {tripLink ? (
                   <button type="button" onClick={() => linkTrip(null)} style={{ fontSize: 12, alignSelf: "flex-start" }}>Unlink this day from the trip BOL</button>
                 ) : (
@@ -1690,7 +1713,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           {/* Driver RODS sign-off (renders bare; self-hides when no driving). */}
           <RodsSignoff
             events={events}
-            bolLink={bolRef ? { ref: bolRef, onOpen: () => nav("/long-distance?section=bol") } : null}
+            bolLink={bolRef ? { ref: bolRef, onOpen: () => nav(`/long-distance?section=bol${attachedBolId ? `&bol_id=${encodeURIComponent(attachedBolId)}` : ""}`) } : null}
             podsDriverNames={podsDriverNames}
             onNeedPods={() => nav("/long-distance?section=prior")}
             tripJob={tripLink?.trip_job_uuid || jobUuid}

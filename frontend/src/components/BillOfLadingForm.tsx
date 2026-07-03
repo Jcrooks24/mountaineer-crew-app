@@ -86,11 +86,14 @@ const STATUS_LABEL: Record<string, string> = {
 // ─────────────────────────────────────────────────────────────────────────
 // Hub - choose an open BOL to continue, or start a new one (job selector).
 // ─────────────────────────────────────────────────────────────────────────
-export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
+export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => void; openBolId?: string }) {
   const [editing, setEditing] = useState<BOLDraft | null>(null);
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Guard so an auto-open only fires once per mount (a re-render triggered
+  // by state updates inside openExisting must not re-open the BOL).
+  const autoOpenedRef = useRef<boolean>(false);
 
   // New-job selector (mirrors the Timeline tab).
   const [selDate, setSelDate] = useState(todayLocal());
@@ -102,16 +105,28 @@ export default function BillOfLadingForm({ onBack }: { onBack: () => void }) {
   const [manualName, setManualName] = useState("");
 
   // Refresh the open-BOL list on mount and whenever we return from the editor.
+  // If the caller asked for a specific bol_id (deep link from Report tab),
+  // auto-open it once the list has that BOL.
   useEffect(() => {
     if (editing) return;
     let cancelled = false;
     (async () => {
       setLoadingList(true);
       const list = await listOpenBols();
-      if (!cancelled) { setOpenBols(list); setLoadingList(false); }
+      if (cancelled) return;
+      setOpenBols(list);
+      setLoadingList(false);
+      if (openBolId && !autoOpenedRef.current) {
+        const match = list.find((b) => b.bol_id === openBolId);
+        if (match) {
+          autoOpenedRef.current = true;
+          await openExisting(match);
+        }
+      }
     })();
     return () => { cancelled = true; };
-  }, [editing]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, openBolId]);
 
   // Load the day's calendar jobs when the date changes (and on mount).
   useEffect(() => {
