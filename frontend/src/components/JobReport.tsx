@@ -1179,6 +1179,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Hours, equipment, and vehicles - the data used to build the invoice line items.
         </div>
+        <InventoryCountsSummary jobUuid={jobUuid} />
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
@@ -2143,6 +2144,37 @@ function FullnessSteps({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Read-only actual-inventory counts on the Report tab. The crew logs items on
+// the Inventory tab; this just surfaces the derived furniture/box totals at
+// close-out (and points them to the Inventory tab when empty). Fetches once;
+// stays quiet on error so a network blip never blocks the report.
+function InventoryCountsSummary({ jobUuid }: { jobUuid: string }) {
+  const [counts, setCounts] = useState<{ furniture: number; boxes: number } | null>(null);
+  useEffect(() => {
+    if (!jobUuid) return;
+    let cancelled = false;
+    apiFetch<{ furniture_count: number; box_count: number }>(
+      `/api/job-inventory/${encodeURIComponent(jobUuid)}`,
+    )
+      .then((r) => { if (!cancelled) setCounts({ furniture: r.furniture_count, boxes: r.box_count }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobUuid]);
+  const total = counts ? counts.furniture + counts.boxes : 0;
+  return (
+    <div className="small" style={{ color: "var(--muted)", marginTop: 6, marginBottom: 4 }}>
+      Actual inventory:{" "}
+      {counts && total > 0 ? (
+        <span style={{ color: "var(--text)" }}>
+          <strong>{counts.furniture}</strong> furniture · <strong>{counts.boxes}</strong> boxes
+        </span>
+      ) : (
+        <>none logged yet — add it on the <strong>Inventory</strong> tab</>
+      )}
     </div>
   );
 }

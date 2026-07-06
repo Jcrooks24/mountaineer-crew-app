@@ -4,6 +4,7 @@ import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
 import BolInventoryTab from "./components/BolInventoryTab";
+import ActualInventory from "./components/ActualInventory";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
@@ -1824,11 +1825,9 @@ export default function App() {
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
         </button>
-        {longDistance && ldLabor.includes("loading") && (
-          <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
-            Inventory
-          </button>
-        )}
+        <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
+          Inventory
+        </button>
         <button
           className={"tab " + (tab === "report" ? "active" : "")}
           onClick={() => setTab("report")}
@@ -2464,10 +2463,15 @@ export default function App() {
         </>
       )}
 
-      {/* Inventory (LD+ load/unload days) */}
+      {/* Inventory: actual inventory (all jobs) + BOL packing inventory (LD load days) */}
       {tab === "inventory" && (
         jobUuid ? (
-          <BolInventoryTab jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+          <>
+            <ActualInventory jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+            {longDistance && ldLabor.includes("loading") && (
+              <BolInventoryTab jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+            )}
+          </>
         ) : (
           <div className="card">
             <div className="small" style={{ color: "var(--muted)" }}>

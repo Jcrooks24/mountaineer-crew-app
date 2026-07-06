@@ -26,6 +26,7 @@ import app.db.models.availability_unlock  # noqa: F401 - register availability_u
 import app.db.models.employee_tag  # noqa: F401 - register employee_tags + user_employee_tags
 import app.db.models.user_email_alias  # noqa: F401 - register user_email_aliases
 import app.db.models.bol  # noqa: F401 - register digital_bols table
+import app.db.models.job_inventory  # noqa: F401 - register job_inventory_items table
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -58,6 +59,7 @@ from app.routers.employee_tags import (
 )
 from app.routers.user_email_aliases import router as user_email_aliases_router
 from app.routers.bol import router as bol_router
+from app.routers.job_inventory import router as job_inventory_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -189,3 +191,4 @@ app.include_router(employee_tags_router)         # /api/admin/employee-tags
 app.include_router(employee_tags_users_router)   # /api/admin/users/{id}/employee-tags
 app.include_router(user_email_aliases_router)    # /api/admin/users/{id}/email-aliases
 app.include_router(bol_router)                   # /api/bol (Digital Bill of Lading)
+app.include_router(job_inventory_router)         # /api/job-inventory (actual inventory → counts)

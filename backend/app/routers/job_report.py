@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
 from app.db.models.event import Event
+from app.db.models.job_inventory import JobInventoryItem
 from app.db.models.job_report import JobReport
 from app.db.models.user import User
+from app.routers.job_inventory import counts_for
 from app.integrations.sheets_export import export_job_report_to_sheets, run_export_in_background
 from app.schemas.job_report import (
     EmployeeHoursEntry,
@@ -100,6 +102,20 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
     # so the API response is never blocked by Google.
     employees = _decode_employee_hours(report.employee_hours_json)
     truck_fullness = _decode_truck_fullness(report.truck_fullness_json)
+
+    # Derived furniture/box counts from the actual inventory logged on this job.
+    # Left blank (None) when no inventory rows exist, so the sheet cell reads
+    # empty rather than a misleading 0.
+    inv_items = (
+        db.query(JobInventoryItem)
+        .filter(JobInventoryItem.job_uuid == report.job_uuid)
+        .all()
+    )
+    if inv_items:
+        furniture_count, box_count = counts_for(inv_items)
+    else:
+        furniture_count = box_count = None
+
     payload = {
         "job_uuid": report.job_uuid,
         "job_name": _job_name_for(db, report.job_uuid),
@@ -117,6 +133,8 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "bill_personal_vehicles": bool(report.bill_personal_vehicles),
         "job_type_tags": _decode_job_type_tags(report.job_type_tags_json) or [],
         "truck_fullness": [t.model_dump() for t in truck_fullness] if truck_fullness else [],
+        "furniture_count": "" if furniture_count is None else furniture_count,
+        "box_count": "" if box_count is None else box_count,
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
         "updated_at": report.updated_at,

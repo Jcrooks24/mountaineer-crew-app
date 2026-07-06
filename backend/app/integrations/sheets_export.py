@@ -71,6 +71,12 @@ _estimate_export_in_flight: Set[str] = set()
 _estimate_export_rerun: Set[str] = set()
 _estimate_export_lock = threading.Lock()
 
+# Same coalescing for job-inventory exports (crew adds stream in as the
+# offline queue drains). Keyed by job_uuid.
+_job_inventory_export_in_flight: Set[str] = set()
+_job_inventory_export_rerun: Set[str] = set()
+_job_inventory_export_lock = threading.Lock()
+
 # Serialize note-cell updates per event_id so rapid edits on the same event
 # (or client retries) can't stack multiple in-memory googleapiclient instances
 # in the pool queue. Bounded so the dict can't grow forever as new event_ids
@@ -826,6 +832,7 @@ JOB_REPORT_HEADERS = [
     "has_crew_feedback", "crew_feedback",
     "employee_hours", "has_non_billable_hours", "per_diem_total",
     "job_type_tags", "truck_fullness",
+    "furniture_count", "box_count",
     "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
@@ -1006,6 +1013,9 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "per_diem_total": _per_diem_total(report),
         "job_type_tags": ", ".join(report.get("job_type_tags") or []),
         "truck_fullness": _format_truck_fullness(report.get("truck_fullness")),
+        # Derived from the actual inventory (blank when none collected).
+        "furniture_count": report.get("furniture_count", ""),
+        "box_count": report.get("box_count", ""),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,
@@ -1774,6 +1784,156 @@ def schedule_estimate_export(estimate_uuid: str) -> None:
             return
         _estimate_export_in_flight.add(estimate_uuid)
     _EXPORT_POOL.submit(_estimate_export_worker, estimate_uuid)
+
+
+# ── Job inventory (actual inventory → furniture + box counts) ─────────────────
+
+JOB_INVENTORY_HEADERS = [
+    "job_uuid", "job_name", "submitted_by",
+    "furniture_count", "box_count", "item_count",
+    "updated_at",
+]
+
+JOB_INVENTORY_ITEM_HEADERS = [
+    "job_uuid", "item_id", "kind", "item_name", "qty", "room", "notes",
+    "exported_at",
+]
+
+
+def export_job_inventory_to_sheets(db: Session, inv: Dict[str, Any]) -> int:
+    """Replace-style export: one summary row per job_uuid in JobInventory + one
+    row per item in JobInventoryItems. Any prior rows for this job are deleted
+    before the fresh set is written so re-saves overwrite in place."""
+    summary_tab = os.getenv("SHEETS_JOB_INVENTORY_TAB", "JobInventory").strip() or "JobInventory"
+    items_tab = os.getenv("SHEETS_JOB_INVENTORY_ITEMS_TAB", "JobInventoryItems").strip() or "JobInventoryItems"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    job_uuid = inv.get("job_uuid", "") or ""
+    if not job_uuid:
+        return 0
+
+    items = inv.get("items") or []
+    updated_at = _iso(inv.get("updated_at"))
+    furniture_count = sum((it.get("qty", 0) or 0) for it in items if not it.get("is_box"))
+    box_count = sum((it.get("qty", 0) or 0) for it in items if it.get("is_box"))
+
+    svc = _get_sheets_svc(db)
+
+    # Summary row (replace by job_uuid).
+    summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, JOB_INVENTORY_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, summary_tab, "job_uuid", job_uuid)
+    summary_row = {
+        "job_uuid": job_uuid,
+        "job_name": inv.get("job_name", "") or "",
+        "submitted_by": inv.get("submitted_by_name", "") or "",
+        "furniture_count": furniture_count,
+        "box_count": box_count,
+        "item_count": sum((it.get("qty", 0) or 0) for it in items),
+        "updated_at": updated_at,
+    }
+    _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, summary_headers)])
+
+    # Item rows (replace by job_uuid).
+    item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, JOB_INVENTORY_ITEM_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, items_tab, "job_uuid", job_uuid)
+    if items:
+        item_rows = [
+            _build_row({
+                "job_uuid": job_uuid,
+                "item_id": it.get("id"),
+                "kind": "Box" if it.get("is_box") else "Furniture",
+                "item_name": it.get("name", ""),
+                "qty": it.get("qty", 0) or 0,
+                "room": it.get("room", "") or "",
+                "notes": it.get("notes", "") or "",
+                "exported_at": updated_at,
+            }, item_headers)
+            for it in items
+        ]
+        _write_rows_top(svc, spreadsheet_id, items_tab, item_rows)
+
+    return 1 + len(items)
+
+
+def _build_job_inventory_payload(db: Session, job_uuid: str) -> Optional[Dict[str, Any]]:
+    from app.db.models.job_inventory import JobInventoryItem  # local import to avoid cycles
+
+    items = (
+        db.query(JobInventoryItem)
+        .filter(JobInventoryItem.job_uuid == job_uuid)
+        .order_by(JobInventoryItem.id.asc())
+        .all()
+    )
+    # Best-effort job name + latest submitter from the rows themselves.
+    job_name = _job_name_from_events(db, job_uuid)
+    submitted_by = items[-1].created_by_name if items else ""
+    updated_at = max((it.updated_at for it in items), default=None)
+    return {
+        "job_uuid": job_uuid,
+        "job_name": job_name,
+        "submitted_by_name": submitted_by,
+        "updated_at": updated_at,
+        "items": [
+            {
+                "id": it.id,
+                "name": it.name,
+                "qty": it.qty,
+                "is_box": bool(it.is_box),
+                "room": it.room,
+                "notes": it.notes,
+            }
+            for it in items
+        ],
+    }
+
+
+def _job_name_from_events(db: Session, job_uuid: str) -> str:
+    from app.db.models.event import Event  # local import to avoid cycles
+    row = (
+        db.query(Event.job_name)
+        .filter(Event.job_uuid == job_uuid, Event.job_name.isnot(None), Event.job_name != "")
+        .order_by(Event.timestamp.desc())
+        .first()
+    )
+    return row[0] if row and row[0] else ""
+
+
+def _job_inventory_export_worker(job_uuid: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_job_inventory_payload(db, job_uuid)
+            if payload is not None:
+                export_job_inventory_to_sheets(db, payload)
+        except Exception as exc:
+            print(f"[sheets] job-inventory export failed ({job_uuid}): {exc}")
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _job_inventory_export_lock:
+            if job_uuid in _job_inventory_export_rerun:
+                _job_inventory_export_rerun.discard(job_uuid)
+                continue
+            _job_inventory_export_in_flight.discard(job_uuid)
+            return
+
+
+def schedule_job_inventory_export(job_uuid: str) -> None:
+    """Coalesce repeated exports for the same job into one in-flight worker
+    with at most one pending rerun. The worker re-reads the DB when it runs so
+    the export always reflects the latest committed inventory."""
+    if not job_uuid:
+        return
+    with _job_inventory_export_lock:
+        if job_uuid in _job_inventory_export_in_flight:
+            _job_inventory_export_rerun.add(job_uuid)
+            return
+        _job_inventory_export_in_flight.add(job_uuid)
+    _EXPORT_POOL.submit(_job_inventory_export_worker, job_uuid)
 
 
 # ── Admin entry-status sweep ─────────────────────────────────────────────────
