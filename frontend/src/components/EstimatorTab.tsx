@@ -272,6 +272,10 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
 
   // Rooms that exist only in the UI (before their first item is added)
   const [pendingRooms, setPendingRooms] = useState<string[]>([]);
+  // Inline room-name entry - see note on subcategory entry below; window.prompt
+  // is unusable in a mobile standalone/PWA context.
+  const [addingRoom, setAddingRoom] = useState(false);
+  const [roomDraft, setRoomDraft] = useState("");
 
   useEffect(() => { setLocal(estimate); }, [estimate]);
 
@@ -560,11 +564,12 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     }));
   }
 
-  function addRoom() {
-    const name = prompt("Room name (e.g. Living Room, Kitchen, Garage):")?.trim();
+  function confirmRoom() {
+    const name = roomDraft.trim();
     if (!name) return;
-    if (rooms.includes(name)) return;
-    setPendingRooms((prev) => [...prev, name]);
+    if (!rooms.includes(name)) setPendingRooms((prev) => [...prev, name]);
+    setRoomDraft("");
+    setAddingRoom(false);
   }
 
   return (
@@ -716,8 +721,45 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
               Totals: {Math.round(totalWeight).toLocaleString()} lbs · {Math.round(totalCuft)} cu ft
             </div>
           </div>
-          <button type="button" className="btnPrimary" onClick={addRoom}>+ Add Room</button>
+          {!addingRoom && (
+            <button type="button" className="btnPrimary" onClick={() => { setRoomDraft(""); setAddingRoom(true); }}>+ Add Room</button>
+          )}
         </div>
+
+        {addingRoom && (
+          <div className="col" style={{ gap: 6, marginTop: 10 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>New room</span>
+            <div className="row" style={{ gap: 6 }}>
+              <input
+                autoFocus
+                value={roomDraft}
+                onChange={(e) => setRoomDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); confirmRoom(); }
+                  if (e.key === "Escape") { setAddingRoom(false); setRoomDraft(""); }
+                }}
+                placeholder="e.g. Living Room, Kitchen, Garage"
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btnPrimary"
+                onClick={confirmRoom}
+                disabled={!roomDraft.trim()}
+                style={{ padding: "6px 12px" }}
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAddingRoom(false); setRoomDraft(""); }}
+                style={{ padding: "6px 10px", color: "var(--muted)" }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {rooms.length === 0 ? (
           <div className="small" style={{ color: "var(--muted)", marginTop: 12 }}>
@@ -790,6 +832,11 @@ function RoomTile({
 }) {
   const [addingItem, setAddingItem] = useState(false);
   const [preSubcategory, setPreSubcategory] = useState<string | null>(null);
+  // Inline subcategory-name entry. Replaces window.prompt(), which mobile
+  // standalone/PWA browsers silently suppress (crew tapped "+ Subcategory"
+  // and nothing happened - no way to classify items on a phone).
+  const [addingSub, setAddingSub] = useState(false);
+  const [subDraft, setSubDraft] = useState("");
 
   const subcategories = useMemo<string[]>(() => {
     const set = new Set<string>();
@@ -807,10 +854,12 @@ function RoomTile({
   const roomWeight = items.reduce((s, i) => s + (i.weight_lbs || 0) * (i.qty || 0), 0);
   const roomCuft = items.reduce((s, i) => s + (i.cubic_ft || 0) * (i.qty || 0), 0);
 
-  function addSubcategory() {
-    const name = prompt(`Add subcategory to "${room}" (e.g. Going, Not Going, Pack, Don't Touch):`)?.trim();
+  function confirmSubcategory() {
+    const name = subDraft.trim();
     if (!name) return;
     setPreSubcategory(name);
+    setAddingSub(false);
+    setSubDraft("");
     setAddingItem(true);
   }
 
@@ -878,16 +927,52 @@ function RoomTile({
         >
           + Add item
         </button>
-        {!isUnassigned && (
+        {!isUnassigned && !addingSub && (
           <button
             type="button"
-            onClick={addSubcategory}
+            onClick={() => { setSubDraft(""); setAddingSub(true); }}
             style={{ fontSize: 12, padding: "6px 10px", flex: 1 }}
           >
             + Subcategory
           </button>
         )}
       </div>
+
+      {addingSub && (
+        <div className="col" style={{ gap: 6 }}>
+          <span className="small" style={{ color: "var(--muted)" }}>
+            New subcategory for "{room}"
+          </span>
+          <div className="row" style={{ gap: 6 }}>
+            <input
+              autoFocus
+              value={subDraft}
+              onChange={(e) => setSubDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); confirmSubcategory(); }
+                if (e.key === "Escape") { setAddingSub(false); setSubDraft(""); }
+              }}
+              placeholder="e.g. Going, Not Going, Pack, Don't Touch"
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              onClick={confirmSubcategory}
+              disabled={!subDraft.trim()}
+              style={{ fontSize: 12, padding: "6px 12px" }}
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAddingSub(false); setSubDraft(""); }}
+              style={{ fontSize: 12, padding: "6px 10px", color: "var(--muted)" }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {addingItem && (
         <AddItemDialog
@@ -1306,9 +1391,12 @@ function AddItemDialog({
           {/* Subcategory chips render before the Item input so they stay
               visible once the mobile keyboard opens (the Item input used to
               autoFocus, pushing the chips below the keyboard fold). */}
-          {knownSubcategories.length > 0 && (
-            <div className="col" style={{ gap: 4 }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Subcategory</span>
+          {/* Subcategory is always available here (not behind the advanced
+              toggle) so crew can classify items on mobile: tap an existing
+              chip, or type a new name. */}
+          <div className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Subcategory (optional)</span>
+            {knownSubcategories.length > 0 && (
               <div className="row wrap" style={{ gap: 6 }}>
                 {knownSubcategories.map((s) => (
                   <button
@@ -1330,8 +1418,19 @@ function AddItemDialog({
                   </button>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+            <input
+              list={knownSubcategories.length ? "subcategory-suggest" : undefined}
+              value={sub}
+              onChange={(e) => setSub(e.target.value)}
+              placeholder="e.g. Going, Not Going, Pack…"
+            />
+            {knownSubcategories.length > 0 && (
+              <datalist id="subcategory-suggest">
+                {knownSubcategories.map((s) => <option key={s} value={s} />)}
+              </datalist>
+            )}
+          </div>
 
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Item *</span>
@@ -1431,21 +1530,6 @@ function AddItemDialog({
                   <input value={cuft} onChange={(e) => setCuft(e.target.value)} placeholder="0" inputMode="decimal" />
                 </label>
               </div>
-
-              <label className="col" style={{ gap: 4 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Subcategory (optional)</span>
-                <input
-                  list={knownSubcategories.length ? "subcategory-suggest" : undefined}
-                  value={sub}
-                  onChange={(e) => setSub(e.target.value)}
-                  placeholder="e.g. Going, Not Going, Pack…"
-                />
-                {knownSubcategories.length > 0 && (
-                  <datalist id="subcategory-suggest">
-                    {knownSubcategories.map((s) => <option key={s} value={s} />)}
-                  </datalist>
-                )}
-              </label>
 
               <label className="col" style={{ gap: 4 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Notes (optional)</span>
