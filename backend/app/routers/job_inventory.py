@@ -18,6 +18,14 @@ from app.schemas.job_inventory import (
 
 router = APIRouter(prefix="/api/job-inventory", tags=["job-inventory"])
 
+VALID_PACK_TYPES = {"CP", "PBO", "NA"}
+
+
+def _normalize_pack_type(raw: str | None) -> str | None:
+    """Coerce a client pack-type to CP/PBO/NA, or None if unset/unrecognized."""
+    v = (raw or "").strip().upper()
+    return v if v in VALID_PACK_TYPES else None
+
 
 def _items_for(db: Session, job_uuid: str) -> list[JobInventoryItem]:
     return (
@@ -67,12 +75,19 @@ def add_item(
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name required")
+    is_box = bool(body.is_box)
+    # Pack type is a box-only classification; furniture never carries one.
+    # Boxes must be classified (CP/PBO/NA) - the client requires it too.
+    pack_type = _normalize_pack_type(body.pack_type) if is_box else None
+    if is_box and not pack_type:
+        raise HTTPException(status_code=400, detail="Pack type (CP, PBO, or NA) is required for boxes")
     now = datetime.now(timezone.utc)
     item = JobInventoryItem(
         job_uuid=job_uuid,
         name=name,
         qty=max(1, int(body.qty or 1)),
-        is_box=bool(body.is_box),
+        is_box=is_box,
+        pack_type=pack_type,
         room=(body.room or "").strip() or None,
         notes=(body.notes or "").strip() or None,
         created_by_id=current_user.id,
@@ -112,6 +127,11 @@ def update_item(
         item.qty = max(1, int(body.qty))
     if body.is_box is not None:
         item.is_box = bool(body.is_box)
+        # Furniture can't carry a pack type - clear it if a row flips off box.
+        if not item.is_box:
+            item.pack_type = None
+    if body.pack_type is not None:
+        item.pack_type = _normalize_pack_type(body.pack_type) if item.is_box else None
     if body.room is not None:
         item.room = body.room.strip() or None
     if body.notes is not None:

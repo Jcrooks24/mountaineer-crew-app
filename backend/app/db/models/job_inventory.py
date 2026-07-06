@@ -31,6 +31,10 @@ class JobInventoryItem(Base):
     # itemized individually, but each add still records a row with its qty.
     is_box = Column(Boolean, nullable=False, default=False)
 
+    # Pack type for boxes: "CP" (carrier packed), "PBO" (packed by owner), or
+    # "NA". Null for furniture rows. Required on the client when adding a box.
+    pack_type = Column(String, nullable=True)
+
     room = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
 

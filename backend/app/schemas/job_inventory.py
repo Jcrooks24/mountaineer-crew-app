@@ -10,6 +10,8 @@ class JobInventoryItemIn(BaseModel):
     name: str
     qty: int = 1
     is_box: bool = False
+    # "CP" | "PBO" | "NA" for boxes; None for furniture.
+    pack_type: Optional[str] = None
     room: Optional[str] = None
     notes: Optional[str] = None
 
@@ -18,6 +20,7 @@ class JobInventoryItemPatch(BaseModel):
     name: Optional[str] = None
     qty: Optional[int] = None
     is_box: Optional[bool] = None
+    pack_type: Optional[str] = None
     room: Optional[str] = None
     notes: Optional[str] = None
 
@@ -27,6 +30,7 @@ class JobInventoryItemOut(BaseModel):
     name: str
     qty: int
     is_box: bool
+    pack_type: Optional[str] = None
     room: Optional[str] = None
     notes: Optional[str] = None
 

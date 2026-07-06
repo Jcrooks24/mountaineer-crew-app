@@ -8,10 +8,15 @@
 
 import { apiFetch, ApiError } from "../api/client";
 
+// Box pack type: CP (carrier packed), PBO (packed by owner), NA. Null/"" for
+// furniture. Required on the client when adding a box.
+export type PackType = "CP" | "PBO" | "NA";
+
 export type InventoryItemPayload = {
   name: string;
   qty: number;
   is_box: boolean;
+  pack_type: PackType | null;
   room: string | null;
   notes: string | null;
 };
@@ -29,6 +34,7 @@ export type ServerItem = {
   name: string;
   qty: number;
   is_box: boolean;
+  pack_type: PackType | null;
   room: string | null;
   notes: string | null;
 };

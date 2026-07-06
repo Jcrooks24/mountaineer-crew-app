@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
 import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
-import { isBoxItem } from "../lib/inventory";
 import { BetaTag } from "./BetaTag";
 import {
   drain,
@@ -10,6 +9,7 @@ import {
   pendingFor,
   pruneStale,
   type InventoryItemPayload,
+  type PackType,
   type QueuedAdd,
   type ServerItem,
 } from "../lib/jobInventoryQueue";
@@ -18,7 +18,17 @@ import {
 // optimistic temp row (negative id) still queued for POST.
 type Row = ServerItem & { pending?: boolean };
 
-const CATALOG_NAMES = FURNITURE_CATALOG.map((f) => f.name);
+// Two separate search lists: furniture types for the item box, box types for
+// the box box. (The old single field + "this is a box" checkbox was replaced
+// by two dedicated search boxes.)
+const FURNITURE_NAMES = FURNITURE_CATALOG.filter((f) => f.category !== "Boxes").map((f) => f.name);
+const BOX_NAMES = FURNITURE_CATALOG.filter((f) => f.category === "Boxes").map((f) => f.name);
+
+const PACK_TYPES: { value: PackType; label: string }[] = [
+  { value: "CP", label: "CP" },
+  { value: "PBO", label: "PBO" },
+  { value: "NA", label: "N/A" },
+];
 
 function newTempId(): number {
   return -(Date.now() * 1000 + Math.floor(Math.random() * 1000));
@@ -43,12 +53,16 @@ export default function ActualInventory({
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Add-form state
-  const [name, setName] = useState("");
-  const [qty, setQty] = useState(1);
-  const [isBox, setIsBox] = useState(false);
-  const [room, setRoom] = useState("");
-  const boxTouchedRef = useRef(false); // did the crew manually toggle the box flag?
+  // Furniture add-form state.
+  const [fName, setFName] = useState("");
+  const [fQty, setFQty] = useState(1);
+  const [fRoom, setFRoom] = useState("");
+
+  // Box add-form state. pack type ("" until chosen) is required to add a box.
+  const [bName, setBName] = useState("");
+  const [bQty, setBQty] = useState(1);
+  const [bRoom, setBRoom] = useState("");
+  const [bPack, setBPack] = useState<PackType | "">("");
 
   // Merge a pending queue op into the rows as a temp row.
   function pendingToRow(op: QueuedAdd): Row {
@@ -57,6 +71,7 @@ export default function ActualInventory({
       name: op.payload.name,
       qty: op.payload.qty,
       is_box: op.payload.is_box,
+      pack_type: op.payload.pack_type,
       room: op.payload.room,
       notes: op.payload.notes,
       pending: true,
@@ -113,12 +128,6 @@ export default function ActualInventory({
     );
   }
 
-  // Auto-detect box vs furniture from the item name until the crew overrides it.
-  useEffect(() => {
-    if (boxTouchedRef.current) return;
-    setIsBox(isBoxItem(name));
-  }, [name]);
-
   const counts = useMemo(() => {
     let furniture = 0;
     let boxes = 0;
@@ -129,41 +138,63 @@ export default function ActualInventory({
     return { furniture, boxes };
   }, [rows]);
 
-  function resetForm() {
-    setName("");
-    setQty(1);
-    setIsBox(false);
-    setRoom("");
-    boxTouchedRef.current = false;
+  // Optimistic add: show immediately, queue for durability, fire in background.
+  function queueAdd(payload: InventoryItemPayload) {
+    const op: QueuedAdd = {
+      id: newOpId(),
+      tempId: newTempId(),
+      jobUuid,
+      payload,
+      createdAt: new Date().toISOString(),
+    };
+    setRows((prev) => [...prev, pendingToRow(op)]);
+    enqueue(op);
+    void drainQueue();
   }
 
-  function addItem() {
-    const trimmed = name.trim();
+  function addFurniture() {
+    const trimmed = fName.trim();
     if (!trimmed) {
       setErr("Enter an item name.");
       return;
     }
     setErr(null);
-    const payload: InventoryItemPayload = {
+    queueAdd({
       name: trimmed,
-      qty: Math.max(1, qty),
-      is_box: isBox,
-      room: room.trim() || null,
+      qty: Math.max(1, fQty),
+      is_box: false,
+      pack_type: null,
+      room: fRoom.trim() || null,
       notes: null,
-    };
-    const tempId = newTempId();
-    const op: QueuedAdd = {
-      id: newOpId(),
-      tempId,
-      jobUuid,
-      payload,
-      createdAt: new Date().toISOString(),
-    };
-    // Optimistic: show immediately, queue for durability, fire in background.
-    setRows((prev) => [...prev, pendingToRow(op)]);
-    enqueue(op);
-    resetForm();
-    void drainQueue();
+    });
+    setFName("");
+    setFQty(1);
+    setFRoom("");
+  }
+
+  function addBox() {
+    const trimmed = bName.trim();
+    if (!trimmed) {
+      setErr("Enter a box type.");
+      return;
+    }
+    if (!bPack) {
+      setErr("Choose CP, PBO, or N/A before adding a box.");
+      return;
+    }
+    setErr(null);
+    queueAdd({
+      name: trimmed,
+      qty: Math.max(1, bQty),
+      is_box: true,
+      pack_type: bPack,
+      room: bRoom.trim() || null,
+      notes: null,
+    });
+    setBName("");
+    setBQty(1);
+    setBRoom("");
+    setBPack("");
   }
 
   async function changeQty(row: Row, delta: number) {
@@ -221,57 +252,100 @@ export default function ActualInventory({
         <CountTile label="Boxes" value={counts.boxes} />
       </div>
 
-      {/* Add form */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+      {/* Add furniture - dedicated item search box. */}
+      <div style={addSectionStyle}>
+        <div style={addTitleStyle}>Add furniture</div>
         <input
-          list="job-inventory-catalog"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
+          list="job-inventory-furniture"
+          value={fName}
+          onChange={(e) => setFName(e.target.value)}
           placeholder="Item (start typing to search)"
           style={inputStyle}
         />
-        <datalist id="job-inventory-catalog">
-          {CATALOG_NAMES.map((n) => (
-            <option key={n} value={n} />
-          ))}
+        <datalist id="job-inventory-furniture">
+          {FURNITURE_NAMES.map((n) => <option key={n} value={n} />)}
         </datalist>
         <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div className="row" style={{ gap: 8, alignItems: "center" }}>
-            <button type="button" onClick={() => setQty((q) => Math.max(1, q - 1))} style={stepBtn} aria-label="Decrease quantity">−</button>
-            <span style={{ fontSize: 20, fontWeight: 700, minWidth: 28, textAlign: "center" }}>{qty}</span>
-            <button type="button" onClick={() => setQty((q) => q + 1)} style={stepBtn} aria-label="Increase quantity">+</button>
+            <button type="button" onClick={() => setFQty((q) => Math.max(1, q - 1))} style={stepBtn} aria-label="Decrease quantity">−</button>
+            <span style={qtyStyle}>{fQty}</span>
+            <button type="button" onClick={() => setFQty((q) => q + 1)} style={stepBtn} aria-label="Increase quantity">+</button>
           </div>
-          <label className="row" style={{ gap: 6, alignItems: "center", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={isBox}
-              onChange={(e) => { boxTouchedRef.current = true; setIsBox(e.target.checked); }}
-              style={{ accentColor: "var(--brand)", width: 16, height: 16 }}
-            />
-            <span className="small">This is a box</span>
-          </label>
           <input
-            value={room}
-            onChange={(e) => setRoom(e.target.value)}
+            value={fRoom}
+            onChange={(e) => setFRoom(e.target.value)}
             placeholder="Room (optional)"
             style={{ ...inputStyle, flex: "1 1 120px", minWidth: 100 }}
           />
         </div>
+        <button type="button" onClick={addFurniture} style={addBtnStyle}>Add item</button>
+      </div>
+
+      {/* Add box - dedicated box search box + required pack type (CP/PBO/NA). */}
+      <div style={addSectionStyle}>
+        <div style={addTitleStyle}>Add box</div>
+        <input
+          list="job-inventory-boxes"
+          value={bName}
+          onChange={(e) => setBName(e.target.value)}
+          placeholder="Box type — Small, Medium, Large, Dish pack…"
+          style={inputStyle}
+        />
+        <datalist id="job-inventory-boxes">
+          {BOX_NAMES.map((n) => <option key={n} value={n} />)}
+        </datalist>
+        <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="row" style={{ gap: 8, alignItems: "center" }}>
+            <button type="button" onClick={() => setBQty((q) => Math.max(1, q - 1))} style={stepBtn} aria-label="Decrease quantity">−</button>
+            <span style={qtyStyle}>{bQty}</span>
+            <button type="button" onClick={() => setBQty((q) => q + 1)} style={stepBtn} aria-label="Increase quantity">+</button>
+          </div>
+          <input
+            value={bRoom}
+            onChange={(e) => setBRoom(e.target.value)}
+            placeholder="Room (optional)"
+            style={{ ...inputStyle, flex: "1 1 120px", minWidth: 100 }}
+          />
+        </div>
+
+        {/* Pack type is required to add a box. */}
+        <div className="small" style={{ fontWeight: 700, marginTop: 2 }}>Packed by *</div>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          {PACK_TYPES.map((pt) => {
+            const active = bPack === pt.value;
+            return (
+              <button
+                key={pt.value}
+                type="button"
+                onClick={() => setBPack(active ? "" : pt.value)}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: 999,
+                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  color: active ? "var(--brand)" : "var(--text)",
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 14,
+                  cursor: "pointer",
+                }}
+              >
+                {pt.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+          <strong>CP</strong> = Carrier Packed (we packed the box). <strong>PBO</strong> = Packed By Owner
+          (the customer packed it themselves). Use <strong>N/A</strong> if it doesn't apply.
+        </div>
+
         <button
           type="button"
-          onClick={addItem}
-          style={{
-            padding: "11px 14px",
-            borderRadius: 10,
-            border: "none",
-            background: "var(--brand)",
-            color: "#00120e",
-            fontWeight: 700,
-            fontSize: 14,
-            cursor: "pointer",
-          }}
+          onClick={addBox}
+          disabled={!bPack}
+          style={{ ...addBtnStyle, opacity: bPack ? 1 : 0.5, cursor: bPack ? "pointer" : "not-allowed" }}
         >
-          Add item
+          Add box
         </button>
       </div>
 
@@ -341,7 +415,7 @@ function ItemGroup({
           <div style={{ minWidth: 0, flex: "1 1 auto" }}>
             <div style={{ fontWeight: 600, fontSize: 14 }}>{r.name}</div>
             <div className="small" style={{ color: "var(--muted)" }}>
-              {r.room ? r.room : ""}{r.pending ? (r.room ? " · " : "") + "Syncing…" : ""}
+              {[r.pack_type, r.room, r.pending ? "Syncing…" : null].filter(Boolean).join(" · ")}
             </div>
           </div>
           <div className="row" style={{ gap: 6, alignItems: "center", flex: "0 0 auto" }}>
@@ -365,6 +439,40 @@ const inputStyle: React.CSSProperties = {
   color: "var(--text)",
   fontSize: 14,
   boxSizing: "border-box",
+};
+
+const addSectionStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  marginBottom: 14,
+  padding: 12,
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  background: "rgba(255,255,255,0.02)",
+};
+
+const addTitleStyle: React.CSSProperties = {
+  fontWeight: 700,
+  fontSize: 13,
+};
+
+const qtyStyle: React.CSSProperties = {
+  fontSize: 20,
+  fontWeight: 700,
+  minWidth: 28,
+  textAlign: "center",
+};
+
+const addBtnStyle: React.CSSProperties = {
+  padding: "11px 14px",
+  borderRadius: 10,
+  border: "none",
+  background: "var(--brand)",
+  color: "#00120e",
+  fontWeight: 700,
+  fontSize: 14,
+  cursor: "pointer",
 };
 
 const stepBtn: React.CSSProperties = {

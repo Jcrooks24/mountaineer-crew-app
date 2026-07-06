@@ -1860,7 +1860,7 @@ JOB_INVENTORY_HEADERS = [
 ]
 
 JOB_INVENTORY_ITEM_HEADERS = [
-    "job_uuid", "item_id", "kind", "item_name", "qty", "room", "notes",
+    "job_uuid", "item_id", "kind", "item_name", "qty", "pack_type", "room", "notes",
     "exported_at",
 ]
 
@@ -1909,6 +1909,7 @@ def export_job_inventory_to_sheets(db: Session, inv: Dict[str, Any]) -> int:
                 "kind": "Box" if it.get("is_box") else "Furniture",
                 "item_name": it.get("name", ""),
                 "qty": it.get("qty", 0) or 0,
+                "pack_type": it.get("pack_type", "") or "",
                 "room": it.get("room", "") or "",
                 "notes": it.get("notes", "") or "",
                 "exported_at": updated_at,
@@ -1944,6 +1945,7 @@ def _build_job_inventory_payload(db: Session, job_uuid: str) -> Optional[Dict[st
                 "name": it.name,
                 "qty": it.qty,
                 "is_box": bool(it.is_box),
+                "pack_type": it.pack_type,
                 "room": it.room,
                 "notes": it.notes,
             }
