@@ -83,6 +83,11 @@ class EstimateUpdate(BaseModel):
     destination_access_notes: Optional[str] = None
     special_items_notes: Optional[str] = None
     general_notes: Optional[str] = None
+    estimated_hours: Optional[float] = None
+    # Bind (or, with "" / explicit clear, unbind) this estimate to a job. The
+    # sentinel below distinguishes "field absent" (leave as-is) from an
+    # explicit unlink - see the router.
+    job_uuid: Optional[str] = None
 
 
 class EstimateResponse(BaseModel):
@@ -100,6 +105,8 @@ class EstimateResponse(BaseModel):
     destination_access_notes: Optional[str]
     special_items_notes: Optional[str]
     general_notes: Optional[str]
+    estimated_hours: Optional[float] = None
+    job_uuid: Optional[str] = None
     estimated_weight_lbs: float
     estimated_cubic_ft: float
     created_at: datetime
@@ -108,3 +115,31 @@ class EstimateResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class EstimateItemSummary(BaseModel):
+    """Crew-safe item view (no weight/volume pricing detail needed for overage)."""
+    name: str
+    qty: int
+    room: Optional[str] = None
+    subcategory: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EstimateByJobResponse(BaseModel):
+    """Crew-safe projection of the estimate linked to a job. Deliberately omits
+    customer PII (name/email/phone) and addresses - only what the crew needs for
+    the overage conversation: estimated hours, access/special notes, and the
+    estimated item list to compare against the actual inventory."""
+    job_uuid: str
+    estimate_uuid: str
+    estimated_hours: Optional[float] = None
+    origin_access_notes: Optional[str] = None
+    destination_access_notes: Optional[str] = None
+    special_items_notes: Optional[str] = None
+    general_notes: Optional[str] = None
+    estimated_weight_lbs: float
+    estimated_cubic_ft: float
+    items: List[EstimateItemSummary] = []

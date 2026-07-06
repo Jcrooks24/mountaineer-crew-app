@@ -36,6 +36,17 @@ class Estimate(Base):
     special_items_notes = Column(Text, nullable=True)  # pianos, safes, art
     general_notes = Column(Text, nullable=True)
 
+    # Estimated crew-hours for the move (admin-entered). The estimated side of
+    # the Phase 4 est-vs-actual hours comparison. Nullable - blank until set.
+    estimated_hours = Column(Float, nullable=True)
+
+    # Link to the real job this estimate becomes: the canonical job_uuid the
+    # crew uses (bound via the calendar job picker / resolveJobUuid). Lets the
+    # crew app fetch this estimate's inventory + access notes for a job
+    # (GET /api/estimates/by-job/{job_uuid}) - the basis for the Phase 5
+    # overage comparison. Nullable + indexed; unlinked until an admin binds it.
+    job_uuid = Column(String, nullable=True, index=True)
+
     # Rolled-up totals (recomputed on item add/remove)
     estimated_weight_lbs = Column(Float, nullable=False, default=0)
     estimated_cubic_ft = Column(Float, nullable=False, default=0)
