@@ -213,6 +213,26 @@ function clearReportDraft(uuid: string) {
   } catch {}
 }
 
+// A draft saved by an older app version omits fields added since (e.g.
+// job_type_tags, truck_fullness, overage_note). Spreading such a draft leaves
+// those keys undefined, which crashes the render the first time we call
+// `.includes`/`.filter`/`.map` on them ("Cannot read properties of undefined").
+// Backfill every non-primitive/newer field to its blank default on load so a
+// stale draft always hydrates into a complete, render-safe ReportData.
+function normalizeDraftData(d: ReportData): ReportData {
+  return {
+    ...d,
+    review_candidate: coerceReviewCandidate(d.review_candidate),
+    out_of_town: !!d.out_of_town,
+    hours_mismatch_reason: d.hours_mismatch_reason ?? "",
+    crew_feedback: d.crew_feedback ?? "",
+    overage_note: d.overage_note ?? "",
+    job_type_tags: Array.isArray(d.job_type_tags) ? d.job_type_tags : [],
+    truck_fullness: Array.isArray(d.truck_fullness) ? d.truck_fullness : [],
+    employee_hours: Array.isArray(d.employee_hours) ? d.employee_hours : [],
+  };
+}
+
 type Props = {
   jobUuid: string;
   jobName: string;
@@ -479,10 +499,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         // in-progress typing on a stall.
         const draft = loadReportDraft(jobUuid);
         if (draft) {
-          setData({
-            ...draft.data,
-            review_candidate: coerceReviewCandidate(draft.data.review_candidate),
-          });
+          setData(normalizeDraftData(draft.data));
           setBillReviewed(draft.billReviewed);
         }
         skipNextDraftSaveRef.current = true;
@@ -557,10 +574,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         const serverUpdated = serverUpdatedAtRef.current;
         const draftWins = !!draft && (!serverUpdated || String(draft.savedAt || "") >= serverUpdated);
         if (draftWins && draft) {
-          setData({
-            ...draft.data,
-            review_candidate: coerceReviewCandidate(draft.data.review_candidate),
-          });
+          setData(normalizeDraftData(draft.data));
           setBillReviewed(draft.billReviewed);
           setDraftStatus("saved");
         } else {
