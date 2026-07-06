@@ -187,6 +187,11 @@ type ServerPhoto = {
   mime_type: string;
 };
 
+// One entry in the pending photo batch (not yet saved). Crew can queue several
+// - multi-selected from the library and/or taken one at a time - and add a
+// per-photo note before submitting the whole batch.
+type PendingPhoto = { id: string; file: File; caption: string };
+
 // `<input type="time">` round-tripping. The element's value is "HH:mm" in
 // the user's local time. We keep the event's existing date intact and only
 // rewrite hours/minutes - crew typically just need to nudge minutes within
@@ -425,8 +430,12 @@ export default function App() {
   const [photos, setPhotos] = useState<StoredPhoto[]>([]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string>("");
-  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
-  const [pendingCaption, setPendingCaption] = useState<string>("");
+  // Pending batch: crew queue several photos (library multi-select and/or one
+  // capture at a time), each with an optional note, then submit them together.
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+  // Saved-gallery note editor: id of the photo whose note is open + its draft.
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState<string>("");
 
   const [sendingType, setSendingType] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -1375,50 +1384,48 @@ export default function App() {
     }
   }
 
-  function onPickPhotoFile(file: File | null) {
-    if (!file) return;
+  // Append one or more picked/taken files to the pending batch. Called by both
+  // the "Add from Library" (multiple) and "Take Photo" (capture) inputs, so a
+  // crew member can accumulate several shots before submitting.
+  function onAddPhotoFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
     if (!jobUuid.trim()) { setPhotoError("Select a job first"); return; }
     setPhotoError("");
-    setPendingPhotoFile(file);
-    setPendingCaption("");
+    const additions: PendingPhoto[] = Array.from(files).map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      caption: "",
+    }));
+    setPendingPhotos((prev) => [...prev, ...additions]);
   }
 
-  async function onSavePendingPhoto() {
-    if (!pendingPhotoFile || !jobUuid.trim()) return;
-    setPhotoBusy(true);
-    setPhotoError("");
+  function setPendingCaptionFor(id: string, caption: string) {
+    setPendingPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, caption } : p)));
+  }
 
-    // Capture before clearing state
-    const fileRef = pendingPhotoFile;
-    const photoId = crypto.randomUUID();
-    const caption = pendingCaption.trim();
+  function removePendingPhoto(id: string) {
+    setPendingPhotos((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  // Save one photo: store locally first (offline-safe), then attempt the Drive
+  // upload. Drive failures leave the photo queued as "failed"/"pending" for the
+  // Retry button - they never lose the local copy.
+  async function uploadOnePhoto(photoId: string, file: File, caption: string) {
     const stored: StoredPhoto = {
       id: photoId,
       job_uuid: jobUuid.trim(),
       created_at: new Date().toISOString(),
-      mime: fileRef.type || "image/jpeg",
+      mime: file.type || "image/jpeg",
       caption,
-      blob: fileRef,
+      blob: file,
       drive_status: "pending",
     };
+    await addPhoto(stored);
 
-    try {
-      await addPhoto(stored);
-      setPendingPhotoFile(null);
-      setPendingCaption("");
-      await refreshPhotos();
-      setStatus("Photo saved - uploading to Drive…");
-    } catch (e: any) {
-      setPhotoError(e?.message ?? "Photo save failed");
-      setPhotoBusy(false);
-      return;
-    }
-
-    // Upload to Drive (non-blocking after local save)
     try {
       const form = new FormData();
-      const resized = await resizeImage(fileRef);
-      form.append("file", resized, (fileRef.name || "photo.jpg").replace(/.[^.]+$/, ".jpg"));
+      const resized = await resizeImage(file);
+      form.append("file", resized, (file.name || "photo.jpg").replace(/.[^.]+$/, ".jpg"));
       form.append("photo_id", photoId);
       form.append("job_uuid", jobUuid.trim());
       form.append("job_name", jobName);
@@ -1434,13 +1441,8 @@ export default function App() {
       const { error, body } = await readPhotoUploadResponse(res);
       if (!error && body?.drive_url) {
         await updatePhoto(photoId, { drive_status: "uploaded", drive_url: body.drive_url });
-        await refreshPhotos();
-        setStatus("Photo saved to Drive");
       } else {
-        const errMsg = error ?? "Drive upload failed";
-        await updatePhoto(photoId, { drive_status: "failed", drive_error: errMsg });
-        await refreshPhotos();
-        setPhotoError(errMsg);
+        await updatePhoto(photoId, { drive_status: "failed", drive_error: error ?? "Drive upload failed" });
       }
     } catch (uploadErr: any) {
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
@@ -1448,11 +1450,63 @@ export default function App() {
         ? "Offline - photo will retry when you're back online"
         : (uploadErr?.message ?? "Network error - tap Retry");
       await updatePhoto(photoId, { drive_status: "failed", drive_error: msg });
-      await refreshPhotos();
-      setPhotoError(msg);
+    }
+  }
+
+  async function onSaveAllPending() {
+    if (pendingPhotos.length === 0 || !jobUuid.trim()) return;
+    setPhotoBusy(true);
+    setPhotoError("");
+
+    const batch = pendingPhotos;
+    let saved = 0;
+    let lastErr = "";
+    // Sequential: keeps peak memory and server load bounded, and preserves the
+    // offline-first "local save always succeeds" guarantee per photo.
+    for (const p of batch) {
+      try {
+        await uploadOnePhoto(p.id, p.file, p.caption.trim());
+        saved++;
+      } catch (e: any) {
+        lastErr = e?.message ?? "Photo save failed";
+      }
     }
 
+    setPendingPhotos([]);
+    await refreshPhotos();
+    if (lastErr) setPhotoError(lastErr);
+    setStatus(saved === 1 ? "Photo saved" : `${saved} photos saved`);
     setPhotoBusy(false);
+  }
+
+  // Add/edit a note on an already-saved photo (from the Saved gallery). Updates
+  // the local copy when present and syncs to the server so the note lands in
+  // the DB and on the Drive file. Offline: the local caption is saved and the
+  // eventual upload/retry carries it; server-only photos need connectivity.
+  async function onSaveNote(id: string, caption: string, isLocal: boolean) {
+    setPhotoBusy(true);
+    setPhotoError("");
+    try {
+      if (isLocal) await updatePhoto(id, { caption });
+      try {
+        await apiFetch(`/api/photos/caption`, {
+          method: "POST",
+          body: JSON.stringify({ photo_id: id, caption }),
+        });
+      } catch {
+        // Offline or not-yet-uploaded: local caption is saved above and will
+        // ride along on the next upload/retry. Non-fatal.
+      }
+      await refreshPhotos();
+      await fetchServerPhotos(jobUuid.trim());
+      setEditingNoteId(null);
+      setNoteDraft("");
+      setStatus("Note saved");
+    } catch (e: any) {
+      setPhotoError(e?.message ?? "Could not save note");
+    } finally {
+      setPhotoBusy(false);
+    }
   }
 
   async function onRetryPhotoUpload(photo: StoredPhoto) {
@@ -2317,62 +2371,84 @@ export default function App() {
       {/* Photos */}
       {tab === "photos" && (
         <>
-          {/* Pending photo - caption + save */}
-          {pendingPhotoFile ? (
-            <div className="card">
-              <div className="sectionTitle">Add Photo</div>
-              <img
-                src={URL.createObjectURL(pendingPhotoFile)}
-                alt="preview"
-                style={{ width: "100%", borderRadius: 8, marginBottom: 10 }}
-              />
-              <div className="col" style={{ gap: 8 }}>
-                <div className="label">Note (optional)</div>
-                <textarea
-                  value={pendingCaption}
-                  onChange={(e) => setPendingCaption(e.target.value)}
-                  placeholder={ht.photoCaptionPlaceholder}
-                  rows={2}
-                  autoFocus
-                />
-                <div className="row wrap" style={{ gap: 8 }}>
-                  <button className="btnPrimary" onClick={onSavePendingPhoto} disabled={photoBusy}>
-                    {photoBusy ? "Saving…" : "Save Photo"}
-                  </button>
-                  <button onClick={() => { setPendingPhotoFile(null); setPendingCaption(""); }}>
-                    Cancel
-                  </button>
-                </div>
+          {/* Capture: take one at a time and/or multi-select from the library,
+              accumulating a batch before submitting. */}
+          <div className="card">
+            <div className="sectionTitle">Photos</div>
+            {ht.photosHint && (
+              <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 2 }}>
+                {ht.photosHint}
               </div>
+            )}
+            <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+              Take several photos (each adds to the batch) or pick multiple from your library, then save them together. Add a note per photo before or after saving.
             </div>
-          ) : (
+            <div className="row wrap" style={{ marginTop: 10, gap: 8 }}>
+              <label className="btnPrimary" style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)" }}>
+                {photoBusy ? "Working…" : "Take Photo"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  style={{ display: "none" }}
+                  disabled={photoBusy}
+                  onChange={(e) => { onAddPhotoFiles(e.target.files); e.currentTarget.value = ""; }}
+                />
+              </label>
+              <label style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)" }}>
+                Add from Library
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  style={{ display: "none" }}
+                  disabled={photoBusy}
+                  onChange={(e) => { onAddPhotoFiles(e.target.files); e.currentTarget.value = ""; }}
+                />
+              </label>
+              <button onClick={refreshPhotos} disabled={photoBusy}>Refresh</button>
+            </div>
+            {photoError && (
+              <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{photoError}</div>
+            )}
+          </div>
+
+          {/* Pending batch - review, note each photo, then submit together. */}
+          {pendingPhotos.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Photos</div>
-              {ht.photosHint && (
-                <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 2 }}>
-                  {ht.photosHint}
-                </div>
-              )}
-              <div className="row wrap" style={{ marginTop: 10, gap: 8 }}>
-                <label className="btnPrimary" style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)" }}>
-                  {photoBusy ? "Working…" : "Add Photo"}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style={{ display: "none" }}
-                    disabled={photoBusy}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0] ?? null;
-                      e.currentTarget.value = "";
-                      onPickPhotoFile(f);
-                    }}
-                  />
-                </label>
-                <button onClick={refreshPhotos} disabled={photoBusy}>Refresh</button>
+              <div className="sectionTitle">Ready to save ({pendingPhotos.length})</div>
+              <div className="col" style={{ gap: 12, marginTop: 8 }}>
+                {pendingPhotos.map((p) => {
+                  const url = URL.createObjectURL(p.file);
+                  return (
+                    <div key={p.id} style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "rgba(255,255,255,0.02)" }}>
+                      <img src={url} alt="preview" style={{ width: "100%", display: "block" }} onLoad={() => URL.revokeObjectURL(url)} />
+                      <div className="col" style={{ gap: 6, padding: 10 }}>
+                        <div className="label">Note (optional)</div>
+                        <textarea
+                          value={p.caption}
+                          onChange={(e) => setPendingCaptionFor(p.id, e.target.value)}
+                          placeholder={ht.photoCaptionPlaceholder}
+                          rows={2}
+                        />
+                        <button
+                          onClick={() => removePendingPhoto(p.id)}
+                          disabled={photoBusy}
+                          style={{ alignSelf: "flex-start", fontSize: 12, padding: "4px 10px" }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              {photoError && (
-                <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{photoError}</div>
-              )}
+              <div className="row wrap" style={{ gap: 8, marginTop: 12 }}>
+                <button className="btnPrimary" onClick={onSaveAllPending} disabled={photoBusy}>
+                  {photoBusy ? "Saving…" : (pendingPhotos.length === 1 ? "Save Photo" : `Save All (${pendingPhotos.length})`)}
+                </button>
+                <button onClick={() => setPendingPhotos([])} disabled={photoBusy}>Clear</button>
+              </div>
             </div>
           )}
 
@@ -2399,11 +2475,39 @@ export default function App() {
                         onLoad={() => URL.revokeObjectURL(url)}
                       />
                       <div style={{ padding: 10 }}>
-                        {p.caption && (
-                          <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
+                        {editingNoteId === p.id ? (
+                          <div className="col" style={{ gap: 6, marginBottom: 8 }}>
+                            <textarea
+                              value={noteDraft}
+                              onChange={(e) => setNoteDraft(e.target.value)}
+                              placeholder={ht.photoCaptionPlaceholder}
+                              rows={2}
+                              autoFocus
+                            />
+                            <div className="row wrap" style={{ gap: 6 }}>
+                              <button className="btnPrimary" disabled={photoBusy}
+                                onClick={() => onSaveNote(p.id, noteDraft.trim(), true)}
+                                style={{ fontSize: 12, padding: "4px 10px" }}>
+                                Save note
+                              </button>
+                              <button onClick={() => { setEditingNoteId(null); setNoteDraft(""); }}
+                                style={{ fontSize: 12, padding: "4px 10px" }}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          p.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
                         )}
                         <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(p.created_at)}</div>
                         <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
+                          {editingNoteId !== p.id && (
+                            <button onClick={() => { setEditingNoteId(p.id); setNoteDraft(p.caption || ""); }}
+                              disabled={photoBusy}
+                              style={{ fontSize: 12, padding: "4px 10px" }}>
+                              {p.caption ? "Edit note" : "Add note"}
+                            </button>
+                          )}
                           {driveOk && p.drive_url ? (
                             <a href={p.drive_url} target="_blank" rel="noopener noreferrer"
                               style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
@@ -2446,7 +2550,30 @@ export default function App() {
                       style={{ width: "100%", display: "block" }}
                     />
                     <div style={{ padding: 10 }}>
-                      {sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>}
+                      {editingNoteId === sp.id ? (
+                        <div className="col" style={{ gap: 6, marginBottom: 8 }}>
+                          <textarea
+                            value={noteDraft}
+                            onChange={(e) => setNoteDraft(e.target.value)}
+                            placeholder={ht.photoCaptionPlaceholder}
+                            rows={2}
+                            autoFocus
+                          />
+                          <div className="row wrap" style={{ gap: 6 }}>
+                            <button className="btnPrimary" disabled={photoBusy}
+                              onClick={() => onSaveNote(sp.id, noteDraft.trim(), false)}
+                              style={{ fontSize: 12, padding: "4px 10px" }}>
+                              Save note
+                            </button>
+                            <button onClick={() => { setEditingNoteId(null); setNoteDraft(""); }}
+                              style={{ fontSize: 12, padding: "4px 10px" }}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>
+                      )}
                       <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(sp.created_at)}</div>
                       {sp.created_by && (
                         <div className="row" style={{ gap: 6, marginTop: 4 }}>
@@ -2454,7 +2581,14 @@ export default function App() {
                           <span className="small" style={{ color: "var(--muted)" }}>by {sp.created_by}</span>
                         </div>
                       )}
-                      <div style={{ marginTop: 8 }}>
+                      <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
+                        {editingNoteId !== sp.id && (
+                          <button onClick={() => { setEditingNoteId(sp.id); setNoteDraft(sp.caption || ""); }}
+                            disabled={photoBusy}
+                            style={{ fontSize: 12, padding: "4px 10px" }}>
+                            {sp.caption ? "Edit note" : "Add note"}
+                          </button>
+                        )}
                         <a href={sp.drive_url} target="_blank" rel="noopener noreferrer"
                           style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
                           View in Drive

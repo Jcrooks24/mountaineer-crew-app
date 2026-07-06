@@ -476,3 +476,15 @@ def upload_bol_pdf_to_drive(
 def delete_drive_file(db: Session, file_id: str) -> None:
     svc = _get_drive_service(db)
     svc.files().delete(fileId=file_id).execute()
+
+
+def update_drive_file_description(db: Session, file_id: str, description: str) -> None:
+    """Update a Drive file's description in place - used to keep a photo's
+    caption/note in sync on Drive after the crew edits it in-app. Raises on a
+    hard Drive error; callers treat it as best-effort."""
+    svc = _get_drive_service(db)
+    svc.files().update(
+        fileId=file_id,
+        body={"description": description or ""},
+        fields="id",
+    ).execute()

@@ -1,6 +1,7 @@
 import traceback
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -8,7 +9,10 @@ from app.core.deps import get_current_user
 from app.db.models.user import User
 from app.db.models.photo import Photo
 from app.db.session import get_db
-from app.integrations.drive_upload import upload_photo_to_drive
+from app.integrations.drive_upload import (
+    update_drive_file_description,
+    upload_photo_to_drive,
+)
 
 router = APIRouter(prefix="/api/photos", tags=["photos"])
 
@@ -85,6 +89,45 @@ def upload_photo(
         "drive_url": result["url"],
         "thumb_url": result["thumb_url"],
     }
+
+
+class CaptionUpdate(BaseModel):
+    photo_id: str
+    caption: str = ""
+
+
+@router.post("/caption")
+def update_caption(
+    payload: CaptionUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Update a photo's caption/note after it was submitted. Lets the crew add
+    or edit a note on an individual photo from the Saved gallery. Persists to
+    the DB (so it syncs across devices) and best-effort mirrors it onto the
+    Drive file description so admin sees the note in Drive too."""
+    row = db.query(Photo).filter(Photo.id == payload.photo_id).first()
+    if not row:
+        return {"ok": False, "error": "Photo not found"}
+
+    caption = (payload.caption or "").strip()
+    row.caption = caption
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        traceback.print_exc()
+        return {"ok": False, "error": "Failed to save note"}
+
+    # Best-effort: keep the Drive description in sync. Never fail the request
+    # on a Drive hiccup - the note is already saved to the DB.
+    if row.drive_file_id:
+        try:
+            update_drive_file_description(db, row.drive_file_id, caption)
+        except Exception:
+            traceback.print_exc()
+
+    return {"ok": True, "photo_id": payload.photo_id, "caption": caption}
 
 
 @router.get("")
