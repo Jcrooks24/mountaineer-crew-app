@@ -1580,9 +1580,12 @@ function EstimatePhotos({
   const [photos, setPhotos] = useState<ServerPhoto[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [caption, setCaption] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
+  // Pending batch: take several shots and/or multi-select from the library,
+  // each with its own note, then upload them together.
+  const [pending, setPending] = useState<{ id: string; file: File; caption: string }[]>([]);
+  // Saved-grid note editor: which photo's note is open + its draft.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
 
   async function refresh() {
     try {
@@ -1595,37 +1598,69 @@ function EstimatePhotos({
 
   useEffect(() => { refresh(); }, [estimateUuid]);
 
-  async function upload() {
-    if (!pendingFile) return;
+  function addFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setErr(null);
+    setPending((prev) => [
+      ...prev,
+      ...Array.from(files).map((file) => ({ id: newUUID(), file, caption: "" })),
+    ]);
+  }
+
+  async function uploadOne(file: File, caption: string) {
+    const form = new FormData();
+    const resized = await resizeImage(file);
+    form.append("file", resized, (file.name || "estimate.jpg").replace(/.[^.]+$/, ".jpg"));
+    form.append("photo_id", newUUID());
+    form.append("job_uuid", estimateUuid);
+    form.append("job_name", `Estimate - ${customerName}`);
+    form.append("job_date", moveDate || mountainDateYYYYMMDD());
+    form.append("caption", caption.trim());
+    // Routes the upload to the estimator-photos Drive parent folder so
+    // estimator captures don't mix into the crew-job photos folder.
+    form.append("folder", "estimator");
+
+    const token = getToken() || "";
+    const res = await fetch(`${API}/api/photos/upload`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const json = await res.json();
+    if (!res.ok || !json.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+  }
+
+  async function uploadAll() {
+    if (pending.length === 0) return;
+    setBusy(true);
+    setErr(null);
+    let lastErr = "";
+    for (const p of pending) {
+      try {
+        await uploadOne(p.file, p.caption);
+      } catch (e: any) {
+        lastErr = e?.message ?? "Upload failed";
+      }
+    }
+    setPending([]);
+    if (lastErr) setErr(lastErr);
+    await refresh();
+    setBusy(false);
+  }
+
+  async function saveNote(photoId: string, caption: string) {
     setBusy(true);
     setErr(null);
     try {
-      const form = new FormData();
-      const resized = await resizeImage(pendingFile);
-      form.append("file", resized, (pendingFile.name || "estimate.jpg").replace(/.[^.]+$/, ".jpg"));
-      form.append("photo_id", newUUID());
-      form.append("job_uuid", estimateUuid);
-      form.append("job_name", `Estimate - ${customerName}`);
-      form.append("job_date", moveDate || mountainDateYYYYMMDD());
-      form.append("caption", caption.trim());
-      // Routes the upload to the estimator-photos Drive parent folder so
-      // estimator captures don't mix into the crew-job photos folder.
-      form.append("folder", "estimator");
-
-      const token = getToken() || "";
-      const res = await fetch(`${API}/api/photos/upload`, {
+      await apiFetch(`/api/photos/caption`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
+        body: JSON.stringify({ photo_id: photoId, caption }),
       });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json?.error || `HTTP ${res.status}`);
-      setPendingFile(null);
-      setCaption("");
-      if (fileRef.current) fileRef.current.value = "";
+      setEditingId(null);
+      setNoteDraft("");
       await refresh();
     } catch (e: any) {
-      setErr(e?.message ?? "Upload failed");
+      setErr(e?.message ?? "Could not save note");
     } finally {
       setBusy(false);
     }
@@ -1633,56 +1668,74 @@ function EstimatePhotos({
 
   return (
     <div className="card">
-      <div className="sectionTitle">Site Photos ({photos.length})</div>
+      <div className="sectionTitle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        Site Photos ({photos.length})<BetaTag feature="multiPhoto" />
+      </div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Add photos of rooms, furniture, access paths, and anything worth noting for the crew.
       </div>
 
-      {pendingFile ? (
-        <div className="col" style={{ gap: 8 }}>
-          <img
-            src={URL.createObjectURL(pendingFile)}
-            alt="preview"
-            style={{ width: "100%", maxHeight: 260, objectFit: "cover", borderRadius: 8 }}
-          />
-          <textarea
-            rows={2}
-            value={caption}
-            onChange={(e) => setCaption(e.target.value)}
-            placeholder="Note (optional)…"
-          />
-          <div className="row" style={{ gap: 8 }}>
-            <button type="button" className="btnPrimary" onClick={upload} disabled={busy} style={{ flex: 1 }}>
-              {busy ? "Uploading…" : "Save photo"}
-            </button>
-            <button type="button" onClick={() => { setPendingFile(null); setCaption(""); }}>Cancel</button>
-          </div>
-        </div>
-      ) : (
+      <div className="row wrap" style={{ gap: 8 }}>
         <label
           className="btnPrimary"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            padding: "10px 18px",
-            borderRadius: "var(--btn-r)",
-            cursor: busy ? "not-allowed" : "pointer",
-          }}
+          style={{ display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)", cursor: busy ? "not-allowed" : "pointer" }}
         >
-          Add Photo
+          Take Photo
           <input
-            ref={fileRef}
             type="file"
             accept="image/*"
+            capture="environment"
             style={{ display: "none" }}
             disabled={busy}
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
-              e.currentTarget.value = "";
-              if (f) setPendingFile(f);
-            }}
+            onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
           />
         </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)", cursor: busy ? "not-allowed" : "pointer" }}
+        >
+          Add from Library
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            style={{ display: "none" }}
+            disabled={busy}
+            onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
+          />
+        </label>
+      </div>
+
+      {/* Pending batch - note each photo, then upload together. */}
+      {pending.length > 0 && (
+        <div className="col" style={{ gap: 10, marginTop: 12 }}>
+          <div className="small" style={{ fontWeight: 700 }}>Ready to upload ({pending.length})</div>
+          {pending.map((p) => {
+            const url = URL.createObjectURL(p.file);
+            return (
+              <div key={p.id} className="col" style={{ gap: 6, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                <img src={url} alt="preview" style={{ width: "100%", maxHeight: 220, objectFit: "cover" }} onLoad={() => URL.revokeObjectURL(url)} />
+                <div className="col" style={{ gap: 6, padding: 8 }}>
+                  <textarea
+                    rows={2}
+                    value={p.caption}
+                    onChange={(e) => setPending((prev) => prev.map((x) => x.id === p.id ? { ...x, caption: e.target.value } : x))}
+                    placeholder="Note (optional)…"
+                  />
+                  <button type="button" onClick={() => setPending((prev) => prev.filter((x) => x.id !== p.id))} disabled={busy}
+                    style={{ alignSelf: "flex-start", fontSize: 12, padding: "4px 10px" }}>
+                    Remove
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          <div className="row wrap" style={{ gap: 8 }}>
+            <button type="button" className="btnPrimary" onClick={uploadAll} disabled={busy} style={{ flex: 1 }}>
+              {busy ? "Uploading…" : (pending.length === 1 ? "Upload photo" : `Upload all (${pending.length})`)}
+            </button>
+            <button type="button" onClick={() => setPending([])} disabled={busy}>Clear</button>
+          </div>
+        </div>
       )}
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
@@ -1690,18 +1743,44 @@ function EstimatePhotos({
       {photos.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8, marginTop: 12 }}>
           {photos.map((p) => (
-            <a
-              key={p.id}
-              href={p.drive_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ display: "block", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}
-            >
-              <img src={p.thumb_url} alt={p.caption} style={{ width: "100%", display: "block" }} />
-              {p.caption && (
-                <div style={{ fontSize: 11, color: "var(--muted)", padding: "4px 6px" }}>{p.caption}</div>
-              )}
-            </a>
+            <div key={p.id} style={{ borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+              <a href={p.drive_url} target="_blank" rel="noopener noreferrer" style={{ display: "block" }}>
+                <img src={p.thumb_url} alt={p.caption} style={{ width: "100%", display: "block" }} />
+              </a>
+              <div style={{ padding: "4px 6px" }}>
+                {editingId === p.id ? (
+                  <div className="col" style={{ gap: 4 }}>
+                    <textarea
+                      rows={2}
+                      value={noteDraft}
+                      onChange={(e) => setNoteDraft(e.target.value)}
+                      placeholder="Note…"
+                      autoFocus
+                    />
+                    <div className="row" style={{ gap: 4 }}>
+                      <button type="button" className="btnPrimary" disabled={busy}
+                        onClick={() => saveNote(p.id, noteDraft.trim())}
+                        style={{ fontSize: 11, padding: "3px 8px" }}>
+                        Save
+                      </button>
+                      <button type="button" onClick={() => { setEditingId(null); setNoteDraft(""); }}
+                        style={{ fontSize: 11, padding: "3px 8px" }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {p.caption && <div style={{ fontSize: 11, color: "var(--muted)" }}>{p.caption}</div>}
+                    <button type="button" onClick={() => { setEditingId(p.id); setNoteDraft(p.caption || ""); }}
+                      disabled={busy}
+                      style={{ fontSize: 11, padding: "3px 8px", marginTop: 4 }}>
+                      {p.caption ? "Edit note" : "Add note"}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
           ))}
         </div>
       )}
