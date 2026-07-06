@@ -29,6 +29,7 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   "estimateJobLink",
   "estVsActualHours",
   "overagePrompt",
+  "multiPhoto",
 ]);
 
 export function isBeta(feature: string): boolean {

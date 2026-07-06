@@ -2374,7 +2374,9 @@ export default function App() {
           {/* Capture: take one at a time and/or multi-select from the library,
               accumulating a batch before submitting. */}
           <div className="card">
-            <div className="sectionTitle">Photos</div>
+            <div className="sectionTitle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              Photos<BetaTag feature="multiPhoto" />
+            </div>
             {ht.photosHint && (
               <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 2 }}>
                 {ht.photosHint}
