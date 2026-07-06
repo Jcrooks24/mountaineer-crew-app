@@ -163,6 +163,7 @@ type CalEvent = {
   id: string;
   summary: string;
   start?: string;
+  end?: string;
 };
 
 type JobMeta = {
@@ -1197,7 +1198,12 @@ export default function App() {
     let jobId: string;
     try {
       const token = getToken();
-      const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`, {
+      // Pass the event's scheduled window so the server caches it for the
+      // est-vs-actual scheduled-duration fallback.
+      let resolveUrl = `${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`;
+      if (ev.start) resolveUrl += `&scheduled_start=${encodeURIComponent(ev.start)}`;
+      if (ev.end) resolveUrl += `&scheduled_end=${encodeURIComponent(ev.end)}`;
+      const res = await fetch(resolveUrl, {
         headers: makeAuthHeaders(token),
       });
       if (res.ok) {

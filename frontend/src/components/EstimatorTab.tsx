@@ -428,7 +428,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     setLinkBusy(true);
     setErr(null);
     try {
-      const jobUuid = await resolveJobUuid(ev.id);
+      const jobUuid = await resolveJobUuid(ev.id, ev.start, ev.end);
       await patchJobLink(jobUuid);
       setLinkOpen(false);
     } catch (e: any) {

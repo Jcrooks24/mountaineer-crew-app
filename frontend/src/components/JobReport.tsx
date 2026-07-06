@@ -942,6 +942,21 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     [totalActualHours],
   );
 
+  // Estimated-hours baseline (linked estimate hours, else calendar scheduled
+  // duration) for the est-vs-actual comparison. Fetched read-only; the actual
+  // side is the live billable man-hours above. Quiet on error.
+  const [estHours, setEstHours] = useState<{ hours: number | null; source: string } | null>(null);
+  useEffect(() => {
+    if (!jobUuid) { setEstHours(null); return; }
+    let cancelled = false;
+    apiFetch<{ estimated_hours: number | null; source: string }>(
+      `/api/job-report/estimated-hours?job_uuid=${encodeURIComponent(jobUuid)}`,
+    )
+      .then((r) => { if (!cancelled) setEstHours({ hours: r.estimated_hours, source: r.source }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobUuid]);
+
   async function doSave() {
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
@@ -1427,6 +1442,30 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 </span>
               </span>
             </div>
+            {estHours && estHours.hours != null && (
+              <div
+                className="small"
+                style={{ color: "var(--muted)", marginTop: 6, display: "flex", justifyContent: "space-between" }}
+              >
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <BetaTag feature="estVsActualHours" style={{ marginTop: 0 }} />
+                  Estimated {estHours.hours.toFixed(2)}h{" "}
+                  <span style={{ opacity: 0.8 }}>
+                    ({estHours.source === "estimate" ? "from estimate" : "from schedule"})
+                  </span>
+                </span>
+                {(() => {
+                  const delta = totalBillableHours - estHours.hours;
+                  const over = delta > 0.01;
+                  const under = delta < -0.01;
+                  return (
+                    <span style={{ color: over ? "var(--danger)" : under ? "var(--ok)" : "var(--muted)", fontWeight: 600 }}>
+                      {over ? "+" : ""}{delta.toFixed(2)}h {over ? "over" : under ? "under" : "on target"}
+                    </span>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         )}
 

@@ -219,7 +219,7 @@ export function newDraft(job: { job_uuid: string; job_name: string; job_date: st
 
 // ── Job selection (mirrors the Timeline tab) ──────────────────────────────────
 
-export type CalEvent = { id: string; summary: string };
+export type CalEvent = { id: string; summary: string; start?: string; end?: string };
 
 /** Deterministic UUID from a Google Calendar event id - identical to the
  * Timeline's calEventToJobUuid so a job selected here shares the same job_uuid
@@ -277,11 +277,20 @@ export async function fetchManualJobsForDate(date: string): Promise<{ job_uuid: 
 
 /** Resolve a calendar event to its canonical job_uuid (server), falling back to
  * the deterministic local hash offline - same as the Timeline. */
-export async function resolveJobUuid(calId: string): Promise<string> {
+export async function resolveJobUuid(
+  calId: string,
+  scheduledStart?: string,
+  scheduledEnd?: string,
+): Promise<string> {
   if (navigator.onLine) {
     try {
       const token = getToken();
-      const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`, {
+      // Pass the scheduled window so the server caches it on the job for the
+      // est-vs-actual scheduled-duration fallback.
+      let url = `${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`;
+      if (scheduledStart) url += `&scheduled_start=${encodeURIComponent(scheduledStart)}`;
+      if (scheduledEnd) url += `&scheduled_end=${encodeURIComponent(scheduledEnd)}`;
+      const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (res.ok) {
@@ -304,7 +313,12 @@ export async function fetchCalendarDay(date: string): Promise<CalEvent[]> {
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok || json?.ok !== true) throw new Error(json?.detail || `Calendar HTTP ${res.status}`);
-  return (json.events || []).map((e: any) => ({ id: String(e.id), summary: String(e.summary || e.title || "Untitled job") }));
+  return (json.events || []).map((e: any) => ({
+    id: String(e.id),
+    summary: String(e.summary || e.title || "Untitled job"),
+    start: e.start ? String(e.start) : undefined,
+    end: e.end ? String(e.end) : undefined,
+  }));
 }
 
 /** Persist a selected job's name/date so it resolves consistently (shares the

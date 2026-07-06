@@ -250,9 +250,13 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List
     out: List[Dict[str, Any]] = []
     for it in items:
         start = it.get("start", {}).get("dateTime") or it.get("start", {}).get("date")
+        end = it.get("end", {}).get("dateTime") or it.get("end", {}).get("date")
         out.append({
             "id": it.get("id"),
             "summary": it.get("summary") or "(no title)",
             "start": start,
+            # `end` powers the scheduled-duration fallback for est-vs-actual
+            # hours (Phase 4). Previously fetched from Google but dropped.
+            "end": end,
         })
     return out

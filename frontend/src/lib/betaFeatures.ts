@@ -27,6 +27,7 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   "truckFullness",
   "actualInventory",
   "estimateJobLink",
+  "estVsActualHours",
 ]);
 
 export function isBeta(feature: string): boolean {
