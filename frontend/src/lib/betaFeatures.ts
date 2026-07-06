@@ -21,7 +21,11 @@ export const APP_VERSION = "1.7";
 //   digitalBOL, rosterTypeahead, manualJobsCrossDevice, autoLaborLines,
 //   podsPerDriver, bolInventoryTab.
 // Add the next round of beta keys here as new features ship.
-export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([]);
+export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
+  "jobTypeTags",
+  "employeeSkillRating",
+  "truckFullness",
+]);
 
 export function isBeta(feature: string): boolean {
   return BETA_FEATURES.has(feature);

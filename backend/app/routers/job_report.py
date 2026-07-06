@@ -12,7 +12,12 @@ from app.db.models.event import Event
 from app.db.models.job_report import JobReport
 from app.db.models.user import User
 from app.integrations.sheets_export import export_job_report_to_sheets, run_export_in_background
-from app.schemas.job_report import EmployeeHoursEntry, JobReportResponse, JobReportUpsert
+from app.schemas.job_report import (
+    EmployeeHoursEntry,
+    JobReportResponse,
+    JobReportUpsert,
+    TruckFullnessEntry,
+)
 
 router = APIRouter(prefix="/api/job-report", tags=["job-report"])
 
@@ -25,6 +30,30 @@ def _decode_employee_hours(raw: Optional[str]) -> Optional[list[EmployeeHoursEnt
         if not isinstance(data, list):
             return None
         return [EmployeeHoursEntry(**row) for row in data if isinstance(row, dict)]
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _decode_job_type_tags(raw: Optional[str]) -> Optional[list[str]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        return [str(t) for t in data]
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _decode_truck_fullness(raw: Optional[str]) -> Optional[list[TruckFullnessEntry]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        return [TruckFullnessEntry(**row) for row in data if isinstance(row, dict)]
     except (json.JSONDecodeError, ValueError):
         return None
 
@@ -46,6 +75,8 @@ def _to_response(r: JobReport) -> JobReportResponse:
         crew_feedback=r.crew_feedback,
         out_of_town=bool(r.out_of_town),
         bill_personal_vehicles=bool(r.bill_personal_vehicles),
+        job_type_tags=_decode_job_type_tags(r.job_type_tags_json),
+        truck_fullness=_decode_truck_fullness(r.truck_fullness_json),
         employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
         updated_at=r.updated_at,
@@ -68,6 +99,7 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
     # closes), then push the actual sheets call onto a background thread
     # so the API response is never blocked by Google.
     employees = _decode_employee_hours(report.employee_hours_json)
+    truck_fullness = _decode_truck_fullness(report.truck_fullness_json)
     payload = {
         "job_uuid": report.job_uuid,
         "job_name": _job_name_for(db, report.job_uuid),
@@ -83,6 +115,8 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "crew_feedback": report.crew_feedback,
         "out_of_town": bool(report.out_of_town),
         "bill_personal_vehicles": bool(report.bill_personal_vehicles),
+        "job_type_tags": _decode_job_type_tags(report.job_type_tags_json) or [],
+        "truck_fullness": [t.model_dump() for t in truck_fullness] if truck_fullness else [],
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
         "updated_at": report.updated_at,
@@ -104,6 +138,14 @@ def upsert_job_report(
         if body.employee_hours
         else None
     )
+    job_type_tags_json = (
+        json.dumps(body.job_type_tags) if body.job_type_tags else None
+    )
+    truck_fullness_json = (
+        json.dumps([t.model_dump() for t in body.truck_fullness])
+        if body.truck_fullness
+        else None
+    )
 
     if existing:
         existing.submitted_by_id = current_user.id
@@ -119,6 +161,8 @@ def upsert_job_report(
         existing.crew_feedback = body.crew_feedback
         existing.out_of_town = body.out_of_town
         existing.bill_personal_vehicles = body.bill_personal_vehicles
+        existing.job_type_tags_json = job_type_tags_json
+        existing.truck_fullness_json = truck_fullness_json
         existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
         db.commit()
@@ -141,6 +185,8 @@ def upsert_job_report(
         crew_feedback=body.crew_feedback,
         out_of_town=body.out_of_town,
         bill_personal_vehicles=body.bill_personal_vehicles,
+        job_type_tags_json=job_type_tags_json,
+        truck_fullness_json=truck_fullness_json,
         employee_hours_json=employee_hours_json,
         created_at=now,
         updated_at=now,

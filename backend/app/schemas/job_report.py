@@ -17,6 +17,45 @@ BILLING_METHODS = {
 
 ReviewCandidate = Literal["yes", "no", "na"]
 
+# Fixed job-type vocabulary (multi-select). Mirrored on the frontend in
+# frontend/src/lib/jobTypes.ts - keep the two lists in sync.
+JOB_TYPE_TAGS = {
+    "Local",
+    "Long-distance",
+    "Labor-only",
+    "Packing",
+    "Unpacking",
+    "Commercial",
+    "Delivery",
+    "Storage",
+}
+
+# The four trucks; a fullness reading is captured per truck used on the job.
+# Mirrored on the frontend in frontend/src/lib/jobTypes.ts.
+TRUCK_IDS = {"16Ford", "26Int", "24FR8", "26FR8"}
+FULLNESS_STEPS = {25, 50, 75, 100}
+
+
+class TruckFullnessEntry(BaseModel):
+    """One truck's fill estimate against the interior 25% marks."""
+    truck: str
+    vertical_pct: int
+    horizontal_pct: int
+
+    @field_validator("truck")
+    @classmethod
+    def truck_valid(cls, v: str) -> str:
+        if v not in TRUCK_IDS:
+            raise ValueError(f"truck must be one of {TRUCK_IDS}")
+        return v
+
+    @field_validator("vertical_pct", "horizontal_pct")
+    @classmethod
+    def pct_step_valid(cls, v: int) -> int:
+        if v not in FULLNESS_STEPS:
+            raise ValueError(f"fullness must be one of {FULLNESS_STEPS}")
+        return v
+
 
 class EmployeeHoursEntry(BaseModel):
     """Single row in the per-job employee-hours table on the Report tab.
@@ -33,6 +72,14 @@ class EmployeeHoursEntry(BaseModel):
     hours: float = 0.0        # actual worked hours, base-10
     non_billable: bool = False  # excluded from total man-hours when true
     out_of_town: bool = False  # long-distance: $50 per-diem owed to this employee
+    skill_rating: Optional[int] = None  # crew-lead 1-5 rating; None = N/A. Display-only.
+
+    @field_validator("skill_rating")
+    @classmethod
+    def skill_rating_valid(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and not (1 <= v <= 5):
+            raise ValueError("skill_rating must be 1-5 or null")
+        return v
 
 
 class JobReportUpsert(BaseModel):
@@ -48,7 +95,19 @@ class JobReportUpsert(BaseModel):
     crew_feedback: Optional[str] = None
     out_of_town: bool = False
     bill_personal_vehicles: bool = False
+    job_type_tags: Optional[List[str]] = None
+    truck_fullness: Optional[List[TruckFullnessEntry]] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
+
+    @field_validator("job_type_tags")
+    @classmethod
+    def job_type_tags_valid(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        bad = [t for t in v if t not in JOB_TYPE_TAGS]
+        if bad:
+            raise ValueError(f"unknown job_type_tags: {bad}")
+        return v
 
     @field_validator("personal_vehicles")
     @classmethod
@@ -88,6 +147,8 @@ class JobReportResponse(BaseModel):
     crew_feedback: Optional[str] = None
     out_of_town: bool = False
     bill_personal_vehicles: bool = False
+    job_type_tags: Optional[List[str]] = None
+    truck_fullness: Optional[List[TruckFullnessEntry]] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime

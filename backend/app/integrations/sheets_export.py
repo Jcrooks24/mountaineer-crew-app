@@ -825,6 +825,7 @@ JOB_REPORT_HEADERS = [
     "review_candidate", "hours_match", "hours_mismatch_reason",
     "has_crew_feedback", "crew_feedback",
     "employee_hours", "has_non_billable_hours", "per_diem_total",
+    "job_type_tags", "truck_fullness",
     "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
@@ -852,6 +853,27 @@ def _has_non_billable(entries: Optional[list]) -> str:
         if isinstance(e, dict) and e.get("non_billable"):
             return "Yes"
     return "No"
+
+
+def _format_truck_fullness(entries: Optional[list]) -> str:
+    """One line per truck used, e.g. "26Int: V75×H50 (38%)". The composite %
+    is vertical×horizontal/100, matching the interior 25% fill marks. Semicolon-
+    joined so it stays a single readable cell."""
+    if not entries:
+        return ""
+    parts: list[str] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        truck = (e.get("truck") or "").strip() or "-"
+        try:
+            v = int(e.get("vertical_pct") or 0)
+            h = int(e.get("horizontal_pct") or 0)
+        except (TypeError, ValueError):
+            v = h = 0
+        combined = round(v * h / 100)
+        parts.append(f"{truck}: V{v}×H{h} ({combined}%)")
+    return "; ".join(parts)
 
 
 def _per_diem_total(report: Dict[str, Any]) -> Any:
@@ -925,7 +947,15 @@ def _format_employee_hours(entries: Optional[list]) -> str:
             pieces.append(span + ("," if br > 0 else ""))
         if br > 0:
             pieces.append(f"break {br:.2f}h")
-        tail = f"{rounded:.2f}h (actual {hrs:.2f}h)"
+        # Crew-lead skill rating (1-5) rides inside each entry; display-only,
+        # never affects the man-hours math.
+        raw_skill = e.get("skill_rating")
+        try:
+            skill = int(raw_skill) if raw_skill is not None else None
+        except (TypeError, ValueError):
+            skill = None
+        skill_str = f"skill {skill}/5" if skill else "skill N/A"
+        tail = f"{rounded:.2f}h (actual {hrs:.2f}h), {skill_str}"
         if non_billable:
             pieces.append(f"→ non-billable {tail}")
         else:
@@ -974,6 +1004,8 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
         # Per-diem: $50/day per crew member when the whole crew is out of town.
         "per_diem_total": _per_diem_total(report),
+        "job_type_tags": ", ".join(report.get("job_type_tags") or []),
+        "truck_fullness": _format_truck_fullness(report.get("truck_fullness")),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,

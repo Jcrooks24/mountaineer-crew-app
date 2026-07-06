@@ -15,6 +15,9 @@ export type EmployeeHoursEntry = {
   non_billable?: boolean;
   // Long-distance: this employee was out of town this day → $50 per-diem.
   out_of_town?: boolean;
+  // Crew-lead skill rating for this mover on this job: 1–5, or null/undefined
+  // for N/A. Display-only — never affects the man-hours math.
+  skill_rating?: number | null;
 };
 
 // Company billing rule: round to the next quarter-hour if the worked time

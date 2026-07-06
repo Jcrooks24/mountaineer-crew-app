@@ -63,10 +63,24 @@ class JobReport(Base):
     bill_personal_vehicles = Column(Boolean, nullable=True, default=False)
 
     # JSON-encoded list of per-employee entries:
-    #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float }]
+    #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float,
+    #      skill_rating: int|null }]
     # Crew enters these on the Report tab using the time-math helper. Stored
     # as Text to match the existing JobBill / MaterialsSubmission pattern.
+    # skill_rating (1-5, null = N/A) rides inside each entry - no separate column.
     employee_hours_json = Column(Text, nullable=True)
+
+    # JSON array of job-type tags from the fixed vocabulary (see JOB_TYPE_TAGS
+    # in schemas/job_report.py). Multi-select; drives per-mover skill-exposure
+    # accrual by job type downstream. Nullable so pre-existing rows read empty
+    # without a backfill.
+    job_type_tags_json = Column(Text, nullable=True)
+
+    # JSON array of per-truck fullness readings:
+    #   [{ truck, vertical_pct, horizontal_pct }] where pct ∈ {25,50,75,100}.
+    # Crew estimates fill against the interior 25% marks. Nullable - blank when
+    # not collected.
+    truck_fullness_json = Column(Text, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, nullable=False)

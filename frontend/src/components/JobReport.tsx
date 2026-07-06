@@ -97,6 +97,12 @@ import { BetaTag } from "./BetaTag";
 export { roundBillableQuarter, type EmployeeHoursEntry } from "../lib/employeeHours";
 import type { EmployeeHoursEntry } from "../lib/employeeHours";
 import { roundBillableQuarter } from "../lib/employeeHours";
+import {
+  JOB_TYPE_TAGS,
+  TRUCK_IDS,
+  FULLNESS_STEPS,
+  type TruckFullnessEntry,
+} from "../lib/jobTypes";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
 // dropdowns without leaking the rest of App.tsx's offline state into
@@ -150,6 +156,10 @@ type ReportData = {
   crew_feedback: string;
   // Long-distance: submitter started AND ended the day out of town ($50 per-diem).
   out_of_town: boolean;
+  // Fixed multi-select job-type tags (see lib/jobTypes).
+  job_type_tags: string[];
+  // Per-truck fullness readings against the interior 25% marks.
+  truck_fullness: TruckFullnessEntry[];
   employee_hours: EmployeeHoursEntry[];
 };
 
@@ -417,6 +427,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     has_crew_feedback: null,
     crew_feedback: "",
     out_of_town: false,
+    job_type_tags: [],
+    truck_fullness: [],
     employee_hours: [],
   });
 
@@ -492,6 +504,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           has_crew_feedback: r.has_crew_feedback ?? null,
           crew_feedback: r.crew_feedback ?? "",
           out_of_town: !!(r as any).out_of_town,
+          job_type_tags: (r as any).job_type_tags ?? [],
+          truck_fullness: (r as any).truck_fullness ?? [],
           employee_hours: r.employee_hours ?? [],
         });
         serverUpdatedAtRef.current = (r as any).updated_at || "";
@@ -519,6 +533,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             has_crew_feedback: null,
             crew_feedback: "",
             out_of_town: false,
+            job_type_tags: [],
+            truck_fullness: [],
             employee_hours: [],
           });
           serverUpdatedAtRef.current = "";
@@ -843,12 +859,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     };
     setData((prev) => {
       if (editingIndex !== null && editingIndex < prev.employee_hours.length) {
-        // Preserve the existing non_billable flag - that toggle lives on the
-        // saved tile, not in the editor, and shouldn't reset on edit.
+        // Preserve the existing non_billable flag + skill_rating - those live
+        // on the saved tile, not in the editor, and shouldn't reset on edit.
         const next = prev.employee_hours.slice();
         next[editingIndex] = {
           ...baseEntry,
           non_billable: prev.employee_hours[editingIndex].non_billable,
+          skill_rating: prev.employee_hours[editingIndex].skill_rating,
         };
         return { ...prev, employee_hours: next };
       }
@@ -882,6 +899,19 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       ...prev,
       employee_hours: prev.employee_hours.map((e, idx) =>
         idx === i ? { ...e, non_billable: !e.non_billable } : e,
+      ),
+    }));
+    setSaved(false);
+  }
+
+  // Crew-lead 1-5 skill rating for this mover on this job. Tapping the active
+  // star again clears it back to N/A (null). Display-only - never touches the
+  // man-hours math.
+  function setEmployeeSkillRating(i: number, rating: number | null) {
+    setData((prev) => ({
+      ...prev,
+      employee_hours: prev.employee_hours.map((e, idx) =>
+        idx === i ? { ...e, skill_rating: rating } : e,
       ),
     }));
     setSaved(false);
@@ -960,6 +990,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           crew_feedback: data.has_crew_feedback ? (data.crew_feedback.trim() || null) : null,
           out_of_town: !!data.out_of_town,
           bill_personal_vehicles: !!data.bill_personal_vehicles,
+          job_type_tags: data.job_type_tags,
+          // Drop any partially-filled truck rows (no fullness picked yet).
+          truck_fullness: data.truck_fullness.filter(
+            (t) => t.truck && t.vertical_pct > 0 && t.horizontal_pct > 0,
+          ),
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
           employee_hours: data.employee_hours
@@ -972,6 +1007,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               hours: Number(e.hours) || 0,
               non_billable: !!e.non_billable,
               out_of_town: !!e.out_of_town,
+              skill_rating: e.skill_rating ?? null,
             })),
         }),
       });
@@ -1146,6 +1182,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
+          <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />
         </div>
 
         {sortedEvents.length < 2 ? (
@@ -1338,6 +1375,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                         </>
                       )}
                     </div>
+                    <div style={{ marginTop: 6 }}>
+                      <StarRating
+                        value={emp.skill_rating ?? null}
+                        onChange={(r) => setEmployeeSkillRating(i, r)}
+                      />
+                    </div>
                   </div>
                   <div className="row" style={{ gap: 6, flex: "0 0 auto" }}>
                     <button
@@ -1445,6 +1488,19 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             </label>
           </>
         )}
+
+        {/* Truck fullness — composite vertical × horizontal fill against the
+            interior 25% marks, one reading per truck used. */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          Truck fullness<BetaTag feature="truckFullness" />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
+          For each truck used, estimate how full it got against the interior marks (vertical and horizontal).
+        </div>
+        <TruckFullnessEditor
+          value={data.truck_fullness}
+          onChange={(next) => { set("truck_fullness", next); setSaved(false); }}
+        />
       </div>
       )}
 
@@ -1506,7 +1562,45 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       {/* ── Personal vehicles ── */}
       <div className="card">
         <div className="sectionTitle">Job wrap-up</div>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Review candidate *</div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+          Job type<BetaTag feature="jobTypeTags" />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
+          Tag the kind of work on this job (select all that apply).
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {JOB_TYPE_TAGS.map((tag) => {
+            const active = data.job_type_tags.includes(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => {
+                  setData((prev) => ({
+                    ...prev,
+                    job_type_tags: active
+                      ? prev.job_type_tags.filter((t) => t !== tag)
+                      : [...prev.job_type_tags, tag],
+                  }));
+                  setSaved(false);
+                }}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 999,
+                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  color: active ? "var(--brand)" : "var(--text)",
+                  fontWeight: active ? 700 : 400,
+                  fontSize: 13,
+                  cursor: "pointer",
+                }}
+              >
+                {tag}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
@@ -1879,6 +1973,176 @@ function YesNo({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// Per-employee crew-lead skill rating: 1–5 stars, or N/A (null). Tapping the
+// active rating again clears it back to N/A. Display-only — never affects the
+// man-hours math.
+function StarRating({
+  value,
+  onChange,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+}) {
+  return (
+    <div className="row" style={{ gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+      <span className="small" style={{ color: "var(--muted)", marginRight: 2 }}>Skill</span>
+      {[1, 2, 3, 4, 5].map((n) => {
+        const filled = value != null && n <= value;
+        return (
+          <button
+            key={n}
+            type="button"
+            aria-label={`${n} star${n > 1 ? "s" : ""}`}
+            onClick={() => onChange(value === n ? null : n)}
+            style={{
+              background: "transparent",
+              border: "none",
+              padding: 2,
+              cursor: "pointer",
+              fontSize: 20,
+              lineHeight: 1,
+              color: filled ? "var(--brand)" : "var(--border)",
+            }}
+          >
+            {filled ? "★" : "☆"}
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        onClick={() => onChange(null)}
+        style={{
+          marginLeft: 4,
+          padding: "2px 8px",
+          borderRadius: 8,
+          border: value == null ? "2px solid var(--muted)" : "1px solid var(--border)",
+          background: value == null ? "rgba(148,163,184,0.12)" : "transparent",
+          color: "var(--muted)",
+          fontSize: 12,
+          cursor: "pointer",
+        }}
+      >
+        N/A
+      </button>
+    </div>
+  );
+}
+
+// Truck fullness: add one reading per truck used, each a composite of a
+// vertical and a horizontal 25%-step fill estimate. Estimated fill is
+// vertical×horizontal/100, matching the interior marks.
+function TruckFullnessEditor({
+  value,
+  onChange,
+}: {
+  value: TruckFullnessEntry[];
+  onChange: (next: TruckFullnessEntry[]) => void;
+}) {
+  const used = new Set(value.map((t) => t.truck));
+  const available = TRUCK_IDS.filter((t) => !used.has(t));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {value.map((t) => {
+        const combined = Math.round((t.vertical_pct * t.horizontal_pct) / 100);
+        return (
+          <div key={t.truck} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{t.truck}</div>
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((x) => x.truck !== t.truck))}
+                style={{ color: "var(--danger)" }}
+              >
+                Remove
+              </button>
+            </div>
+            <FullnessSteps
+              label="Vertical fill"
+              value={t.vertical_pct}
+              onChange={(p) => onChange(value.map((x) => (x.truck === t.truck ? { ...x, vertical_pct: p } : x)))}
+            />
+            <FullnessSteps
+              label="Horizontal fill"
+              value={t.horizontal_pct}
+              onChange={(p) => onChange(value.map((x) => (x.truck === t.truck ? { ...x, horizontal_pct: p } : x)))}
+            />
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+              {t.vertical_pct > 0 && t.horizontal_pct > 0
+                ? `Estimated fill: ${combined}% (V${t.vertical_pct} × H${t.horizontal_pct})`
+                : "Pick vertical and horizontal fill"}
+            </div>
+          </div>
+        );
+      })}
+      {available.length > 0 && (
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="small" style={{ color: "var(--muted)" }}>Add truck:</span>
+          {available.map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => onChange([...value, { truck: t, vertical_pct: 0, horizontal_pct: 0 }])}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 999,
+                border: "1px dashed var(--border)",
+                background: "transparent",
+                color: "var(--text)",
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              + {t}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FullnessSteps({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (pct: number) => void;
+}) {
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>{label}</div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {FULLNESS_STEPS.map((step) => {
+          const active = value === step;
+          return (
+            <button
+              key={step}
+              type="button"
+              onClick={() => onChange(step)}
+              style={{
+                flex: 1,
+                padding: "10px 0",
+                borderRadius: 10,
+                border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                color: active ? "var(--brand)" : "var(--muted)",
+                fontWeight: active ? 700 : 400,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              {step}%
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
