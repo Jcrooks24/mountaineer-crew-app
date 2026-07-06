@@ -103,6 +103,7 @@ import {
   FULLNESS_STEPS,
   type TruckFullnessEntry,
 } from "../lib/jobTypes";
+import { isBoxItem } from "../lib/inventory";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
 // dropdowns without leaking the rest of App.tsx's offline state into
@@ -160,6 +161,8 @@ type ReportData = {
   job_type_tags: string[];
   // Per-truck fullness readings against the interior 25% marks.
   truck_fullness: TruckFullnessEntry[];
+  // Crew's note when actual inventory ran over the linked estimate.
+  overage_note: string;
   employee_hours: EmployeeHoursEntry[];
 };
 
@@ -429,6 +432,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     out_of_town: false,
     job_type_tags: [],
     truck_fullness: [],
+    overage_note: "",
     employee_hours: [],
   });
 
@@ -506,6 +510,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           out_of_town: !!(r as any).out_of_town,
           job_type_tags: (r as any).job_type_tags ?? [],
           truck_fullness: (r as any).truck_fullness ?? [],
+          overage_note: (r as any).overage_note ?? "",
           employee_hours: r.employee_hours ?? [],
         });
         serverUpdatedAtRef.current = (r as any).updated_at || "";
@@ -535,6 +540,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             out_of_town: false,
             job_type_tags: [],
             truck_fullness: [],
+            overage_note: "",
             employee_hours: [],
           });
           serverUpdatedAtRef.current = "";
@@ -1010,6 +1016,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           truck_fullness: data.truck_fullness.filter(
             (t) => t.truck && t.vertical_pct > 0 && t.horizontal_pct > 0,
           ),
+          overage_note: data.overage_note.trim() || null,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
           employee_hours: data.employee_hours
@@ -1181,6 +1188,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           {jobName}
         </div>
       )}
+
+      {/* Overage check - self-hides unless this job has a linked estimate. */}
+      <OverageCheck
+        jobUuid={jobUuid}
+        value={data.overage_note}
+        onChange={(v) => { set("overage_note", v); setSaved(false); }}
+      />
 
       {/* ── Job data (employee hours + M1 equipment + personal vehicles) ──
           Employee hours drive one auto-populated $80/hr labor line per
@@ -2214,6 +2228,124 @@ function InventoryCountsSummary({ jobUuid }: { jobUuid: string }) {
       ) : (
         <>none logged yet — add it on the <strong>Inventory</strong> tab</>
       )}
+    </div>
+  );
+}
+
+// Overage conversation: when this job has a linked estimate, compare the
+// actual inventory (furniture/boxes) against it, surface the estimate's access
+// notes, and — when actual runs over — prompt the crew to note what changed.
+// Self-hides when there is no linked estimate (by-job 404) or on any fetch
+// error, so it never blocks the report.
+type ByJobEstimate = {
+  estimate_uuid: string;
+  estimated_hours: number | null;
+  origin_access_notes: string | null;
+  destination_access_notes: string | null;
+  special_items_notes: string | null;
+  general_notes: string | null;
+  estimated_weight_lbs: number;
+  estimated_cubic_ft: number;
+  items: { name: string; qty: number; room?: string | null; subcategory?: string | null }[];
+};
+
+function OverageCheck({
+  jobUuid,
+  value,
+  onChange,
+}: {
+  jobUuid: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [est, setEst] = useState<ByJobEstimate | "none" | null>(null);
+  const [counts, setCounts] = useState<{ furniture: number; boxes: number } | null>(null);
+
+  useEffect(() => {
+    if (!jobUuid) { setEst("none"); return; }
+    let cancelled = false;
+    setEst(null);
+    apiFetch<ByJobEstimate>(`/api/estimates/by-job/${encodeURIComponent(jobUuid)}`)
+      .then((e) => { if (!cancelled) setEst(e); })
+      .catch(() => { if (!cancelled) setEst("none"); }); // 404 / error = no linked estimate → hide
+    apiFetch<{ furniture_count: number; box_count: number }>(
+      `/api/job-inventory/${encodeURIComponent(jobUuid)}`,
+    )
+      .then((r) => { if (!cancelled) setCounts({ furniture: r.furniture_count, boxes: r.box_count }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobUuid]);
+
+  if (est === null || est === "none") return null; // loading or no linked estimate
+
+  const estFurniture = est.items.filter((i) => !isBoxItem(i.name)).reduce((s, i) => s + (i.qty || 0), 0);
+  const estBoxes = est.items.filter((i) => isBoxItem(i.name)).reduce((s, i) => s + (i.qty || 0), 0);
+  const actFurniture = counts?.furniture ?? 0;
+  const actBoxes = counts?.boxes ?? 0;
+  const overFurniture = actFurniture - estFurniture;
+  const overBoxes = actBoxes - estBoxes;
+  const isOver = overFurniture > 0 || overBoxes > 0;
+  const hasActual = counts != null && actFurniture + actBoxes > 0;
+  const hasAccess = est.origin_access_notes || est.destination_access_notes || est.special_items_notes;
+
+  return (
+    <div className="card" style={{ borderColor: isOver ? "var(--danger)" : undefined }}>
+      <div className="row" style={{ alignItems: "center", gap: 8 }}>
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Estimate check</div>
+        <BetaTag feature="overagePrompt" style={{ marginTop: 0 }} />
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        This job has a linked estimate — confirm the actual inventory and access against it.
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+        <CompareTile label="Furniture" est={estFurniture} act={actFurniture} over={overFurniture} />
+        <CompareTile label="Boxes" est={estBoxes} act={actBoxes} over={overBoxes} />
+      </div>
+
+      {!hasActual && (
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+          No actual inventory logged yet — add it on the <strong>Inventory</strong> tab to compare.
+        </div>
+      )}
+
+      {hasAccess && (
+        <div className="small" style={{ marginBottom: 8, lineHeight: 1.5 }}>
+          {est.origin_access_notes && <div><strong>Origin access:</strong> {est.origin_access_notes}</div>}
+          {est.destination_access_notes && <div><strong>Destination access:</strong> {est.destination_access_notes}</div>}
+          {est.special_items_notes && <div><strong>Special items:</strong> {est.special_items_notes}</div>}
+        </div>
+      )}
+
+      {isOver ? (
+        <div style={{ marginTop: 6 }}>
+          <div className="small" style={{ color: "var(--danger)", fontWeight: 700, marginBottom: 6 }}>
+            Actual is over the estimate{overFurniture > 0 ? ` · +${overFurniture} furniture` : ""}
+            {overBoxes > 0 ? ` · +${overBoxes} boxes` : ""}. Note what changed:
+          </div>
+          <textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            rows={3}
+            placeholder="Extra items, packing not expected, different access, added stairs/parking…"
+            style={textareaStyle}
+          />
+        </div>
+      ) : hasActual ? (
+        <div className="small" style={{ color: "var(--ok)" }}>Actual inventory is within the estimate.</div>
+      ) : null}
+    </div>
+  );
+}
+
+function CompareTile({ label, est, act, over }: { label: string; est: number; act: number; over: number }) {
+  return (
+    <div style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
+      <div className="small" style={{ color: "var(--muted)" }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 700 }}>
+        {act} <span className="small" style={{ color: "var(--muted)", fontWeight: 400 }}>/ {est} est</span>
+      </div>
+      {over > 0 && <div className="small" style={{ color: "var(--danger)", fontWeight: 600 }}>+{over} over</div>}
     </div>
   );
 }

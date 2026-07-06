@@ -97,6 +97,7 @@ class JobReportUpsert(BaseModel):
     bill_personal_vehicles: bool = False
     job_type_tags: Optional[List[str]] = None
     truck_fullness: Optional[List[TruckFullnessEntry]] = None
+    overage_note: Optional[str] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
 
     @field_validator("job_type_tags")
@@ -149,6 +150,7 @@ class JobReportResponse(BaseModel):
     bill_personal_vehicles: bool = False
     job_type_tags: Optional[List[str]] = None
     truck_fullness: Optional[List[TruckFullnessEntry]] = None
+    overage_note: Optional[str] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime

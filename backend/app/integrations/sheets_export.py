@@ -834,6 +834,7 @@ JOB_REPORT_HEADERS = [
     "job_type_tags", "truck_fullness",
     "furniture_count", "box_count",
     "estimated_hours", "estimated_hours_source", "actual_man_hours", "hours_delta",
+    "overage_note",
     "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
@@ -1074,6 +1075,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "estimated_hours_source": _est_source,
         "actual_man_hours": _actual_man_hours,
         "hours_delta": ("" if _est_hours is None else round(_actual_man_hours - _est_hours, 2)),
+        "overage_note": report.get("overage_note", "") or "",
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,

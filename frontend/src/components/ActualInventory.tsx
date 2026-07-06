@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
 import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
+import { isBoxItem } from "../lib/inventory";
 import { BetaTag } from "./BetaTag";
 import {
   drain,
@@ -17,10 +18,6 @@ import {
 // optimistic temp row (negative id) still queued for POST.
 type Row = ServerItem & { pending?: boolean };
 
-// Names in the static catalog flagged as boxes, lower-cased for matching.
-const BOX_NAMES = new Set(
-  FURNITURE_CATALOG.filter((f) => f.category === "Boxes").map((f) => f.name.toLowerCase()),
-);
 const CATALOG_NAMES = FURNITURE_CATALOG.map((f) => f.name);
 
 function newTempId(): number {
@@ -116,10 +113,10 @@ export default function ActualInventory({
     );
   }
 
-  // Keep is_box in sync with a matched catalog item until the crew overrides it.
+  // Auto-detect box vs furniture from the item name until the crew overrides it.
   useEffect(() => {
     if (boxTouchedRef.current) return;
-    setIsBox(BOX_NAMES.has(name.trim().toLowerCase()));
+    setIsBox(isBoxItem(name));
   }, [name]);
 
   const counts = useMemo(() => {

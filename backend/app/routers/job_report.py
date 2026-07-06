@@ -83,6 +83,7 @@ def _to_response(r: JobReport) -> JobReportResponse:
         bill_personal_vehicles=bool(r.bill_personal_vehicles),
         job_type_tags=_decode_job_type_tags(r.job_type_tags_json),
         truck_fullness=_decode_truck_fullness(r.truck_fullness_json),
+        overage_note=r.overage_note,
         employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
         updated_at=r.updated_at,
@@ -139,6 +140,7 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "truck_fullness": [t.model_dump() for t in truck_fullness] if truck_fullness else [],
         "furniture_count": "" if furniture_count is None else furniture_count,
         "box_count": "" if box_count is None else box_count,
+        "overage_note": report.overage_note or "",
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
         "updated_at": report.updated_at,
@@ -185,6 +187,7 @@ def upsert_job_report(
         existing.bill_personal_vehicles = body.bill_personal_vehicles
         existing.job_type_tags_json = job_type_tags_json
         existing.truck_fullness_json = truck_fullness_json
+        existing.overage_note = body.overage_note
         existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
         db.commit()
@@ -209,6 +212,7 @@ def upsert_job_report(
         bill_personal_vehicles=body.bill_personal_vehicles,
         job_type_tags_json=job_type_tags_json,
         truck_fullness_json=truck_fullness_json,
+        overage_note=body.overage_note,
         employee_hours_json=employee_hours_json,
         created_at=now,
         updated_at=now,

@@ -82,6 +82,11 @@ class JobReport(Base):
     # not collected.
     truck_fullness_json = Column(Text, nullable=True)
 
+    # Crew's explanation when the actual inventory ran over the linked estimate
+    # (extra items, different access, stairs/parking). Captured by the overage
+    # prompt - the objective est-vs-actual note for the client conversation.
+    overage_note = Column(Text, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
