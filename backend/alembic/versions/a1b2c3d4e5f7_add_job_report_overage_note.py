@@ -1,6 +1,6 @@
 """add overage_note to job_reports
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: a1b2c3d4e5f7
 Revises: z0a1b2c3d4e5
 Create Date: 2026-07-06
 
@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 'a1b2c3d4e5f6'
+revision: str = 'a1b2c3d4e5f7'
 down_revision: Union[str, Sequence[str], None] = 'z0a1b2c3d4e5'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
