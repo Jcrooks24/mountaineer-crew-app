@@ -104,12 +104,17 @@ class JobReportUpsert(BaseModel):
     @field_validator("job_type_tags")
     @classmethod
     def job_type_tags_valid(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        # Job types are admin-configurable (see the job_types table), so we no
+        # longer validate against a fixed vocabulary here - only sanity-bound
+        # the input. Unknown/renamed tags on historical reports stay valid.
         if v is None:
             return v
-        bad = [t for t in v if t not in JOB_TYPE_TAGS]
-        if bad:
-            raise ValueError(f"unknown job_type_tags: {bad}")
-        return v
+        if len(v) > 50:
+            raise ValueError("too many job_type_tags")
+        cleaned = [t.strip() for t in v if isinstance(t, str) and t.strip()]
+        if any(len(t) > 64 for t in cleaned):
+            raise ValueError("job_type_tag too long")
+        return cleaned
 
     @field_validator("personal_vehicles")
     @classmethod

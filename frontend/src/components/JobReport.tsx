@@ -98,10 +98,10 @@ export { roundBillableQuarter, type EmployeeHoursEntry } from "../lib/employeeHo
 import type { EmployeeHoursEntry } from "../lib/employeeHours";
 import { roundBillableQuarter } from "../lib/employeeHours";
 import {
-  JOB_TYPE_TAGS,
   TRUCK_IDS,
   type TruckFullnessEntry,
 } from "../lib/jobTypes";
+import { useJobTypes } from "../lib/jobTypesStore";
 import { isBoxItem } from "../lib/inventory";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
@@ -460,6 +460,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showDVIRModal, setShowDVIRModal] = useState(false);
+  // Admin-configurable job-type tags (server, cached). Union with any tags
+  // already saved on this report so a since-deactivated tag still shows.
+  const jobTypes = useJobTypes();
   // Crew must confirm the auto-populated bill rows before the report submits.
   // The checkbox lives below the M1 sliders so crew see the M1-driven
   // charges populate before acknowledging them.
@@ -1636,7 +1639,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           Tag the kind of work on this job (select all that apply).
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {JOB_TYPE_TAGS.map((tag) => {
+          {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
             const active = data.job_type_tags.includes(tag);
             return (
               <button

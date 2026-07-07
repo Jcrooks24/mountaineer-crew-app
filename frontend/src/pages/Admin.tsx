@@ -2136,6 +2136,7 @@ function SettingsTab({
       />
       <DVIRUnitsCard />
       <EmployeeTagsManagerCard />
+      <JobTypesManagerCard />
       <HelpTextCard />
     </div>
   );
@@ -2304,6 +2305,127 @@ function EmployeeTagsManagerCard() {
         >
           Add
         </button>
+      </div>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+    </div>
+  );
+}
+
+type JobType = { id: number; name: string; sort_order: number; active: boolean };
+
+// Admin CRUD for the configurable job-type tag list shown on the Job Report.
+function JobTypesManagerCard() {
+  const [types, setTypes] = useState<JobType[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<JobType[]>("/api/admin/job-types")
+      .then((t) => { if (!cancelled) setTypes(t); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function createType() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true); setErr(null);
+    try {
+      const created = await apiFetch<JobType>("/api/admin/job-types", {
+        method: "POST", body: JSON.stringify({ name }),
+      });
+      setTypes((prev) => [...prev, created].sort((a, b) => a.sort_order - b.sort_order));
+      setNewName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to create job type");
+    } finally { setBusy(false); }
+  }
+
+  async function patchType(id: number, patch: Partial<Pick<JobType, "name" | "active">>) {
+    setBusy(true); setErr(null);
+    try {
+      const updated = await apiFetch<JobType>(`/api/admin/job-types/${id}`, {
+        method: "PATCH", body: JSON.stringify(patch),
+      });
+      setTypes((prev) => prev.map((t) => (t.id === id ? updated : t)));
+      setEditing(null); setEditName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to update");
+    } finally { setBusy(false); }
+  }
+
+  async function deleteType(t: JobType) {
+    if (!confirm(`Delete job type "${t.name}"? It stays on any report already tagged with it, but won't be offered on new reports.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/admin/job-types/${t.id}`, { method: "DELETE" });
+      setTypes((prev) => prev.filter((x) => x.id !== t.id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to delete");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Job Types</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        The "Job type" tags crew pick on the Job Report. These also drive which
+        skills are shown to rate on a job (Crew Skills). Deactivate to hide a
+        type from new reports without losing it on old ones.
+      </div>
+
+      {loading ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div className="col" style={{ gap: 6 }}>
+          {types.map((t) => {
+            const isEditing = editing === t.id;
+            return (
+              <div key={t.id} className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                {isEditing ? (
+                  <input autoFocus value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") patchType(t.id, { name: editName.trim() }); if (e.key === "Escape") setEditing(null); }}
+                    style={{ flex: 1, padding: "4px 8px", fontSize: 13 }} />
+                ) : (
+                  <span style={{ fontSize: 14, fontWeight: 600, opacity: t.active ? 1 : 0.5 }}>
+                    {t.name}{t.active ? "" : " (inactive)"}
+                  </span>
+                )}
+                <div className="row" style={{ gap: 6 }}>
+                  {isEditing ? (
+                    <>
+                      <button onClick={() => patchType(t.id, { name: editName.trim() })} disabled={busy} style={{ fontSize: 12, padding: "4px 10px" }}>Save</button>
+                      <button onClick={() => { setEditing(null); setEditName(""); }} style={{ fontSize: 12, padding: "4px 10px", background: "none", border: "1px solid var(--border)", color: "var(--muted)" }}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => patchType(t.id, { active: !t.active })} disabled={busy} style={{ fontSize: 12, padding: "4px 10px" }}>
+                        {t.active ? "Deactivate" : "Activate"}
+                      </button>
+                      <button onClick={() => { setEditing(t.id); setEditName(t.name); }} style={{ fontSize: 12, padding: "4px 10px" }}>Rename</button>
+                      <button onClick={() => deleteType(t)} disabled={busy} style={{ fontSize: 12, padding: "4px 10px", background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}>Delete</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <input value={newName} onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") createType(); }}
+          placeholder="New job type" style={{ flex: 1, padding: "6px 10px", fontSize: 13 }} />
+        <button onClick={createType} disabled={busy || !newName.trim()} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>Add</button>
       </div>
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
