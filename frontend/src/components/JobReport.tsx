@@ -1240,12 +1240,59 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Hours, equipment, and vehicles - the data used to build the invoice line items.
         </div>
+
+        {/* Job type comes first: it decides which skills are rated per employee
+            below, so the crew must pick it before the skill rows are meaningful. */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+          Job type<BetaTag feature="jobTypeTags" />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
+          {ht.jobTypeHint}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
+          {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
+            const active = data.job_type_tags.includes(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => {
+                  setData((prev) => ({
+                    ...prev,
+                    job_type_tags: active
+                      ? prev.job_type_tags.filter((t) => t !== tag)
+                      : [...prev.job_type_tags, tag],
+                  }));
+                  setSaved(false);
+                }}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 999,
+                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  color: active ? "var(--brand)" : "var(--text)",
+                  fontWeight: active ? 700 : 400,
+                  fontSize: 13,
+                  cursor: "pointer",
+                }}
+              >
+                {tag}
+              </button>
+            );
+          })}
+        </div>
+
         <InventoryCountsSummary jobUuid={jobUuid} />
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
           <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />
         </div>
+        {relevantSkills.length > 0 && ht.skillsHint && (
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+            {ht.skillsHint}
+          </div>
+        )}
 
         {sortedEvents.length < 2 ? (
           <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
@@ -1582,7 +1629,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           Truck fullness<BetaTag feature="truckFullness" />
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-          For each truck used, estimate how full it got against the interior marks (vertical and horizontal).
+          {ht.truckFullnessHint}
         </div>
         <TruckFullnessEditor
           value={data.truck_fullness}
@@ -1649,45 +1696,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       {/* ── Personal vehicles ── */}
       <div className="card">
         <div className="sectionTitle">Job wrap-up</div>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
-          Job type<BetaTag feature="jobTypeTags" />
-        </div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-          Tag the kind of work on this job (select all that apply).
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
-            const active = data.job_type_tags.includes(tag);
-            return (
-              <button
-                key={tag}
-                type="button"
-                onClick={() => {
-                  setData((prev) => ({
-                    ...prev,
-                    job_type_tags: active
-                      ? prev.job_type_tags.filter((t) => t !== tag)
-                      : [...prev.job_type_tags, tag],
-                  }));
-                  setSaved(false);
-                }}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: 999,
-                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
-                  color: active ? "var(--brand)" : "var(--text)",
-                  fontWeight: active ? 700 : 400,
-                  fontSize: 13,
-                  cursor: "pointer",
-                }}
-              >
-                {tag}
-              </button>
-            );
-          })}
-        </div>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
@@ -2093,6 +2102,23 @@ function EmployeeSkillRatings({
   );
 }
 
+// Sentinel stored in skill_ratings for a skill the crew explicitly marked "not
+// applicable" on this job - distinct from unrated (absent from the map) and from
+// a real 0-5 score. Backend + sheet export understand this value.
+const SKILL_NA = -1;
+
+function NaButton({ on, onClick }: { on: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick}
+      style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+        border: on ? "2px solid var(--muted)" : "1px solid var(--border)",
+        background: on ? "rgba(255,255,255,0.08)" : "transparent",
+        color: on ? "var(--text)" : "var(--muted)", fontWeight: on ? 700 : 400 }}>
+      N/A
+    </button>
+  );
+}
+
 function SkillRatingRow({
   skill,
   value,
@@ -2103,6 +2129,7 @@ function SkillRatingRow({
   onChange: (rating: number | null) => void;
 }) {
   const v = value ?? null;
+  const isNa = v === SKILL_NA;
   if (skill.binary) {
     return (
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -2120,6 +2147,7 @@ function SkillRatingRow({
               </button>
             );
           })}
+          <NaButton on={isNa} onClick={() => onChange(isNa ? null : SKILL_NA)} />
         </div>
       </div>
     );
@@ -2127,17 +2155,20 @@ function SkillRatingRow({
   return (
     <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
       <span className="small" style={{ color: "var(--text)" }}>{skill.name}</span>
-      <div className="row" style={{ gap: 2, alignItems: "center" }}>
-        {[1, 2, 3, 4, 5].map((n) => {
-          const filled = v != null && n <= v;
-          return (
-            <button key={n} type="button" aria-label={`${skill.name} ${n} of 5`}
-              onClick={() => onChange(v === n ? null : n)}
-              style={{ background: "transparent", border: "none", padding: 1, cursor: "pointer", fontSize: 18, lineHeight: 1, color: filled ? "var(--brand)" : "var(--border)" }}>
-              {filled ? "★" : "☆"}
-            </button>
-          );
-        })}
+      <div className="row" style={{ gap: 6, alignItems: "center" }}>
+        <div className="row" style={{ gap: 2, alignItems: "center", opacity: isNa ? 0.4 : 1 }}>
+          {[1, 2, 3, 4, 5].map((n) => {
+            const filled = !isNa && v != null && n <= v;
+            return (
+              <button key={n} type="button" aria-label={`${skill.name} ${n} of 5`}
+                onClick={() => onChange(v === n ? null : n)}
+                style={{ background: "transparent", border: "none", padding: 1, cursor: "pointer", fontSize: 18, lineHeight: 1, color: filled ? "var(--brand)" : "var(--border)" }}>
+                {filled ? "★" : "☆"}
+              </button>
+            );
+          })}
+        </div>
+        <NaButton on={isNa} onClick={() => onChange(isNa ? null : SKILL_NA)} />
       </div>
     </div>
   );
@@ -2309,6 +2340,8 @@ function OverageCheck({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { settings } = useTheme();
+  const ht = settings.helpTexts;
   const [est, setEst] = useState<ByJobEstimate | "none" | null>(null);
   const [counts, setCounts] = useState<{ furniture: number; boxes: number } | null>(null);
 
@@ -2374,6 +2407,9 @@ function OverageCheck({
             Actual is over the estimate{overFurniture > 0 ? ` · +${overFurniture} furniture` : ""}
             {overBoxes > 0 ? ` · +${overBoxes} boxes` : ""}. Note what changed:
           </div>
+          {ht.overageHint && (
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>{ht.overageHint}</div>
+          )}
           <textarea
             value={value}
             onChange={(e) => onChange(e.target.value)}

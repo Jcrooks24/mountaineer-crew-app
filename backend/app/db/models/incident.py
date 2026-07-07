@@ -19,6 +19,10 @@ class Incident(Base):
     # Client-generated UUID - idempotency key for the offline queue.
     incident_uuid = Column(String, unique=True, index=True, nullable=False)
 
+    # Human-readable claim number (e.g. "MC-20260707-4F2A"). Generated on the
+    # device at submit so it's available offline and stable across syncs.
+    claim_number = Column(String, nullable=True)
+
     # Universal job key (may be blank if reported outside a job).
     job_uuid = Column(String, index=True, nullable=True)
     job_name = Column(String, nullable=True)

@@ -4167,38 +4167,76 @@ function HelpTextCard() {
     update({ helpTexts: { ...ht, [key]: val } });
   }
 
-  const fields: { key: keyof HelpTexts; label: string }[] = [
-    { key: "photoCaptionPlaceholder",        label: "Photo caption placeholder" },
-    { key: "jobNotesPlaceholder",            label: "Job notes placeholder" },
-    { key: "billNotesPlaceholder",           label: "Bill notes placeholder" },
-    { key: "hoursMismatchPlaceholder",       label: "Hours mismatch reason placeholder" },
-    { key: "jobDescriptionPlaceholder",      label: "Manual job description placeholder" },
-    { key: "photosHint",                     label: "Photos tab instructions" },
-    { key: "schedulingNotesPlaceholder",     label: "Scheduling notes placeholder" },
-    { key: "availabilityDayNotePlaceholder", label: "Availability day note placeholder" },
-    { key: "futureAbsenceNotePlaceholder",   label: "Future absence note placeholder" },
+  // Grouped by the page/tab the field appears on so admin can find the wording
+  // they want to change by where they see it in the crew app.
+  const groups: { page: string; fields: { key: keyof HelpTexts; label: string }[] }[] = [
+    {
+      page: "Photos tab",
+      fields: [
+        { key: "photosHint",                  label: "Photos tab instructions" },
+        { key: "photoCaptionPlaceholder",     label: "Photo caption placeholder" },
+        { key: "incidentHint",                label: "Incident reporting hint" },
+        { key: "incidentDescriptionPlaceholder", label: "Incident “what happened” placeholder" },
+      ],
+    },
+    {
+      page: "Job Report tab",
+      fields: [
+        { key: "jobTypeHint",                 label: "Job type hint" },
+        { key: "skillsHint",                  label: "Skill rating hint" },
+        { key: "truckFullnessHint",           label: "Truck fullness hint" },
+        { key: "overageHint",                 label: "Estimate overage hint" },
+        { key: "hoursMismatchPlaceholder",    label: "Hours mismatch reason placeholder" },
+        { key: "billNotesPlaceholder",        label: "Bill notes placeholder" },
+      ],
+    },
+    {
+      page: "Timeline tab",
+      fields: [
+        { key: "jobNotesPlaceholder",         label: "Job notes placeholder" },
+        { key: "jobDescriptionPlaceholder",   label: "Manual job description placeholder" },
+      ],
+    },
+    {
+      page: "Availability page",
+      fields: [
+        { key: "schedulingNotesPlaceholder",     label: "Scheduling notes placeholder" },
+        { key: "availabilityDayNotePlaceholder", label: "Availability day note placeholder" },
+        { key: "futureAbsenceNotePlaceholder",   label: "Future absence note placeholder" },
+      ],
+    },
   ];
 
   return (
     <div className="card">
       <div className="sectionTitle">Field Help Text</div>
-      <div className="col" style={{ gap: 12 }}>
-        {fields.map(({ key, label }) => (
-          <div key={key} className="col" style={{ gap: 4 }}>
-            <label className="small">{label}</label>
-            <div className="row" style={{ gap: 8 }}>
-              <input
-                value={ht[key]}
-                onChange={(e) => set(key, e.target.value)}
-                style={{ flex: 1, fontSize: 13 }}
-              />
-              <button
-                onClick={() => set(key, DEFAULT_HELP_TEXTS[key])}
-                style={{ fontSize: 11, padding: "4px 10px", color: "var(--muted)", whiteSpace: "nowrap" }}
-              >
-                Reset
-              </button>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Placeholder and hint text shown to crew, grouped by the page it appears on.
+      </div>
+      <div className="col" style={{ gap: 18 }}>
+        {groups.map((group) => (
+          <div key={group.page} className="col" style={{ gap: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>
+              {group.page}
             </div>
+            {group.fields.map(({ key, label }) => (
+              <div key={key} className="col" style={{ gap: 4 }}>
+                <label className="small">{label}</label>
+                <div className="row" style={{ gap: 8 }}>
+                  <input
+                    value={ht[key]}
+                    onChange={(e) => set(key, e.target.value)}
+                    style={{ flex: 1, fontSize: 13 }}
+                  />
+                  <button
+                    onClick={() => set(key, DEFAULT_HELP_TEXTS[key])}
+                    style={{ fontSize: 11, padding: "4px 10px", color: "var(--muted)", whiteSpace: "nowrap" }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         ))}
       </div>

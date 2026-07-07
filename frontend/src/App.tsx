@@ -5,7 +5,7 @@ import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
 import BolInventoryTab from "./components/BolInventoryTab";
 import ActualInventory from "./components/ActualInventory";
-import IncidentReport from "./components/IncidentReport";
+import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport";
 import { drainIncidents } from "./lib/incidentStore";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
@@ -127,7 +127,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "report" | "inventory" | "incident";
+type Tab = "timeline" | "photos" | "report" | "inventory";
 
 type EventRecord = {
   event_id: string;
@@ -187,6 +187,8 @@ type ServerPhoto = {
   thumb_url: string;
   created_at: string;
   mime_type: string;
+  incident_uuid?: string | null;
+  claim_number?: string | null;
 };
 
 // One entry in the pending photo batch (not yet saved). Crew can queue several
@@ -438,6 +440,11 @@ export default function App() {
   // Saved-gallery note editor: id of the photo whose note is open + its draft.
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState<string>("");
+  // Incident reporting now lives on the Photos tab. jobIncidents feeds the
+  // "attach these photos to <claim>" selector; attachIncidentUuid is the
+  // currently-selected target ("" = tag the batch to the job, not an incident).
+  const [jobIncidents, setJobIncidents] = useState<JobIncidentRef[]>([]);
+  const [attachIncidentUuid, setAttachIncidentUuid] = useState<string>("");
 
   const [sendingType, setSendingType] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -1386,6 +1393,31 @@ export default function App() {
     }
   }
 
+  // Count photos tagged to each incident (local + server), deduped by photo id,
+  // so the incident rows can show "N photos attached".
+  const incidentPhotoCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    const seen = new Set<string>();
+    for (const p of photos) {
+      if (!p.incident_uuid) continue;
+      seen.add(p.id);
+      counts[p.incident_uuid] = (counts[p.incident_uuid] || 0) + 1;
+    }
+    for (const sp of serverPhotos) {
+      if (!sp.incident_uuid || seen.has(sp.id)) continue;
+      counts[sp.incident_uuid] = (counts[sp.incident_uuid] || 0) + 1;
+    }
+    return counts;
+  }, [photos, serverPhotos]);
+
+  // Reset the photo attach target when the job changes. Keyed on jobUuid (not
+  // on jobIncidents) so it can't race the onReported auto-select: jobIncidents
+  // updates a render after onReported sets the target, and keying on it here
+  // would clobber the just-selected incident before the list caught up.
+  useEffect(() => {
+    setAttachIncidentUuid("");
+  }, [jobUuid]);
+
   // Append one or more picked/taken files to the pending batch. Called by both
   // the "Add from Library" (multiple) and "Take Photo" (capture) inputs, so a
   // crew member can accumulate several shots before submitting.
@@ -1413,6 +1445,11 @@ export default function App() {
   // upload. Drive failures leave the photo queued as "failed"/"pending" for the
   // Retry button - they never lose the local copy.
   async function uploadOnePhoto(photoId: string, file: File, caption: string) {
+    // Resolve the incident this batch is tagged to (if any). "" target = a plain
+    // job photo. A stale selection (incident not in the current list) is ignored.
+    const inc = attachIncidentUuid
+      ? jobIncidents.find((x) => x.incident_uuid === attachIncidentUuid)
+      : undefined;
     const stored: StoredPhoto = {
       id: photoId,
       job_uuid: jobUuid.trim(),
@@ -1421,6 +1458,8 @@ export default function App() {
       caption,
       blob: file,
       drive_status: "pending",
+      incident_uuid: inc?.incident_uuid,
+      claim_number: inc?.claim_number,
     };
     await addPhoto(stored);
 
@@ -1433,6 +1472,10 @@ export default function App() {
       form.append("job_name", jobName);
       form.append("job_date", jobDate);
       form.append("caption", caption);
+      if (inc) {
+        form.append("incident_uuid", inc.incident_uuid);
+        form.append("claim_number", inc.claim_number || "");
+      }
 
       const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {
@@ -1526,6 +1569,10 @@ export default function App() {
       form.append("job_name", jobName);
       form.append("job_date", jobDate);
       form.append("caption", photo.caption);
+      if (photo.incident_uuid) {
+        form.append("incident_uuid", photo.incident_uuid);
+        form.append("claim_number", photo.claim_number || "");
+      }
       const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {
         method: "POST",
@@ -1891,9 +1938,6 @@ export default function App() {
         </button>
         <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
           Inventory
-        </button>
-        <button className={"tab " + (tab === "incident" ? "active" : "")} onClick={() => setTab("incident")}>
-          Incident
         </button>
         <button
           className={"tab " + (tab === "report" ? "active" : "")}
@@ -2378,6 +2422,25 @@ export default function App() {
       {/* Photos */}
       {tab === "photos" && (
         <>
+          {/* Incident reporting lives on the Photos tab so crew document an
+              incident and attach photos to its claim in one place. */}
+          {jobUuid ? (
+            <IncidentReport
+              jobUuid={jobUuid}
+              jobName={jobName}
+              jobDate={jobDate}
+              onIncidentsChange={setJobIncidents}
+              onReported={(ref) => { setAttachIncidentUuid(ref.incident_uuid); setTab("photos"); }}
+              photoCounts={incidentPhotoCounts}
+            />
+          ) : (
+            <div className="card">
+              <div className="small" style={{ color: "var(--muted)" }}>
+                Select a job on the Timeline tab to report an incident or add photos.
+              </div>
+            </div>
+          )}
+
           {/* Capture: take one at a time and/or multi-select from the library,
               accumulating a batch before submitting. */}
           <div className="card">
@@ -2426,6 +2489,34 @@ export default function App() {
           {pendingPhotos.length > 0 && (
             <div className="card">
               <div className="sectionTitle">Ready to save ({pendingPhotos.length})</div>
+
+              {/* Attach target: tag this batch to an incident's claim, or leave
+                  as plain job photos. Only shown when the job has incidents. */}
+              {jobIncidents.length > 0 && (
+                <div className="col" style={{ gap: 6, marginTop: 8 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Attach these photos to</span>
+                  <div className="row wrap" style={{ gap: 6 }}>
+                    {[{ incident_uuid: "", claim_number: "", severity: "", description: "The job (not an incident)" } as JobIncidentRef, ...jobIncidents].map((inc) => {
+                      const on = attachIncidentUuid === inc.incident_uuid;
+                      const label = inc.incident_uuid
+                        ? (inc.claim_number || "Incident")
+                        : "The job";
+                      return (
+                        <button key={inc.incident_uuid || "__job__"} type="button"
+                          onClick={() => setAttachIncidentUuid(inc.incident_uuid)}
+                          title={inc.description}
+                          style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, cursor: "pointer",
+                            border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                            background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                            color: on ? "var(--brand)" : "var(--text)", fontWeight: on ? 700 : 400 }}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="col" style={{ gap: 12, marginTop: 8 }}>
                 {pendingPhotos.map((p) => {
                   const url = URL.createObjectURL(p.file);
@@ -2508,6 +2599,11 @@ export default function App() {
                         ) : (
                           p.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
                         )}
+                        {p.claim_number && (
+                          <div style={{ display: "inline-block", marginBottom: 6, fontSize: 11, fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
+                            Incident {p.claim_number}
+                          </div>
+                        )}
                         <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(p.created_at)}</div>
                         <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
                           {editingNoteId !== p.id && (
@@ -2583,6 +2679,11 @@ export default function App() {
                       ) : (
                         sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>
                       )}
+                      {sp.claim_number && (
+                        <div style={{ display: "inline-block", marginBottom: 6, fontSize: 11, fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
+                          Incident {sp.claim_number}
+                        </div>
+                      )}
                       <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(sp.created_at)}</div>
                       {sp.created_by && (
                         <div className="row" style={{ gap: 6, marginTop: 4 }}>
@@ -2625,19 +2726,6 @@ export default function App() {
           <div className="card">
             <div className="small" style={{ color: "var(--muted)" }}>
               Select a job on the Timeline tab before adding inventory.
-            </div>
-          </div>
-        )
-      )}
-
-      {/* Incident */}
-      {tab === "incident" && (
-        jobUuid ? (
-          <IncidentReport jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
-        ) : (
-          <div className="card">
-            <div className="small" style={{ color: "var(--muted)" }}>
-              Select a job on the Timeline tab before reporting an incident.
             </div>
           </div>
         )

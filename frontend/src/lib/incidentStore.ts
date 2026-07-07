@@ -10,11 +10,15 @@ export type Attributable = "yes" | "no" | "unknown";
 
 export type IncidentPayload = {
   incident_uuid: string;
+  // Human-readable claim number generated on the device at submit (offline-safe).
+  claim_number: string;
   job_uuid: string | null;
   job_name: string | null;
   incident_date: string | null;
   attributed_crew: string | null;
   severity: Severity;
+  // Retained for back-compat with the backend/admin log; the crew form no longer
+  // collects attributability, estimated cost, or the extra notes field.
   attributable: Attributable;
   description: string;
   est_cost: number | null;
@@ -94,4 +98,15 @@ export function newIncidentUuid(): string {
   } catch {
     return `inc-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
   }
+}
+
+// Human-readable claim number: "MC-YYYYMMDD-XXXX". The date segment is the
+// incident date (falls back to today) and the 4-char code is derived from the
+// incident uuid so it's stable and collision-resistant without a server round
+// trip - the crew sees it instantly, even offline. `dateStr` is "YYYY-MM-DD".
+export function newClaimNumber(dateStr: string | null, uuid: string): string {
+  const ymd = (dateStr || "").replace(/-/g, "").slice(0, 8) ||
+    new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const hex = uuid.replace(/[^a-fA-F0-9]/g, "").slice(0, 4).toUpperCase().padEnd(4, "0");
+  return `MC-${ymd}-${hex}`;
 }

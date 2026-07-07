@@ -30,6 +30,7 @@ ATTRIBUTABLE = {"yes", "no", "unknown"}
 
 class IncidentIn(BaseModel):
     incident_uuid: str
+    claim_number: Optional[str] = None
     job_uuid: Optional[str] = None
     job_name: Optional[str] = None
     incident_date: Optional[str] = None
@@ -46,6 +47,7 @@ class IncidentIn(BaseModel):
 class IncidentOut(BaseModel):
     id: int
     incident_uuid: str
+    claim_number: Optional[str] = None
     job_uuid: Optional[str] = None
     job_name: Optional[str] = None
     incident_date: Optional[str] = None
@@ -70,6 +72,7 @@ def _to_out(inc: Incident) -> IncidentOut:
     return IncidentOut(
         id=inc.id,
         incident_uuid=inc.incident_uuid,
+        claim_number=inc.claim_number,
         job_uuid=inc.job_uuid,
         job_name=inc.job_name,
         incident_date=inc.incident_date,
@@ -112,6 +115,9 @@ def create_incident(
         inc = Incident(incident_uuid=body.incident_uuid.strip(), created_at=now)
         db.add(inc)
 
+    # Claim number is client-generated and immutable once set. A retry sends the
+    # same value; never wipe an existing claim number if a later payload omits it.
+    inc.claim_number = (body.claim_number or "").strip() or inc.claim_number
     inc.job_uuid = (body.job_uuid or "").strip() or None
     inc.job_name = (body.job_name or "").strip() or None
     inc.incident_date = (body.incident_date or "").strip() or None

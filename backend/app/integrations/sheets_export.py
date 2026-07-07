@@ -1014,9 +1014,11 @@ def _format_employee_hours(entries: Optional[list]) -> str:
             parts = []
             for sk_name, sk_val in ratings.items():
                 try:
-                    parts.append(f"{sk_name} {int(sk_val)}/5")
+                    n = int(sk_val)
                 except (TypeError, ValueError):
                     continue
+                # -1 is the explicit "not applicable" sentinel the crew set.
+                parts.append(f"{sk_name} N/A" if n < 0 else f"{sk_name} {n}/5")
             if parts:
                 skill_str = "skills: " + ", ".join(parts)
         else:
@@ -2020,9 +2022,9 @@ def schedule_job_inventory_export(job_uuid: str) -> None:
 # ── Incident export ──────────────────────────────────────────────────────────
 
 INCIDENT_HEADERS = [
-    "incident_uuid", "incident_date", "job_uuid", "job_name", "reported_by",
-    "attributed_crew", "severity", "attributable", "description", "est_cost",
-    "resolved", "notes", "photo_urls", "created_at",
+    "incident_uuid", "claim_number", "incident_date", "job_uuid", "job_name",
+    "reported_by", "attributed_crew", "severity", "attributable", "description",
+    "est_cost", "resolved", "notes", "photo_urls", "created_at",
 ]
 
 
@@ -2041,6 +2043,7 @@ def export_incident_to_sheets(db: Session, inc: Dict[str, Any]) -> int:
 
     row = {
         "incident_uuid": uuid,
+        "claim_number": inc.get("claim_number") or "",
         "incident_date": inc.get("incident_date") or "",
         "job_uuid": inc.get("job_uuid") or "",
         "job_name": inc.get("job_name") or "",

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import RosterTypeahead from "./RosterTypeahead";
 import { BetaTag } from "./BetaTag";
+import { useTheme } from "../theme/ThemeContext";
 import { mountainDateYYYYMMDD } from "../lib/time";
 import { formatMountainDateTime } from "../lib/time";
 import {
@@ -8,10 +9,10 @@ import {
   fetchJobIncidents,
   pendingIncidents,
   newIncidentUuid,
+  newClaimNumber,
   type IncidentOut,
   type IncidentPayload,
   type Severity,
-  type Attributable,
 } from "../lib/incidentStore";
 
 const SEVERITIES: { value: Severity; label: string; color: string }[] = [
@@ -20,21 +21,37 @@ const SEVERITIES: { value: Severity; label: string; color: string }[] = [
   { value: "major", label: "Major", color: "var(--danger)" },
 ];
 
-const ATTRIBUTABLE: { value: Attributable; label: string }[] = [
-  { value: "yes", label: "Yes" },
-  { value: "no", label: "No" },
-  { value: "unknown", label: "Unknown" },
-];
+// Lightweight shape passed up to the Photos tab so it can offer an
+// "attach these photos to <claim>" selector on the pending batch.
+export type JobIncidentRef = {
+  incident_uuid: string;
+  claim_number: string;
+  severity: string;
+  description: string;
+};
 
 export default function IncidentReport({
   jobUuid,
   jobName,
   jobDate,
+  onIncidentsChange,
+  onReported,
+  photoCounts,
 }: {
   jobUuid: string;
   jobName?: string;
   jobDate?: string;
+  // Fires whenever the known incidents for this job change (synced + queued),
+  // so the parent can drive the photo attach-target selector.
+  onIncidentsChange?: (list: JobIncidentRef[]) => void;
+  // Fires right after a new incident is submitted so the parent can auto-select
+  // it as the attach target for the next photo batch.
+  onReported?: (ref: JobIncidentRef) => void;
+  // incident_uuid -> number of photos already tagged to it (local + server).
+  photoCounts?: Record<string, number>;
 }) {
+  const { settings } = useTheme();
+  const ht = settings.helpTexts;
   const [incidents, setIncidents] = useState<IncidentOut[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,11 +61,8 @@ export default function IncidentReport({
   const [date, setDate] = useState(jobDate || mountainDateYYYYMMDD());
   const [attributed, setAttributed] = useState("");
   const [severity, setSeverity] = useState<Severity>("minor");
-  const [attributable, setAttributable] = useState<Attributable>("unknown");
   const [description, setDescription] = useState("");
-  const [estCost, setEstCost] = useState("");
   const [resolved, setResolved] = useState(false);
-  const [notes, setNotes] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
   async function refresh() {
@@ -64,44 +78,79 @@ export default function IncidentReport({
 
   const queued = useMemo(() => pendingIncidents(jobUuid), [jobUuid, status]);
 
+  // Surface the union of synced + queued incidents to the parent so it can
+  // offer a photo attach target. Deduped by incident_uuid (synced wins).
+  useEffect(() => {
+    const seen = new Set<string>();
+    const refs: JobIncidentRef[] = [];
+    for (const inc of incidents) {
+      seen.add(inc.incident_uuid);
+      refs.push({
+        incident_uuid: inc.incident_uuid,
+        claim_number: inc.claim_number || "",
+        severity: inc.severity,
+        description: inc.description,
+      });
+    }
+    for (const q of queued) {
+      if (seen.has(q.incident_uuid)) continue;
+      refs.push({
+        incident_uuid: q.incident_uuid,
+        claim_number: q.claim_number || "",
+        severity: q.severity,
+        description: q.description,
+      });
+    }
+    onIncidentsChange?.(refs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incidents, queued]);
+
   function resetForm() {
     setDate(jobDate || mountainDateYYYYMMDD());
     setAttributed("");
     setSeverity("minor");
-    setAttributable("unknown");
     setDescription("");
-    setEstCost("");
     setResolved(false);
-    setNotes("");
     setErr(null);
   }
 
   async function submit() {
     if (!description.trim()) { setErr("Describe what happened."); return; }
     setBusy(true); setErr(null);
+    const incidentUuid = newIncidentUuid();
+    const claimNumber = newClaimNumber(date || null, incidentUuid);
     const payload: IncidentPayload = {
-      incident_uuid: newIncidentUuid(),
+      incident_uuid: incidentUuid,
+      claim_number: claimNumber,
       job_uuid: jobUuid || null,
       job_name: jobName || null,
       incident_date: date || null,
       attributed_crew: attributed.trim() || null,
       severity,
-      attributable,
+      // The crew form no longer collects these; send neutral defaults so the
+      // admin log + sheet columns stay populated.
+      attributable: "unknown",
       description: description.trim(),
-      est_cost: estCost.trim() ? Number(estCost) : null,
+      est_cost: null,
       resolved,
-      notes: notes.trim() || null,
+      notes: null,
       photo_urls: [],
     };
     try {
       await submitIncident(payload);
-      setStatus(navigator.onLine ? "Incident submitted" : "Saved — will submit when back online");
+      setStatus(
+        navigator.onLine
+          ? `Incident submitted - Claim ${claimNumber}`
+          : `Saved offline - Claim ${claimNumber}. Will submit when back online.`,
+      );
+      onReported?.({ incident_uuid: incidentUuid, claim_number: claimNumber, severity, description: description.trim() });
       resetForm();
       setShowForm(false);
       await refresh();
-    } catch (e: any) {
+    } catch {
       // submitIncident queues first, so the record is never lost even here.
-      setStatus("Saved — will submit when back online");
+      setStatus(`Saved offline - Claim ${claimNumber}. Will submit when back online.`);
+      onReported?.({ incident_uuid: incidentUuid, claim_number: claimNumber, severity, description: description.trim() });
       setShowForm(false);
       await refresh();
     } finally {
@@ -122,11 +171,13 @@ export default function IncidentReport({
           </button>
         )}
       </div>
-      <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 12 }}>
-        Log damage, injuries, or near-misses on {jobName ? <strong>{jobName}</strong> : "this job"}. Saved offline and synced when back online.
-      </div>
+      {ht.incidentHint && (
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 12 }}>
+          {ht.incidentHint}
+        </div>
+      )}
 
-      {status && <div className="small" style={{ color: "var(--ok)", marginBottom: 8 }}>{status}</div>}
+      {status && <div className="small" style={{ color: "var(--ok)", marginBottom: 8, fontWeight: 600 }}>{status}</div>}
 
       {showForm && (
         <div className="col" style={{ gap: 12, marginBottom: 14 }}>
@@ -162,48 +213,19 @@ export default function IncidentReport({
             </button>
           </div>
 
-          <div className="col" style={{ gap: 4 }}>
-            <span className="small" style={{ color: "var(--muted)" }}>Attributable?</span>
-            <div className="row" style={{ gap: 6 }}>
-              {ATTRIBUTABLE.map((a) => {
-                const on = attributable === a.value;
-                return (
-                  <button key={a.value} type="button" onClick={() => setAttributable(a.value)}
-                    style={{ flex: 1, padding: "8px 0", borderRadius: 8, fontSize: 13, cursor: "pointer",
-                      border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: on ? "rgba(93,214,194,0.18)" : "transparent",
-                      color: on ? "var(--brand)" : "var(--muted)", fontWeight: on ? 700 : 400 }}>
-                    {a.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>What happened? *</span>
             <textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe the incident, location, and any damage." />
+              placeholder={ht.incidentDescriptionPlaceholder} />
           </label>
 
-          <div className="row wrap" style={{ gap: 10 }}>
-            <label className="col" style={{ gap: 4, flex: "1 1 120px" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Est. cost ($)</span>
-              <input inputMode="decimal" value={estCost} onChange={(e) => setEstCost(e.target.value)} placeholder="0" />
-            </label>
-            <label className="row" style={{ gap: 8, alignItems: "center", flex: "1 1 120px", marginTop: 18 }}>
-              <input type="checkbox" checked={resolved} onChange={(e) => setResolved(e.target.checked)} style={{ accentColor: "var(--brand)", width: 16, height: 16 }} />
-              <span className="small">Resolved on site</span>
-            </label>
-          </div>
-
-          <label className="col" style={{ gap: 4 }}>
-            <span className="small" style={{ color: "var(--muted)" }}>Others involved / notes</span>
-            <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" />
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={resolved} onChange={(e) => setResolved(e.target.checked)} style={{ accentColor: "var(--brand)", width: 16, height: 16 }} />
+            <span className="small">Resolved on site</span>
           </label>
 
           <div className="small" style={{ color: "var(--muted)" }}>
-            Need photos? Add them on the Photos tab and mention this incident in the note.
+            A claim number is generated when you submit. Add photos below and tag them to the claim to document the incident.
           </div>
 
           {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
@@ -219,7 +241,9 @@ export default function IncidentReport({
       {queued.length > 0 && (
         <div className="col" style={{ gap: 6, marginBottom: 10 }}>
           {queued.map((q) => (
-            <IncidentRow key={q.incident_uuid} severity={q.severity} date={q.incident_date} description={q.description} attributed={q.attributed_crew} pending />
+            <IncidentRow key={q.incident_uuid} claimNumber={q.claim_number} severity={q.severity} date={q.incident_date}
+              description={q.description} attributed={q.attributed_crew} resolved={q.resolved}
+              photoCount={photoCounts?.[q.incident_uuid] || 0} pending />
           ))}
         </div>
       )}
@@ -230,8 +254,10 @@ export default function IncidentReport({
       ) : (
         <div className="col" style={{ gap: 6 }}>
           {incidents.map((inc) => (
-            <IncidentRow key={inc.id} severity={inc.severity} date={inc.incident_date} description={inc.description}
-              attributed={inc.attributed_crew} createdAt={inc.created_at} reportedBy={inc.reported_by_name} resolved={inc.resolved} />
+            <IncidentRow key={inc.id} claimNumber={inc.claim_number} severity={inc.severity} date={inc.incident_date}
+              description={inc.description} attributed={inc.attributed_crew} createdAt={inc.created_at}
+              reportedBy={inc.reported_by_name} resolved={inc.resolved}
+              photoCount={photoCounts?.[inc.incident_uuid] || 0} />
           ))}
         </div>
       )}
@@ -240,8 +266,9 @@ export default function IncidentReport({
 }
 
 function IncidentRow({
-  severity, date, description, attributed, createdAt, reportedBy, resolved, pending,
+  claimNumber, severity, date, description, attributed, createdAt, reportedBy, resolved, photoCount, pending,
 }: {
+  claimNumber?: string | null;
   severity: string;
   date?: string | null;
   description: string;
@@ -249,20 +276,33 @@ function IncidentRow({
   createdAt?: string;
   reportedBy?: string | null;
   resolved?: boolean;
+  photoCount?: number;
   pending?: boolean;
 }) {
   const color = severity === "major" ? "var(--danger)" : severity === "moderate" ? "#f59e0b" : "var(--ok)";
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 10, opacity: pending ? 0.7 : 1 }}>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{severity}</span>
+        <span className="row" style={{ gap: 8, alignItems: "center" }}>
+          <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{severity}</span>
+          {claimNumber && (
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
+              {claimNumber}
+            </span>
+          )}
+        </span>
         <span className="small" style={{ color: "var(--muted)" }}>
           {pending ? "Syncing…" : (createdAt ? formatMountainDateTime(createdAt) : (date || ""))}
         </span>
       </div>
       <div style={{ fontSize: 14, marginTop: 4 }}>{description}</div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-        {[attributed ? `Attributed: ${attributed}` : null, reportedBy ? `by ${reportedBy}` : null, resolved ? "Resolved" : null].filter(Boolean).join(" · ")}
+        {[
+          attributed ? `Attributed: ${attributed}` : null,
+          reportedBy ? `by ${reportedBy}` : null,
+          resolved ? "Resolved" : null,
+          photoCount ? `${photoCount} photo${photoCount === 1 ? "" : "s"} attached` : null,
+        ].filter(Boolean).join(" · ")}
       </div>
     </div>
   );

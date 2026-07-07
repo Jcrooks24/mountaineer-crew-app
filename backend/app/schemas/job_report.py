@@ -74,7 +74,8 @@ class EmployeeHoursEntry(BaseModel):
     non_billable: bool = False  # excluded from total man-hours when true
     out_of_town: bool = False  # long-distance: $50 per-diem owed to this employee
     skill_rating: Optional[int] = None  # legacy single 1-5 rating; None = N/A.
-    # Per-skill ratings keyed by skill name (0-5). Only job-relevant skills are
+    # Per-skill ratings keyed by skill name (0-5, or -1 for "N/A" when the crew
+    # marked a relevant skill not-applicable). Only job-relevant skills are
     # rated. Display-only - never affects the man-hours math.
     skill_ratings: Optional[Dict[str, int]] = None
 
@@ -93,8 +94,9 @@ class EmployeeHoursEntry(BaseModel):
         if len(v) > 100:
             raise ValueError("too many skill_ratings")
         for name, rating in v.items():
-            if not isinstance(rating, int) or not (0 <= rating <= 5):
-                raise ValueError(f"skill rating for {name!r} must be 0-5")
+            # -1 = explicit "not applicable"; 0-5 = a real score.
+            if not isinstance(rating, int) or not (rating == -1 or 0 <= rating <= 5):
+                raise ValueError(f"skill rating for {name!r} must be 0-5 or -1 (N/A)")
         return v
 
 

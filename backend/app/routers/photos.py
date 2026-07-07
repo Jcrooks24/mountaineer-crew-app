@@ -26,10 +26,19 @@ def upload_photo(
     job_date: str = Form(default=""),
     caption: str = Form(default=""),
     folder: str = Form(default=""),  # "estimator" routes to the estimator parent folder
+    incident_uuid: str = Form(default=""),  # tags this photo to an incident
+    claim_number: str = Form(default=""),   # denormalized for display / Drive search
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     mime_type = file.content_type or "image/jpeg"
+
+    incident_uuid = (incident_uuid or "").strip()
+    claim_number = (claim_number or "").strip()
+    # Prefix the Drive caption with the claim number so an incident's photos are
+    # findable in Drive by claim, mirroring the incident's claim_number in the
+    # sheet. The DB fields below are the primary link; this is admin convenience.
+    drive_caption = f"[{claim_number}] {caption}".strip() if claim_number else caption
 
     # Idempotent: if this photo_id is already stored, skip the Drive upload
     # and return the existing record. The offline queue retries with the same
@@ -53,7 +62,7 @@ def upload_photo(
             mime_type=mime_type,
             job_name=job_name,
             job_date=job_date,
-            caption=caption,
+            caption=drive_caption,
             is_estimator=(folder.strip().lower() == "estimator"),
         )
     except Exception as e:
@@ -69,6 +78,8 @@ def upload_photo(
         drive_file_id=result["file_id"],
         drive_url=result["url"],
         mime_type=mime_type,
+        incident_uuid=incident_uuid or None,
+        claim_number=claim_number or None,
     )
     db.add(row)
     try:
@@ -159,6 +170,8 @@ def get_photos(
                 "thumb_url": f"https://drive.google.com/thumbnail?id={r.drive_file_id}&sz=w800",
                 "created_at": r.created_at.isoformat(),
                 "mime_type": r.mime_type,
+                "incident_uuid": r.incident_uuid,
+                "claim_number": r.claim_number,
             }
             for r in rows
         ],
