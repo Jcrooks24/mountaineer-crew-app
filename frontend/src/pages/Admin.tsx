@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
+import { getToken } from "../auth/token";
+
+const ADMIN_API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 import { useAuth } from "../auth/AuthContext";
 import {
   useTheme,
@@ -2275,6 +2278,7 @@ function SettingsTab({
       <EmployeeTagsManagerCard />
       <JobTypesManagerCard />
       <SkillsManagerCard />
+      <FurnitureCatalogCard />
       <HelpTextCard />
     </div>
   );
@@ -2566,6 +2570,85 @@ function JobTypesManagerCard() {
         <button onClick={createType} disabled={busy || !newName.trim()} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>Add</button>
       </div>
 
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+    </div>
+  );
+}
+
+// Bulk furniture-catalog CSV import. Feeds the single server catalog that both
+// the Estimator and Actual Inventory read (uploaded items appear in both).
+function FurnitureCatalogCard() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ added: number; updated: number; skipped: number; errors: string[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [count, setCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ name: string }[]>("/api/furniture-catalog")
+      .then((rows) => setCount(rows.length))
+      .catch(() => {});
+  }, [result]);
+
+  async function upload(file: File) {
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file, file.name);
+      const token = getToken() || "";
+      const res = await fetch(`${ADMIN_API}/api/furniture-catalog/import-csv`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) throw new Error(body?.detail || body?.error || `HTTP ${res.status}`);
+      setResult(body);
+    } catch (e: any) {
+      setErr(e?.message ?? "Import failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Furniture Catalog</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Bulk-import furniture/box items from a CSV. Imported items appear in both
+        the Estimator and the job Actual-Inventory search. Upsert by name.
+        {count !== null && <> Currently <strong>{count}</strong> catalog items.</>}
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        CSV columns (header row): <code>name</code>, <code>cubic_ft</code>,{" "}
+        <code>weight_lbs</code>, <code>category</code>. Set category to{" "}
+        <code>Boxes</code> for box types so they classify as boxes.
+      </div>
+
+      <label className="btnPrimary" style={{ display: "inline-flex", alignItems: "center", padding: "8px 16px", borderRadius: "var(--btn-r)", cursor: busy ? "not-allowed" : "pointer" }}>
+        {busy ? "Importing…" : "Upload CSV"}
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          style={{ display: "none" }}
+          disabled={busy}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.currentTarget.value = "";
+            if (f) upload(f);
+          }}
+        />
+      </label>
+
+      {result && (
+        <div className="small" style={{ marginTop: 10, color: "var(--ok)" }}>
+          Imported: {result.added} added, {result.updated} updated, {result.skipped} skipped.
+          {result.errors.length > 0 && (
+            <div style={{ color: "var(--danger)", marginTop: 4 }}>
+              {result.errors.length} row error(s): {result.errors.slice(0, 5).join("; ")}
+            </div>
+          )}
+        </div>
+      )}
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
     </div>
   );

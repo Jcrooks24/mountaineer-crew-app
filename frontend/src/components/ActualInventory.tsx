@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
-import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
+import { useMergedCatalog, splitCatalogNames } from "../lib/furnitureCatalogStore";
 import { BetaTag } from "./BetaTag";
 import {
   drain,
@@ -17,12 +17,6 @@ import {
 // A rendered row is either a synced server item (positive id) or an
 // optimistic temp row (negative id) still queued for POST.
 type Row = ServerItem & { pending?: boolean };
-
-// Two separate search lists: furniture types for the item box, box types for
-// the box box. (The old single field + "this is a box" checkbox was replaced
-// by two dedicated search boxes.)
-const FURNITURE_NAMES = FURNITURE_CATALOG.filter((f) => f.category !== "Boxes").map((f) => f.name);
-const BOX_NAMES = FURNITURE_CATALOG.filter((f) => f.category === "Boxes").map((f) => f.name);
 
 const PACK_TYPES: { value: PackType; label: string }[] = [
   { value: "CP", label: "CP" },
@@ -52,6 +46,14 @@ export default function ActualInventory({
   const [rows, setRows] = useState<Row[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Unified catalog (server + built-in), split into furniture vs box names for
+  // the two search boxes. CSV-imported items show up here automatically.
+  const catalog = useMergedCatalog();
+  const { furniture: furnitureNames, boxNames } = useMemo(() => {
+    const { furniture, boxes } = splitCatalogNames(catalog);
+    return { furniture, boxNames: boxes };
+  }, [catalog]);
 
   // Furniture add-form state.
   const [fName, setFName] = useState("");
@@ -263,7 +265,7 @@ export default function ActualInventory({
           style={inputStyle}
         />
         <datalist id="job-inventory-furniture">
-          {FURNITURE_NAMES.map((n) => <option key={n} value={n} />)}
+          {furnitureNames.map((n) => <option key={n} value={n} />)}
         </datalist>
         <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div className="row" style={{ gap: 8, alignItems: "center" }}>
@@ -292,7 +294,7 @@ export default function ActualInventory({
           style={inputStyle}
         />
         <datalist id="job-inventory-boxes">
-          {BOX_NAMES.map((n) => <option key={n} value={n} />)}
+          {boxNames.map((n) => <option key={n} value={n} />)}
         </datalist>
         <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div className="row" style={{ gap: 8, alignItems: "center" }}>

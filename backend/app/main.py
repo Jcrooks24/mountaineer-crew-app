@@ -71,6 +71,7 @@ from app.routers.skills import (
     admin_router as skills_admin_router,
     users_router as skills_users_router,
 )
+from app.routers.furniture_catalog import router as furniture_catalog_router
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -208,3 +209,4 @@ app.include_router(job_types_admin_router)       # /api/admin/job-types (admin C
 app.include_router(skills_public_router)         # /api/skills (crew: active registry)
 app.include_router(skills_admin_router)          # /api/admin/skills (admin CRUD)
 app.include_router(skills_users_router)          # /api/admin/users/{id}/skills (matrix)
+app.include_router(furniture_catalog_router)     # /api/furniture-catalog (crew read + admin CSV import)
