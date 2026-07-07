@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Callable, List, Dict, Any, Optional, Set
@@ -1708,18 +1709,35 @@ def _estimate_export_worker(estimate_uuid: str) -> None:
     # Bounds queue growth: at most one in-flight export + one pending rerun
     # marker per estimate_uuid, regardless of how many PATCHes stream in.
     while True:
-        db = SessionLocal()
-        try:
-            payload = _build_estimate_payload(db, estimate_uuid)
-            if payload is not None:
-                export_estimate_to_sheets(db, payload)
-        except Exception as exc:
-            print(f"[sheets] estimate export failed ({estimate_uuid}): {exc}")
-        finally:
+        # Retry the full export a few times on failure. export_estimate_to_sheets
+        # is a delete-then-rewrite replace (it clears all rows for this estimate
+        # before writing summary + item rows), so re-running it is idempotent -
+        # this ensures a transient Google/SSL error on the second (items) write
+        # can't leave a summary row permanently stranded without its item rows.
+        # Each attempt uses a fresh session and re-reads the latest DB state.
+        for attempt in range(3):
+            db = SessionLocal()
             try:
-                db.close()
-            except Exception:
-                pass
+                payload = _build_estimate_payload(db, estimate_uuid)
+                if payload is None:
+                    break  # estimate was deleted - nothing to export
+                export_estimate_to_sheets(db, payload)
+                break  # success
+            except Exception as exc:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                if attempt >= 2:
+                    print(f"[sheets] estimate export failed after retries ({estimate_uuid}): {exc}")
+                else:
+                    print(f"[sheets] estimate export retry {attempt + 1} ({estimate_uuid}): {exc}")
+                    time.sleep(0.75 * (attempt + 1))
+            finally:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
         with _estimate_export_lock:
             if estimate_uuid in _estimate_export_rerun:
