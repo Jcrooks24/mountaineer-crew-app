@@ -102,6 +102,7 @@ import {
   type TruckFullnessEntry,
 } from "../lib/jobTypes";
 import { useJobTypes } from "../lib/jobTypesStore";
+import { useSkills, skillsForJobTypes, type Skill } from "../lib/skillsStore";
 import { isBoxItem } from "../lib/inventory";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
@@ -463,6 +464,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // Admin-configurable job-type tags (server, cached). Union with any tags
   // already saved on this report so a since-deactivated tag still shows.
   const jobTypes = useJobTypes();
+  // Skill registry + the subset relevant to this job's type(s) - the only
+  // skills crew are asked to rate per employee.
+  const skills = useSkills();
+  const relevantSkills = useMemo(
+    () => skillsForJobTypes(skills, data.job_type_tags),
+    [skills, data.job_type_tags],
+  );
   // Crew must confirm the auto-populated bill rows before the report submits.
   // The checkbox lives below the M1 sliders so crew see the M1-driven
   // charges populate before acknowledging them.
@@ -888,6 +896,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           ...baseEntry,
           non_billable: prev.employee_hours[editingIndex].non_billable,
           skill_rating: prev.employee_hours[editingIndex].skill_rating,
+          skill_ratings: prev.employee_hours[editingIndex].skill_ratings,
         };
         return { ...prev, employee_hours: next };
       }
@@ -929,12 +938,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // Crew-lead 1-5 skill rating for this mover on this job. Tapping the active
   // star again clears it back to N/A (null). Display-only - never touches the
   // man-hours math.
-  function setEmployeeSkillRating(i: number, rating: number | null) {
+  // Set one per-skill rating (0-5) for employee i, keyed by skill name. A
+  // rating of null clears that skill from the map.
+  function setEmployeeSkillTypeRating(i: number, skillName: string, rating: number | null) {
     setData((prev) => ({
       ...prev,
-      employee_hours: prev.employee_hours.map((e, idx) =>
-        idx === i ? { ...e, skill_rating: rating } : e,
-      ),
+      employee_hours: prev.employee_hours.map((e, idx) => {
+        if (idx !== i) return e;
+        const next = { ...(e.skill_ratings || {}) };
+        if (rating === null) delete next[skillName];
+        else next[skillName] = rating;
+        return { ...e, skill_ratings: next };
+      }),
     }));
     setSaved(false);
   }
@@ -1046,6 +1061,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               non_billable: !!e.non_billable,
               out_of_town: !!e.out_of_town,
               skill_rating: e.skill_rating ?? null,
+              skill_ratings: e.skill_ratings ?? null,
             })),
         }),
       });
@@ -1422,9 +1438,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                       )}
                     </div>
                     <div style={{ marginTop: 6 }}>
-                      <StarRating
-                        value={emp.skill_rating ?? null}
-                        onChange={(r) => setEmployeeSkillRating(i, r)}
+                      <EmployeeSkillRatings
+                        skills={relevantSkills}
+                        ratings={emp.skill_ratings || {}}
+                        onRate={(skillName, r) => setEmployeeSkillTypeRating(i, skillName, r)}
                       />
                     </div>
                   </div>
@@ -2047,57 +2064,81 @@ function YesNo({
   );
 }
 
-// Per-employee crew-lead skill rating: 1–5 stars, or N/A (null). Tapping the
-// active rating again clears it back to N/A. Display-only — never affects the
-// man-hours math.
-function StarRating({
+// Per-employee skill ratings: one compact row per skill relevant to this job's
+// type(s) - core skills always, plus any whose relevant_job_types match.
+// Display-only - never affects the man-hours math.
+function EmployeeSkillRatings({
+  skills,
+  ratings,
+  onRate,
+}: {
+  skills: Skill[];
+  ratings: Record<string, number>;
+  onRate: (skillName: string, rating: number | null) => void;
+}) {
+  if (skills.length === 0) {
+    return (
+      <div className="small" style={{ color: "var(--muted)" }}>
+        Pick a job type above to rate skills.
+      </div>
+    );
+  }
+  return (
+    <div className="col" style={{ gap: 4 }}>
+      <span className="small" style={{ color: "var(--muted)" }}>Skills</span>
+      {skills.map((s) => (
+        <SkillRatingRow key={s.id} skill={s} value={ratings[s.name]} onChange={(r) => onRate(s.name, r)} />
+      ))}
+    </div>
+  );
+}
+
+function SkillRatingRow({
+  skill,
   value,
   onChange,
 }: {
-  value: number | null;
-  onChange: (v: number | null) => void;
+  skill: Skill;
+  value: number | undefined;
+  onChange: (rating: number | null) => void;
 }) {
+  const v = value ?? null;
+  if (skill.binary) {
+    return (
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <span className="small" style={{ color: "var(--text)" }}>{skill.name}</span>
+        <div className="row" style={{ gap: 4 }}>
+          {([["No", 0], ["Yes", 5]] as const).map(([label, num]) => {
+            const on = v === num;
+            return (
+              <button key={label} type="button" onClick={() => onChange(on ? null : num)}
+                style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                  border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                  color: on ? "var(--brand)" : "var(--muted)" }}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
   return (
-    <div className="row" style={{ gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-      <span className="small" style={{ color: "var(--muted)", marginRight: 2 }}>Skill</span>
-      {[1, 2, 3, 4, 5].map((n) => {
-        const filled = value != null && n <= value;
-        return (
-          <button
-            key={n}
-            type="button"
-            aria-label={`${n} star${n > 1 ? "s" : ""}`}
-            onClick={() => onChange(value === n ? null : n)}
-            style={{
-              background: "transparent",
-              border: "none",
-              padding: 2,
-              cursor: "pointer",
-              fontSize: 20,
-              lineHeight: 1,
-              color: filled ? "var(--brand)" : "var(--border)",
-            }}
-          >
-            {filled ? "★" : "☆"}
-          </button>
-        );
-      })}
-      <button
-        type="button"
-        onClick={() => onChange(null)}
-        style={{
-          marginLeft: 4,
-          padding: "2px 8px",
-          borderRadius: 8,
-          border: value == null ? "2px solid var(--muted)" : "1px solid var(--border)",
-          background: value == null ? "rgba(148,163,184,0.12)" : "transparent",
-          color: "var(--muted)",
-          fontSize: 12,
-          cursor: "pointer",
-        }}
-      >
-        N/A
-      </button>
+    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+      <span className="small" style={{ color: "var(--text)" }}>{skill.name}</span>
+      <div className="row" style={{ gap: 2, alignItems: "center" }}>
+        {[1, 2, 3, 4, 5].map((n) => {
+          const filled = v != null && n <= v;
+          return (
+            <button key={n} type="button" aria-label={`${skill.name} ${n} of 5`}
+              onClick={() => onChange(v === n ? null : n)}
+              style={{ background: "transparent", border: "none", padding: 1, cursor: "pointer", fontSize: 18, lineHeight: 1, color: filled ? "var(--brand)" : "var(--border)" }}>
+              {filled ? "★" : "☆"}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

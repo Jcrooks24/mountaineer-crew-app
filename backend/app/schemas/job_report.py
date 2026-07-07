@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -73,13 +73,28 @@ class EmployeeHoursEntry(BaseModel):
     hours: float = 0.0        # actual worked hours, base-10
     non_billable: bool = False  # excluded from total man-hours when true
     out_of_town: bool = False  # long-distance: $50 per-diem owed to this employee
-    skill_rating: Optional[int] = None  # crew-lead 1-5 rating; None = N/A. Display-only.
+    skill_rating: Optional[int] = None  # legacy single 1-5 rating; None = N/A.
+    # Per-skill ratings keyed by skill name (0-5). Only job-relevant skills are
+    # rated. Display-only - never affects the man-hours math.
+    skill_ratings: Optional[Dict[str, int]] = None
 
     @field_validator("skill_rating")
     @classmethod
     def skill_rating_valid(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and not (1 <= v <= 5):
             raise ValueError("skill_rating must be 1-5 or null")
+        return v
+
+    @field_validator("skill_ratings")
+    @classmethod
+    def skill_ratings_valid(cls, v: Optional[Dict[str, int]]) -> Optional[Dict[str, int]]:
+        if v is None:
+            return v
+        if len(v) > 100:
+            raise ValueError("too many skill_ratings")
+        for name, rating in v.items():
+            if not isinstance(rating, int) or not (0 <= rating <= 5):
+                raise ValueError(f"skill rating for {name!r} must be 0-5")
         return v
 
 

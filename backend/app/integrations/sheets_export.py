@@ -1005,14 +1005,28 @@ def _format_employee_hours(entries: Optional[list]) -> str:
             pieces.append(span + ("," if br > 0 else ""))
         if br > 0:
             pieces.append(f"break {br:.2f}h")
-        # Crew-lead skill rating (1-5) rides inside each entry; display-only,
-        # never affects the man-hours math.
-        raw_skill = e.get("skill_rating")
-        try:
-            skill = int(raw_skill) if raw_skill is not None else None
-        except (TypeError, ValueError):
-            skill = None
-        skill_str = f"skill {skill}/5" if skill else "skill N/A"
+        # Per-skill ratings ride inside each entry (keyed by skill name);
+        # display-only, never affect the man-hours math. Falls back to the
+        # legacy single skill_rating for reports saved before the change.
+        skill_str = "skill N/A"
+        ratings = e.get("skill_ratings")
+        if isinstance(ratings, dict) and ratings:
+            parts = []
+            for sk_name, sk_val in ratings.items():
+                try:
+                    parts.append(f"{sk_name} {int(sk_val)}/5")
+                except (TypeError, ValueError):
+                    continue
+            if parts:
+                skill_str = "skills: " + ", ".join(parts)
+        else:
+            raw_skill = e.get("skill_rating")
+            try:
+                skill = int(raw_skill) if raw_skill is not None else None
+            except (TypeError, ValueError):
+                skill = None
+            if skill:
+                skill_str = f"skill {skill}/5"
         tail = f"{rounded:.2f}h (actual {hrs:.2f}h), {skill_str}"
         if non_billable:
             pieces.append(f"→ non-billable {tail}")
