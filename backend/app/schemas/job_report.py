@@ -33,7 +33,6 @@ JOB_TYPE_TAGS = {
 # The four trucks; a fullness reading is captured per truck used on the job.
 # Mirrored on the frontend in frontend/src/lib/jobTypes.ts.
 TRUCK_IDS = {"16Ford", "26Int", "24FR8", "26FR8"}
-FULLNESS_STEPS = {25, 50, 75, 100}
 
 
 class TruckFullnessEntry(BaseModel):
@@ -51,9 +50,11 @@ class TruckFullnessEntry(BaseModel):
 
     @field_validator("vertical_pct", "horizontal_pct")
     @classmethod
-    def pct_step_valid(cls, v: int) -> int:
-        if v not in FULLNESS_STEPS:
-            raise ValueError(f"fullness must be one of {FULLNESS_STEPS}")
+    def pct_in_range(cls, v: int) -> int:
+        # Sliders send any 0-100 value (step 5 on the client). Keep the bound
+        # check but no longer require the old 25/50/75/100 buckets.
+        if v < 0 or v > 100:
+            raise ValueError("fullness must be between 0 and 100")
         return v
 
 

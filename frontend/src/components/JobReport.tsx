@@ -100,7 +100,6 @@ import { roundBillableQuarter } from "../lib/employeeHours";
 import {
   JOB_TYPE_TAGS,
   TRUCK_IDS,
-  FULLNESS_STEPS,
   type TruckFullnessEntry,
 } from "../lib/jobTypes";
 import { isBoxItem } from "../lib/inventory";
@@ -2129,12 +2128,12 @@ function TruckFullnessEditor({
                 Remove
               </button>
             </div>
-            <FullnessSteps
+            <FullnessSlider
               label="Vertical fill"
               value={t.vertical_pct}
               onChange={(p) => onChange(value.map((x) => (x.truck === t.truck ? { ...x, vertical_pct: p } : x)))}
             />
-            <FullnessSteps
+            <FullnessSlider
               label="Horizontal fill"
               value={t.horizontal_pct}
               onChange={(p) => onChange(value.map((x) => (x.truck === t.truck ? { ...x, horizontal_pct: p } : x)))}
@@ -2174,7 +2173,9 @@ function TruckFullnessEditor({
   );
 }
 
-function FullnessSteps({
+// Continuous slider for truck fill, matching the M1 dumpster/recycling sliders
+// (PctSlider). Replaces the old 25/50/75/100 button row.
+function FullnessSlider({
   label,
   value,
   onChange,
@@ -2184,32 +2185,24 @@ function FullnessSteps({
   onChange: (pct: number) => void;
 }) {
   return (
-    <div style={{ marginTop: 10 }}>
-      <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>{label}</div>
-      <div style={{ display: "flex", gap: 8 }}>
-        {FULLNESS_STEPS.map((step) => {
-          const active = value === step;
-          return (
-            <button
-              key={step}
-              type="button"
-              onClick={() => onChange(step)}
-              style={{
-                flex: 1,
-                padding: "10px 0",
-                borderRadius: 10,
-                border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                background: active ? "rgba(93,214,194,0.18)" : "transparent",
-                color: active ? "var(--brand)" : "var(--muted)",
-                fontWeight: active ? 700 : 400,
-                fontSize: 13,
-                cursor: "pointer",
-              }}
-            >
-              {step}%
-            </button>
-          );
-        })}
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span className="small" style={{ color: "var(--muted)" }}>{label}</span>
+        <span style={{ fontWeight: 700, fontSize: 15, color: "var(--brand)" }}>{value}%</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width: "100%", accentColor: "var(--brand)" }}
+      />
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 10, color: "var(--muted)" }}>Empty</span>
+        <span style={{ fontSize: 10, color: "var(--muted)" }}>Half</span>
+        <span style={{ fontSize: 10, color: "var(--muted)" }}>Full</span>
       </div>
     </div>
   );
