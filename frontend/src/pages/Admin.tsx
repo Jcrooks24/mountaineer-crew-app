@@ -315,6 +315,7 @@ function EmployeesTab() {
   const [editingTagsFor, setEditingTagsFor] = useState<AdminUser | null>(null);
   const [editingUnlocksFor, setEditingUnlocksFor] = useState<AdminUser | null>(null);
   const [editingAliasesFor, setEditingAliasesFor] = useState<AdminUser | null>(null);
+  const [editingSkillsFor, setEditingSkillsFor] = useState<AdminUser | null>(null);
   const [subview, setSubview] = useState<"roster" | "month">("roster");
 
   useEffect(() => {
@@ -559,6 +560,13 @@ function EmployeesTab() {
                     </button>
                     <button
                       className="roster-btn"
+                      onClick={() => setEditingSkillsFor(u)}
+                      title="Set this employee's skill levels (0-5 matrix)"
+                    >
+                      Skills
+                    </button>
+                    <button
+                      className="roster-btn"
                       onClick={() => nav(`/availability?admin_user=${u.id}`)}
                       title="Open this employee's availability (admin view)"
                     >
@@ -585,6 +593,12 @@ function EmployeesTab() {
           }}
         />
       )}
+      {editingSkillsFor && (
+        <SkillMatrixPicker
+          user={editingSkillsFor}
+          onClose={() => setEditingSkillsFor(null)}
+        />
+      )}
       {editingUnlocksFor && (
         <AvailabilityUnlocksPicker
           user={editingUnlocksFor}
@@ -605,6 +619,129 @@ function EmployeesTab() {
         />
       )}
     </>
+  );
+}
+
+// Admin modal for setting an employee's 0-5 skill levels (the roster matrix).
+function SkillMatrixPicker({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const [skills, setSkills] = useState<AdminSkill[]>([]);
+  const [levels, setLevels] = useState<Record<number, number>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      apiFetch<AdminSkill[]>("/api/admin/skills"),
+      apiFetch<{ skill_id: number; level: number }[]>(`/api/admin/users/${user.id}/skills`),
+    ])
+      .then(([s, ls]) => {
+        if (cancelled) return;
+        setSkills(s.filter((x) => x.active));
+        const m: Record<number, number> = {};
+        for (const l of ls) m[l.skill_id] = l.level;
+        setLevels(m);
+      })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [user.id]);
+
+  function setLevel(skillId: number, level: number) {
+    setLevels((prev) => ({ ...prev, [skillId]: level }));
+  }
+
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/admin/users/${user.id}/skills`, {
+        method: "PUT",
+        body: JSON.stringify({ skills: Object.entries(levels).map(([id, lvl]) => ({ skill_id: Number(id), level: lvl })) }),
+      });
+      onClose();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to save");
+    } finally { setBusy(false); }
+  }
+
+  const byCategory = skills.reduce<Record<string, AdminSkill[]>>((acc, s) => {
+    (acc[s.category || "Other"] ||= []).push(s);
+    return acc;
+  }, {});
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="card" style={{ maxWidth: 520, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+        <div className="sectionTitle">Skills — {user.name || user.email}</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          0 = none/very poor · 5 = mastery · blank (0) = not yet assessed.
+        </div>
+
+        {loading ? (
+          <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+        ) : (
+          <div className="col" style={{ gap: 12 }}>
+            {Object.entries(byCategory).map(([cat, list]) => (
+              <div key={cat}>
+                <div className="small" style={{ color: "var(--brand)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{cat}</div>
+                <div className="col" style={{ gap: 8 }}>
+                  {list.map((s) => {
+                    const lvl = levels[s.id] ?? 0;
+                    return (
+                      <div key={s.id} className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 13, flex: 1 }}>{s.name}</span>
+                        {s.binary ? (
+                          <div className="row" style={{ gap: 4 }}>
+                            {[0, 5].map((v) => (
+                              <button key={v} type="button" onClick={() => setLevel(s.id, v)}
+                                style={{ padding: "4px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                                  border: lvl === v ? "2px solid var(--brand)" : "1px solid var(--border)",
+                                  background: lvl === v ? "rgba(93,214,194,0.18)" : "transparent",
+                                  color: lvl === v ? "var(--brand)" : "var(--muted)" }}>
+                                {v === 0 ? "No" : "Yes"}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="row" style={{ gap: 3 }}>
+                            {[0, 1, 2, 3, 4, 5].map((v) => (
+                              <button key={v} type="button" onClick={() => setLevel(s.id, v)}
+                                style={{ width: 28, height: 28, borderRadius: 6, fontSize: 12, cursor: "pointer",
+                                  border: lvl === v ? "2px solid var(--brand)" : "1px solid var(--border)",
+                                  background: lvl === v ? "rgba(93,214,194,0.18)" : "transparent",
+                                  color: lvl === v ? "var(--brand)" : "var(--muted)", fontWeight: lvl === v ? 700 : 400 }}>
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {skills.length === 0 && (
+              <div className="small" style={{ color: "var(--muted)" }}>No active skills. Add some in Settings → Crew Skills.</div>
+            )}
+          </div>
+        )}
+
+        {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+        <div className="row" style={{ gap: 8, marginTop: 14 }}>
+          <button className="btnPrimary" onClick={save} disabled={busy || loading}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2137,6 +2274,7 @@ function SettingsTab({
       <DVIRUnitsCard />
       <EmployeeTagsManagerCard />
       <JobTypesManagerCard />
+      <SkillsManagerCard />
       <HelpTextCard />
     </div>
   );
@@ -2429,6 +2567,220 @@ function JobTypesManagerCard() {
       </div>
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+    </div>
+  );
+}
+
+type AdminSkill = {
+  id: number; name: string; category: string; binary: boolean; core: boolean;
+  relevant_job_types: string[]; definition: string | null; sort_order: number; active: boolean;
+};
+
+// Admin registry for the crew skill types (name, category, 0-5 vs binary,
+// whether it's a "core" skill always rated, and which job types make it
+// relevant on the Job Report).
+function SkillsManagerCard() {
+  const [skills, setSkills] = useState<AdminSkill[]>([]);
+  const [jobTypeNames, setJobTypeNames] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<AdminSkill | null>(null);
+  const [newName, setNewName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      apiFetch<AdminSkill[]>("/api/admin/skills"),
+      apiFetch<{ name: string; active: boolean }[]>("/api/admin/job-types").catch(() => []),
+    ])
+      .then(([s, jt]) => {
+        if (cancelled) return;
+        setSkills(s);
+        setJobTypeNames(jt.filter((x) => x.active).map((x) => x.name));
+      })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function createSkill() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true); setErr(null);
+    try {
+      const created = await apiFetch<AdminSkill>("/api/admin/skills", {
+        method: "POST", body: JSON.stringify({ name }),
+      });
+      setSkills((prev) => [...prev, created]);
+      setNewName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to create skill");
+    } finally { setBusy(false); }
+  }
+
+  async function saveSkill(patch: Partial<AdminSkill>) {
+    if (!editing) return;
+    setBusy(true); setErr(null);
+    try {
+      const updated = await apiFetch<AdminSkill>(`/api/admin/skills/${editing.id}`, {
+        method: "PATCH", body: JSON.stringify(patch),
+      });
+      setSkills((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      setEditing(null);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to save skill");
+    } finally { setBusy(false); }
+  }
+
+  async function deleteSkill(s: AdminSkill) {
+    if (!confirm(`Delete skill "${s.name}"? This removes it from every employee's matrix.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/admin/skills/${s.id}`, { method: "DELETE" });
+      setSkills((prev) => prev.filter((x) => x.id !== s.id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to delete");
+    } finally { setBusy(false); }
+  }
+
+  const byCategory = skills.reduce<Record<string, AdminSkill[]>>((acc, s) => {
+    (acc[s.category || "Other"] ||= []).push(s);
+    return acc;
+  }, {});
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Crew Skills</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        The skill types crew get rated on. "Core" skills are rated on every job;
+        others only appear on the Job Report when the job's type matches. Set
+        each employee's 0–5 levels from the Employees tab.
+      </div>
+
+      {loading ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div className="col" style={{ gap: 12 }}>
+          {Object.entries(byCategory).map(([cat, list]) => (
+            <div key={cat}>
+              <div className="small" style={{ color: "var(--brand)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{cat}</div>
+              <div className="col" style={{ gap: 4 }}>
+                {list.map((s) => (
+                  <div key={s.id} className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
+                    <span style={{ fontSize: 14, opacity: s.active ? 1 : 0.5 }}>
+                      {s.name}
+                      {s.core && <span style={{ fontSize: 10, color: "var(--brand)", marginLeft: 6 }}>CORE</span>}
+                      {s.binary && <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 6 }}>0/5</span>}
+                      {!s.active && <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 6 }}>inactive</span>}
+                    </span>
+                    <div className="row" style={{ gap: 6 }}>
+                      <button onClick={() => setEditing(s)} style={{ fontSize: 12, padding: "3px 10px" }}>Edit</button>
+                      <button onClick={() => deleteSkill(s)} disabled={busy} style={{ fontSize: 12, padding: "3px 10px", background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}>Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <input value={newName} onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") createSkill(); }}
+          placeholder="New skill name" style={{ flex: 1, padding: "6px 10px", fontSize: 13 }} />
+        <button onClick={createSkill} disabled={busy || !newName.trim()} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>Add</button>
+      </div>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+
+      {editing && (
+        <SkillEditModal
+          skill={editing}
+          jobTypeNames={jobTypeNames}
+          busy={busy}
+          onCancel={() => setEditing(null)}
+          onSave={saveSkill}
+        />
+      )}
+    </div>
+  );
+}
+
+function SkillEditModal({
+  skill, jobTypeNames, busy, onCancel, onSave,
+}: {
+  skill: AdminSkill;
+  jobTypeNames: string[];
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (patch: Partial<AdminSkill>) => void;
+}) {
+  const [name, setName] = useState(skill.name);
+  const [category, setCategory] = useState(skill.category);
+  const [binary, setBinary] = useState(skill.binary);
+  const [core, setCore] = useState(skill.core);
+  const [active, setActive] = useState(skill.active);
+  const [rel, setRel] = useState<string[]>(skill.relevant_job_types);
+
+  function toggleRel(t: string) {
+    setRel((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="card" style={{ maxWidth: 460, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+        <div className="sectionTitle">Edit skill</div>
+        <div className="col" style={{ gap: 10 }}>
+          <label className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Name</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Category</span>
+            <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Physical / Technical" />
+          </label>
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={core} onChange={(e) => setCore(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+            <span className="small">Core — rated on every job</span>
+          </label>
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={binary} onChange={(e) => setBinary(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+            <span className="small">Binary — trained / not (0 or 5)</span>
+          </label>
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+            <span className="small">Active</span>
+          </label>
+          <div className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Relevant job types (non-core only)</span>
+            <div className="row wrap" style={{ gap: 6 }}>
+              {jobTypeNames.length === 0 && <span className="small" style={{ color: "var(--muted)" }}>No job types configured.</span>}
+              {jobTypeNames.map((t) => {
+                const on = rel.includes(t);
+                return (
+                  <button key={t} type="button" onClick={() => toggleRel(t)}
+                    style={{ padding: "4px 10px", borderRadius: 99, fontSize: 12, cursor: "pointer",
+                      border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                      background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                      color: on ? "var(--brand)" : "var(--text)" }}>
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 4 }}>
+            <button className="btnPrimary" disabled={busy || !name.trim()}
+              onClick={() => onSave({ name: name.trim(), category: category.trim(), binary, core, active, relevant_job_types: rel })}>
+              Save
+            </button>
+            <button onClick={onCancel}>Cancel</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

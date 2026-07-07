@@ -25,6 +25,7 @@ import app.db.models.availability  # noqa: F401 - register availability_days tab
 import app.db.models.availability_unlock  # noqa: F401 - register availability_unlocks
 import app.db.models.employee_tag  # noqa: F401 - register employee_tags + user_employee_tags
 import app.db.models.job_type  # noqa: F401 - register job_types
+import app.db.models.skill  # noqa: F401 - register skills + user_skills
 import app.db.models.user_email_alias  # noqa: F401 - register user_email_aliases
 import app.db.models.bol  # noqa: F401 - register digital_bols table
 import app.db.models.job_inventory  # noqa: F401 - register job_inventory_items table
@@ -64,6 +65,11 @@ from app.routers.job_inventory import router as job_inventory_router
 from app.routers.job_types import (
     public_router as job_types_public_router,
     admin_router as job_types_admin_router,
+)
+from app.routers.skills import (
+    public_router as skills_public_router,
+    admin_router as skills_admin_router,
+    users_router as skills_users_router,
 )
 
 
@@ -199,3 +205,6 @@ app.include_router(bol_router)                   # /api/bol (Digital Bill of Lad
 app.include_router(job_inventory_router)         # /api/job-inventory (actual inventory → counts)
 app.include_router(job_types_public_router)      # /api/job-types (crew: active list)
 app.include_router(job_types_admin_router)       # /api/admin/job-types (admin CRUD)
+app.include_router(skills_public_router)         # /api/skills (crew: active registry)
+app.include_router(skills_admin_router)          # /api/admin/skills (admin CRUD)
+app.include_router(skills_users_router)          # /api/admin/users/{id}/skills (matrix)
