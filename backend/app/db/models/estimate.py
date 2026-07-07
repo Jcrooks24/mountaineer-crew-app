@@ -6,7 +6,7 @@ own estimate_uuid) so the existing Drive upload pipeline and photo viewer
 work without changes.
 """
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
@@ -93,5 +93,15 @@ class FurnitureCatalogItem(Base):
     weight_lbs = Column(Float, nullable=False, default=0)
     cubic_ft = Column(Float, nullable=False, default=0)
     category = Column(String, nullable=True)
+    # Optional dimensions in inches. When all three are set, cubic_ft is derived
+    # as L*W*H/1728 on import (dimensions win over an explicit cubic_ft).
+    length_in = Column(Float, nullable=True)
+    width_in = Column(Float, nullable=True)
+    height_in = Column(Float, nullable=True)
+    # Extra admin-maintained fields (round-tripped through the catalog CSV).
+    packing_type = Column(String, nullable=True)
+    fragile = Column(Boolean, nullable=True)
+    sku = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, nullable=False)

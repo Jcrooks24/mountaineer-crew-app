@@ -45,6 +45,13 @@ class CatalogItemIn(BaseModel):
     weight_lbs: float = 0
     cubic_ft: float = 0
     category: Optional[str] = None
+    length_in: Optional[float] = None
+    width_in: Optional[float] = None
+    height_in: Optional[float] = None
+    packing_type: Optional[str] = None
+    fragile: Optional[bool] = None
+    sku: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class CatalogItemOut(BaseModel):
@@ -53,6 +60,13 @@ class CatalogItemOut(BaseModel):
     weight_lbs: float
     cubic_ft: float
     category: Optional[str] = None
+    length_in: Optional[float] = None
+    width_in: Optional[float] = None
+    height_in: Optional[float] = None
+    packing_type: Optional[str] = None
+    fragile: Optional[bool] = None
+    sku: Optional[str] = None
+    notes: Optional[str] = None
 
     class Config:
         from_attributes = True

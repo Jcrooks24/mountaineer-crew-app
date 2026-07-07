@@ -2707,34 +2707,74 @@ function FurnitureCatalogCard() {
     }
   }
 
+  // Export the catalog as a CSV via an authed fetch -> blob download (the
+  // endpoint is admin-gated, so a plain <a href> without the token would 401).
+  async function exportCsv() {
+    setBusy(true); setErr(null);
+    try {
+      const token = getToken() || "";
+      const res = await fetch(`${ADMIN_API}/api/furniture-catalog/export-csv`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "furniture_catalog.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setErr(e?.message ?? "Export failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="card">
       <div className="sectionTitle">Furniture Catalog</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-        Bulk-import furniture/box items from a CSV. Imported items appear in both
-        the Estimator and the job Actual-Inventory search. Upsert by name.
+        Maintain the catalog in a spreadsheet: <strong>Export CSV</strong>, fill in
+        dimensions and other data, then <strong>Upload CSV</strong> to push it back.
+        Imported items appear in both the Estimator and the job Actual-Inventory search.
         {count !== null && <> Currently <strong>{count}</strong> catalog items.</>}
       </div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-        CSV columns (header row): <code>name</code>, <code>cubic_ft</code>,{" "}
-        <code>weight_lbs</code>, <code>category</code>. Set category to{" "}
-        <code>Boxes</code> for box types so they classify as boxes.
+        Columns: <code>name</code> (match key), <code>category</code>,{" "}
+        <code>length_in</code>, <code>width_in</code>, <code>height_in</code>,{" "}
+        <code>cubic_ft</code>, <code>weight_lbs</code>, <code>packing_type</code>,{" "}
+        <code>fragile</code>, <code>sku</code>, <code>notes</code>. Fill L×W×H and
+        volume is computed for you. Blank cells are left unchanged (they don't
+        wipe existing values). Set category to <code>Boxes</code> for box types.
       </div>
 
-      <label className="btnPrimary" style={{ display: "inline-flex", alignItems: "center", padding: "8px 16px", borderRadius: "var(--btn-r)", cursor: busy ? "not-allowed" : "pointer" }}>
-        {busy ? "Importing…" : "Upload CSV"}
-        <input
-          type="file"
-          accept=".csv,text/csv"
-          style={{ display: "none" }}
+      <div className="row wrap" style={{ gap: 8 }}>
+        <button
+          type="button"
+          onClick={exportCsv}
           disabled={busy}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            e.currentTarget.value = "";
-            if (f) upload(f);
-          }}
-        />
-      </label>
+          style={{ display: "inline-flex", alignItems: "center", padding: "8px 16px", borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)", cursor: busy ? "not-allowed" : "pointer" }}
+        >
+          {busy ? "Working…" : "Export CSV"}
+        </button>
+        <label className="btnPrimary" style={{ display: "inline-flex", alignItems: "center", padding: "8px 16px", borderRadius: "var(--btn-r)", cursor: busy ? "not-allowed" : "pointer" }}>
+          {busy ? "Importing…" : "Upload CSV"}
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            style={{ display: "none" }}
+            disabled={busy}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.currentTarget.value = "";
+              if (f) upload(f);
+            }}
+          />
+        </label>
+      </div>
 
       {result && (
         <div className="small" style={{ marginTop: 10, color: "var(--ok)" }}>
