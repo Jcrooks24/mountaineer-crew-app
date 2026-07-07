@@ -2017,6 +2017,48 @@ def schedule_job_inventory_export(job_uuid: str) -> None:
     _EXPORT_POOL.submit(_job_inventory_export_worker, job_uuid)
 
 
+# ── Incident export ──────────────────────────────────────────────────────────
+
+INCIDENT_HEADERS = [
+    "incident_uuid", "incident_date", "job_uuid", "job_name", "reported_by",
+    "attributed_crew", "severity", "attributable", "description", "est_cost",
+    "resolved", "notes", "photo_urls", "created_at",
+]
+
+
+def export_incident_to_sheets(db: Session, inc: Dict[str, Any]) -> int:
+    """Replace-style export: one row per incident_uuid on the Incidents tab, so
+    admin edits (resolve, notes, cost) overwrite in place."""
+    tab = os.getenv("SHEETS_INCIDENTS_TAB", "Incidents").strip() or "Incidents"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = inc.get("incident_uuid") or ""
+    if not uuid:
+        return 0
+
+    svc = _get_sheets_svc(db)
+    headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, INCIDENT_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "incident_uuid", uuid)
+
+    row = {
+        "incident_uuid": uuid,
+        "incident_date": inc.get("incident_date") or "",
+        "job_uuid": inc.get("job_uuid") or "",
+        "job_name": inc.get("job_name") or "",
+        "reported_by": inc.get("reported_by_name") or "",
+        "attributed_crew": inc.get("attributed_crew") or "",
+        "severity": inc.get("severity") or "",
+        "attributable": inc.get("attributable") or "",
+        "description": inc.get("description") or "",
+        "est_cost": inc.get("est_cost") if inc.get("est_cost") is not None else "",
+        "resolved": "Y" if inc.get("resolved") else "N",
+        "notes": inc.get("notes") or "",
+        "photo_urls": ", ".join(inc.get("photo_urls") or []),
+        "created_at": inc.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
 # ── Admin entry-status sweep ─────────────────────────────────────────────────
 # When admin saves their initials + date on the Job Summary view, every row
 # already exported for that job needs its trailing entered_by / entered_on

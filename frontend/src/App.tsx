@@ -5,6 +5,8 @@ import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
 import BolInventoryTab from "./components/BolInventoryTab";
 import ActualInventory from "./components/ActualInventory";
+import IncidentReport from "./components/IncidentReport";
+import { drainIncidents } from "./lib/incidentStore";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
@@ -125,7 +127,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "report" | "inventory";
+type Tab = "timeline" | "photos" | "report" | "inventory" | "incident";
 
 type EventRecord = {
   event_id: string;
@@ -1614,8 +1616,10 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); };
     const onOffline = () => setIsOnline(false);
+    // Flush any incidents queued while offline on this mount too.
+    drainIncidents();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
@@ -1887,6 +1891,9 @@ export default function App() {
         </button>
         <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
           Inventory
+        </button>
+        <button className={"tab " + (tab === "incident" ? "active" : "")} onClick={() => setTab("incident")}>
+          Incident
         </button>
         <button
           className={"tab " + (tab === "report" ? "active" : "")}
@@ -2618,6 +2625,19 @@ export default function App() {
           <div className="card">
             <div className="small" style={{ color: "var(--muted)" }}>
               Select a job on the Timeline tab before adding inventory.
+            </div>
+          </div>
+        )
+      )}
+
+      {/* Incident */}
+      {tab === "incident" && (
+        jobUuid ? (
+          <IncidentReport jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+        ) : (
+          <div className="card">
+            <div className="small" style={{ color: "var(--muted)" }}>
+              Select a job on the Timeline tab before reporting an incident.
             </div>
           </div>
         )

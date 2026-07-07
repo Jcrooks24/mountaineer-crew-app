@@ -26,6 +26,7 @@ import app.db.models.availability_unlock  # noqa: F401 - register availability_u
 import app.db.models.employee_tag  # noqa: F401 - register employee_tags + user_employee_tags
 import app.db.models.job_type  # noqa: F401 - register job_types
 import app.db.models.skill  # noqa: F401 - register skills + user_skills
+import app.db.models.incident  # noqa: F401 - register incidents
 import app.db.models.user_email_alias  # noqa: F401 - register user_email_aliases
 import app.db.models.bol  # noqa: F401 - register digital_bols table
 import app.db.models.job_inventory  # noqa: F401 - register job_inventory_items table
@@ -72,6 +73,10 @@ from app.routers.skills import (
     users_router as skills_users_router,
 )
 from app.routers.furniture_catalog import router as furniture_catalog_router
+from app.routers.incidents import (
+    router as incidents_router,
+    admin_router as incidents_admin_router,
+)
 
 
 app = FastAPI(title="Mountaineer Crew App Backend")
@@ -210,3 +215,5 @@ app.include_router(skills_public_router)         # /api/skills (crew: active reg
 app.include_router(skills_admin_router)          # /api/admin/skills (admin CRUD)
 app.include_router(skills_users_router)          # /api/admin/users/{id}/skills (matrix)
 app.include_router(furniture_catalog_router)     # /api/furniture-catalog (crew read + admin CSV import)
+app.include_router(incidents_router)             # /api/incidents (crew report + job list)
+app.include_router(incidents_admin_router)       # /api/admin/incidents (admin log)

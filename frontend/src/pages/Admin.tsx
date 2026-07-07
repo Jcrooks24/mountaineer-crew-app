@@ -77,7 +77,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office";
+type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents";
 
 const TAB_TITLES: Record<Tab, string> = {
   map: "Admin Dashboard",
@@ -90,6 +90,7 @@ const TAB_TITLES: Record<Tab, string> = {
   settings: "Settings",
   advanced: "Advanced Settings",
   appearance: "Theme & Appearance",
+  incidents: "Incidents",
 };
 
 const DESKTOP_MODE_KEY = "crew_admin_desktop_mode_v1";
@@ -195,6 +196,7 @@ export default function Admin() {
       {tab === "notes" && <NotesTab />}
       {tab === "summary" && <JobSummaryTab />}
       {tab === "office" && <OfficeHoursPanel />}
+      {tab === "incidents" && <IncidentsAdminTab />}
       {tab === "settings" && (
         <SettingsTab
           onOpenAdvanced={() => setTab("advanced")}
@@ -275,6 +277,7 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
     { tab: "notes",     label: "Notes",        hint: "Patch notes and admin notes" },
     { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
     { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
+    { tab: "incidents", label: "Incidents",    hint: "Crew-reported incident log" },
     { tab: "settings",  label: "Settings",     hint: "Theme, field config, and advanced options" },
   ];
   return (
@@ -301,6 +304,100 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+type AdminIncident = {
+  id: number; incident_uuid: string; job_uuid: string | null; job_name: string | null;
+  incident_date: string | null; reported_by_name: string | null; attributed_crew: string | null;
+  severity: string; attributable: string; description: string; est_cost: number | null;
+  resolved: boolean; notes: string | null; photo_urls: string[]; created_at: string;
+};
+
+// Admin log of crew-reported incidents. Read + resolve/reopen + edit notes/cost.
+function IncidentsAdminTab() {
+  const [incidents, setIncidents] = useState<AdminIncident[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [showResolved, setShowResolved] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<AdminIncident[]>("/api/admin/incidents")
+      .then((r) => { if (!cancelled) setIncidents(r); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function patch(inc: AdminIncident, body: Partial<Pick<AdminIncident, "resolved" | "notes" | "est_cost">>) {
+    setBusy(inc.id);
+    try {
+      const updated = await apiFetch<AdminIncident>(`/api/admin/incidents/${inc.id}`, {
+        method: "PATCH", body: JSON.stringify(body),
+      });
+      setIncidents((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Failed to update");
+    } finally { setBusy(null); }
+  }
+
+  const shown = incidents.filter((i) => showResolved || !i.resolved);
+  const openCount = incidents.filter((i) => !i.resolved).length;
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Incidents</div>
+        <label className="row small" style={{ gap: 6, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+          Show resolved
+        </label>
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 12 }}>
+        {openCount} open · {incidents.length} total. Also exported to the Incidents sheet tab.
+      </div>
+
+      {loading ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : err ? (
+        <div className="small" style={{ color: "var(--danger)" }}>{err}</div>
+      ) : shown.length === 0 ? (
+        <div className="small" style={{ color: "var(--muted)" }}>No incidents.</div>
+      ) : (
+        <div className="col" style={{ gap: 10 }}>
+          {shown.map((inc) => {
+            const color = inc.severity === "major" ? "var(--danger)" : inc.severity === "moderate" ? "#f59e0b" : "var(--ok)";
+            return (
+              <div key={inc.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, opacity: inc.resolved ? 0.6 : 1 }}>
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{inc.severity}</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>{inc.incident_date || inc.created_at.slice(0, 10)}</span>
+                </div>
+                <div style={{ fontSize: 14, marginTop: 4 }}>{inc.description}</div>
+                <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                  {[
+                    inc.job_name ? `Job: ${inc.job_name}` : null,
+                    inc.attributed_crew ? `Attributed: ${inc.attributed_crew}` : null,
+                    `Attributable: ${inc.attributable}`,
+                    inc.est_cost != null ? `Est. $${inc.est_cost}` : null,
+                    inc.reported_by_name ? `by ${inc.reported_by_name}` : null,
+                  ].filter(Boolean).join(" · ")}
+                </div>
+                {inc.notes && <div className="small" style={{ marginTop: 4 }}>Notes: {inc.notes}</div>}
+                <div className="row" style={{ gap: 6, marginTop: 8 }}>
+                  <button disabled={busy === inc.id} onClick={() => patch(inc, { resolved: !inc.resolved })}
+                    style={{ fontSize: 12, padding: "4px 12px" }}>
+                    {inc.resolved ? "Reopen" : "Mark resolved"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
