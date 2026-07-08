@@ -931,7 +931,20 @@ def _format_truck_fullness(entries: Optional[list]) -> str:
         except (TypeError, ValueError):
             v = h = 0
         combined = round(v * h / 100)
-        parts.append(f"{truck}: V{v}×H{h} ({combined}%)")
+        # Rental trucks: note the length (if given) and that fill is a best
+        # guess (no interior markers). e.g. "Penske 26ft (rental): V75×H50 (38%)".
+        label = truck
+        if e.get("is_rental"):
+            length = e.get("length_ft")
+            if length not in (None, "", 0):
+                try:
+                    length = int(float(length))
+                except (TypeError, ValueError):
+                    length = None
+                if length:
+                    label = f"{truck} {length}ft"
+            label = f"{label} (rental)"
+        parts.append(f"{label}: V{v}×H{h} ({combined}%)")
     return "; ".join(parts)
 
 

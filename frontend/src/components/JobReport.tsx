@@ -1294,17 +1294,22 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         )}
 
-        {sortedEvents.length < 2 ? (
-          <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
-            Need at least two timeline events for this job before you can
-            log employee hours.
-          </div>
-        ) : (
-          <>
-            <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-              Type a name, pick the start and end events, add any clocked-out
-              periods, then Save. Repeat for each crew member.
-            </div>
+        {/* The editor is always available - even with 0-1 timeline events the
+            crew can log hours via the "Manual time…" option in the pickers.
+            The earlier hard gate hid the whole editor (and its manual path),
+            which read as "no option to log". */}
+        <>
+            {sortedEvents.length < 2 ? (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+                No start/finish events logged yet - choose “Manual time…” in the
+                start and end pickers to type each person's hours by hand.
+              </div>
+            ) : (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+                Type a name, pick the start and end events, add any clocked-out
+                periods, then Save. Repeat for each crew member.
+              </div>
+            )}
 
             <div
               style={{
@@ -1408,8 +1413,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 </button>
               </div>
             </div>
-          </>
-        )}
+        </>
 
         {data.employee_hours.length > 0 && (
           <div className="col" style={{ gap: 0 }}>
@@ -2184,66 +2188,107 @@ function TruckFullnessEditor({
   value: TruckFullnessEntry[];
   onChange: (next: TruckFullnessEntry[]) => void;
 }) {
-  const used = new Set(value.map((t) => t.truck));
-  const available = TRUCK_IDS.filter((t) => !used.has(t));
+  // Only fleet entries reserve a fixed id; rentals are free-text so several can
+  // coexist. Updates/removes go by index so two rentals never collide.
+  const usedFleet = new Set(value.filter((t) => !t.is_rental).map((t) => t.truck));
+  const availableFleet = TRUCK_IDS.filter((t) => !usedFleet.has(t));
+
+  const patchAt = (i: number, patch: Partial<TruckFullnessEntry>) =>
+    onChange(value.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  const removeAt = (i: number) => onChange(value.filter((_, idx) => idx !== i));
+
+  const dashedChip: React.CSSProperties = {
+    padding: "6px 12px", borderRadius: 999, border: "1px dashed var(--border)",
+    background: "transparent", color: "var(--text)", fontSize: 13, cursor: "pointer",
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {value.map((t) => {
+      {value.map((t, i) => {
         const combined = Math.round((t.vertical_pct * t.horizontal_pct) / 100);
         return (
-          <div key={t.truck} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>{t.truck}</div>
+          <div key={t.is_rental ? `rental-${i}` : t.truck} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              {t.is_rental ? (
+                <input
+                  value={t.truck}
+                  onChange={(e) => patchAt(i, { truck: e.target.value })}
+                  placeholder="Rental truck (company / name)"
+                  style={{ fontWeight: 700, fontSize: 14, flex: 1, minWidth: 0 }}
+                />
+              ) : (
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{t.truck}</div>
+              )}
               <button
                 type="button"
-                onClick={() => onChange(value.filter((x) => x.truck !== t.truck))}
-                style={{ color: "var(--danger)" }}
+                onClick={() => removeAt(i)}
+                style={{ color: "var(--danger)", flexShrink: 0 }}
               >
                 Remove
               </button>
             </div>
+            {t.is_rental && (
+              <label className="col" style={{ gap: 2, marginTop: 8 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Truck length (ft)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={t.length_ft ?? ""}
+                  onChange={(e) => patchAt(i, { length_ft: e.target.value === "" ? undefined : Number(e.target.value) })}
+                  placeholder="e.g. 26"
+                  style={{ width: 120 }}
+                />
+              </label>
+            )}
             <FullnessSlider
               label="Vertical fill"
               value={t.vertical_pct}
-              onChange={(p) => onChange(value.map((x) => (x.truck === t.truck ? { ...x, vertical_pct: p } : x)))}
+              onChange={(p) => patchAt(i, { vertical_pct: p })}
             />
             <FullnessSlider
               label="Horizontal fill"
               value={t.horizontal_pct}
-              onChange={(p) => onChange(value.map((x) => (x.truck === t.truck ? { ...x, horizontal_pct: p } : x)))}
+              onChange={(p) => patchAt(i, { horizontal_pct: p })}
             />
             <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
               {t.vertical_pct > 0 && t.horizontal_pct > 0
-                ? `Estimated fill: ${combined}% (V${t.vertical_pct} × H${t.horizontal_pct})`
+                ? `Estimated fill: ${combined}% (V${t.vertical_pct} × H${t.horizontal_pct})${t.is_rental ? " · best guess" : ""}`
                 : "Pick vertical and horizontal fill"}
             </div>
+            {t.is_rental && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                Rental trucks have no interior 25% markers - estimate the fill as best you can.
+              </div>
+            )}
           </div>
         );
       })}
-      {available.length > 0 && (
-        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span className="small" style={{ color: "var(--muted)" }}>Add truck:</span>
-          {available.map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => onChange([...value, { truck: t, vertical_pct: 0, horizontal_pct: 0 }])}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 999,
-                border: "1px dashed var(--border)",
-                background: "transparent",
-                color: "var(--text)",
-                fontSize: 13,
-                cursor: "pointer",
-              }}
-            >
-              + {t}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {availableFleet.length > 0 && (
+          <>
+            <span className="small" style={{ color: "var(--muted)" }}>Add truck:</span>
+            {availableFleet.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => onChange([...value, { truck: t, vertical_pct: 0, horizontal_pct: 0 }])}
+                style={dashedChip}
+              >
+                + {t}
+              </button>
+            ))}
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => onChange([...value, { truck: "", vertical_pct: 0, horizontal_pct: 0, is_rental: true }])}
+          style={dashedChip}
+        >
+          + Rental truck
+        </button>
+      </div>
     </div>
   );
 }

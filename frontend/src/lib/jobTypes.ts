@@ -27,4 +27,8 @@ export type TruckFullnessEntry = {
   truck: string;
   vertical_pct: number;
   horizontal_pct: number;
+  // Rental trucks aren't in the fixed fleet: free-text label + optional length,
+  // and their fill is a best guess since they have no interior 25% markers.
+  is_rental?: boolean;
+  length_ft?: number;
 };

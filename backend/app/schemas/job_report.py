@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 BILLING_METHODS = {
@@ -36,17 +36,28 @@ TRUCK_IDS = {"16Ford", "26Int", "24FR8", "26FR8"}
 
 
 class TruckFullnessEntry(BaseModel):
-    """One truck's fill estimate against the interior 25% marks."""
+    """One truck's fill estimate against the interior 25% marks.
+
+    Fleet trucks must be one of TRUCK_IDS. Rental trucks (is_rental) carry a
+    free-text label and an optional length_ft, since they're not in the fixed
+    fleet and have no interior markers - their fill is a best-guess estimate.
+    """
     truck: str
     vertical_pct: int
     horizontal_pct: int
+    is_rental: bool = False
+    length_ft: Optional[float] = None
 
-    @field_validator("truck")
-    @classmethod
-    def truck_valid(cls, v: str) -> str:
-        if v not in TRUCK_IDS:
-            raise ValueError(f"truck must be one of {TRUCK_IDS}")
-        return v
+    @model_validator(mode="after")
+    def _validate_truck(self) -> "TruckFullnessEntry":
+        if self.is_rental:
+            if not (self.truck or "").strip():
+                raise ValueError("rental truck requires a name")
+        elif self.truck not in TRUCK_IDS:
+            raise ValueError(f"truck must be one of {TRUCK_IDS} (or mark it a rental)")
+        if self.length_ft is not None and not (0 <= self.length_ft <= 100):
+            raise ValueError("length_ft must be between 0 and 100")
+        return self
 
     @field_validator("vertical_pct", "horizontal_pct")
     @classmethod

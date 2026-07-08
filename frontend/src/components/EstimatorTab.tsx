@@ -277,7 +277,13 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
   const [addingRoom, setAddingRoom] = useState(false);
   const [roomDraft, setRoomDraft] = useState("");
 
-  useEffect(() => { setLocal(estimate); }, [estimate]);
+  // Resync local ONLY when a different estimate is opened. Keying on the whole
+  // `estimate` object would reset local every time our own autosave echoes back
+  // an updated record, clobbering characters typed during the save round-trip
+  // (and any trailing whitespace the backend trims) - the "lose a sentence while
+  // typing" bug. Item edits refresh local.items explicitly via refreshEstimate.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setLocal(estimate); }, [estimate.estimate_uuid]);
 
   const totalWeight = useMemo(
     () => local.items.reduce((s, i) => s + (i.weight_lbs || 0) * (i.qty || 0), 0),
@@ -391,6 +397,10 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     try {
       const fresh = await apiFetch<Estimate>(`/api/estimates/${local.estimate_uuid}`);
       onChange(fresh);
+      // Pull the refreshed item list into local (item add/remove/edit happens in
+      // child rows). Meta fields the user may be typing are preserved - the
+      // prop-sync effect above no longer resets local for the same estimate.
+      setLocal((prev) => ({ ...prev, items: fresh.items }));
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Reload failed");
     }
@@ -980,11 +990,7 @@ function RoomTile({
           subcategory={preSubcategory ?? ""}
           knownSubcategories={subcategories.filter((s) => s !== "-")}
           onClose={() => { setAddingItem(false); setPreSubcategory(null); }}
-          onAdd={(payload) => {
-            onAddItem(payload);
-            setAddingItem(false);
-            setPreSubcategory(null);
-          }}
+          onAdd={(payload) => { onAddItem(payload); }}
         />
       )}
     </div>
@@ -1292,6 +1298,11 @@ function AddItemDialog({
 }) {
   const { list: catalog, refresh: refreshCatalog } = useCatalog();
 
+  // The dialog stays open after each add so the estimator can add several items
+  // in a row; searchRef lets us drop the cursor straight back in the item box,
+  // and justAdded gives a quick confirmation of the item that was just added.
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [justAdded, setJustAdded] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Match | null>(null);
   // String-backed so the user can clear and retype. A numeric-clamped state
@@ -1345,6 +1356,23 @@ function AddItemDialog({
       subcategory: sub.trim() || null,
       notes: notes.trim() || null,
     });
+    resetForNext(name);
+  }
+
+  // Clear the item-specific fields and drop the cursor back in the search box so
+  // the next item can be typed immediately. Keeps `sub` (subcategory) so a run
+  // of items in the same subcategory stays grouped without re-picking it.
+  function resetForNext(addedName: string) {
+    setJustAdded(addedName);
+    setSelected(null);
+    setQuery("");
+    setWeight("");
+    setCuft("");
+    setNotes("");
+    setQty("1");
+    setSaveToCatalog(false);
+    setErr(null);
+    requestAnimationFrame(() => searchRef.current?.focus());
   }
 
   function chooseAndAdd(m: Match) {
@@ -1432,12 +1460,19 @@ function AddItemDialog({
             )}
           </div>
 
+          {justAdded && (
+            <div className="small" style={{ color: "var(--ok)", fontWeight: 600 }}>
+              ✓ Added “{justAdded}”. Add another, or tap Done.
+            </div>
+          )}
+
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Item *</span>
             <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
               <input
+                ref={searchRef}
                 value={query}
-                onChange={(e) => { setQuery(e.target.value); setSelected(null); }}
+                onChange={(e) => { setQuery(e.target.value); setSelected(null); if (justAdded) setJustAdded(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } }}
                 placeholder="Start typing - e.g. Sofa, Dresser, Box…"
                 style={{ flex: 1 }}
@@ -1556,7 +1591,7 @@ function AddItemDialog({
             <button type="submit" className="btnPrimary" style={{ flex: 1 }}>
               Add to inventory
             </button>
-            <button type="button" onClick={onClose}>Cancel</button>
+            <button type="button" onClick={onClose}>{justAdded ? "Done" : "Cancel"}</button>
           </div>
         </form>
       </div>
