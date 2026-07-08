@@ -3929,12 +3929,121 @@ function AdvancedSettingsPage() {
           every visit to Settings. Order: action card (Sheet Sync) before
           read-only health snapshot, then collapsible Diagnostics. */}
       <SheetSyncCard />
+      <SheetSyncHealthCard />
       <AppHealthCard />
 
       {/* Diagnostics last and collapsed by default - admin only goes here
           when something looks off. Keeps the operational cards above it
           uncluttered. */}
       <DiagnosticsCard />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Sheet-sync health check (System Check)
+// Verifies every app->sheet sync in one place. New feature syncs are picked up
+// automatically from the backend registry (SHEET_SYNC_REGISTRY).
+// ─────────────────────────────────────────
+type SyncCheck = {
+  key: string;
+  label: string;
+  tab: string;
+  env_var: string;
+  env_set: boolean;
+  tab_exists: boolean;
+  last_ok_at: string | null;
+  last_error_at: string | null;
+  last_error: string | null;
+};
+type SheetSyncHealth = {
+  spreadsheet_id: string;
+  connected: boolean;
+  error: string | null;
+  ok?: boolean;
+  syncs: SyncCheck[];
+};
+
+function SheetSyncHealthCard() {
+  const [busy, setBusy] = useState(false);
+  const [data, setData] = useState<SheetSyncHealth | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true); setErr(null); setData(null);
+    try {
+      setData(await apiFetch<SheetSyncHealth>("/api/admin/system-check/sheets"));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Health check failed");
+    } finally { setBusy(false); }
+  }
+
+  const problems = data?.syncs.filter((s) => !s.tab_exists || s.last_error_at) ?? [];
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">System Check — Sheet Syncs</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Verifies the Google Sheets connection and that every app→sheet sync has its
+        worksheet tab and a valid config. Run this after adding a feature that
+        writes to the sheet, or if data looks like it stopped syncing.
+      </div>
+      <button onClick={run} disabled={busy} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>
+        {busy ? "Checking…" : "Run check"}
+      </button>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+
+      {data && (
+        <div style={{ marginTop: 12 }}>
+          <div className="small" style={{ marginBottom: 8, fontWeight: 700, color: data.connected ? "var(--ok)" : "var(--danger)" }}>
+            {data.connected
+              ? (problems.length === 0 ? "✓ Connected — all syncs healthy" : `⚠ Connected — ${problems.length} sync(s) need attention`)
+              : `✗ Not connected: ${data.error || "unknown error"}`}
+          </div>
+          {data.connected && (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: "var(--muted)" }}>
+                    <th style={{ padding: "4px 6px" }}>Sync</th>
+                    <th style={{ padding: "4px 6px" }}>Tab</th>
+                    <th style={{ padding: "4px 6px" }}>Exists</th>
+                    <th style={{ padding: "4px 6px" }}>Env set</th>
+                    <th style={{ padding: "4px 6px" }}>Last sync</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.syncs.map((s) => (
+                    <tr key={s.key} style={{ borderTop: "1px solid var(--border)" }}>
+                      <td style={{ padding: "4px 6px" }}>{s.label}</td>
+                      <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{s.tab}</td>
+                      <td style={{ padding: "4px 6px", color: s.tab_exists ? "var(--ok)" : "var(--danger)", fontWeight: 700 }}>
+                        {s.tab_exists ? "✓" : "missing"}
+                      </td>
+                      <td style={{ padding: "4px 6px", color: s.env_set ? "var(--text)" : "#f59e0b" }} title={s.env_set ? "" : `${s.env_var} not set — using default tab`}>
+                        {s.env_set ? "yes" : "default"}
+                      </td>
+                      <td style={{ padding: "4px 6px", color: s.last_error_at ? "var(--danger)" : "var(--muted)" }}>
+                        {s.last_error_at
+                          ? `error ${new Date(s.last_error_at).toLocaleString()}`
+                          : s.last_ok_at ? new Date(s.last_ok_at).toLocaleString() : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {problems.some((s) => s.last_error) && (
+            <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>
+              {problems.filter((s) => s.last_error).slice(0, 3).map((s) => (
+                <div key={s.key}>{s.label}: {s.last_error}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

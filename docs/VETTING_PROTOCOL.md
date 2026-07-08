@@ -116,6 +116,14 @@ write to distinct worksheets; re-submits don't accumulate rows.
   on every autosave keystroke (Sheets API spam - unsigned RODS is DB-only by design).
 - **Verify:** trigger the write, confirm one row in the `*Staging` tab; re-submit
   and confirm still one row.
+- **Health check (run every vet):** open Admin → Advanced Settings → **System
+  Check — Sheet Syncs** (or `GET /api/admin/system-check/sheets`) and confirm
+  Sheets is connected and every sync's tab exists. **If the change adds a new
+  sheet sync, its entry MUST be added to `SHEET_SYNC_REGISTRY` in
+  `backend/app/integrations/sheets_export.py`** so the health check covers it -
+  a new sync missing from the registry is a finding. The check also flags syncs
+  whose `SHEETS_*_TAB` env var is unset (using the default tab - on staging that
+  silently targets the prod worksheet) and any sync with a recent export error.
 
 ## Core Behavior 4 - Crew auth stays intact
 

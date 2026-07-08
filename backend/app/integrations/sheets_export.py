@@ -147,8 +147,14 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
         db = SessionLocal()
         try:
             export_fn(db, *args, **kwargs)
+            record_sheet_sync(db, export_fn.__name__, True)
         except Exception as exc:
             print(f"[sheets] background export failed ({export_fn.__name__}): {exc}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            record_sheet_sync(db, export_fn.__name__, False, str(exc))
         finally:
             try:
                 db.close()
@@ -156,6 +162,30 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
                 pass
 
     _EXPORT_POOL.submit(_worker)
+
+
+def record_sheet_sync(db: Session, fn_name: str, ok: bool, error: Optional[str] = None) -> None:
+    """Best-effort: record the last success/failure for a sheet export function so
+    the Advanced Settings health check can flag a silently-failing sync. Never
+    raises - a health-tracking hiccup must not affect the export itself."""
+    try:
+        from app.db.models.sheet_sync_status import SheetSyncStatus
+        now = datetime.utcnow()
+        row = db.query(SheetSyncStatus).filter(SheetSyncStatus.fn_name == fn_name).first()
+        if row is None:
+            row = SheetSyncStatus(fn_name=fn_name)
+            db.add(row)
+        if ok:
+            row.last_ok_at = now
+        else:
+            row.last_error_at = now
+            row.last_error = (error or "")[:500]
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
@@ -1888,14 +1918,18 @@ def _estimate_export_worker(estimate_uuid: str) -> None:
                     # Estimate was deleted - remove its stale summary + item rows
                     # so a deleted estimate doesn't leave ghost rows behind.
                     delete_estimate_from_sheets(db, estimate_uuid)
+                    record_sheet_sync(db, "export_estimate_to_sheets", True)
                     break
                 export_estimate_to_sheets(db, payload)
+                record_sheet_sync(db, "export_estimate_to_sheets", True)
                 break  # success
             except Exception as exc:
                 try:
                     db.rollback()
                 except Exception:
                     pass
+                if attempt >= 2:
+                    record_sheet_sync(db, "export_estimate_to_sheets", False, str(exc))
                 if attempt >= 2:
                     print(f"[sheets] estimate export failed after retries ({estimate_uuid}): {exc}")
                 else:
@@ -2534,3 +2568,82 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
 
     _ssl_retry(_append_avail)
     return 1
+
+
+# ── Sheets sync health check ─────────────────────────────────────────────────
+# One entry per app->sheet sync. The Advanced Settings system check iterates this
+# registry, so when a new feature adds a sync, add its entry here and it's
+# automatically covered by the health check (and the /vet protocol). `fn` is the
+# export function name used to look up last-run status (several syncs can share a
+# function, e.g. a summary + its item rows).
+SHEET_SYNC_REGISTRY = [
+    {"key": "events",            "label": "Timeline events",     "env": "SHEETS_EVENTS_TAB",             "default": "Events",            "fn": "export_events_to_sheets"},
+    {"key": "materials",         "label": "Materials",           "env": "SHEETS_MATERIALS_TAB",          "default": "Materials",         "fn": "export_materials_to_sheets"},
+    {"key": "job_reports",       "label": "Job reports",         "env": "SHEETS_JOB_REPORTS_TAB",        "default": "JobReports",        "fn": "export_job_report_to_sheets"},
+    {"key": "bills",             "label": "Bills / invoices",    "env": "SHEETS_BILLS_TAB",              "default": "Bills",             "fn": "export_bill_to_sheets"},
+    {"key": "estimates",         "label": "Estimates",           "env": "SHEETS_ESTIMATES_TAB",          "default": "Estimates",         "fn": "export_estimate_to_sheets"},
+    {"key": "estimate_items",    "label": "Estimate items",      "env": "SHEETS_ESTIMATE_ITEMS_TAB",     "default": "EstimateItems",     "fn": "export_estimate_to_sheets"},
+    {"key": "bols",              "label": "Bills of lading",     "env": "SHEETS_BOLS_TAB",               "default": "BOLs",              "fn": "export_bol_to_sheets"},
+    {"key": "bol_items",         "label": "BOL items",           "env": "SHEETS_BOL_ITEMS_TAB",          "default": "BOLItems",          "fn": "export_bol_to_sheets"},
+    {"key": "job_inventory",     "label": "Job inventory",       "env": "SHEETS_JOB_INVENTORY_TAB",      "default": "JobInventory",      "fn": "export_job_inventory_to_sheets"},
+    {"key": "job_inventory_items","label": "Job inventory items","env": "SHEETS_JOB_INVENTORY_ITEMS_TAB","default": "JobInventoryItems", "fn": "export_job_inventory_to_sheets"},
+    {"key": "incidents",         "label": "Incidents",           "env": "SHEETS_INCIDENTS_TAB",          "default": "Incidents",         "fn": "export_incident_to_sheets"},
+    {"key": "dvirs",             "label": "DVIRs",               "env": "SHEETS_DVIRS_TAB",              "default": "DVIRs",             "fn": "export_dvir_to_sheets"},
+    {"key": "prior_hours",       "label": "Prior on-duty (PODS)","env": "SHEETS_PRIOR_HOURS_TAB",        "default": "PriorOnDuty",       "fn": "export_prior_hours_to_sheets"},
+    {"key": "rods",             "label": "RODS logs",            "env": "SHEETS_RODS_TAB",               "default": "RODS",              "fn": "export_rods_to_sheets"},
+    {"key": "ld_pay",            "label": "Long-distance pay",   "env": "SHEETS_LD_PAY_TAB",             "default": "LongDistancePay",   "fn": "export_ld_day_to_sheets"},
+    {"key": "office_hours",      "label": "Office hours",        "env": "SHEETS_OFFICE_HOURS_TAB",       "default": "OfficeHours",       "fn": "export_office_hours_to_sheets"},
+    {"key": "reimbursements",    "label": "Reimbursements",      "env": "SHEETS_REIMBURSEMENTS_TAB",     "default": "Reimbursements",    "fn": "export_reimbursement_to_sheets"},
+    {"key": "availability",      "label": "Availability",        "env": "SHEETS_AVAILABILITY_TAB",       "default": "Availability",      "fn": "export_availability_window_to_sheets"},
+]
+
+
+def check_sheets_sync(db: Session) -> Dict[str, Any]:
+    """Health check for every app->sheet sync. Verifies the Sheets connection,
+    then per registered sync: whether its tab exists in the spreadsheet, whether
+    its tab env var is explicitly set (unset = using the default, which on
+    staging silently targets the prod tab), and the last success/failure time.
+
+    Returns a JSON-able dict for the Advanced Settings system check. New syncs
+    are covered automatically by adding to SHEET_SYNC_REGISTRY."""
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    result: Dict[str, Any] = {
+        "spreadsheet_id": spreadsheet_id,
+        "connected": False,
+        "error": None,
+        "syncs": [],
+    }
+
+    try:
+        svc = _get_sheets_svc(db)
+        meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+        titles = {s["properties"]["title"] for s in meta.get("sheets", [])}
+        result["connected"] = True
+    except Exception as e:  # noqa: BLE001 - surface the failure to the admin
+        result["error"] = str(e)
+        return result
+
+    try:
+        from app.db.models.sheet_sync_status import SheetSyncStatus
+        statuses = {r.fn_name: r for r in db.query(SheetSyncStatus).all()}
+    except Exception:
+        statuses = {}
+
+    for entry in SHEET_SYNC_REGISTRY:
+        raw = (os.getenv(entry["env"]) or "").strip()
+        tab = raw or entry["default"]
+        st = statuses.get(entry.get("fn") or "")
+        result["syncs"].append({
+            "key": entry["key"],
+            "label": entry["label"],
+            "tab": tab,
+            "env_var": entry["env"],
+            "env_set": bool(raw),
+            "tab_exists": tab in titles,
+            "last_ok_at": st.last_ok_at.isoformat() if st and st.last_ok_at else None,
+            "last_error_at": st.last_error_at.isoformat() if st and st.last_error_at else None,
+            "last_error": (st.last_error if st else None),
+        })
+
+    result["ok"] = all(s["tab_exists"] for s in result["syncs"])
+    return result

@@ -912,3 +912,15 @@ def app_health(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
     }
+
+
+@router.get("/system-check/sheets")
+def system_check_sheets(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Advanced Settings health check: verify the Google Sheets connection and
+    that every registered app->sheet sync has its worksheet tab (and flag env
+    vars that aren't set). Covers all syncs via SHEET_SYNC_REGISTRY."""
+    from app.integrations.sheets_export import check_sheets_sync
+    return check_sheets_sync(db)
