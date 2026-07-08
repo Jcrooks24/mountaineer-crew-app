@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime
+from sqlalchemy import Column, String, DateTime, Integer
 from sqlalchemy.sql import func
 from app.db.session import Base
 
@@ -18,5 +18,11 @@ class CalendarJob(Base):
     # older rows and manual jobs have no window.
     scheduled_start = Column(String, nullable=True)
     scheduled_end = Column(String, nullable=True)
+
+    # Number of crew invited to the calendar event (non-declined attendees),
+    # cached at resolve time so the scheduled-duration fallback can express an
+    # estimated MAN-hours baseline (invitees x duration) instead of raw wall
+    # duration. Nullable - older rows / manual jobs have none.
+    invitee_count = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())

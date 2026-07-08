@@ -310,6 +310,7 @@ def resolve_calendar_job(
     calendar_event_id: str = Query(...),
     scheduled_start: Optional[str] = Query(None),
     scheduled_end: Optional[str] = Query(None),
+    invitee_count: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -335,6 +336,11 @@ def resolve_calendar_job(
         if scheduled_end and not row.scheduled_end:
             row.scheduled_end = scheduled_end
             changed = True
+        # Refresh invitee_count whenever supplied - crew get added/removed from
+        # the event over time, so the latest count is the most accurate baseline.
+        if invitee_count is not None and invitee_count != row.invitee_count:
+            row.invitee_count = invitee_count
+            changed = True
         if changed:
             db.commit()
         return {"ok": True, "job_uuid": row.job_uuid, "created": False}
@@ -345,6 +351,7 @@ def resolve_calendar_job(
         job_uuid=new_uuid,
         scheduled_start=scheduled_start or None,
         scheduled_end=scheduled_end or None,
+        invitee_count=invitee_count,
     )
     db.add(row)
     db.commit()

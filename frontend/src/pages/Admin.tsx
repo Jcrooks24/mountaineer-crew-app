@@ -2807,6 +2807,10 @@ function SkillsManagerCard() {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<AdminSkill | null>(null);
   const [newName, setNewName] = useState("");
+  // Core + scale are chosen up front for custom-added skills (still editable
+  // later). binary=true means a pass/fail (No/Yes = 0/5) rating; false = 1-5 stars.
+  const [newCore, setNewCore] = useState(false);
+  const [newBinary, setNewBinary] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2830,10 +2834,12 @@ function SkillsManagerCard() {
     setBusy(true); setErr(null);
     try {
       const created = await apiFetch<AdminSkill>("/api/admin/skills", {
-        method: "POST", body: JSON.stringify({ name }),
+        method: "POST", body: JSON.stringify({ name, core: newCore, binary: newBinary }),
       });
       setSkills((prev) => [...prev, created]);
       setNewName("");
+      setNewCore(false);
+      setNewBinary(false);
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to create skill");
     } finally { setBusy(false); }
@@ -2906,11 +2912,34 @@ function SkillsManagerCard() {
         </div>
       )}
 
-      <div className="row" style={{ gap: 8, marginTop: 12 }}>
-        <input value={newName} onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") createSkill(); }}
-          placeholder="New skill name" style={{ flex: 1, padding: "6px 10px", fontSize: 13 }} />
-        <button onClick={createSkill} disabled={busy || !newName.trim()} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>Add</button>
+      <div className="col" style={{ gap: 8, marginTop: 12 }}>
+        <div className="row" style={{ gap: 8 }}>
+          <input value={newName} onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createSkill(); }}
+            placeholder="New skill name" style={{ flex: 1, padding: "6px 10px", fontSize: 13 }} />
+          <button onClick={createSkill} disabled={busy || !newName.trim()} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>Add</button>
+        </div>
+        <div className="row wrap" style={{ gap: 14, alignItems: "center" }}>
+          <label className="row" style={{ gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={newCore} onChange={(e) => setNewCore(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+            <span className="small">Core (rated on every job)</span>
+          </label>
+          <div className="row" style={{ gap: 6, alignItems: "center" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Scale:</span>
+            {([["1–5 stars", false], ["Pass / fail", true]] as const).map(([label, bin]) => {
+              const on = newBinary === bin;
+              return (
+                <button key={label} type="button" onClick={() => setNewBinary(bin)}
+                  style={{ padding: "3px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                    border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                    background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                    color: on ? "var(--brand)" : "var(--muted)" }}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}

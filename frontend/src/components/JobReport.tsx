@@ -1221,6 +1221,26 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
+      {/* LD driving days: remind whoever enters pay that drive time is a fixed
+          rate, not hourly. Driving (RODS/DUTY) events are already excluded from
+          the billable Employee Hours below - this note guards the manual entry. */}
+      {longDistance && (driveOnly || mixedLd) && (
+        <div
+          style={{
+            border: "1px solid #f59e0b",
+            background: "rgba(245,158,11,0.12)",
+            borderRadius: 10,
+            padding: "10px 12px",
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          <strong style={{ color: "#f59e0b" }}>Pay reminder (long-distance driving):</strong>{" "}
+          Movers are <strong>not</strong> paid hourly for drive time - long-distance
+          driving is paid at a fixed rate. Do not enter drive time as billable/hourly pay.
+        </div>
+      )}
+
       {/* Overage check - self-hides unless this job has a linked estimate. */}
       <OverageCheck
         jobUuid={jobUuid}
@@ -1549,7 +1569,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   <BetaTag feature="estVsActualHours" style={{ marginTop: 0 }} />
                   Estimated {estHours.hours.toFixed(2)}h{" "}
                   <span style={{ opacity: 0.8 }}>
-                    ({estHours.source === "estimate" ? "from estimate" : "from schedule"})
+                    ({estHours.source === "estimate" ? "from estimate" : "from schedule × crew"})
                   </span>
                 </span>
                 {(() => {

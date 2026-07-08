@@ -884,7 +884,12 @@ def estimated_hours_for(db: Session, job_uuid: str) -> tuple[Optional[float], st
             end = datetime.fromisoformat(cj.scheduled_end)
             hours = (end - start).total_seconds() / 3600.0
             if hours > 0:
-                return round(hours, 2), "schedule"
+                # Express estimated MAN-hours so it compares like-for-like with
+                # the actual (summed across crew): duration x invited crew. When
+                # the invitee count is unknown (older rows) fall back to 1 so the
+                # value is at worst the old wall-clock duration, never inflated.
+                crew = cj.invitee_count if (cj.invitee_count and cj.invitee_count > 0) else 1
+                return round(hours * crew, 2), "schedule"
         except (ValueError, TypeError):
             pass
     return None, ""

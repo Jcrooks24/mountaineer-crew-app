@@ -166,6 +166,9 @@ type CalEvent = {
   summary: string;
   start?: string;
   end?: string;
+  // Count of invited crew on the event; cached server-side at resolve so the
+  // est-vs-actual schedule fallback can express man-hours (invitees x duration).
+  invitees?: number;
 };
 
 type JobMeta = {
@@ -1221,6 +1224,7 @@ export default function App() {
       let resolveUrl = `${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`;
       if (ev.start) resolveUrl += `&scheduled_start=${encodeURIComponent(ev.start)}`;
       if (ev.end) resolveUrl += `&scheduled_end=${encodeURIComponent(ev.end)}`;
+      if (typeof ev.invitees === "number") resolveUrl += `&invitee_count=${ev.invitees}`;
       const res = await fetch(resolveUrl, {
         headers: makeAuthHeaders(token),
       });
