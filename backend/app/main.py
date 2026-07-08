@@ -27,6 +27,7 @@ import app.db.models.employee_tag  # noqa: F401 - register employee_tags + user_
 import app.db.models.job_type  # noqa: F401 - register job_types
 import app.db.models.skill  # noqa: F401 - register skills + user_skills
 import app.db.models.incident  # noqa: F401 - register incidents
+import app.db.models.off_job_entry  # noqa: F401 - register off-job hours
 import app.db.models.user_email_alias  # noqa: F401 - register user_email_aliases
 import app.db.models.bol  # noqa: F401 - register digital_bols table
 import app.db.models.job_inventory  # noqa: F401 - register job_inventory_items table
@@ -76,6 +77,10 @@ from app.routers.furniture_catalog import router as furniture_catalog_router
 from app.routers.incidents import (
     router as incidents_router,
     admin_router as incidents_admin_router,
+)
+from app.routers.off_job import (
+    router as off_job_router,
+    admin_router as off_job_admin_router,
 )
 
 
@@ -217,3 +222,5 @@ app.include_router(skills_users_router)          # /api/admin/users/{id}/skills 
 app.include_router(furniture_catalog_router)     # /api/furniture-catalog (crew read + admin CSV import)
 app.include_router(incidents_router)             # /api/incidents (crew report + job list)
 app.include_router(incidents_admin_router)       # /api/admin/incidents (admin log)
+app.include_router(off_job_router)               # /api/off-job-hours (crew log + own history)
+app.include_router(off_job_admin_router)         # /api/admin/off-job-hours (admin log)

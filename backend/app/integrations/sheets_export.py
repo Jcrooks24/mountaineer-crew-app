@@ -2596,6 +2596,7 @@ SHEET_SYNC_REGISTRY = [
     {"key": "office_hours",      "label": "Office hours",        "env": "SHEETS_OFFICE_HOURS_TAB",       "default": "OfficeHours",       "fn": "export_office_hours_to_sheets"},
     {"key": "reimbursements",    "label": "Reimbursements",      "env": "SHEETS_REIMBURSEMENTS_TAB",     "default": "Reimbursements",    "fn": "export_reimbursement_to_sheets"},
     {"key": "availability",      "label": "Availability",        "env": "SHEETS_AVAILABILITY_TAB",       "default": "Availability",      "fn": "export_availability_window_to_sheets"},
+    {"key": "off_job_hours",     "label": "Off-job hours",       "env": "SHEETS_OFF_JOB_TAB",            "default": "OffJobHours",       "fn": "export_off_job_to_sheets"},
 ]
 
 
@@ -2648,3 +2649,40 @@ def check_sheets_sync(db: Session) -> Dict[str, Any]:
 
     result["ok"] = all(s["tab_exists"] for s in result["syncs"])
     return result
+
+
+# ── Off-job hours export ─────────────────────────────────────────────────────
+
+OFF_JOB_HEADERS = [
+    "entry_uuid", "submitted_by", "work_date", "start_time", "end_time",
+    "hours", "pay_structure", "pay_other_note", "notes", "created_at",
+]
+
+
+def export_off_job_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """Replace-style export: one row per entry_uuid on the OffJobHours tab, so a
+    re-submit (offline retry) overwrites in place rather than duplicating."""
+    tab = os.getenv("SHEETS_OFF_JOB_TAB", "OffJobHours").strip() or "OffJobHours"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = entry.get("entry_uuid") or ""
+    if not uuid:
+        return 0
+
+    svc = _get_sheets_svc(db)
+    headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, OFF_JOB_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", uuid)
+
+    row = {
+        "entry_uuid": uuid,
+        "submitted_by": entry.get("submitted_by_name") or "",
+        "work_date": entry.get("work_date") or "",
+        "start_time": entry.get("start_time") or "",
+        "end_time": entry.get("end_time") or "",
+        "hours": entry.get("hours") if entry.get("hours") is not None else "",
+        "pay_structure": entry.get("pay_structure") or "",
+        "pay_other_note": entry.get("pay_other_note") or "",
+        "notes": entry.get("notes") or "",
+        "created_at": entry.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1

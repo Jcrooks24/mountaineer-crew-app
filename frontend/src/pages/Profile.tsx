@@ -310,6 +310,12 @@ export default function Profile() {
             onClick={() => nav("/reimbursement")}
           />
           <ProfileNavRow
+            label="Log Off-Job Hours"
+            hint="Hours for work not tied to a job (usually pre-approved)"
+            betaFeature="offJobHours"
+            onClick={() => nav("/off-job")}
+          />
+          <ProfileNavRow
             label="Document Library"
             onClick={() => nav("/documents")}
           />

@@ -7,6 +7,7 @@ import BolInventoryTab from "./components/BolInventoryTab";
 import ActualInventory from "./components/ActualInventory";
 import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport";
 import { drainIncidents } from "./lib/incidentStore";
+import { drainOffJob } from "./lib/offJobStore";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
@@ -1667,10 +1668,11 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); };
     const onOffline = () => setIsOnline(false);
-    // Flush any incidents queued while offline on this mount too.
+    // Flush any incidents + off-job hours queued while offline on this mount too.
     drainIncidents();
+    drainOffJob();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
