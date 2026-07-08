@@ -177,7 +177,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   return (
     <>
-      <div className="card">
+      <div className="card" data-component="BolInventoryTab">
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 4 }}>
           <div className="sectionTitle" style={{ marginBottom: 0 }}>BOL Inventory</div>
           <BetaTag feature="bolInventoryTab" style={{ marginTop: 0 }} />

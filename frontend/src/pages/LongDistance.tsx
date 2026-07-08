@@ -90,7 +90,7 @@ export default function LongDistance() {
         </button>
       </div>
 
-      <div className="card">
+      <div className="card" data-component="LdHosReference">
         <div className="sectionTitle">Hours of Service - Quick Reference</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
@@ -107,7 +107,7 @@ export default function LongDistance() {
         </div>
       </div>
 
-      <div className="card">
+      <div className="card" data-component="LdFormsSection">
         <div className="sectionTitle">Forms</div>
         <div className="col" style={{ gap: 8 }}>
           <button onClick={() => setSection("prior")} style={{ textAlign: "left" }}>
@@ -126,7 +126,7 @@ export default function LongDistance() {
         </div>
       </div>
 
-      <div className="card">
+      <div className="card" data-component="LdTralaExemption">
         <div className="sectionTitle">TRALA Rental-Truck Exemption - 82 FR 47306</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           Published by FMCSA in the Federal Register (Oct 11, 2017), this exemption covers

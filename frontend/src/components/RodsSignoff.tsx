@@ -156,7 +156,7 @@ function RodsDriverSection({
   }
 
   return (
-    <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+    <div data-component="RodsSignoff" style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
       <div style={{ fontWeight: 800, fontSize: 14 }}>RODS - {driver || "driver"}</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Edit the duty log on the Timeline; review the summary, add trip details, and sign.{day.signature ? "  Signed." : ""}

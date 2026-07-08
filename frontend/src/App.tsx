@@ -2121,7 +2121,7 @@ export default function App() {
             // Local, or LD labor-only day: the normal Actions tile.
             if (!longDistance || ldLabor.length > 0) {
               return (
-                <div className="card">
+                <div className="card" data-component="TimelineActionsTile">
                   <div className="sectionTitle">Actions</div>
                   {longDistance && (
                     <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>

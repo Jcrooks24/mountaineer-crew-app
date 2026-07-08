@@ -1804,7 +1804,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="card" style={{ borderColor: "var(--brand)" }}>
           <div className="sectionTitle">Long-distance</div>
 
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
+          <div data-component="ReportDocuments" style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
             Required for this interstate trip. Each driver's PODS is tracked in the Driver PODS section below. Complete or attach the Bill of Lading; multi-day trips link this day to the trip's BOL.
           </div>
@@ -1870,7 +1870,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             {/* Per-diem sits next to the BOL selector so the crew rep
                 confirming which BOL is attached also flags whether the
                 crew was out of town for that day's charge. */}
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <label data-component="ReportPerDiem" style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
               <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
               <span>The <strong>crew</strong> started and ended the day out of town ($50 per-diem, per crew member)</span>
             </label>

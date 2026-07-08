@@ -63,7 +63,7 @@ export default function RodsRecorder({
   }
 
   return (
-    <div className="card" style={{ borderColor: "var(--brand)" }}>
+    <div className="card" data-component="RodsRecorder" style={{ borderColor: "var(--brand)" }}>
       {/* Title changes when the tile also hosts the "Actions - job labor"
           slot on mixed drive+labor days - "Record of Duty Status" alone is
           misleading in that case. */}

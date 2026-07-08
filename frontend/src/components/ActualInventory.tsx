@@ -238,7 +238,7 @@ export default function ActualInventory({
   const boxRows = rows.filter((r) => r.is_box);
 
   return (
-    <div className="card">
+    <div className="card" data-component="ActualInventory">
       <div className="row" style={{ alignItems: "center", gap: 8 }}>
         <div className="sectionTitle" style={{ marginBottom: 0 }}>Actual inventory</div>
         <BetaTag feature="actualInventory" style={{ marginTop: 0 }} />
