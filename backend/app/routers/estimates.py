@@ -257,6 +257,11 @@ def delete_estimate(
         raise HTTPException(status_code=404, detail="Estimate not found")
     db.delete(e)
     db.commit()
+    # Reconcile the sheet: routed through the same coalescing worker as exports,
+    # which now sees no estimate for this uuid and removes its (ghost) summary +
+    # item rows. Going through schedule_* serializes it with any in-flight export
+    # so a delete can't race a write.
+    schedule_estimate_export(estimate_uuid)
 
 
 @router.post("/{estimate_uuid}/items", response_model=EstimateItemOut, status_code=status.HTTP_201_CREATED)

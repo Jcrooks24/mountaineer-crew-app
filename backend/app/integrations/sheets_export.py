@@ -1839,6 +1839,30 @@ def _build_estimate_payload(db: Session, estimate_uuid: str) -> Optional[Dict[st
     }
 
 
+def delete_estimate_from_sheets(db: Session, estimate_uuid: str) -> int:
+    """Remove a deleted estimate's summary + item rows from the sheet so it
+    doesn't leave ghost rows. Mirrors the delete phase of
+    export_estimate_to_sheets and is safe to run repeatedly (deletes by
+    estimate_uuid; clears the dedup markers too)."""
+    if not estimate_uuid:
+        return 0
+    summary_tab = os.getenv("SHEETS_ESTIMATES_TAB", "Estimates").strip() or "Estimates"
+    items_tab = os.getenv("SHEETS_ESTIMATE_ITEMS_TAB", "EstimateItems").strip() or "EstimateItems"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    svc = _get_sheets_svc(db)
+    _delete_estimate_sheet_rows(svc, spreadsheet_id, [summary_tab, items_tab], estimate_uuid)
+    db.execute(
+        text(
+            "DELETE FROM sheet_generic_exports "
+            "WHERE kind IN ('estimate', 'estimate_item') AND export_key LIKE :prefix"
+        ),
+        {"prefix": f"{estimate_uuid}:%"},
+    )
+    db.commit()
+    return 1
+
+
 def _estimate_export_worker(estimate_uuid: str) -> None:
     from app.db.session import SessionLocal
     # Loop until no rerun flag was set while the previous export was running.
@@ -1856,7 +1880,10 @@ def _estimate_export_worker(estimate_uuid: str) -> None:
             try:
                 payload = _build_estimate_payload(db, estimate_uuid)
                 if payload is None:
-                    break  # estimate was deleted - nothing to export
+                    # Estimate was deleted - remove its stale summary + item rows
+                    # so a deleted estimate doesn't leave ghost rows behind.
+                    delete_estimate_from_sheets(db, estimate_uuid)
+                    break
                 export_estimate_to_sheets(db, payload)
                 break  # success
             except Exception as exc:
