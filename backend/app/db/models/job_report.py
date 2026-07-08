@@ -87,6 +87,10 @@ class JobReport(Base):
     # prompt - the objective est-vs-actual note for the client conversation.
     overage_note = Column(Text, nullable=True)
 
+    # Crew-lead sign-off that the per-employee hours are correct. Null = not yet
+    # verified; the crew-lead-only checkbox on the report sets it.
+    hours_verified = Column(Boolean, nullable=True, default=False)
+
     # Timestamps
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)

@@ -449,9 +449,10 @@ function EmployeesTab() {
     }
   }
 
-  async function toggleRole(u: AdminUser) {
-    const newRole = u.role === "admin" ? "user" : "admin";
-    if (!confirm(`Make ${u.email} a ${newRole}?`)) return;
+  async function setRole(u: AdminUser, newRole: string) {
+    if (newRole === (u.role || "user")) return;
+    const label = newRole === "crew_lead" ? "crew lead" : newRole;
+    if (!confirm(`Make ${u.email} a ${label}?`)) return;
     setBusy(u.id);
     try {
       const updated = await apiFetch<AdminUser>(`/api/admin/users/${u.id}`, {
@@ -565,7 +566,7 @@ function EmployeesTab() {
                   <div>{u.email}</div>
                   {u.phone && <div className="small" style={{ color: "var(--text)" }}>{u.phone}</div>}
                 </td>
-                <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role}</td>
+                <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
                 <td style={{ padding: "10px 14px" }}>
                   <span style={{
                     fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
@@ -629,13 +630,17 @@ function EmployeesTab() {
                     >
                       {u.is_active ? "Revoke" : "Restore"}
                     </button>
-                    <button
+                    <select
                       className="roster-btn"
                       disabled={busy === u.id}
-                      onClick={() => toggleRole(u)}
+                      value={u.role || "user"}
+                      onChange={(e) => setRole(u, e.target.value)}
+                      title="Set this person's role"
                     >
-                      {u.role === "admin" ? "Make user" : "Make admin"}
-                    </button>
+                      <option value="user">Crew</option>
+                      <option value="crew_lead">Crew lead</option>
+                      <option value="admin">Admin</option>
+                    </select>
                     <button
                       className="roster-btn"
                       onClick={() => setEditingUnlocksFor(u)}

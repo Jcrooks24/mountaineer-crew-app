@@ -163,6 +163,8 @@ type ReportData = {
   truck_fullness: TruckFullnessEntry[];
   // Crew's note when actual inventory ran over the linked estimate.
   overage_note: string;
+  // Crew-lead sign-off that the per-employee hours are correct.
+  hours_verified: boolean;
   employee_hours: EmployeeHoursEntry[];
 };
 
@@ -227,6 +229,7 @@ function normalizeDraftData(d: ReportData): ReportData {
     hours_mismatch_reason: d.hours_mismatch_reason ?? "",
     crew_feedback: d.crew_feedback ?? "",
     overage_note: d.overage_note ?? "",
+    hours_verified: !!d.hours_verified,
     job_type_tags: Array.isArray(d.job_type_tags) ? d.job_type_tags : [],
     truck_fullness: Array.isArray(d.truck_fullness) ? d.truck_fullness : [],
     employee_hours: Array.isArray(d.employee_hours) ? d.employee_hours : [],
@@ -281,6 +284,15 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
 export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
+
+  // Crew Lead gating: skill ratings + job type are crew-lead (or admin) tasks.
+  // Regular crew fill the rest of the report (it syncs cross-device, so a lead
+  // can finish + submit from their own device). When a job has no crew lead,
+  // the crew can switch on self-assessment to fill these in themselves - job
+  // type stays loggable and skills become a self-rating.
+  const canLead = user?.role === "admin" || user?.role === "crew_lead";
+  const [selfAssess, setSelfAssess] = useState(false);
+  const leadEditable = canLead || selfAssess;
 
   // Long-distance documents: PODS + BOL (with multi-day trip linking).
   const [bolStatus, setBolStatus] = useState<string>("");
@@ -453,6 +465,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     job_type_tags: [],
     truck_fullness: [],
     overage_note: "",
+    hours_verified: false,
     employee_hours: [],
   });
 
@@ -538,6 +551,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           job_type_tags: (r as any).job_type_tags ?? [],
           truck_fullness: (r as any).truck_fullness ?? [],
           overage_note: (r as any).overage_note ?? "",
+          hours_verified: !!(r as any).hours_verified,
           employee_hours: r.employee_hours ?? [],
         });
         serverUpdatedAtRef.current = (r as any).updated_at || "";
@@ -568,6 +582,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             job_type_tags: [],
             truck_fullness: [],
             overage_note: "",
+            hours_verified: false,
             employee_hours: [],
           });
           serverUpdatedAtRef.current = "";
@@ -1048,6 +1063,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             (t) => t.truck && t.vertical_pct > 0 && t.horizontal_pct > 0,
           ),
           overage_note: data.overage_note.trim() || null,
+          hours_verified: !!data.hours_verified,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
           employee_hours: data.employee_hours
@@ -1265,17 +1281,20 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             below, so the crew must pick it before the skill rows are meaningful. */}
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
           Job type<BetaTag feature="jobTypeTags" />
+          <BetaTag feature="crewLead" style={{ marginTop: 0 }} />
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           {ht.jobTypeHint}
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
+        <LeadGate leadEditable={leadEditable} onSelfAssess={() => setSelfAssess(true)} what="job type" />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)", opacity: leadEditable ? 1 : 0.55 }}>
           {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
             const active = data.job_type_tags.includes(tag);
             return (
               <button
                 key={tag}
                 type="button"
+                disabled={!leadEditable}
                 onClick={() => {
                   setData((prev) => ({
                     ...prev,
@@ -1293,7 +1312,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 400,
                   fontSize: 13,
-                  cursor: "pointer",
+                  cursor: leadEditable ? "pointer" : "not-allowed",
                 }}
               >
                 {tag}
@@ -1312,6 +1331,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
             {ht.skillsHint}
           </div>
+        )}
+        {relevantSkills.length > 0 && (
+          <LeadGate leadEditable={leadEditable} onSelfAssess={() => setSelfAssess(true)} what="skill ratings" />
         )}
 
         {/* The editor is always available - even with 0-1 timeline events the
@@ -1512,6 +1534,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                       <EmployeeSkillRatings
                         skills={relevantSkills}
                         ratings={emp.skill_ratings || {}}
+                        disabled={!leadEditable}
                         onRate={(skillName, r) => setEmployeeSkillTypeRating(i, skillName, r)}
                       />
                     </div>
@@ -1584,6 +1607,21 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 })()}
               </div>
             )}
+
+            {/* Crew-lead hours verification. Editable by leads/admins; regular
+                crew just see the status once a lead has signed off. */}
+            {canLead ? (
+              <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border)", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!data.hours_verified}
+                  onChange={(e) => set("hours_verified", e.target.checked)}
+                  style={{ accentColor: "var(--brand)", width: 16, height: 16 }} />
+                <span className="small"><strong>Crew lead:</strong> I've verified these hours are correct.</span>
+              </label>
+            ) : data.hours_verified ? (
+              <div className="small" style={{ color: "var(--ok)", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+                ✓ Hours verified by a crew lead.
+              </div>
+            ) : null}
           </div>
         )}
 
@@ -2104,10 +2142,12 @@ function EmployeeSkillRatings({
   skills,
   ratings,
   onRate,
+  disabled = false,
 }: {
   skills: Skill[];
   ratings: Record<string, number>;
   onRate: (skillName: string, rating: number | null) => void;
+  disabled?: boolean;
 }) {
   if (skills.length === 0) {
     return (
@@ -2117,11 +2157,29 @@ function EmployeeSkillRatings({
     );
   }
   return (
-    <div className="col" style={{ gap: 4 }}>
+    <div className="col" style={{ gap: 4, opacity: disabled ? 0.55 : 1 }}>
       <span className="small" style={{ color: "var(--muted)" }}>Skills</span>
       {skills.map((s) => (
-        <SkillRatingRow key={s.id} skill={s} value={ratings[s.name]} onChange={(r) => onRate(s.name, r)} />
+        <SkillRatingRow key={s.id} skill={s} value={ratings[s.name]} disabled={disabled} onChange={(r) => onRate(s.name, r)} />
       ))}
+    </div>
+  );
+}
+
+// Crew-lead gate for skill ratings / job type. Regular crew see a lock note with
+// a "no crew lead here" self-assessment escape hatch; leads/admins (or once
+// self-assessment is on) see nothing and edit normally.
+function LeadGate({ leadEditable, onSelfAssess, what }: { leadEditable: boolean; onSelfAssess: () => void; what: string }) {
+  if (leadEditable) return null;
+  return (
+    <div style={{ border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
+      <div className="small" style={{ color: "var(--muted)" }}>
+        A crew lead handles the {what} for this job.
+      </div>
+      <button type="button" onClick={onSelfAssess}
+        style={{ fontSize: 12, padding: "4px 10px", marginTop: 6 }}>
+        No crew lead on this job — let me fill it in
+      </button>
     </div>
   );
 }
@@ -2131,10 +2189,10 @@ function EmployeeSkillRatings({
 // a real 0-5 score. Backend + sheet export understand this value.
 const SKILL_NA = -1;
 
-function NaButton({ on, onClick }: { on: boolean; onClick: () => void }) {
+function NaButton({ on, onClick, disabled = false }: { on: boolean; onClick: () => void; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick}
-      style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+    <button type="button" onClick={onClick} disabled={disabled}
+      style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: disabled ? "not-allowed" : "pointer",
         border: on ? "2px solid var(--muted)" : "1px solid var(--border)",
         background: on ? "rgba(255,255,255,0.08)" : "transparent",
         color: on ? "var(--text)" : "var(--muted)", fontWeight: on ? 700 : 400 }}>
@@ -2147,10 +2205,12 @@ function SkillRatingRow({
   skill,
   value,
   onChange,
+  disabled = false,
 }: {
   skill: Skill;
   value: number | undefined;
   onChange: (rating: number | null) => void;
+  disabled?: boolean;
 }) {
   const v = value ?? null;
   const isNa = v === SKILL_NA;
@@ -2162,8 +2222,8 @@ function SkillRatingRow({
           {([["No", 0], ["Yes", 5]] as const).map(([label, num]) => {
             const on = v === num;
             return (
-              <button key={label} type="button" onClick={() => onChange(on ? null : num)}
-                style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+              <button key={label} type="button" disabled={disabled} onClick={() => onChange(on ? null : num)}
+                style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: disabled ? "not-allowed" : "pointer",
                   border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
                   background: on ? "rgba(93,214,194,0.18)" : "transparent",
                   color: on ? "var(--brand)" : "var(--muted)" }}>
@@ -2171,7 +2231,7 @@ function SkillRatingRow({
               </button>
             );
           })}
-          <NaButton on={isNa} onClick={() => onChange(isNa ? null : SKILL_NA)} />
+          <NaButton on={isNa} disabled={disabled} onClick={() => onChange(isNa ? null : SKILL_NA)} />
         </div>
       </div>
     );
@@ -2184,15 +2244,15 @@ function SkillRatingRow({
           {[1, 2, 3, 4, 5].map((n) => {
             const filled = !isNa && v != null && n <= v;
             return (
-              <button key={n} type="button" aria-label={`${skill.name} ${n} of 5`}
+              <button key={n} type="button" aria-label={`${skill.name} ${n} of 5`} disabled={disabled}
                 onClick={() => onChange(v === n ? null : n)}
-                style={{ background: "transparent", border: "none", padding: 1, cursor: "pointer", fontSize: 18, lineHeight: 1, color: filled ? "var(--brand)" : "var(--border)" }}>
+                style={{ background: "transparent", border: "none", padding: 1, cursor: disabled ? "not-allowed" : "pointer", fontSize: 18, lineHeight: 1, color: filled ? "var(--brand)" : "var(--border)" }}>
                 {filled ? "★" : "☆"}
               </button>
             );
           })}
         </div>
-        <NaButton on={isNa} onClick={() => onChange(isNa ? null : SKILL_NA)} />
+        <NaButton on={isNa} disabled={disabled} onClick={() => onChange(isNa ? null : SKILL_NA)} />
       </div>
     </div>
   );

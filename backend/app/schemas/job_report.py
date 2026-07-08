@@ -127,6 +127,7 @@ class JobReportUpsert(BaseModel):
     job_type_tags: Optional[List[str]] = None
     truck_fullness: Optional[List[TruckFullnessEntry]] = None
     overage_note: Optional[str] = None
+    hours_verified: bool = False
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
 
     @field_validator("job_type_tags")
@@ -185,6 +186,7 @@ class JobReportResponse(BaseModel):
     job_type_tags: Optional[List[str]] = None
     truck_fullness: Optional[List[TruckFullnessEntry]] = None
     overage_note: Optional[str] = None
+    hours_verified: bool = False
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime

@@ -144,7 +144,9 @@ def update_user(
 
     if payload.is_active is not None:
         user.is_active = payload.is_active
-    if payload.role is not None and payload.role in ("user", "admin"):
+    # Three roles: user (crew), crew_lead (gated skill/job-type + hours verify),
+    # admin. Unknown values are ignored so a bad client can't set a junk role.
+    if payload.role is not None and payload.role in ("user", "crew_lead", "admin"):
         user.role = payload.role
     if payload.name is not None:
         user.name = payload.name.strip() or None
