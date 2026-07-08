@@ -155,6 +155,31 @@ def list_job_incidents(
     return [_to_out(r) for r in rows]
 
 
+class ResolveIn(BaseModel):
+    resolved: bool = True
+
+
+@router.patch("/{incident_uuid}/resolve", response_model=IncidentOut)
+def resolve_incident(
+    incident_uuid: str,
+    body: ResolveIn = ResolveIn(),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Crew-facing: mark a submitted incident resolved (or not) on site after the
+    fact - the resolution often happens after the report was filed. Keyed by the
+    client's incident_uuid. Idempotent; re-exports the row to the sheet."""
+    inc = db.query(Incident).filter(Incident.incident_uuid == incident_uuid).first()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    inc.resolved = bool(body.resolved)
+    inc.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(inc)
+    _export(inc)
+    return _to_out(inc)
+
+
 @admin_router.get("", response_model=List[IncidentOut])
 def list_all_incidents(
     db: Session = Depends(get_db),

@@ -87,6 +87,26 @@ export async function submitIncident(p: IncidentPayload): Promise<void> {
   await drainIncidents();
 }
 
+// Retroactive "resolved on site" for an incident still in the offline queue:
+// edit the queued payload in place so it syncs already-resolved. Returns true
+// when the uuid was found in the queue.
+export function resolveQueuedIncident(incidentUuid: string, resolved = true): boolean {
+  const q = loadAll();
+  const idx = q.findIndex((x) => x.incident_uuid === incidentUuid);
+  if (idx < 0) return false;
+  q[idx] = { ...q[idx], resolved };
+  saveAll(q);
+  return true;
+}
+
+// Retroactive "resolved on site" for an already-synced incident (crew endpoint).
+export async function resolveSyncedIncident(incidentUuid: string, resolved = true): Promise<void> {
+  await apiFetch(`/api/incidents/${encodeURIComponent(incidentUuid)}/resolve`, {
+    method: "PATCH",
+    body: JSON.stringify({ resolved }),
+  });
+}
+
 export async function fetchJobIncidents(jobUuid: string): Promise<IncidentOut[]> {
   if (!jobUuid.trim()) return [];
   return apiFetch<IncidentOut[]>(`/api/incidents?job_uuid=${encodeURIComponent(jobUuid)}`);

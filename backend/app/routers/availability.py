@@ -257,8 +257,15 @@ def submit_batch(
                 )
                 .first()
             )
+            # The lock applies only to *modifying* an already-submitted day.
+            # A never-submitted day in the window (no existing row) stays
+            # editable, and re-submitting an already-submitted day with its
+            # unchanged value is a no-op - neither should trip the lock. Only a
+            # genuine value change to a submitted day requires an admin unlock.
             if existing:
-                locked_changes.append(entry.day)
+                new_note = (entry.note or "").strip() or None
+                if existing.status != entry.status or (existing.note or None) != new_note:
+                    locked_changes.append(entry.day)
     if locked_changes and not window_unlocked:
         raise HTTPException(
             status_code=409,

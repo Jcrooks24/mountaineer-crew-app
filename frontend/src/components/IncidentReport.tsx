@@ -8,6 +8,8 @@ import {
   submitIncident,
   fetchJobIncidents,
   pendingIncidents,
+  resolveQueuedIncident,
+  resolveSyncedIncident,
   newIncidentUuid,
   newClaimNumber,
   type IncidentOut,
@@ -158,6 +160,26 @@ export default function IncidentReport({
     }
   }
 
+  // Retroactively mark a still-queued incident resolved on site (edits the
+  // offline payload so it syncs already-resolved).
+  function markQueuedResolved(uuid: string) {
+    if (resolveQueuedIncident(uuid, true)) setStatus("Marked resolved on site");
+  }
+
+  // Retroactively mark a synced incident resolved on site (crew endpoint).
+  async function markSyncedResolved(uuid: string) {
+    setBusy(true);
+    try {
+      await resolveSyncedIncident(uuid, true);
+      await refresh();
+      setStatus("Marked resolved on site");
+    } catch {
+      setStatus("Couldn't mark resolved - try again when back online.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="card">
       <div className="row" style={{ alignItems: "center", gap: 8, justifyContent: "space-between" }}>
@@ -243,7 +265,9 @@ export default function IncidentReport({
           {queued.map((q) => (
             <IncidentRow key={q.incident_uuid} claimNumber={q.claim_number} severity={q.severity} date={q.incident_date}
               description={q.description} attributed={q.attributed_crew} resolved={q.resolved}
-              photoCount={photoCounts?.[q.incident_uuid] || 0} pending />
+              photoCount={photoCounts?.[q.incident_uuid] || 0}
+              onResolve={q.resolved ? undefined : () => markQueuedResolved(q.incident_uuid)}
+              busy={busy} pending />
           ))}
         </div>
       )}
@@ -257,7 +281,9 @@ export default function IncidentReport({
             <IncidentRow key={inc.id} claimNumber={inc.claim_number} severity={inc.severity} date={inc.incident_date}
               description={inc.description} attributed={inc.attributed_crew} createdAt={inc.created_at}
               reportedBy={inc.reported_by_name} resolved={inc.resolved}
-              photoCount={photoCounts?.[inc.incident_uuid] || 0} />
+              photoCount={photoCounts?.[inc.incident_uuid] || 0}
+              onResolve={inc.resolved ? undefined : () => markSyncedResolved(inc.incident_uuid)}
+              busy={busy} />
           ))}
         </div>
       )}
@@ -266,7 +292,7 @@ export default function IncidentReport({
 }
 
 function IncidentRow({
-  claimNumber, severity, date, description, attributed, createdAt, reportedBy, resolved, photoCount, pending,
+  claimNumber, severity, date, description, attributed, createdAt, reportedBy, resolved, photoCount, pending, onResolve, busy,
 }: {
   claimNumber?: string | null;
   severity: string;
@@ -278,6 +304,10 @@ function IncidentRow({
   resolved?: boolean;
   photoCount?: number;
   pending?: boolean;
+  // When set (and not yet resolved), renders a "Mark resolved on site" button -
+  // for the common case where the incident is resolved after it was reported.
+  onResolve?: () => void;
+  busy?: boolean;
 }) {
   const color = severity === "major" ? "var(--danger)" : severity === "moderate" ? "#f59e0b" : "var(--ok)";
   return (
@@ -304,6 +334,12 @@ function IncidentRow({
           photoCount ? `${photoCount} photo${photoCount === 1 ? "" : "s"} attached` : null,
         ].filter(Boolean).join(" · ")}
       </div>
+      {onResolve && (
+        <button type="button" onClick={onResolve} disabled={busy}
+          style={{ marginTop: 8, fontSize: 12, padding: "4px 10px" }}>
+          Mark resolved on site
+        </button>
+      )}
     </div>
   );
 }
