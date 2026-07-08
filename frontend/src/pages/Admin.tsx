@@ -505,7 +505,8 @@ function EmployeesTab() {
     <>
       {/* Roster vs. month-wide schedule view. The roster is the default
           since most admin tasks (tags, unlocks, aliases, role/access)
-          live there; the month view is a wholistic read-only grid. */}
+          live there; the month view is a wholistic grid where tapping a
+          cell cycles that day's availability inline. */}
       <div className="card" style={{ padding: 6 }}>
         <div className="row" style={{ gap: 6 }}>
           {(["roster", "month"] as const).map((v) => {
@@ -1272,7 +1273,8 @@ function AvailabilityUnlocksPicker({
   );
 }
 
-// Read-only month-wide availability matrix nested under the Employees tab.
+// Month-wide availability matrix nested under the Employees tab. Cells are
+// editable: tapping one cycles that day's status (admin upsert, lock-bypassing).
 // Days down, active employees across, status-colored cells. Month navigation
 // arrows mirror Google Calendar's month picker. Employees with no submitted
 // record for a given day render as a blank cell so admin can spot gaps.
@@ -1438,6 +1440,37 @@ function MonthScheduleView({
     }
     return m;
   }, [rows]);
+
+  // Inline editing: tap a cell to cycle available → unavailable → conditional.
+  // Reuses the admin per-user upsert (POST /api/admin/availability/{id}) which
+  // bypasses the 14-day lock, so admin can edit any day right here instead of
+  // opening each employee's page. Optimistic; reverts on error.
+  const [cellBusy, setCellBusy] = useState<string | null>(null);
+  async function cycleCell(userId: number, dIso: string, record: AvailabilityRangeRow | null | undefined) {
+    const order = ["available", "unavailable", "conditional"] as const;
+    const cur = record?.status as (typeof order)[number] | undefined;
+    const next = cur == null ? "available" : order[(order.indexOf(cur) + 1) % order.length];
+    const windowStart = record?.window_start || dIso;
+    const key = `${userId}:${dIso}`;
+    const prevRows = rows;
+    setCellBusy(key);
+    setErr(null);
+    setRows((rs) => [
+      ...rs.filter((r) => !(r.user_id === userId && r.day === dIso)),
+      { user_id: userId, day: dIso, status: next, note: record?.note ?? null, window_start: windowStart },
+    ]);
+    try {
+      await apiFetch(`/api/admin/availability/${userId}`, {
+        method: "POST",
+        body: JSON.stringify({ window_start: windowStart, days: [{ day: dIso, status: next, note: record?.note ?? null }] }),
+      });
+    } catch (e: any) {
+      setRows(prevRows);
+      setErr(e instanceof ApiError ? e.message : "Failed to save availability");
+    } finally {
+      setCellBusy(null);
+    }
+  }
 
   // (user_id, day) → list of job titles for the day. Built from scheduledRows.
   // Multiple events for the same (user, day) accumulate into the list; the
@@ -1767,13 +1800,15 @@ function MonthScheduleView({
                       return (
                         <td
                           key={u.id}
-                          title={title}
+                          title={`${title} — tap to change`}
+                          onClick={() => cycleCell(u.id, dIso, record)}
                           style={{
                             borderBottom: "1px solid var(--border)",
                             borderRight: "1px solid var(--border)",
                             padding: isScheduled ? "4px 6px" : 0,
                             minHeight: 26,
                             background: cellBg,
+                            cursor: cellBusy === `${u.id}:${dIso}` ? "wait" : "pointer",
                             // Highlight a conflict (scheduled cell on a
                             // submitted-availability day) with the
                             // availability color as a tinted outline.
