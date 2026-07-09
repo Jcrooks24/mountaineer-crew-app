@@ -19,6 +19,9 @@ class UserResponse(BaseModel):
     role: str | None = None
     profile_photo: str | None = None
     scheduling_notes: str = ""
+    # Admin-set skill-rating designation (see User.is_crew_lead). Surfaced to
+    # the client so the Job Report can gate skill view/edit on it.
+    is_crew_lead: bool = False
 
     class Config:
         from_attributes = True  # Allows returning SQLAlchemy models directly

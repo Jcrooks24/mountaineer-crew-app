@@ -1,0 +1,103 @@
+{
+  "threads": [
+    {
+      "id": "0lKqyGMyaR5A",
+      "text": "this feature will never be used as is. estimate tool is used on site during a walkthrough -> data collected is entered into our CRM and the estimate is generated from there -> created on google calendar as job",
+      "path": "/admin",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/admin",
+      "selector": "body > #root > div.container > div:nth-of-type(2) > div.card:nth-of-type(3)",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "FVxtTIplXob0",
+      "text": "can hide some of these with option to expand",
+      "path": "/admin",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/admin",
+      "selector": "body > #root > div.container > div:nth-of-type(2) > div.card:nth-of-type(4) > div.col > div.row:nth-of-type(3)",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "zfibvVoUwP-Z",
+      "text": "dont need to see all at once; can show first 3 with option to expand the rest",
+      "path": "/admin",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/admin",
+      "selector": "body > #root > div.container > div:nth-of-type(2) > div.card:nth-of-type(8) > div.col > div.col:nth-of-type(2) > div.col > div.row > input",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "vqmrc0vS1bg6",
+      "text": "exported furniture catalogue only has 1 item in it...",
+      "path": "/admin",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/admin",
+      "selector": "body > #root > div.container > div:nth-of-type(2) > div.card:nth-of-type(7) > div.row > button",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "NoZ53BOqf9N3",
+      "text": "dont need to see all at once; can show first 3 with option to expand the rest",
+      "path": "/admin",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/admin",
+      "selector": "body > #root > div.container > div:nth-of-type(2) > div.card:nth-of-type(6) > div.col > div > div.col > div.row:nth-of-type(9)",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "vsZeVO9xYZM3",
+      "text": "dont need to see all at once; can show first 3 with option to expand the rest",
+      "path": "/admin",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/admin",
+      "selector": "body > #root > div.container > div:nth-of-type(2) > div.card:nth-of-type(5) > div.col > div.row:nth-of-type(5)",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "yFyaZ1WtcHwD",
+      "text": "No em dashes app-wide!",
+      "path": "/",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/",
+      "selector": "body > #root > div.container > form > div.card > div.small:nth-of-type(6)",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "ezBYstUa0FA1",
+      "text": "These can be tied to crew skills in crew lead access point mentioned in my skills comment",
+      "path": "/",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/",
+      "selector": "body > #root > div.container > form > div.card > div:nth-of-type(5) > button:nth-of-type(6)",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "S6oGpfVToyhv",
+      "text": "man hours, not hours",
+      "path": "/",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/",
+      "selector": "body > #root > div.container > form > div.card > div.col > div.small:nth-of-type(4) > span:nth-of-type(2)",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "oF0nTf6qKwND",
+      "text": "Remove crew lead hours confirmation",
+      "path": "/",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/",
+      "selector": "body > #root > div.container > form > div.card > div.col > label.row > span.small > strong",
+      "resolved": false,
+      "replies": []
+    },
+    {
+      "id": "W8IGacJ3Ii0x",
+      "text": "skill ratings are still clickable by any user, i would like to harden this further to be viewable/editable by crew leads only. UX level crew lead designation is still ok. A good fix would be using an admin-set crew lead tag to gate whether a user can view and fill out skills",
+      "path": "/",
+      "url": "https://mountaineer-crew-app-git-staging-mountaineer-moving.vercel.app/",
+      "selector": "body > #root > div.container > form > div.card > div.col > div.row > div > div:nth-of-type(4) > div.col > div.row > div.row > div.row > button:nth-of-type(2)",
+      "resolved": false,
+      "replies": []
+    }
+  ]
+}

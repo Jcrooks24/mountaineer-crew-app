@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Children, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
@@ -24,6 +24,7 @@ import {
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
+import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
 import OfficeHoursPanel from "./OfficeHours";
 import { roundBillableQuarter } from "../components/JobReport";
 import {
@@ -40,6 +41,7 @@ type AdminUser = {
   phone: string | null;
   role: string;
   is_active: boolean;
+  is_crew_lead: boolean;
   tag_ids: number[];
   alias_count: number;
   scheduling_notes: string;
@@ -467,6 +469,21 @@ function EmployeesTab() {
     }
   }
 
+  async function toggleCrewLead(u: AdminUser) {
+    setBusy(u.id);
+    try {
+      const updated = await apiFetch<AdminUser>(`/api/admin/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_crew_lead: !u.is_crew_lead }),
+      });
+      setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Failed to update");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function editPhone(u: AdminUser) {
     const next = window.prompt(`Contact phone for ${u.name || u.email}:`, u.phone || "");
     if (next === null) return;
@@ -643,6 +660,14 @@ function EmployeesTab() {
                       <option value="admin">Admin</option>
                     </select>
                     <button
+                      className={`roster-btn ${u.is_crew_lead ? "ok" : ""}`}
+                      disabled={busy === u.id}
+                      onClick={() => toggleCrewLead(u)}
+                      title="Allow this person to view and fill out per-employee skill ratings on the Job Report. Admins and crew leads can always rate skills; use this to designate a rater without changing their role."
+                    >
+                      {u.is_crew_lead ? "Skill rater ✓" : "Skill rater"}
+                    </button>
+                    <button
                       className="roster-btn"
                       onClick={() => setEditingUnlocksFor(u)}
                       title="Unlock an availability window for this user"
@@ -786,7 +811,7 @@ function SkillMatrixPicker({
     <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="card" style={{ maxWidth: 520, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-        <div className="sectionTitle">Skills — {user.name || user.email}</div>
+        <div className="sectionTitle">Skills - {user.name || user.email}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           0 = none/very poor · 5 = mastery · blank (0) = not yet assessed.
         </div>
@@ -1800,7 +1825,7 @@ function MonthScheduleView({
                       return (
                         <td
                           key={u.id}
-                          title={`${title} — tap to change`}
+                          title={`${title} - tap to change`}
                           onClick={() => cycleCell(u.id, dIso, record)}
                           style={{
                             borderBottom: "1px solid var(--border)",
@@ -2421,6 +2446,50 @@ function SettingsTab({
   );
 }
 
+// Collapses a long list to its first `initialCount` children with a
+// "Show N more / Show less" toggle. Used across the Settings-tab manager cards
+// (Employee Tags, Job Types, Crew Skills, Field Help Text) so admin isn't
+// scrolling past every row at once. The wrapped children keep their own state
+// (edit-in-place, etc.) since they're the same elements, just sliced.
+function CollapsibleList({
+  children,
+  initialCount = 3,
+  className,
+  style,
+  moreLabel = "more",
+}: {
+  children: ReactNode;
+  initialCount?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  // Noun shown in the toggle, e.g. "more tags" -> pass "tags".
+  moreLabel?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const items = Children.toArray(children);
+  const shown = expanded ? items : items.slice(0, initialCount);
+  const hiddenCount = items.length - initialCount;
+
+  return (
+    <>
+      <div className={className} style={style}>{shown}</div>
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          style={{
+            marginTop: 8, fontSize: 12, padding: "4px 10px", alignSelf: "flex-start",
+            background: "none", border: "1px solid var(--border)", color: "var(--muted)",
+            borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          {expanded ? "Show less" : `Show ${hiddenCount} ${moreLabel}`}
+        </button>
+      )}
+    </>
+  );
+}
+
 // Admin CRUD for the employee tag list. Inline add / rename / delete -
 // admin can also drag-style reorder via the sort-order input, but most
 // reordering is rare enough not to warrant a fancier UI.
@@ -2507,7 +2576,7 @@ function EmployeeTagsManagerCard() {
       {loading ? (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
       ) : (
-        <div className="col" style={{ gap: 6 }}>
+        <CollapsibleList className="col" style={{ gap: 6 }} moreLabel="tags">
           {tags.map((t) => {
             const isEditing = editing === t.id;
             return (
@@ -2565,7 +2634,7 @@ function EmployeeTagsManagerCard() {
               </div>
             );
           })}
-        </div>
+        </CollapsibleList>
       )}
 
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
@@ -2663,7 +2732,7 @@ function JobTypesManagerCard() {
       {loading ? (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
       ) : (
-        <div className="col" style={{ gap: 6 }}>
+        <CollapsibleList className="col" style={{ gap: 6 }} moreLabel="job types">
           {types.map((t) => {
             const isEditing = editing === t.id;
             return (
@@ -2697,7 +2766,7 @@ function JobTypesManagerCard() {
               </div>
             );
           })}
-        </div>
+        </CollapsibleList>
       )}
 
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
@@ -2714,6 +2783,32 @@ function JobTypesManagerCard() {
 
 // Bulk furniture-catalog CSV import. Feeds the single server catalog that both
 // the Estimator and Actual Inventory read (uploaded items appear in both).
+// Quote a CSV cell only when it contains a comma, quote, or newline (RFC-4180
+// escaping: double any inner quotes). Keeps plain names unquoted so the file
+// stays readable in a spreadsheet.
+function csvEscape(v: string): string {
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+// Read just the first field of a CSV line, honoring a leading quoted field so a
+// name containing a comma is read whole. Used only to dedupe built-ins against
+// server rows by name.
+function csvFirstField(line: string): string {
+  if (line[0] === '"') {
+    let out = "";
+    for (let i = 1; i < line.length; i++) {
+      if (line[i] === '"') {
+        if (line[i + 1] === '"') { out += '"'; i++; continue; }
+        break;
+      }
+      out += line[i];
+    }
+    return out;
+  }
+  const comma = line.indexOf(",");
+  return comma === -1 ? line : line.slice(0, comma);
+}
+
 function FurnitureCatalogCard() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ added: number; updated: number; skipped: number; errors: string[] } | null>(null);
@@ -2747,8 +2842,14 @@ function FurnitureCatalogCard() {
     }
   }
 
-  // Export the catalog as a CSV via an authed fetch -> blob download (the
-  // endpoint is admin-gated, so a plain <a href> without the token would 401).
+  // Export the catalog as a CSV. The server's export-csv endpoint only holds
+  // admin-managed / CSV-imported rows; the ~40 built-in items the Estimator and
+  // Actual-Inventory show are a frontend-only list (data/furnitureCatalog.ts)
+  // the server never sees. Exporting the server rows alone yields a nearly-empty
+  // file, so we fetch the server CSV (full columns), then append any built-in
+  // item whose name isn't already a server row - giving the admin the complete
+  // catalog to edit and re-import. Endpoint is admin-gated, hence the authed
+  // fetch (a plain <a href> without the token would 401).
   async function exportCsv() {
     setBusy(true); setErr(null);
     try {
@@ -2757,7 +2858,30 @@ function FurnitureCatalogCard() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
+      const serverCsv = (await res.text()).replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+      const lines = serverCsv.split("\n");
+      // Header order is the server's own (name,category,length_in,...); map each
+      // built-in field into the right column so re-import lines up.
+      const cols = (lines[0] || "").split(",").map((c) => c.trim().toLowerCase());
+      const existing = new Set(
+        lines.slice(1).filter(Boolean).map((ln) => csvFirstField(ln).trim().toLowerCase()),
+      );
+      const extraRows = FURNITURE_CATALOG
+        .filter((f) => !existing.has(f.name.trim().toLowerCase()))
+        .map((f) => {
+          const cell: Record<string, string> = {
+            name: f.name,
+            category: f.category,
+            cubic_ft: String(f.cubic_ft),
+            weight_lbs: String(f.weight_lbs),
+          };
+          // Dimension / packing columns are blank for built-ins - the admin
+          // fills them in the spreadsheet; blank cells don't wipe on re-import.
+          return cols.map((c) => csvEscape(cell[c] ?? "")).join(",");
+        });
+
+      const out = [serverCsv, ...extraRows].join("\n") + "\n";
+      const blob = new Blob([out], { type: "text/csv" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -2927,7 +3051,7 @@ function SkillsManagerCard() {
       {loading ? (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
       ) : (
-        <div className="col" style={{ gap: 12 }}>
+        <CollapsibleList className="col" style={{ gap: 12 }} moreLabel="categories">
           {Object.entries(byCategory).map(([cat, list]) => (
             <div key={cat}>
               <div className="small" style={{ color: "var(--brand)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{cat}</div>
@@ -2949,7 +3073,7 @@ function SkillsManagerCard() {
               </div>
             </div>
           ))}
-        </div>
+        </CollapsibleList>
       )}
 
       <div className="col" style={{ gap: 8, marginTop: 12 }}>
@@ -3033,11 +3157,11 @@ function SkillEditModal({
           </label>
           <label className="row" style={{ gap: 8, alignItems: "center" }}>
             <input type="checkbox" checked={core} onChange={(e) => setCore(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
-            <span className="small">Core — rated on every job</span>
+            <span className="small">Core - rated on every job</span>
           </label>
           <label className="row" style={{ gap: 8, alignItems: "center" }}>
             <input type="checkbox" checked={binary} onChange={(e) => setBinary(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
-            <span className="small">Binary — trained / not (0 or 5)</span>
+            <span className="small">Binary - trained / not (0 or 5)</span>
           </label>
           <label className="row" style={{ gap: 8, alignItems: "center" }}>
             <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
@@ -4022,7 +4146,7 @@ function SheetSyncHealthCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">System Check — Sheet Syncs</div>
+      <div className="sectionTitle">System Check - Sheet Syncs</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Verifies the Google Sheets connection and that every app→sheet sync has its
         worksheet tab and a valid config. Run this after adding a feature that
@@ -4038,7 +4162,7 @@ function SheetSyncHealthCard() {
         <div style={{ marginTop: 12 }}>
           <div className="small" style={{ marginBottom: 8, fontWeight: 700, color: data.connected ? "var(--ok)" : "var(--danger)" }}>
             {data.connected
-              ? (problems.length === 0 ? "✓ Connected — all syncs healthy" : `⚠ Connected — ${problems.length} sync(s) need attention`)
+              ? (problems.length === 0 ? "✓ Connected - all syncs healthy" : `⚠ Connected - ${problems.length} sync(s) need attention`)
               : `✗ Not connected: ${data.error || "unknown error"}`}
           </div>
           {data.connected && (
@@ -4061,13 +4185,13 @@ function SheetSyncHealthCard() {
                       <td style={{ padding: "4px 6px", color: s.tab_exists ? "var(--ok)" : "var(--danger)", fontWeight: 700 }}>
                         {s.tab_exists ? "✓" : "missing"}
                       </td>
-                      <td style={{ padding: "4px 6px", color: s.env_set ? "var(--text)" : "#f59e0b" }} title={s.env_set ? "" : `${s.env_var} not set — using default tab`}>
+                      <td style={{ padding: "4px 6px", color: s.env_set ? "var(--text)" : "#f59e0b" }} title={s.env_set ? "" : `${s.env_var} not set - using default tab`}>
                         {s.env_set ? "yes" : "default"}
                       </td>
                       <td style={{ padding: "4px 6px", color: s.last_error_at ? "var(--danger)" : "var(--muted)" }}>
                         {s.last_error_at
                           ? `error ${new Date(s.last_error_at).toLocaleString()}`
-                          : s.last_ok_at ? new Date(s.last_ok_at).toLocaleString() : "—"}
+                          : s.last_ok_at ? new Date(s.last_ok_at).toLocaleString() : "-"}
                       </td>
                     </tr>
                   ))}
@@ -4431,7 +4555,7 @@ function HelpTextCard() {
       <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
         Placeholder and hint text shown to crew, grouped by the page it appears on.
       </div>
-      <div className="col" style={{ gap: 18 }}>
+      <CollapsibleList className="col" style={{ gap: 18 }} moreLabel="page groups">
         {groups.map((group) => (
           <div key={group.page} className="col" style={{ gap: 10 }}>
             <div style={{ fontWeight: 700, fontSize: 13, borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>
@@ -4457,7 +4581,7 @@ function HelpTextCard() {
             ))}
           </div>
         ))}
-      </div>
+      </CollapsibleList>
     </div>
   );
 }

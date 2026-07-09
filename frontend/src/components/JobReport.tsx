@@ -287,12 +287,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
   // Crew Lead gating: skill ratings + job type are crew-lead (or admin) tasks.
   // Regular crew fill the rest of the report (it syncs cross-device, so a lead
-  // can finish + submit from their own device). When a job has no crew lead,
-  // the crew can switch on self-assessment to fill these in themselves - job
-  // type stays loggable and skills become a self-rating.
-  const canLead = user?.role === "admin" || user?.role === "crew_lead";
-  const [selfAssess, setSelfAssess] = useState(false);
-  const leadEditable = canLead || selfAssess;
+  // can finish + submit from their own device). Editing is gated on an
+  // admin-set designation only - either the crew_lead/admin role or the
+  // dedicated is_crew_lead flag an admin sets per person. There is deliberately
+  // no self-assess escape hatch: skills stay view-only for everyone else so a
+  // non-designated crew member can't rate the crew.
+  const canLead =
+    user?.role === "admin" || user?.role === "crew_lead" || !!user?.is_crew_lead;
+  const leadEditable = canLead;
 
   // Long-distance documents: PODS + BOL (with multi-day trip linking).
   const [bolStatus, setBolStatus] = useState<string>("");
@@ -1164,7 +1166,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       <div className="card" style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6 }}>
         <div>Loading report…</div>
         <div style={{ marginTop: 6 }}>
-          If this stays visible for more than a few seconds, refresh the app —
+          If this stays visible for more than a few seconds, refresh the app -
           the fetch may have stalled.
         </div>
       </div>
@@ -1286,7 +1288,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           {ht.jobTypeHint}
         </div>
-        <LeadGate leadEditable={leadEditable} onSelfAssess={() => setSelfAssess(true)} what="job type" />
+        <LeadGate leadEditable={leadEditable} what="job type" />
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)", opacity: leadEditable ? 1 : 0.55 }}>
           {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
             const active = data.job_type_tags.includes(tag);
@@ -1323,7 +1325,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
         <InventoryCountsSummary jobUuid={jobUuid} />
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <span style={{ fontWeight: 700, fontSize: 13 }}>Employee hours</span>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>Employee man-hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
           <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />
         </div>
@@ -1333,7 +1335,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         )}
         {relevantSkills.length > 0 && (
-          <LeadGate leadEditable={leadEditable} onSelfAssess={() => setSelfAssess(true)} what="skill ratings" />
+          <LeadGate leadEditable={leadEditable} what="skill ratings" />
         )}
 
         {/* The editor is always available - even with 0-1 timeline events the
@@ -1607,21 +1609,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 })()}
               </div>
             )}
-
-            {/* Crew-lead hours verification. Editable by leads/admins; regular
-                crew just see the status once a lead has signed off. */}
-            {canLead ? (
-              <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border)", cursor: "pointer" }}>
-                <input type="checkbox" checked={!!data.hours_verified}
-                  onChange={(e) => set("hours_verified", e.target.checked)}
-                  style={{ accentColor: "var(--brand)", width: 16, height: 16 }} />
-                <span className="small"><strong>Crew lead:</strong> I've verified these hours are correct.</span>
-              </label>
-            ) : data.hours_verified ? (
-              <div className="small" style={{ color: "var(--ok)", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
-                ✓ Hours verified by a crew lead.
-              </div>
-            ) : null}
           </div>
         )}
 
@@ -1685,7 +1672,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </>
         )}
 
-        {/* Truck fullness — composite vertical × horizontal fill against the
+        {/* Truck fullness - composite vertical × horizontal fill against the
             interior 25% marks, one reading per truck used. */}
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
           Truck fullness<BetaTag feature="truckFullness" />
@@ -2169,17 +2156,14 @@ function EmployeeSkillRatings({
 // Crew-lead gate for skill ratings / job type. Regular crew see a lock note with
 // a "no crew lead here" self-assessment escape hatch; leads/admins (or once
 // self-assessment is on) see nothing and edit normally.
-function LeadGate({ leadEditable, onSelfAssess, what }: { leadEditable: boolean; onSelfAssess: () => void; what: string }) {
+function LeadGate({ leadEditable, what }: { leadEditable: boolean; what: string }) {
   if (leadEditable) return null;
   return (
     <div style={{ border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
       <div className="small" style={{ color: "var(--muted)" }}>
-        A crew lead handles the {what} for this job.
+        A crew lead handles the {what} for this job. Ask an admin to grant crew-lead
+        access if you need to fill this in.
       </div>
-      <button type="button" onClick={onSelfAssess}
-        style={{ fontSize: 12, padding: "4px 10px", marginTop: 6 }}>
-        No crew lead on this job — let me fill it in
-      </button>
     </div>
   );
 }
@@ -2433,7 +2417,7 @@ function InventoryCountsSummary({ jobUuid }: { jobUuid: string }) {
           <strong>{counts.furniture}</strong> furniture · <strong>{counts.boxes}</strong> boxes
         </span>
       ) : (
-        <>none logged yet — add it on the <strong>Inventory</strong> tab</>
+        <>none logged yet - add it on the <strong>Inventory</strong> tab</>
       )}
     </div>
   );
@@ -2441,7 +2425,7 @@ function InventoryCountsSummary({ jobUuid }: { jobUuid: string }) {
 
 // Overage conversation: when this job has a linked estimate, compare the
 // actual inventory (furniture/boxes) against it, surface the estimate's access
-// notes, and — when actual runs over — prompt the crew to note what changed.
+// notes, and - when actual runs over - prompt the crew to note what changed.
 // Self-hides when there is no linked estimate (by-job 404) or on any fetch
 // error, so it never blocks the report.
 type ByJobEstimate = {
@@ -2504,7 +2488,7 @@ function OverageCheck({
         <BetaTag feature="overagePrompt" style={{ marginTop: 0 }} />
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-        This job has a linked estimate — confirm the actual inventory and access against it.
+        This job has a linked estimate - confirm the actual inventory and access against it.
       </div>
 
       <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
@@ -2514,7 +2498,7 @@ function OverageCheck({
 
       {!hasActual && (
         <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-          No actual inventory logged yet — add it on the <strong>Inventory</strong> tab to compare.
+          No actual inventory logged yet - add it on the <strong>Inventory</strong> tab to compare.
         </div>
       )}
 

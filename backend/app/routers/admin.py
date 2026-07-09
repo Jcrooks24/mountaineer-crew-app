@@ -52,6 +52,7 @@ class UserAdminResponse(BaseModel):
     phone: Optional[str] = None
     role: str
     is_active: bool
+    is_crew_lead: bool = False
     tag_ids: List[int] = []
     alias_count: int = 0
     # Free-form text the crew maintains on their availability page. Surfaced
@@ -65,6 +66,7 @@ class UserAdminResponse(BaseModel):
 class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
     role: Optional[str] = None
+    is_crew_lead: Optional[bool] = None
     name: Optional[str] = None
     phone: Optional[str] = None
 
@@ -100,6 +102,7 @@ def _user_with_tags(
         phone=user.phone,
         role=user.role,
         is_active=user.is_active,
+        is_crew_lead=bool(user.is_crew_lead),
         tag_ids=tag_ids,
         alias_count=alias_count,
         scheduling_notes=user.scheduling_notes or "",
@@ -148,6 +151,10 @@ def update_user(
     # admin. Unknown values are ignored so a bad client can't set a junk role.
     if payload.role is not None and payload.role in ("user", "crew_lead", "admin"):
         user.role = payload.role
+    # Skill-rating designation (independent of role). No self-lockout concern
+    # since it grants a capability rather than removing access.
+    if payload.is_crew_lead is not None:
+        user.is_crew_lead = payload.is_crew_lead
     if payload.name is not None:
         user.name = payload.name.strip() or None
     if payload.phone is not None:

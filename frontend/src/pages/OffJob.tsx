@@ -113,11 +113,11 @@ export default function OffJob() {
         pay_other_note: pay === "other" ? payOther.trim() || null : null,
         notes: notes.trim(),
       });
-      setOk(navigator.onLine ? "Off-job hours submitted." : "Saved — will submit when back online.");
+      setOk(navigator.onLine ? "Off-job hours submitted." : "Saved - will submit when back online.");
       resetForm();
       await refresh();
     } catch {
-      setOk("Saved — will submit when back online.");
+      setOk("Saved - will submit when back online.");
       resetForm();
       await refresh();
     } finally {
@@ -144,7 +144,7 @@ export default function OffJob() {
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 4 }}>
           For work not tied to a job (usually approved by management ahead of time).
-          Works offline — queued entries sync automatically.
+          Works offline - queued entries sync automatically.
         </div>
 
         <form onSubmit={handleSubmit} className="col" style={{ gap: 12, marginTop: 8 }}>
@@ -217,7 +217,7 @@ export default function OffJob() {
                   <span style={{ fontWeight: 700 }}>
                     {r.hours}h
                     <span className="small" style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}>
-                      {PAY_STRUCTURE_LABELS[r.pay_structure]}{r.pay_structure === "other" && r.pay_other_note ? ` — ${r.pay_other_note}` : ""}
+                      {PAY_STRUCTURE_LABELS[r.pay_structure]}{r.pay_structure === "other" && r.pay_other_note ? ` - ${r.pay_other_note}` : ""}
                     </span>
                   </span>
                   <span className="small" style={{ color: "var(--muted)" }}>

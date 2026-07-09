@@ -226,7 +226,7 @@ function applyTimeToIso(localTime: string, baseIso: string): string | null {
 }
 
 // Returns null when valid, or a short reason when the user picked an
-// unparseable time. Any real timestamp is allowed — crew can set event
+// unparseable time. Any real timestamp is allowed - crew can set event
 // time to any time, past or future.
 function validateEditableTimestamp(newIso: string, _loggedAtIso: string | undefined): string | null {
   const newT = Date.parse(newIso);
@@ -1624,7 +1624,7 @@ export default function App() {
   }
 
   // Drain offline-queued materials + warm the cache so the Invoice Builder
-  // opens with fresh data. No render — the visible summary lives only in
+  // opens with fresh data. No render - the visible summary lives only in
   // the Invoice Builder on the Report tab.
   async function syncMaterialsInBackground(uuid: string) {
     const trimmed = uuid.trim();

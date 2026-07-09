@@ -290,7 +290,7 @@ export default function ActualInventory({
           list="job-inventory-boxes"
           value={bName}
           onChange={(e) => setBName(e.target.value)}
-          placeholder="Box type — Small, Medium, Large, Dish pack…"
+          placeholder="Box type - Small, Medium, Large, Dish pack…"
           style={inputStyle}
         />
         <datalist id="job-inventory-boxes">

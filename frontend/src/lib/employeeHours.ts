@@ -20,7 +20,7 @@ export type EmployeeHoursEntry = {
   skill_rating?: number | null;
   // Per-skill ratings for this mover on this job, keyed by skill name. Only the
   // skills relevant to the job's type(s) are shown to rate. 0-5 (or 0/5 for
-  // binary skills). Display-only — never affects the man-hours math.
+  // binary skills). Display-only - never affects the man-hours math.
   skill_ratings?: Record<string, number> | null;
 };
 

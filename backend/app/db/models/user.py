@@ -23,6 +23,12 @@ class User(Base):
 
     is_active = Column(Boolean, default=True, nullable=False)
 
+    # Admin-set flag: may this user view + fill out per-employee skill ratings
+    # on the Job Report? Distinct from the `crew_lead` role (which also grants
+    # report finish/submit powers) so an admin can designate skill-raters
+    # without elevating them further. Defaults false.
+    is_crew_lead = Column(Boolean, nullable=False, server_default="false", default=False)
+
     # Password reset
     reset_token = Column(String, nullable=True, index=True)
     reset_token_expiry = Column(DateTime(timezone=True), nullable=True)

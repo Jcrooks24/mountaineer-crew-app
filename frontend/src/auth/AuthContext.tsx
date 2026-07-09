@@ -9,6 +9,9 @@ export type User = {
   name?: string | null;
   role?: string;
   is_active?: boolean;
+  // Admin-set flag gating who can view/fill skill ratings on the Job Report
+  // (distinct from the crew_lead role, which also grants report submit powers).
+  is_crew_lead?: boolean;
   profile_photo?: string | null;
   scheduling_notes?: string;
 };
