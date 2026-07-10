@@ -1637,8 +1637,10 @@ export default function App() {
   // Effects
   // -----------------------
   useEffect(() => {
-    // Auto-load calendar for today on login
-    loadCalendarEvents();
+    // Calendar auto-loads via the jobDate effect's first-mount branch below, so
+    // we deliberately don't call loadCalendarEvents() here too - it was firing
+    // twice on every cold boot (a wasted duplicate /api/calendar/day +
+    // /api/jobs/manual against a spun-down backend).
     // Load server events for any active job
     if (jobUuid.trim()) fetchJobEvents(jobUuid.trim());
 
