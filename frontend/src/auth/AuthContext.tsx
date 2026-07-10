@@ -23,12 +23,30 @@ export type DirectoryEntry = {
   profile_photo?: string | null;
 };
 
+// Staging-only "preview as role" dev tool. Lets an admin view the app as a
+// lower role (crew / crew lead / skill rater) to test role-gated UI without
+// logging out. Gated on VITE_STAGING so it never renders on production (main).
+// Client-side view override only - the server still sees the real admin token.
+export type PreviewRole = "crew_lead" | "skill_rater" | "crew";
+const STAGING = import.meta.env.VITE_STAGING === "true";
+const PREVIEW_KEY = "mm_preview_role_v1";
+const PREVIEW_OVERRIDES: Record<PreviewRole, { role: string; is_crew_lead: boolean }> = {
+  crew_lead: { role: "crew_lead", is_crew_lead: false },
+  skill_rater: { role: "user", is_crew_lead: true },
+  crew: { role: "user", is_crew_lead: false },
+};
+
 type AuthState = {
   user: User | null;
   loading: boolean;
   loginWithToken: (token: string) => Promise<void>;
   logout: () => void;
   setUser: (user: User | null) => void;
+  // Staging-only role preview (null = real role). canPreview is true only on
+  // staging for a real admin.
+  previewRole: PreviewRole | null;
+  setPreviewRole: (r: PreviewRole | null) => void;
+  canPreview: boolean;
 };
 
 const AuthCtx = createContext<AuthState | null>(null);
@@ -89,6 +107,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     else clearCachedUser();
   }, []);
 
+  // Staging-only role preview. Persisted to sessionStorage so it survives
+  // navigation but resets on a fresh session. Only meaningful for a real admin.
+  const [previewRole, setPreviewRoleState] = useState<PreviewRole | null>(() => {
+    if (!STAGING) return null;
+    try {
+      const v = sessionStorage.getItem(PREVIEW_KEY);
+      return v === "crew_lead" || v === "skill_rater" || v === "crew" ? v : null;
+    } catch {
+      return null;
+    }
+  });
+  const setPreviewRole = useCallback((r: PreviewRole | null) => {
+    setPreviewRoleState(r);
+    try {
+      if (r) sessionStorage.setItem(PREVIEW_KEY, r);
+      else sessionStorage.removeItem(PREVIEW_KEY);
+    } catch {}
+  }, []);
+
   const loadMe = useCallback(async () => {
     try {
       const token = getToken();
@@ -147,12 +184,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Wipe per-user storage so the next crew member to log in on this
     // device starts clean: no leftover queues, drafts, or dismiss flags.
     clearCrewState();
+    setPreviewRole(null);
     setUserState(null);
   }
 
+  // canPreview is based on the REAL role (not the previewed one) so an admin
+  // previewing as crew can still switch back.
+  const canPreview = STAGING && user?.role === "admin";
+
+  // The role/is_crew_lead the rest of the app sees. When previewing, overlay
+  // the chosen role onto the real user (id/name/email stay real). The cached
+  // profile is never overwritten with a previewed role - only server responses
+  // are saved via setUser.
+  const effectiveUser = useMemo<User | null>(() => {
+    if (!user) return null;
+    if (!canPreview || !previewRole) return user;
+    const o = PREVIEW_OVERRIDES[previewRole];
+    return { ...user, role: o.role, is_crew_lead: o.is_crew_lead };
+  }, [user, canPreview, previewRole]);
+
   const value = useMemo(
-    () => ({ user, loading, loginWithToken, logout, setUser }),
-    [user, loading, setUser],
+    () => ({
+      user: effectiveUser,
+      loading,
+      loginWithToken,
+      logout,
+      setUser,
+      previewRole,
+      setPreviewRole,
+      canPreview,
+    }),
+    [effectiveUser, loading, setUser, previewRole, setPreviewRole, canPreview],
   );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
