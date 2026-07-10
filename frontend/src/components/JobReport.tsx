@@ -91,6 +91,7 @@ import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
 import ReturnTripTool from "./ReturnTripTool";
+import { fireConfetti } from "../lib/confetti";
 
 // Type + billing-math helpers live in lib/employeeHours so BillCalculator
 // can consume them without importing back through this parent. Re-exported
@@ -943,15 +944,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function toggleEmployeeNonBillable(i: number) {
-    setData((prev) => ({
-      ...prev,
-      employee_hours: prev.employee_hours.map((e, idx) =>
-        idx === i ? { ...e, non_billable: !e.non_billable } : e,
-      ),
-    }));
-    setSaved(false);
-  }
 
   // Crew-lead 1-5 skill rating for this mover on this job. Tapping the active
   // star again clears it back to N/A (null). Display-only - never touches the
@@ -1099,6 +1091,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       }
 
       setSaved(true);
+      fireConfetti(); // celebrate a submitted report
       // Submit succeeded - discard the in-progress drafts (report + bill).
       // The server is now authoritative; further edits start fresh drafts.
       clearReportDraft(jobUuid);
@@ -1333,6 +1326,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
           {leadEditable && <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />}
         </div>
+        {/* Non-billable time is no longer a per-entry toggle here - it goes in
+            the off-job hours report so payroll and billing stay clean. */}
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+          Log the hours each crew member worked <strong>on this job</strong>. For
+          non-billable or off-job time (shop work, errands, anything not billed to
+          this job), use <strong>Profile → Log Off-Job Hours</strong> instead.
+        </div>
         {/* Skill ratings are visible only to skill raters (crew leads / admins /
             is_crew_lead). Regular crew don't see the hint or the per-employee
             stars at all - not just a disabled version. */}
@@ -1495,46 +1495,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   <div style={{ minWidth: 0, flex: "1 1 auto" }}>
                     <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                       <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
-                      <label
-                        className="row"
-                        style={{ gap: 4, alignItems: "center", cursor: "pointer" }}
-                        title="Toggle whether this entry counts toward total man-hours"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={!!emp.non_billable}
-                          onChange={() => toggleEmployeeNonBillable(i)}
-                          style={{ accentColor: "var(--brand)", width: 14, height: 14 }}
-                        />
-                        <span className="small" style={{ color: "var(--muted)" }}>
-                          Non-billable
-                        </span>
-                      </label>
                     </div>
                     <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                       {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
                       {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
                     </div>
                     <div className="small" style={{ marginTop: 2 }}>
-                      {emp.non_billable ? (
-                        <>
-                          <strong style={{ color: "var(--muted)" }}>
-                            non-billable {roundBillableQuarter(emp.hours).toFixed(2)}h
-                          </strong>
-                          <span style={{ color: "var(--muted)" }}>
-                            {" "}(actual {emp.hours.toFixed(2)}h)
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <strong style={{ color: "var(--text)" }}>
-                            {roundBillableQuarter(emp.hours).toFixed(2)}h
-                          </strong>
-                          <span style={{ color: "var(--muted)" }}>
-                            {" "}(actual {emp.hours.toFixed(2)}h)
-                          </span>
-                        </>
-                      )}
+                      <strong style={{ color: "var(--text)" }}>
+                        {roundBillableQuarter(emp.hours).toFixed(2)}h
+                      </strong>
+                      <span style={{ color: "var(--muted)" }}>
+                        {" "}(actual {emp.hours.toFixed(2)}h)
+                      </span>
                     </div>
                     {leadEditable && (
                       <div style={{ marginTop: 6 }}>

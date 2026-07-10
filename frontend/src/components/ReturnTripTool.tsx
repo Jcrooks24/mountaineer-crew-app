@@ -26,6 +26,10 @@ function fmtDuration(sec: number): string {
   return rem ? `${h} hr ${rem} min` : `${h} hr`;
 }
 
+function fmtClock(d: Date): string {
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function getPosition(): Promise<GeolocationPosition> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -50,6 +54,13 @@ export default function ReturnTripTool() {
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<ReturnTripResp | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  // Extra billable tasks at dispatch (manual minute estimates) + the generated
+  // wrap-up timestamp snapshot.
+  const [trashMin, setTrashMin] = useState("");
+  const [unstockMin, setUnstockMin] = useState("");
+  const [miscMin, setMiscMin] = useState("");
+  const [wrapUp, setWrapUp] = useState<{ at: Date; totalMin: number; driveMin: number; taskMin: number } | null>(null);
 
   const effectiveDest = dest.trim() || DEFAULT_DEST;
 
@@ -93,6 +104,16 @@ export default function ReturnTripTool() {
   // Prefer the traffic-aware duration when the API returns it.
   const baseSec = result?.duration_traffic_sec ?? result?.duration_sec ?? null;
   const bufferedSec = baseSec != null ? Math.round(baseSec * 1.2) : null;
+
+  // Estimated job wrap-up = now + buffered drive time + billable dispatch tasks.
+  const driveMin = bufferedSec != null ? bufferedSec / 60 : 0;
+  const taskMin =
+    (parseFloat(trashMin) || 0) + (parseFloat(unstockMin) || 0) + (parseFloat(miscMin) || 0);
+  const totalMin = driveMin + taskMin;
+
+  function generateWrapUp() {
+    setWrapUp({ at: new Date(Date.now() + totalMin * 60_000), totalMin, driveMin, taskMin });
+  }
 
   const fieldStyle: React.CSSProperties = {
     width: "100%",
@@ -144,6 +165,46 @@ export default function ReturnTripTool() {
       )}
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 10 }}>{err}</div>}
+
+      {/* Estimated job wrap-up: drive back (buffered) + billable tasks at
+          dispatch, added to the current time - used for on-site billing. */}
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+        <div className="small" style={{ fontWeight: 700, marginBottom: 2 }}>Billable tasks at dispatch (minutes)</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+          Estimate any billable work still to do back at dispatch. Added to the drive
+          time and the current time to project when the job wraps up.
+        </div>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          <label className="col" style={{ gap: 4, flex: "1 1 90px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Trash mgmt</span>
+            <input inputMode="numeric" value={trashMin} onChange={(e) => setTrashMin(e.target.value)} placeholder="0" style={fieldStyle} />
+          </label>
+          <label className="col" style={{ gap: 4, flex: "1 1 90px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Unstock truck</span>
+            <input inputMode="numeric" value={unstockMin} onChange={(e) => setUnstockMin(e.target.value)} placeholder="0" style={fieldStyle} />
+          </label>
+          <label className="col" style={{ gap: 4, flex: "1 1 90px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Other</span>
+            <input inputMode="numeric" value={miscMin} onChange={(e) => setMiscMin(e.target.value)} placeholder="0" style={fieldStyle} />
+          </label>
+        </div>
+        <button type="button" onClick={generateWrapUp} className="btnPrimary" style={{ marginTop: 10, padding: "10px 14px" }}>
+          Generate estimated wrap-up time
+        </button>
+        {wrapUp && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: "var(--brand)" }}>
+              Est. job wrap-up: {fmtClock(wrapUp.at)}
+            </div>
+            <div className="small" style={{ color: "var(--muted)" }}>
+              now + {Math.round(wrapUp.totalMin)} min
+              {wrapUp.driveMin > 0
+                ? ` (drive ${Math.round(wrapUp.driveMin)} + tasks ${Math.round(wrapUp.taskMin)})`
+                : ` (tasks only - calculate the return trip above to include drive time)`}
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="col" style={{ gap: 4, marginTop: 12 }}>
         <span className="small" style={{ color: "var(--muted)" }}>Navigate somewhere else? (optional)</span>
