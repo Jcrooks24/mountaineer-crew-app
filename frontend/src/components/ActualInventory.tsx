@@ -24,6 +24,27 @@ const PACK_TYPES: { value: PackType; label: string }[] = [
   { value: "NA", label: "N/A" },
 ];
 
+// "Chow" = piles of loose miscellaneous items (garden tools, hoses, blankets,
+// random odds and ends) not worth logging individually. The crew approximate
+// the floor imprint (L x W x H, in feet) the pile occupies on the truck;
+// cubic feet is that occupied space, and density sets a rough weight per cubic
+// foot for load planning. Stored as a normal inventory row (name prefixed with
+// CHOW_PREFIX, estimate in notes) so it rides the existing offline queue with
+// no backend change.
+const CHOW_PREFIX = "Chow - ";
+const CHOW_DENSITY: { value: string; label: string; lbsPerCuft: number }[] = [
+  { value: "loose", label: "Loosely strewn", lbsPerCuft: 4 },
+  { value: "medium", label: "Medium", lbsPerCuft: 7 },
+  { value: "packed", label: "Packed tight", lbsPerCuft: 11 },
+];
+function isChowRow(r: { is_box: boolean; name: string }): boolean {
+  return !r.is_box && r.name.startsWith(CHOW_PREFIX);
+}
+function chowCuftFromNotes(notes: string | null | undefined): number {
+  const m = (notes || "").match(/≈\s*([\d.]+)\s*cu ft/);
+  return m ? parseFloat(m[1]) || 0 : 0;
+}
+
 function newTempId(): number {
   return -(Date.now() * 1000 + Math.floor(Math.random() * 1000));
 }
@@ -65,6 +86,14 @@ export default function ActualInventory({
   const [bQty, setBQty] = useState(1);
   const [bRoom, setBRoom] = useState("");
   const [bPack, setBPack] = useState<PackType | "">("");
+
+  // "Estimate chow volume" tool state.
+  const [chowLabel, setChowLabel] = useState("");
+  const [chowL, setChowL] = useState("");
+  const [chowW, setChowW] = useState("");
+  const [chowH, setChowH] = useState("");
+  const [chowDensity, setChowDensity] = useState("medium");
+  const [chowRoom, setChowRoom] = useState("");
 
   // Merge a pending queue op into the rows as a temp row.
   function pendingToRow(op: QueuedAdd): Row {
@@ -133,12 +162,24 @@ export default function ActualInventory({
   const counts = useMemo(() => {
     let furniture = 0;
     let boxes = 0;
+    let chowCuft = 0;
+    let chowPiles = 0;
     for (const r of rows) {
-      if (r.is_box) boxes += r.qty || 0;
-      else furniture += r.qty || 0;
+      if (r.is_box) { boxes += r.qty || 0; continue; }
+      if (isChowRow(r)) { chowPiles += 1; chowCuft += chowCuftFromNotes(r.notes); continue; }
+      furniture += r.qty || 0;
     }
-    return { furniture, boxes };
+    return { furniture, boxes, chowCuft: Math.round(chowCuft * 10) / 10, chowPiles };
   }, [rows]);
+
+  // Live chow estimate from the L x W x H (feet) + density inputs.
+  const chowPreview = useMemo(() => {
+    const l = parseFloat(chowL), w = parseFloat(chowW), h = parseFloat(chowH);
+    if (!(l > 0 && w > 0 && h > 0)) return null;
+    const cuft = l * w * h;
+    const d = CHOW_DENSITY.find((x) => x.value === chowDensity) || CHOW_DENSITY[1];
+    return { cuft: Math.round(cuft * 10) / 10, weight: Math.round(cuft * d.lbsPerCuft), density: d };
+  }, [chowL, chowW, chowH, chowDensity]);
 
   // Optimistic add: show immediately, queue for durability, fire in background.
   function queueAdd(payload: InventoryItemPayload) {
@@ -199,6 +240,29 @@ export default function ActualInventory({
     setBPack("");
   }
 
+  function addChow() {
+    if (!chowPreview) {
+      setErr("Enter length, width, and height (ft) for the pile.");
+      return;
+    }
+    setErr(null);
+    const label = chowLabel.trim() || "loose items";
+    queueAdd({
+      name: `${CHOW_PREFIX}${label}`,
+      qty: 1,
+      is_box: false,
+      pack_type: null,
+      room: chowRoom.trim() || null,
+      notes: `≈ ${chowPreview.cuft} cu ft, ≈ ${chowPreview.weight} lbs (${chowL}x${chowW}x${chowH} ft, ${chowPreview.density.label.toLowerCase()})`,
+    });
+    setChowLabel("");
+    setChowL("");
+    setChowW("");
+    setChowH("");
+    setChowDensity("medium");
+    setChowRoom("");
+  }
+
   async function changeQty(row: Row, delta: number) {
     if (row.pending) return; // can't PATCH a not-yet-synced row
     const next = Math.max(1, (row.qty || 1) + delta);
@@ -234,8 +298,9 @@ export default function ActualInventory({
     }
   }
 
-  const furnitureRows = rows.filter((r) => !r.is_box);
+  const furnitureRows = rows.filter((r) => !r.is_box && !isChowRow(r));
   const boxRows = rows.filter((r) => r.is_box);
+  const chowRows = rows.filter((r) => isChowRow(r));
 
   return (
     <div className="card" data-component="ActualInventory">
@@ -252,6 +317,7 @@ export default function ActualInventory({
       <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
         <CountTile label="Furniture" value={counts.furniture} />
         <CountTile label="Boxes" value={counts.boxes} />
+        {counts.chowPiles > 0 && <CountTile label="Chow (cu ft)" value={counts.chowCuft} />}
       </div>
 
       {/* Add furniture - dedicated item search box. */}
@@ -351,6 +417,85 @@ export default function ActualInventory({
         </button>
       </div>
 
+      {/* Estimate chow volume - piles of loose miscellaneous items. */}
+      <div style={addSectionStyle}>
+        <div className="row" style={{ alignItems: "center", gap: 8 }}>
+          <div style={addTitleStyle}>Estimate chow volume</div>
+          <BetaTag feature="chowVolume" style={{ marginTop: 0 }} />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+          For piles of loose odds and ends (garden tools, hoses, blankets, randoms).
+          Approximate the floor imprint the pile takes up on the truck in <strong>feet</strong>,
+          then pick how tightly it's packed.
+        </div>
+        <input
+          value={chowLabel}
+          onChange={(e) => setChowLabel(e.target.value)}
+          placeholder="What is it? (e.g. garage loose items)"
+          style={inputStyle}
+        />
+        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          <label className="col" style={{ gap: 4, flex: "1 1 70px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Length (ft)</span>
+            <input inputMode="decimal" value={chowL} onChange={(e) => setChowL(e.target.value)} placeholder="0" style={inputStyle} />
+          </label>
+          <label className="col" style={{ gap: 4, flex: "1 1 70px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Width (ft)</span>
+            <input inputMode="decimal" value={chowW} onChange={(e) => setChowW(e.target.value)} placeholder="0" style={inputStyle} />
+          </label>
+          <label className="col" style={{ gap: 4, flex: "1 1 70px" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Height (ft)</span>
+            <input inputMode="decimal" value={chowH} onChange={(e) => setChowH(e.target.value)} placeholder="0" style={inputStyle} />
+          </label>
+        </div>
+        <div className="small" style={{ fontWeight: 700, marginTop: 2 }}>Density</div>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          {CHOW_DENSITY.map((d) => {
+            const active = chowDensity === d.value;
+            return (
+              <button
+                key={d.value}
+                type="button"
+                onClick={() => setChowDensity(d.value)}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 999,
+                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  color: active ? "var(--brand)" : "var(--text)",
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 14,
+                  cursor: "pointer",
+                }}
+              >
+                {d.label}
+              </button>
+            );
+          })}
+        </div>
+        <input
+          value={chowRoom}
+          onChange={(e) => setChowRoom(e.target.value)}
+          placeholder="Room / area (optional)"
+          style={inputStyle}
+        />
+        <div className="small" style={{ color: chowPreview ? "var(--text)" : "var(--muted)" }}>
+          {chowPreview ? (
+            <>Estimate: <strong>{chowPreview.cuft} cu ft</strong>, <strong>≈ {chowPreview.weight} lbs</strong></>
+          ) : (
+            "Enter L x W x H to estimate."
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={addChow}
+          disabled={!chowPreview}
+          style={{ ...addBtnStyle, opacity: chowPreview ? 1 : 0.5, cursor: chowPreview ? "pointer" : "not-allowed" }}
+        >
+          Add chow estimate
+        </button>
+      </div>
+
       {err && (
         <div className="small" style={{ color: "var(--danger)", marginBottom: 10 }}>{err}</div>
       )}
@@ -363,6 +508,7 @@ export default function ActualInventory({
         <>
           <ItemGroup title="Furniture" rows={furnitureRows} onQty={changeQty} onRemove={removeRow} />
           <ItemGroup title="Boxes" rows={boxRows} onQty={changeQty} onRemove={removeRow} />
+          <ItemGroup title="Chow (loose items)" rows={chowRows} onQty={changeQty} onRemove={removeRow} />
         </>
       )}
     </div>
@@ -417,7 +563,7 @@ function ItemGroup({
           <div style={{ minWidth: 0, flex: "1 1 auto" }}>
             <div style={{ fontWeight: 600, fontSize: 14 }}>{r.name}</div>
             <div className="small" style={{ color: "var(--muted)" }}>
-              {[r.pack_type, r.room, r.pending ? "Syncing…" : null].filter(Boolean).join(" · ")}
+              {[r.pack_type, r.room, r.notes, r.pending ? "Syncing…" : null].filter(Boolean).join(" · ")}
             </div>
           </div>
           <div className="row" style={{ gap: 6, alignItems: "center", flex: "0 0 auto" }}>
