@@ -150,6 +150,13 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
     run_export_in_background(export_job_report_to_sheets, payload)
 
 
+def _is_skill_rater(user: User) -> bool:
+    """Skill ratings are editable only by admins, crew leads, or admin-designated
+    skill raters (users.is_crew_lead). Enforced server-side so a stale or tampered
+    client can't persist skill edits from a regular crew member."""
+    return user.role in ("admin", "crew_lead") or bool(getattr(user, "is_crew_lead", False))
+
+
 @router.post("", response_model=JobReportResponse)
 def upsert_job_report(
     body: JobReportUpsert,
@@ -158,6 +165,20 @@ def upsert_job_report(
 ):
     now = datetime.now(timezone.utc)
     existing = db.query(JobReport).filter(JobReport.job_uuid == body.job_uuid).first()
+
+    # Non-raters can't create or change skill ratings. Keep whatever a rater
+    # already saved on the existing report (matched by employee name) and drop
+    # anything the non-rater's payload carries. Never wipes a rater's data -
+    # that lives on `existing` and is re-applied here.
+    if body.employee_hours and not _is_skill_rater(current_user):
+        prior_by_name: dict = {}
+        if existing:
+            prior = _decode_employee_hours(existing.employee_hours_json) or []
+            prior_by_name = {e.name: e for e in prior}
+        for entry in body.employee_hours:
+            keep = prior_by_name.get(entry.name)
+            entry.skill_ratings = keep.skill_ratings if keep else None
+            entry.skill_rating = keep.skill_rating if keep else None
 
     employee_hours_json = (
         json.dumps([e.model_dump() for e in body.employee_hours])
