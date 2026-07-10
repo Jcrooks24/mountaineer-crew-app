@@ -90,6 +90,7 @@ import { formatMountainTime } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
+import ReturnTripTool from "./ReturnTripTool";
 
 // Type + billing-math helpers live in lib/employeeHours so BillCalculator
 // can consume them without importing back through this parent. Re-exported
@@ -1238,6 +1239,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           {jobName}
         </div>
       )}
+
+      {/* Return-trip tool: drive time back to dispatch + 20% buffer (item 9). */}
+      <ReturnTripTool />
 
       {/* LD driving days: remind whoever enters pay that drive time is a fixed
           rate, not hourly. Driving (RODS/DUTY) events are already excluded from
