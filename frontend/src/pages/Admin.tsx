@@ -565,7 +565,7 @@ function EmployeesTab() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
-              {["Name", "Email", "Role", "Status", "Tags", "Actions"].map((h) => (
+              {["Name", "Contacts", "Role", "Status", "Tags", "Actions"].map((h) => (
                 <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
@@ -580,9 +580,35 @@ function EmployeesTab() {
                 }}
               >
                 <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>-</span>}</td>
-                <td style={{ padding: "10px 14px", color: "var(--muted)" }}>
-                  <div>{u.email}</div>
-                  {u.phone && <div className="small" style={{ color: "var(--text)" }}>{u.phone}</div>}
+                <td style={{ padding: "10px 14px" }}>
+                  {/* Contacts: email + phone as compact clickable pills so the
+                      roster reads as one "Contacts" column instead of two rows. */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+                    <a
+                      href={`mailto:${u.email}`}
+                      title={u.email}
+                      style={{
+                        fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999,
+                        border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none",
+                        maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}
+                    >
+                      ✉ {u.email}
+                    </a>
+                    {u.phone && (
+                      <a
+                        href={`tel:${u.phone}`}
+                        title={u.phone}
+                        style={{
+                          fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999,
+                          border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        ☎ {u.phone}
+                      </a>
+                    )}
+                  </div>
                 </td>
                 <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
                 <td style={{ padding: "10px 14px" }}>

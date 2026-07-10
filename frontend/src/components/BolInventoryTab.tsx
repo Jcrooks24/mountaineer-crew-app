@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
+import { useMergedCatalog } from "../lib/furnitureCatalogStore";
 import {
   type BOLDraft,
   type BOLItem,
@@ -25,6 +25,9 @@ type Props = {
  * server (via loadForJob), and every add/edit is queued for upsert.
  */
 export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
+  // Shared catalogue (server rows + built-in, cached offline) so this picker
+  // matches Actual Inventory and the Estimator instead of the built-in list.
+  const catalog = useMergedCatalog();
   const [draft, setDraft] = useState<BOLDraft | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "syncing">("loading");
   const [itemName, setItemName] = useState("");
@@ -211,7 +214,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
               placeholder="Sofa, dresser, CP box, PBO box…"
             />
             <datalist id="bol-inv-tab-furniture">
-              {FURNITURE_CATALOG.map((f) => (
+              {catalog.map((f) => (
                 <option key={f.name} value={f.name} />
               ))}
             </datalist>

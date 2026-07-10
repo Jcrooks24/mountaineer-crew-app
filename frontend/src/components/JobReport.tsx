@@ -1327,15 +1327,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee man-hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
-          <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />
+          {leadEditable && <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />}
         </div>
-        {relevantSkills.length > 0 && ht.skillsHint && (
+        {/* Skill ratings are visible only to skill raters (crew leads / admins /
+            is_crew_lead). Regular crew don't see the hint or the per-employee
+            stars at all - not just a disabled version. */}
+        {relevantSkills.length > 0 && leadEditable && ht.skillsHint && (
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
             {ht.skillsHint}
           </div>
-        )}
-        {relevantSkills.length > 0 && (
-          <LeadGate leadEditable={leadEditable} what="skill ratings" />
         )}
 
         {/* The editor is always available - even with 0-1 timeline events the
@@ -1532,14 +1532,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                         </>
                       )}
                     </div>
-                    <div style={{ marginTop: 6 }}>
-                      <EmployeeSkillRatings
-                        skills={relevantSkills}
-                        ratings={emp.skill_ratings || {}}
-                        disabled={!leadEditable}
-                        onRate={(skillName, r) => setEmployeeSkillTypeRating(i, skillName, r)}
-                      />
-                    </div>
+                    {leadEditable && (
+                      <div style={{ marginTop: 6 }}>
+                        <EmployeeSkillRatings
+                          skills={relevantSkills}
+                          ratings={emp.skill_ratings || {}}
+                          disabled={false}
+                          onRate={(skillName, r) => setEmployeeSkillTypeRating(i, skillName, r)}
+                        />
+                      </div>
+                    )}
                   </div>
                   <div className="row" style={{ gap: 6, flex: "0 0 auto" }}>
                     <button

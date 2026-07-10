@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { apiFetch } from "../api/client";
 import { BetaTag } from "./BetaTag";
 import SignaturePad, { type SignaturePadHandle } from "./SignaturePad";
-import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
+import { useMergedCatalog } from "../lib/furnitureCatalogStore";
 import {
   applySignature,
   type BOLDraft,
@@ -294,6 +294,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   const [crewRep, setCrewRep] = useState(initialDraft.crew_rep || user?.name || user?.email || "");
   const [draft, setDraft] = useState<BOLDraft>(initialDraft);
 
+  // Shared catalogue (server rows + built-in, cached offline) so the BOL item
+  // picker matches Actual Inventory and the Estimator.
+  const catalog = useMergedCatalog();
+
   // Add-item form state
   const [itemName, setItemName] = useState("");
   const [itemQty, setItemQty] = useState(1);
@@ -564,7 +568,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
               placeholder="Sofa, dresser, CP box, PBO box…"
             />
             <datalist id="bol-furniture">
-              {FURNITURE_CATALOG.map((f) => (
+              {catalog.map((f) => (
                 <option key={f.name} value={f.name} />
               ))}
             </datalist>
