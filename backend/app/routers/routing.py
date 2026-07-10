@@ -35,7 +35,11 @@ def return_trip(
     _: User = Depends(get_current_user),
 ):
     dest = (destination or "").strip() or DISPATCH_ADDRESS
-    api_key = os.getenv("MAPS_API_KEY", "").strip()
+    # Reuse the existing GOOGLE_MAPS_API_KEY (already set for the RODS miles /
+    # Distance Matrix feature) so no second key is needed - it just also needs
+    # the Directions API enabled on the same GCP project. MAPS_API_KEY is an
+    # accepted fallback name.
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip() or os.getenv("MAPS_API_KEY", "").strip()
     if not api_key:
         # No key configured yet - let the client fall back to a navigate link.
         return {"ok": False, "reason": "no_api_key", "destination_address": dest}
