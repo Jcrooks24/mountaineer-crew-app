@@ -1,0 +1,125 @@
+# Credential and access inventory
+
+**This file contains no secret values, and never will.** It is the map, not the
+keys. It tells a successor what secrets exist, what breaks without each one, who
+issues them, and how to rotate them.
+
+> **Where the actual secrets live**
+>
+> - **Password manager** (1Password / Bitwarden): the human logins (Google
+>   Workspace, Render, Vercel, Postmark, GitHub) and any recovery codes. Set up
+>   **emergency access / legacy contact** on this vault so it is reachable if the
+>   owner is not. That mechanism, not this document, is the bus-factor plan for
+>   secrets.
+> - **Render and Vercel environment variables**: the runtime secrets the app reads.
+>   These are the live source of truth for anything in the tables below.
+>
+> Committing a secret value to this repo, even briefly, means rotating it. Git
+> history is forever.
+
+## Accounts a successor needs
+
+Fill in the owner column. These cannot be reconstructed from code.
+
+| Account | What it gates | Owner / where to get in |
+|---|---|---|
+| GitHub (`Jcrooks24/mountaineer-crew-app`) | The code, and push access that triggers deploys | TODO |
+| Render | Both backend services, both Postgres databases, all backend env vars, logs | TODO |
+| Vercel | Both frontends, frontend env vars, build logs | TODO |
+| Google Workspace / Cloud project | The Sheet, Drive, Calendar, the Maps key, the OAuth client | TODO |
+| Postmark | Outbound email. Without it, nobody can reset a password. | TODO |
+| Password manager | Everything above | TODO (set emergency access) |
+
+## Backend runtime secrets (Render, per service)
+
+Set on **both** the prod and the staging service, with different values.
+
+| Variable | Required | Breaks what, if wrong or missing |
+|---|---|---|
+| `DATABASE_URL` | Yes | Everything. Postgres connection string. If unset the app silently falls back to local SQLite, which in a deploy means data goes nowhere real. |
+| `JWT_SECRET` | Yes | Nobody can log in. The app **refuses to boot** if `DATABASE_URL` is set and this is not, which is intentional (fail closed rather than sign tokens with a dev default). Rotating it logs every crew member out. |
+| `FRONTEND_URL` | Yes | Password-reset and mechanic-signature links. A stale value here points crew at the wrong environment's frontend and they get "invalid or expired reset link", because the token is in the other database. This has actually happened after a promotion. |
+| `GOOGLE_SHEETS_SPREADSHEET_ID` | Yes | The office sees nothing. The target spreadsheet for every export. |
+| `POSTMARK_SERVER_TOKEN` | Yes in deploys | Password-reset email. With it unset the mailer prints to stdout in dev mode and sends nothing, silently. |
+| `SMTP_FROM` | Yes in deploys | The from-address on Postmark sends. Must be a verified Postmark sender. Name is legacy; no SMTP is involved. |
+| `ADMIN_EMAIL` | Recommended | The user auto-promoted to admin on every startup. Your way back in if you lose admin. |
+| `GOOGLE_MAPS_API_KEY` | Optional | Drive-time, mileage auto-calc, and address lookup. Degrades gracefully: routes return `ok: false` and the UI falls back to manual entry or free OSM routing. `MAPS_API_KEY` is accepted as a fallback name in `routing.py` only. |
+| `GOOGLE_OAUTH_TOKEN_JSON` | Fallback only | Google API access. **The primary source is the `system_config` table** (key `google_oauth_token`), pasted in via Admin. This env var is only consulted if that row is absent. See rotation below. |
+| `DISPATCH_ADDRESS` | Optional | Default return-trip destination. Defaults to the Bozeman yard in code. |
+| `WORKSPACE_CALENDAR_ID` | Optional | Which Google Calendar the day's jobs are read from. Defaults to `primary`. |
+| `CREW_RESOURCES_ENABLED` | Optional | Must be `true` to run the hourly crew-resources calendar loop. Off otherwise. |
+| `RESOURCES_CALENDAR_ID`, `JOBS_CALENDAR_ID`, `IGNORED_INVITEE_EMAILS` | Optional | Only used by the crew-resources loop. |
+| `SQLITE_PATH` | Local only | Local dev database file. Never set in a deploy. |
+
+### Sheet tab variables (Render backend)
+
+**Every one of these defaults to the production tab name.** On staging, each must
+be set to the `*Staging` value or staging test data lands in the office's real
+sheet. This is the most common configuration mistake in this system.
+
+`SHEETS_EVENTS_TAB`, `SHEETS_MATERIALS_TAB`, `SHEETS_JOB_REPORTS_TAB`,
+`SHEETS_BILLS_TAB`, `SHEETS_DVIRS_TAB`, `SHEETS_PRIOR_HOURS_TAB`, `SHEETS_RODS_TAB`,
+`SHEETS_LD_PAY_TAB`, `SHEETS_ESTIMATES_TAB`, `SHEETS_ESTIMATE_ITEMS_TAB`,
+`SHEETS_BOLS_TAB`, `SHEETS_BOL_ITEMS_TAB`, `SHEETS_JOB_INVENTORY_TAB`,
+`SHEETS_JOB_INVENTORY_ITEMS_TAB`, `SHEETS_INCIDENTS_TAB`, `SHEETS_OFFICE_HOURS_TAB`,
+`SHEETS_REIMBURSEMENTS_TAB`, `SHEETS_AVAILABILITY_TAB`, `SHEETS_OFF_JOB_TAB`
+
+Staging value is the production name plus `Staging` (`Events` → `EventsStaging`).
+
+Admin → Advanced Settings → System Check → Sheet Syncs lists which are unset.
+Check it after any deploy that adds a new tab.
+
+### Drive folder variables (Render backend)
+
+| Variable | Effect if unset |
+|---|---|
+| `DRIVE_PARENT_FOLDER_NAME` | Defaults to "Mountaineer Crew Photos". The folder id is then cached in `system_config`. |
+| `DRIVE_ESTIMATOR_PARENT_FOLDER_ID` | Estimator photos fall back into the crew-photos parent. Functional, just messier. |
+| `DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID` | Same, for receipt and odometer photos. |
+| `DRIVE_DOCUMENTS_FOLDER_NAME` | Defaults to "Mountaineer Crew Documents". |
+| `DRIVE_BOL_FOLDER_NAME` | Has a code default. |
+
+## Frontend build variables (Vercel, per project)
+
+| Variable | Notes |
+|---|---|
+| `VITE_API_URL` | The backend origin. **Baked in at build time**, including into the service worker's caching rules, so changing it requires a rebuild, not just a restart. Pointing prod at the staging backend is a way to lose a day of crew data. |
+| `VITE_STAGING` | Set to `true` on the **staging project only**. Enables the staging-only "Preview as role" switch. Must never be set on prod. |
+| `VITE_BUILD_ID` | Optional. Vercel injects `VERCEL_GIT_COMMIT_SHA` automatically, which the build picks up. |
+
+## Google Cloud specifics
+
+One Cloud project backs everything Google. A successor needs to know:
+
+**APIs that must be enabled.** Missing one does not crash the app, it silently
+disables a feature:
+
+| API | Powers | Symptom if not enabled |
+|---|---|---|
+| Google Sheets API | Every export. The office's entire view. | Nothing reaches the sheet. |
+| Google Drive API | Photos, documents, signed BOL PDFs | Uploads fail. |
+| Google Calendar API | The day's job list | Crew see no jobs for today. |
+| Directions API | Return-trip drive time | Endpoint returns `ok: false`; UI falls back to a Maps deep link. |
+| Distance Matrix API | RODS mileage "Auto" button | Miles come back null; the field stays manual. |
+| Places API | Address typeahead | Google answers `REQUEST_DENIED`; the field degrades to plain text, silently. |
+
+**The OAuth token is in the database, not in an env var.** Scopes:
+`calendar.readonly`, `calendar.events`, `spreadsheets`, `drive.file`. It is stored
+in the `system_config` table under key `google_oauth_token` and is refreshed
+automatically. `GOOGLE_OAUTH_TOKEN_JSON` is only a fallback.
+
+**Rotating it:** regenerate the token locally with the Google OAuth flow, then paste
+it in via Admin → the `/api/admin/cal-token` endpoint. Do this per environment,
+since the token lives in each environment's database. If Google access breaks
+across the board and nothing else changed, a revoked or expired token is the first
+thing to check.
+
+## Rotation notes
+
+| Secret | On rotation |
+|---|---|
+| `JWT_SECRET` | Every crew member is logged out and must sign in again. Do it at night, not mid-move. |
+| `GOOGLE_MAPS_API_KEY` | Safe. Features degrade during the gap; nothing is lost. |
+| `POSTMARK_SERVER_TOKEN` | Safe, but nobody can reset a password until it is back. Verify the sender signature still matches `SMTP_FROM`. |
+| Google OAuth token | Must be repasted per environment. Sheets exports queue up in Postgres and the auto-reconciler backfills them once access returns, so a short outage is recoverable. |
+| Database password | Update `DATABASE_URL` on Render. The app will not boot without a valid one. |

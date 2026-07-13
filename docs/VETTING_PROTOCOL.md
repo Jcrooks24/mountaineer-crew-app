@@ -117,7 +117,7 @@ write to distinct worksheets; re-submits don't accumulate rows.
 - **Verify:** trigger the write, confirm one row in the `*Staging` tab; re-submit
   and confirm still one row.
 - **Health check (run every vet):** open Admin → Advanced Settings → **System
-  Check — Sheet Syncs** (or `GET /api/admin/system-check/sheets`) and confirm
+  Check, Sheet Syncs** (or `GET /api/admin/system-check/sheets`) and confirm
   Sheets is connected and every sync's tab exists. **If the change adds a new
   sheet sync, its entry MUST be added to `SHEET_SYNC_REGISTRY` in
   `backend/app/integrations/sheets_export.py`** so the health check covers it -
@@ -202,6 +202,21 @@ surface clearly; admin can interpret the data at a glance.
 - **Regression:** surfaces untouched by the change (DVIR, materials, photos,
   reimbursements, estimator, job report + bill, availability, BOL, RODS) still
   work end-to-end.
+- **Docs still true (bus-factor):** the change did not silently invalidate the
+  docs a successor depends on. Cheapest way to check is to run `/handoff`, but
+  the four that matter here:
+  - every new env var / secret / Google API is in `docs/CREDENTIALS.md`
+    (names only, never values);
+  - `docs/ARCHITECTURE.md` and its diagram still match if a service, queue,
+    integration, or data flow moved;
+  - a decision someone would be tempted to undo has an ADR in
+    `docs/decisions/`;
+  - any bug found and **not** fixed is in Known defects in `docs/RUNBOOKS.md`,
+    and any listed bug that got fixed is deleted from it.
+
+  A promotion that leaves an undocumented env var behind is a promotion that
+  breaks for whoever deploys next. Treat a missing credential entry as a
+  blocker, not a follow-up.
 
 ---
 

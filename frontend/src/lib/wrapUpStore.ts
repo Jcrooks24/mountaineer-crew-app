@@ -18,7 +18,10 @@
  * sliding forward with the wall clock.
  */
 
-const KEY_PREFIX = "wrapup:";
+// The `crew_` prefix is load-bearing: clearCrewState() wipes storage by prefix,
+// not from a registry, so a store keyed anything else survives logout and leaks
+// to the next person who signs in on a shared phone.
+const KEY_PREFIX = "crew_wrapup_v1:";
 
 export type WrapUpState = {
   /** Destination override. Empty = dispatch (backend supplies the address). */

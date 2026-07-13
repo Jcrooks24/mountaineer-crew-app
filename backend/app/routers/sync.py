@@ -429,7 +429,7 @@ def upsert_manual_job(
         db.commit()
     except IntegrityError:
         # Race: another device inserted the same (name, date) pair first.
-        # Whichever job_uuid wins the race is canonical — the client will
+        # Whichever job_uuid wins the race is canonical, the client will
         # re-derive its UUID from the deterministic hash on next load and
         # they should match anyway.
         db.rollback()
