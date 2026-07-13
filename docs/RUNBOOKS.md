@@ -200,31 +200,32 @@ Live bugs that are known and not yet fixed. If you hit one of these, you have fo
 a real issue, not a misunderstanding. Keep this list honest: delete an entry when it
 is fixed, and add one when a `/vet` pass finds something you cannot fix that day.
 
-1. **Job photos do not auto-retry on reconnect.** The UI says "photo will retry when
-   you're back online", but the `online` handler does not drain the photo store. The
-   only path is the manual **Retry** button on the photo. BOL item photos, by
-   contrast, do auto-retry. Workaround: tell the crew to tap Retry.
-   (`frontend/src/App.tsx`, the `online` listener.)
-
-2. **Logging out destroys unsynced photos and reimbursements.** `clearCrewState()`
+1. **Logging out destroys unsynced photos and reimbursements.** `clearCrewState()`
    deletes the entire IndexedDB database. A crew member who logs out with a pending
    receipt photo loses it permanently. **Never tell a crew member to log out or
    reinstall as a troubleshooting step** unless you have confirmed their queues are
    empty.
 
-3. **Estimator items and job-inventory items are not idempotent.** They are the only
-   two queues without a client-generated UUID. If the server commits the insert but
-   the response is lost, the retry creates a duplicate line item. Every other queue
-   is protected against this. Fix is to add an `item_uuid` with a unique constraint.
-
-4. **`alembic revision --autogenerate` is unsafe as-is.** `alembic/env.py` does not
-   import every model module, so autogenerate emits `DROP TABLE` for the ones it
-   cannot see (skills, incidents, off-job entries, job inventory, job types, and
-   others). **Always read a generated migration before applying it.** Better: add the
-   missing imports to `env.py` first.
-
-5. **Queued work is silently dropped after 14 days**, and any 4xx response (other
+2. **Queued work is silently dropped after 14 days**, and any 4xx response (other
    than 401, 403, 408) drops the op with only a console warning. There is no
    dead-letter store and no user-visible signal. A backend validation change can
    therefore silently delete queued field work from crew devices. Tighten server
    validation carefully.
+
+3. **Estimate totals may be stale on old estimates.** Item adds used to double-count
+   the newly added item into the estimate's rolled-up weight and volume (fixed
+   2026-07-13). Item counts were always correct; only the totals inflated, by exactly
+   the last-added item's contribution. Editing or deleting any item recalculated
+   correctly and healed the estimate, so only estimates whose items were **only ever
+   added** are affected. Run `backend/scripts/recalc_estimate_totals.py --dry-run`
+   per environment to see which, then without the flag to fix them.
+
+### Recently fixed (kept briefly so you do not re-report them)
+
+- Job photos not auto-retrying on reconnect. Fixed 2026-07-13: the `online` handler
+  now drains them like every other queue.
+- Estimator and job-inventory item queues not being idempotent. Fixed 2026-07-13:
+  both now send a client-minted `item_uuid` and the endpoints upsert on it.
+- `alembic revision --autogenerate` emitting spurious `DROP TABLE`. Fixed 2026-07-13:
+  the seven missing model imports were added to `alembic/env.py`. Still worth reading
+  any generated migration before applying it.

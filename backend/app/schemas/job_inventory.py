@@ -14,6 +14,9 @@ class JobInventoryItemIn(BaseModel):
     pack_type: Optional[str] = None
     room: Optional[str] = None
     notes: Optional[str] = None
+    # Client-minted idempotency key. Optional so an older app build (which does
+    # not send one) keeps working; when present the add is an upsert.
+    item_uuid: Optional[str] = None
 
 
 class JobInventoryItemPatch(BaseModel):
@@ -27,6 +30,7 @@ class JobInventoryItemPatch(BaseModel):
 
 class JobInventoryItemOut(BaseModel):
     id: int
+    item_uuid: Optional[str] = None
     name: str
     qty: int
     is_box: bool

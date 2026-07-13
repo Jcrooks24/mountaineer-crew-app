@@ -14,6 +14,9 @@ class EstimateItemIn(BaseModel):
     room: Optional[str] = None
     subcategory: Optional[str] = None
     notes: Optional[str] = None
+    # Client-minted idempotency key. Optional so an older app build (which does
+    # not send one) keeps working; when present the add is an upsert.
+    item_uuid: Optional[str] = None
 
 
 class EstimateItemPatch(BaseModel):
@@ -28,6 +31,7 @@ class EstimateItemPatch(BaseModel):
 
 class EstimateItemOut(BaseModel):
     id: int
+    item_uuid: Optional[str] = None
     name: str
     qty: int
     weight_lbs: float

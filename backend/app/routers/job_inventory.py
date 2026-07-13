@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
@@ -81,8 +82,23 @@ def add_item(
     pack_type = _normalize_pack_type(body.pack_type) if is_box else None
     if is_box and not pack_type:
         raise HTTPException(status_code=400, detail="Pack type (CP, PBO, or NA) is required for boxes")
+
+    # Idempotency. This add is queued on the device and retried, so a response
+    # lost in a tunnel must not create a second row on the next drain. Return
+    # the row we already have instead of inserting a duplicate.
+    item_uuid = (body.item_uuid or "").strip() or None
+    if item_uuid:
+        existing = (
+            db.query(JobInventoryItem)
+            .filter(JobInventoryItem.item_uuid == item_uuid)
+            .first()
+        )
+        if existing:
+            return existing
+
     now = datetime.now(timezone.utc)
     item = JobInventoryItem(
+        item_uuid=item_uuid,
         job_uuid=job_uuid,
         name=name,
         qty=max(1, int(body.qty or 1)),
@@ -96,7 +112,21 @@ def add_item(
         updated_at=now,
     )
     db.add(item)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Raced a concurrent retry of the same item_uuid (two tabs, or the
+        # drain firing from both the `online` event and a mount). The unique
+        # index is the real guard; the SELECT above is just the fast path.
+        db.rollback()
+        existing = (
+            db.query(JobInventoryItem)
+            .filter(JobInventoryItem.item_uuid == item_uuid)
+            .first()
+        )
+        if existing:
+            return existing
+        raise
     db.refresh(item)
     schedule_job_inventory_export(job_uuid)
     return item

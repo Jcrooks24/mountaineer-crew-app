@@ -107,7 +107,12 @@ export async function drain(
     try {
       const server = await apiFetch<ServerItem>(
         `/api/estimates/${encodeURIComponent(op.estimateUuid)}/items`,
-        { method: "POST", body: JSON.stringify(op.payload) },
+        // item_uuid = the queue-op id, which is a crypto.randomUUID() minted
+        // once at enqueue and persisted until the op is acked. The server
+        // upserts on it, so re-POSTing after a lost response returns the
+        // existing row instead of adding the line item a second time (which
+        // would also double-count it in the estimate's weight/volume totals).
+        { method: "POST", body: JSON.stringify({ ...op.payload, item_uuid: op.id }) },
       );
       removeOp(op.id);
       onResolved(op.tempId, server);

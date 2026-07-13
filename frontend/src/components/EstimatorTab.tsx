@@ -507,9 +507,12 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     const optimistic: EstimateItem = { id: tempId, ...payload };
     setLocal((prev) => ({ ...prev, items: [...prev.items, optimistic] }));
 
+    // item_uuid = opId. The server upserts on it, so this POST and any later
+    // retry from drainEstimatorQueue() are the same write. Without it, a lost
+    // response here left the op queued and the next drain added the item twice.
     apiFetch<EstimateItem>(`/api/estimates/${local.estimate_uuid}/items`, {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, item_uuid: opId }),
     })
       .then((server) => {
         removeEstimatorOp(opId);

@@ -1559,12 +1559,15 @@ export default function App() {
     }
   }
 
-  async function onRetryPhotoUpload(photo: StoredPhoto) {
-    if (photoBusy) return;
-    setPhotoBusy(true);
-    setPhotoError("");
-    await updatePhoto(photo.id, { drive_status: "pending", drive_error: undefined });
-    await refreshPhotos();
+  // Push one already-stored photo to Drive, updating its drive_status. Returns
+  // null on success or the error message on failure. Shared by the manual Retry
+  // button and the automatic drain below, so the two can never diverge.
+  //
+  // Safe to call concurrently with an in-flight upload of the same photo: the
+  // endpoint is idempotent by photo_id (an existing row short-circuits before
+  // the Drive call, because Drive uploads themselves are NOT idempotent and
+  // would otherwise duplicate the file).
+  async function pushPhotoToDrive(photo: StoredPhoto): Promise<string | null> {
     try {
       const form = new FormData();
       const resized = await resizeImage(photo.blob);
@@ -1587,22 +1590,67 @@ export default function App() {
       const { error, body } = await readPhotoUploadResponse(res);
       if (!error && body?.drive_url) {
         await updatePhoto(photo.id, { drive_status: "uploaded", drive_url: body.drive_url });
-        setStatus("Photo uploaded to Drive");
-      } else {
-        const errMsg = error ?? "Drive upload failed";
-        await updatePhoto(photo.id, { drive_status: "failed", drive_error: errMsg });
-        setPhotoError(errMsg);
+        return null;
       }
+      const errMsg = error ?? "Drive upload failed";
+      await updatePhoto(photo.id, { drive_status: "failed", drive_error: errMsg });
+      return errMsg;
     } catch (uploadErr: any) {
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
       const msg = offline
         ? "Offline - photo will retry when you're back online"
         : (uploadErr?.message ?? "Network error - tap Retry");
       await updatePhoto(photo.id, { drive_status: "failed", drive_error: msg });
-      setPhotoError(msg);
+      return msg;
     }
+  }
+
+  async function onRetryPhotoUpload(photo: StoredPhoto) {
+    if (photoBusy) return;
+    setPhotoBusy(true);
+    setPhotoError("");
+    await updatePhoto(photo.id, { drive_status: "pending", drive_error: undefined });
+    await refreshPhotos();
+    const errMsg = await pushPhotoToDrive(photo);
+    if (errMsg) setPhotoError(errMsg);
+    else setStatus("Photo uploaded to Drive");
     await refreshPhotos();
     setPhotoBusy(false);
+  }
+
+  // Drain the active job's un-uploaded photos on reconnect.
+  //
+  // Photos were the one queue with no automatic drain: the UI promised the crew
+  // "photo will retry when you're back online", but only the manual Retry button
+  // ever re-pushed, so a photo taken offline sat on the device until someone
+  // noticed the failed badge and tapped it. Every other queue in the app drains
+  // on the `online` event; photos now do too.
+  //
+  // Silent by design: no photoBusy, no error banner. This runs unprompted in the
+  // background, and a failure here is not something the crew asked for and can
+  // act on. It just leaves the photo queued (still marked failed, still
+  // retryable) for the next reconnect or a manual tap.
+  const drainingPhotosRef = useRef(false);
+  async function drainPendingPhotos() {
+    if (!navigator.onLine) return;
+    if (drainingPhotosRef.current) return;
+    const uuid = jobUuid.trim();
+    if (!uuid) return;
+
+    drainingPhotosRef.current = true;
+    try {
+      const stuck = (await listPhotosForJob(uuid)).filter((p) => p.drive_status !== "uploaded");
+      if (stuck.length === 0) return;
+      for (const p of stuck) {
+        // Signal can drop again mid-drain. Stop rather than burning through the
+        // rest of the batch marking everything failed.
+        if (!navigator.onLine) break;
+        await pushPhotoToDrive(p);
+      }
+      await refreshPhotos();
+    } finally {
+      drainingPhotosRef.current = false;
+    }
   }
 
   async function onDeletePhoto(id: string) {
@@ -1670,11 +1718,13 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainPendingPhotos(); };
     const onOffline = () => setIsOnline(false);
-    // Flush any incidents + off-job hours queued while offline on this mount too.
+    // Flush any incidents + off-job hours + un-uploaded photos queued while
+    // offline on this mount too.
     drainIncidents();
     drainOffJob();
+    void drainPendingPhotos();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
@@ -1732,6 +1782,7 @@ export default function App() {
     if (!isOnline) return;
     void syncQueueNow();
     void drainNotePatchQueue();
+    void drainPendingPhotos();
     if (notesStatus === "offline") setNotesStatus("saved");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline]);

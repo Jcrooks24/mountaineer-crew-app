@@ -109,7 +109,11 @@ export async function drain(
     try {
       const server = await apiFetch<ServerItem>(
         `/api/job-inventory/${encodeURIComponent(op.jobUuid)}/items`,
-        { method: "POST", body: JSON.stringify(op.payload) },
+        // item_uuid = the queue-op id, which is a crypto.randomUUID() minted
+        // once at enqueue and persisted until the op is acked. The server
+        // upserts on it, so re-POSTing after a lost response returns the
+        // existing row instead of adding the item a second time.
+        { method: "POST", body: JSON.stringify({ ...op.payload, item_uuid: op.id }) },
       );
       removeOp(op.id);
       onResolved(op.tempId, server);

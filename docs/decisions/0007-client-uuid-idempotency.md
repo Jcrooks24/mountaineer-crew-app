@@ -39,14 +39,28 @@ cross-tab: two open tabs draining the same queue at once cannot double-write.
   "simplify" that into a boolean ok/fail response.** Dropping a retryable event
   silently loses a logged clock-in.
 
-## Known violations
+## Formerly violated, now fixed (2026-07-13)
 
-**`estimatorQueue` and `jobInventoryQueue` are the only two queues without one**,
-and they are genuinely not idempotent: the backend does a plain insert against an
-autoincrement primary key. A lost response produces a duplicate line item on retry.
+`estimatorQueue` and `jobInventoryQueue` were the only two queues without a key, and
+they were genuinely not idempotent: the backend did a plain insert against an
+autoincrement primary key, so a lost response produced a duplicate line item on the
+next drain.
 
-This is a real bug, tracked in [../RUNBOOKS.md](../RUNBOOKS.md#known-defects). The
-fix is to add an `item_uuid` with a unique constraint. It has not been done yet.
+Both now send `item_uuid` (the queue-op id, already a persisted `crypto.randomUUID()`),
+and both endpoints upsert on it behind a unique index.
+
+Two things that fix taught us, worth keeping:
+
+1. **The immediate-POST path had to send the key too, not just the drain.** These two
+   queues fire an optimistic POST *and* keep the op queued. Adding the uuid only to
+   the drain would have left the original bug fully intact: the first POST inserts
+   with no key, its response is lost, and the drain's keyed retry finds nothing to
+   match and inserts again. If you add a queue with an optimistic-write path, the key
+   goes on **every** path that can reach the endpoint.
+2. **A nullable unique column is the right shape for a retrofit.** Rows written before
+   the key existed have `NULL`, and Postgres permits many NULLs under a unique
+   constraint, so old rows coexist and an older app build that sends no uuid keeps
+   working.
 
 ## What would break if you undid this
 

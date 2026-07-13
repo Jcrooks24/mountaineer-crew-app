@@ -20,6 +20,13 @@ class JobInventoryItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
+    # Client-minted idempotency key. The add is queued offline and retried, so a
+    # lost response must not produce a duplicate row: the endpoint upserts on
+    # this. Nullable because rows written before this column existed have none
+    # (Postgres allows many NULLs under a unique constraint, which is what we
+    # want - only real uuids collide).
+    item_uuid = Column(String, unique=True, index=True, nullable=True)
+
     # Universal job key (shared with events, materials, photos, job reports).
     job_uuid = Column(String, index=True, nullable=False)
 

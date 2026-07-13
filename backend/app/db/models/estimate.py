@@ -67,6 +67,12 @@ class EstimateItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
+    # Client-minted idempotency key. Estimator item adds are queued offline and
+    # retried, so a lost response must not produce a duplicate line. Nullable:
+    # rows written before this column existed have none, and Postgres allows
+    # many NULLs under a unique constraint.
+    item_uuid = Column(String, unique=True, index=True, nullable=True)
+
     estimate_id = Column(Integer, ForeignKey("estimates.id", ondelete="CASCADE"), nullable=False, index=True)
 
     name = Column(String, nullable=False)

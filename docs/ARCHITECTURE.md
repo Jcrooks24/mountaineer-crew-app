@@ -132,9 +132,10 @@ the op is dropped; everything else stays queued. 401 and 403 are deliberately
 transient so an expired token never destroys a day of queued field work.
 
 **Why retries are safe:** every payload carries a client-generated UUID, and the
-backend upserts on it. This is the single invariant that makes the whole
-offline design work. Two exceptions exist and are genuine bugs, tracked in
-[docs/RUNBOOKS.md](RUNBOOKS.md#known-defects).
+backend upserts on it. This is the single invariant that makes the whole offline
+design work, and as of 2026-07-13 every queue honors it (the estimator and
+job-inventory item queues were the last two holdouts). Any new offline write must
+do the same. See [ADR 0007](decisions/0007-client-uuid-idempotency.md).
 
 **What a new store must do:** use a `crew_` or `mm_` key prefix. `clearCrewState()`
 wipes storage by prefix, not from a registry, so a store with any other prefix
@@ -188,6 +189,7 @@ uvicorn are there for the same reason. See
   local development possible without secrets.
 - `backend/app/routers/dev.py` exists but is deliberately never registered in
   `main.py`.
-- `alembic/env.py` does not import every model module. Running
-  `alembic revision --autogenerate` today will emit `DROP TABLE` for the models it
-  does not import. See [docs/RUNBOOKS.md](RUNBOOKS.md#known-defects).
+- `alembic/env.py` must import **every** model module or
+  `alembic revision --autogenerate` emits `DROP TABLE` for the ones it cannot see.
+  Seven were missing until 2026-07-13. Keep that import list complete when you add a
+  model, and read any generated migration before applying it.
