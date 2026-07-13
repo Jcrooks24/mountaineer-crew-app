@@ -244,10 +244,25 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    not theoretical: a real mileage submission was destroyed by a 422 on staging, which
    is what prompted the fix.
 
-   **Still unfixed in five queues**, which all keep the original drop-on-4xx behaviour:
-   `bolStore`, `ldDayStore`, `materialsStore`, `officeHoursStore`, `rodsStore`. Port the
-   `markFailed` / `retryFailed` / `discardFailed` pattern from `reimbursementStore` when
-   each one next gets touched.
+   **Still unfixed in five queues**, which all keep the original drop-on-4xx behaviour
+   and can each destroy field work the same way:
+
+   | Store | What a 4xx can destroy |
+   |---|---|
+   | `rodsStore` | DOT duty-status records. A compliance problem, not an annoyance. **Fix first.** |
+   | `materialsStore` | Materials logged against a job. Feeds billing. |
+   | `bolStore` | Bills of lading, including customer signatures. |
+   | `ldDayStore` | Long-distance day records. Feeds per-diem and drive-day pay. |
+   | `officeHoursStore` | Office hours entries. Feeds payroll. |
+
+   The pattern to copy, and why deleting is the tempting wrong answer, is written up in
+   [ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md). The reference
+   implementation is `reimbursementStore.ts`. Delete this defect entry only when the
+   last of the five is done.
+
+   **Note the production gap:** the reimbursement fix was hotfixed to `main`
+   (`724e3e1`), but the five above are unfixed on **both** branches, so this is losing
+   crew data in production today, not just in staging.
 
 3. **Estimates created before 2026-07-13 may carry inflated totals. This is known and
    accepted; do not "discover" it and panic.**

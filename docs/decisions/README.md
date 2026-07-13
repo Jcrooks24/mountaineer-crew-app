@@ -48,3 +48,4 @@ written retroactively is a decision log that is already wrong.
 | [0010](0010-wrap-up-anchor.md) | The wrap-up estimate stores an anchor, not a timestamp | Makes the projection live-editable and always creatable. |
 | [0011](0011-no-em-dashes.md) | No em dashes | A house style rule, enforced everywhere. |
 | [0012](0012-docs-mirror-oauth-not-service-account.md) | The docs mirror uses a user token | A service account has no Drive quota. Do not "fix" this into one. |
+| [0013](0013-rejected-queue-work-is-never-deleted.md) | A queue never deletes work the server rejected | It marks it failed and shows the crew member. **Five queues still need this.** |
