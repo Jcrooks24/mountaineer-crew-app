@@ -90,7 +90,7 @@ import { formatMountainTime } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
-import ReturnTripTool from "./ReturnTripTool";
+import WrapUpEstimator from "./WrapUpEstimator";
 import { fireConfetti } from "../lib/confetti";
 
 // Type + billing-math helpers live in lib/employeeHours so BillCalculator
@@ -673,13 +673,20 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     return m;
   }, [sortedEvents]);
 
-  // A "slot" in the editor is either a picked timeline event or a manually
-  // typed HH:MM. Crew picks the manual option when an employee's time
-  // doesn't line up with any logged event (e.g., one person arrived 10
-  // minutes late and there's no per-employee event for that).
+  // A "slot" in the editor is either a picked timeline event, the projected
+  // wrap-up time from the estimator above, or a manually typed HH:MM. Crew
+  // picks the manual option when an employee's time doesn't line up with any
+  // logged event (e.g., one person arrived 10 minutes late and there's no
+  // per-employee event for that).
   const MANUAL_SENTINEL = "__manual__";
+  const WRAPUP_SENTINEL = "__wrapup__";
   type SlotPick = { selection: string; manualTime: string };
   const emptySlot: SlotPick = { selection: "", manualTime: "" };
+
+  // Projected wrap-up time, lifted from <WrapUpEstimator>. Null until the crew
+  // calculates one. Offered as an End option only - it's a projection of when
+  // the job finishes, so it's never a valid start or break bound.
+  const [wrapUpTime, setWrapUpTime] = useState<Date | null>(null);
 
   // First START on the timeline + last FINISH = the natural bookends for a
   // typical crew day. Prefilling these means the common case (everyone
@@ -757,6 +764,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
       return h * 60 + mm;
     }
+    if (slot.selection === WRAPUP_SENTINEL) {
+      // Resolves live: editing the estimator's minutes above moves this end
+      // time with it. The saved row snapshots the value at Save.
+      return wrapUpTime ? wrapUpTime.getHours() * 60 + wrapUpTime.getMinutes() : null;
+    }
     if (slot.selection) {
       const ev = eventById.get(slot.selection);
       if (!ev) return null;
@@ -769,12 +781,24 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
   function slotToHHMM(slot: SlotPick): string {
     if (slot.selection === MANUAL_SENTINEL) return slot.manualTime || "";
+    if (slot.selection === WRAPUP_SENTINEL) {
+      return wrapUpTime ? fmtHHMM(wrapUpTime.toISOString()) : "";
+    }
     if (slot.selection) {
       const ev = eventById.get(slot.selection);
       return ev ? fmtHHMM(ev.timestamp) : "";
     }
     return "";
   }
+
+  // Clock label for the wrap-up option, e.g. "4:35 PM".
+  const wrapUpLabel = useMemo(
+    () =>
+      wrapUpTime
+        ? wrapUpTime.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        : "",
+    [wrapUpTime],
+  );
 
   // Re-used four times in the editor (start, end, each break's start/end).
   // Renders a <select> over events plus a "Manual time…" option that
@@ -785,6 +809,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     slot: SlotPick,
     setSlot: (next: SlotPick) => void,
     placeholder: string,
+    // End slots may also resolve to the projected wrap-up time from the
+    // estimator above (only offered once one has been calculated).
+    allowWrapUp = false,
   ) {
     return (
       <div
@@ -805,6 +832,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         >
           <option value="">{placeholder}</option>
           <option value={MANUAL_SENTINEL}>Manual time…</option>
+          {allowWrapUp && wrapUpTime && (
+            <option value={WRAPUP_SENTINEL}>Est. wrap-up - {wrapUpLabel}</option>
+          )}
           {sortedEvents.map((ev) => (
             <option key={ev.event_id} value={ev.event_id}>
               {eventOptionLabel(ev)}
@@ -1233,9 +1263,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
-      {/* Return-trip tool: drive time back to dispatch + 20% buffer (item 9). */}
-      <ReturnTripTool />
-
       {/* LD driving days: remind whoever enters pay that drive time is a fixed
           rate, not hourly. Driving (RODS/DUTY) events are already excluded from
           the billable Employee Hours below - this note guards the manual entry. */}
@@ -1321,6 +1348,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
 
         <InventoryCountsSummary jobUuid={jobUuid} />
+
+        {/* Wrap-up estimator sits directly above the hours record because it
+            feeds it: the projected wrap-up time is offered as an End option in
+            the start/end pickers below. */}
+        <WrapUpEstimator jobUuid={jobUuid} onWrapUpChange={setWrapUpTime} />
+
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee man-hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
@@ -1395,7 +1428,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>
                 {renderSlotPicker(editStart, (s) => { setEditStart(s); setEditError(null); }, "Start event…")}
                 <span className="small">→</span>
-                {renderSlotPicker(editEnd, (s) => { setEditEnd(s); setEditError(null); }, "End event…")}
+                {renderSlotPicker(editEnd, (s) => { setEditEnd(s); setEditError(null); }, "End event…", true)}
               </div>
 
               <div className="col" style={{ gap: 6 }}>
