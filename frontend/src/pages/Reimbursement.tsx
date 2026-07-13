@@ -3,12 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { BetaTag } from "../components/BetaTag";
 import {
+  discardFailed,
   enqueueExpense,
   enqueueMileage,
   EXPENSE_CATEGORIES,
   fetchHistory,
   newReimbursementUuid,
   renderedRows,
+  retryFailed,
   syncQueue,
   type PaymentMethod,
   type ReimbursementRow,
@@ -61,6 +63,46 @@ export default function Reimbursement() {
 
   async function refresh() {
     setRows(await renderedRows());
+  }
+
+  async function handleRetry(uuid: string) {
+    setErr(null);
+    setOk(null);
+    setBusy(true);
+    try {
+      await retryFailed(uuid);
+      await fetchHistory();
+      await refresh();
+      // renderedRows() is the truth here: if it still shows the row as failed, the
+      // server rejected it a second time and the reason under it is now the fresh
+      // one. Claiming success would be a lie the crew member pays for later.
+      const still = (await renderedRows()).find((r) => r.reimbursement_uuid === uuid);
+      if (still?.status === "failed") {
+        setErr("Still not accepted. See the reason on the submission below.");
+      } else {
+        setOk("Submission sent.");
+      }
+    } catch (e: any) {
+      setErr(e?.message || "Could not send it. Try again when you have signal.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDiscard(uuid: string) {
+    // Deleting a submission destroys its odometer/receipt photos, which exist
+    // nowhere else. Never do it on a single tap.
+    if (!window.confirm("Delete this submission? Its photos are only on this phone and cannot be recovered.")) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await discardFailed(uuid);
+      await refresh();
+      setOk("Submission deleted.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -479,6 +521,54 @@ export default function Reimbursement() {
                       Admin: {r.approval_notes}
                     </div>
                   )}
+                  {r.status === "failed" && (
+                    // The submission is still on this phone, photos and all. Say what
+                    // went wrong and give the crew member both ways out, rather than
+                    // deleting their work and telling nobody.
+                    <div
+                      style={{
+                        marginTop: 6,
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        border: "1px solid var(--danger)",
+                        background: "rgba(255,107,107,0.08)",
+                      }}
+                    >
+                      <div className="small" style={{ color: "var(--danger)", fontWeight: 600 }}>
+                        Not sent: {r.failed_reason || "the server rejected this submission."}
+                      </div>
+                      <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                        It is still saved on this phone. Nothing has been lost.
+                      </div>
+                      <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          onClick={() => handleRetry(r.reimbursement_uuid)}
+                          disabled={busy}
+                          className="btnPrimary"
+                          style={{ padding: "8px 12px" }}
+                        >
+                          Try again
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDiscard(r.reimbursement_uuid)}
+                          disabled={busy}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: 10,
+                            border: "1px solid var(--border)",
+                            background: "transparent",
+                            color: "var(--text)",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Delete it
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -492,13 +582,16 @@ export default function Reimbursement() {
 function StatusBadge({ status }: { status: string }) {
   const color =
     status === "approved" ? "var(--ok)"
-    : status === "rejected" ? "var(--danger)"
+    : status === "rejected" || status === "failed" ? "var(--danger)"
     : status === "pending" ? "var(--muted)"
     : "var(--brand)";
   const label =
     status === "submitted" ? "Submitted"
     : status === "approved" ? "Approved"
     : status === "rejected" ? "Rejected"
+    // "Rejected" is the admin declining a valid claim. "Not sent" is the app
+    // failing to deliver one. Very different news for a crew member.
+    : status === "failed" ? "Not sent"
     : status === "pending" ? "Pending sync"
     : status;
   return <span style={{ color, fontWeight: 700 }}>{label}</span>;
