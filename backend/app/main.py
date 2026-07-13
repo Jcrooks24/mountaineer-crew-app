@@ -142,8 +142,20 @@ async def log_validation_error(request: Request, exc: RequestValidationError):
         f"{'.'.join(str(p) for p in err.get('loc', []))}: {err.get('msg', '?')}"
         for err in exc.errors()
     )
+    # Content-type and length, because "a required form field is missing" has two very
+    # different causes and the field name alone cannot tell them apart: the client
+    # genuinely omitted it, or the body never parsed as a form (empty body, or a
+    # multipart content-type with no boundary) and so EVERY field looks missing.
+    # Header shape only. Never the body: these payloads carry crew notes and photos.
+    ctype = request.headers.get("content-type", "(none)")
+    clen = request.headers.get("content-length", "(none)")
     logger.warning(
-        "[422] %s %s rejected: %s", request.method, request.url.path, fields or "(no detail)"
+        "[422] %s %s rejected: %s | content-type=%s content-length=%s",
+        request.method,
+        request.url.path,
+        fields or "(no detail)",
+        ctype,
+        clen,
     )
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
