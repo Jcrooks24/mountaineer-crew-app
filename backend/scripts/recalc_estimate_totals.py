@@ -1,4 +1,11 @@
-"""One-shot: recompute estimate rolled-up totals from their items.
+"""Optional repair tool: recompute estimate rolled-up totals from their items.
+
+NOT part of any runbook or deploy step. The owner decided against a blanket
+backfill of the historical rows (see docs/RUNBOOKS.md, Known defects #3) - the
+bug is fixed forward, so every estimate created from 2026-07-13 on is correct,
+and an old estimate heals itself as soon as anyone edits or deletes an item on
+it. This script exists only for the case where one specific old estimate's
+numbers look wrong and you want it corrected on the spot.
 
 Why this exists
 ---------------

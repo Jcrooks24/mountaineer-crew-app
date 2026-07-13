@@ -212,13 +212,24 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    therefore silently delete queued field work from crew devices. Tighten server
    validation carefully.
 
-3. **Estimate totals may be stale on old estimates.** Item adds used to double-count
-   the newly added item into the estimate's rolled-up weight and volume (fixed
-   2026-07-13). Item counts were always correct; only the totals inflated, by exactly
-   the last-added item's contribution. Editing or deleting any item recalculated
-   correctly and healed the estimate, so only estimates whose items were **only ever
-   added** are affected. Run `backend/scripts/recalc_estimate_totals.py --dry-run`
-   per environment to see which, then without the flag to fix them.
+3. **Estimates created before 2026-07-13 may carry inflated totals. This is known and
+   accepted; do not "discover" it and panic.**
+
+   Item adds used to double-count the newly added item into the estimate's rolled-up
+   weight and volume. Item counts were always correct; only `estimated_weight_lbs` and
+   `estimated_cubic_ft` inflated, by exactly the last-added item's contribution. Fixed
+   2026-07-13, so **every estimate created from that date forward is correct.**
+
+   **The owner decided not to backfill the historical rows.** Those estimates are
+   quoting documents that have already served their purpose, and any of them heals
+   itself the moment someone edits or deletes an item on it (patch and delete always
+   recalculated correctly).
+
+   The one live consequence: an old estimate feeding the est-vs-actual overage
+   comparison will read slightly heavy on the estimated side. If a specific old
+   estimate's numbers look wrong and you need it corrected, run
+   `backend/scripts/recalc_estimate_totals.py --dry-run` (then without the flag) for
+   that environment. It is idempotent and safe, just not required.
 
 ### Recently fixed (kept briefly so you do not re-report them)
 
