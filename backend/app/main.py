@@ -1,8 +1,13 @@
 # backend/app/main.py
 from __future__ import annotations
 
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.limits import BodySizeLimitMiddleware, MAX_REQUEST_BODY_BYTES
 from app.db.session import Base, engine  # noqa: F401
@@ -86,6 +91,8 @@ from app.routers.off_job import (
 )
 
 
+logger = logging.getLogger("uvicorn.error")
+
 app = FastAPI(title="Mountaineer Crew App Backend")
 
 # Hard ceiling on request body size - rejects oversized uploads with 413
@@ -115,6 +122,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def log_validation_error(request: Request, exc: RequestValidationError):
+    """A 422 means a crew device sent a payload this API refuses, and the default
+    FastAPI response says so only to the client. In the Render log it appears as a
+    bare `422 Unprocessable Entity` with no hint as to which field was wrong, which
+    turns a one-line bug into an archaeology exercise.
+
+    Offline queues make this worse than a normal validation error: a rejected
+    submission is field work that has nowhere else to live, so we need to be able
+    to see, from the log alone, exactly what the device sent that we would not take.
+
+    Logs the failing field and the reason. **Not the value.** These payloads carry
+    crew notes and job names, and the log is not the place for them.
+    """
+    fields = "; ".join(
+        f"{'.'.join(str(p) for p in err.get('loc', []))}: {err.get('msg', '?')}"
+        for err in exc.errors()
+    )
+    logger.warning(
+        "[422] %s %s rejected: %s", request.method, request.url.path, fields or "(no detail)"
+    )
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
 
 @app.on_event("startup")

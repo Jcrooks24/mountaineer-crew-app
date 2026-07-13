@@ -233,11 +233,21 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    reinstall as a troubleshooting step** unless you have confirmed their queues are
    empty.
 
-2. **Queued work is silently dropped after 14 days**, and any 4xx response (other
-   than 401, 403, 408) drops the op with only a console warning. There is no
-   dead-letter store and no user-visible signal. A backend validation change can
-   therefore silently delete queued field work from crew devices. Tighten server
-   validation carefully.
+2. **Queued work is silently dropped after 14 days**, and in most queues any 4xx
+   response (other than 401, 403, 408) drops the op with only a console warning. A
+   backend validation change can therefore silently delete queued field work from crew
+   devices. Tighten server validation carefully.
+
+   **Fixed for reimbursements (2026-07-13).** `reimbursementStore` now marks a rejected
+   submission `failed` and keeps it in the queue, with the reason and a Retry button on
+   the crew member's screen. It leaves the queue only when a person says so. This was
+   not theoretical: a real mileage submission was destroyed by a 422 on staging, which
+   is what prompted the fix.
+
+   **Still unfixed in five queues**, which all keep the original drop-on-4xx behaviour:
+   `bolStore`, `ldDayStore`, `materialsStore`, `officeHoursStore`, `rodsStore`. Port the
+   `markFailed` / `retryFailed` / `discardFailed` pattern from `reimbursementStore` when
+   each one next gets touched.
 
 3. **Estimates created before 2026-07-13 may carry inflated totals. This is known and
    accepted; do not "discover" it and panic.**
