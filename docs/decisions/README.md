@@ -47,3 +47,4 @@ written retroactively is a decision log that is already wrong.
 | [0009](0009-offline-auth-cache.md) | The user is cached and only cleared on an explicit 401 | Otherwise losing signal logs the whole crew out. |
 | [0010](0010-wrap-up-anchor.md) | The wrap-up estimate stores an anchor, not a timestamp | Makes the projection live-editable and always creatable. |
 | [0011](0011-no-em-dashes.md) | No em dashes | A house style rule, enforced everywhere. |
+| [0012](0012-docs-mirror-oauth-not-service-account.md) | The docs mirror uses a user token | A service account has no Drive quota. Do not "fix" this into one. |

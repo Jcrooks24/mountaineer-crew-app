@@ -177,6 +177,30 @@ because carrying the Alembic import surface into the web worker was OOM-killing 
 uvicorn are there for the same reason. See
 [ADR 0002](decisions/0002-render-start-command.md) before touching any of it.
 
+## The docs mirror
+
+There is one CI workflow, and it has nothing to do with shipping code.
+`.github/workflows/sync-docs-to-drive.yml` runs on every push to `staging` and mirrors
+this documentation set into a Google Drive folder as native Google Docs, so a successor
+can read it from a phone without cloning the repo.
+
+```
+push to staging  ->  GitHub Actions  ->  scripts/sync_docs_to_drive.py  ->  Drive folder
+                                          (Google OAuth user token,          (Google Docs)
+                                           GOOGLE_OAUTH_TOKEN_JSON secret)
+```
+
+It is **one way**. The repo is the source of truth, and anything edited in Drive is
+overwritten on the next push. Every mirrored Doc carries a banner saying exactly that.
+The script never touches the app, its database, or the Sheet. The worst a broken sync
+can do is go red in the Actions tab.
+
+Two things about it are counterintuitive and are explained in
+[ADR 0012](decisions/0012-docs-mirror-oauth-not-service-account.md): it authenticates
+as a **user**, not a service account (service accounts have no Drive storage quota),
+and the Drive folder must be **created by the script**, not by hand (the `drive.file`
+scope only sees files this OAuth client created).
+
 ## Things that will surprise you
 
 - The frontend never talks to Google directly. Even the address typeahead goes

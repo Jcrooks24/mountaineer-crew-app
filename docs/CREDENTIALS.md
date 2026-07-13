@@ -114,6 +114,24 @@ since the token lives in each environment's database. If Google access breaks
 across the board and nothing else changed, a revoked or expired token is the first
 thing to check.
 
+## GitHub Actions secrets (repo: `Jcrooks24/mountaineer-crew-app`)
+
+Set under **Settings > Secrets and variables > Actions**.
+
+| Name | Kind | Powers | Breaks what, if wrong or missing |
+|---|---|---|---|
+| `GOOGLE_OAUTH_TOKEN_JSON` | Secret | The docs mirror (`.github/workflows/sync-docs-to-drive.yml`) | The Drive copy of the docs stops updating and the Action goes red. Nothing in the running app is affected. **Its value is the same authorized-user JSON stored in `system_config.google_oauth_token`**, so there is no separate credential to create: copy the existing one. |
+| `DRIVE_DOCS_FOLDER_NAME` | Variable, optional | The Drive folder the docs land in | Defaults to "Mountaineer Crew App Docs". |
+
+The mirror deliberately uses a **user** token rather than a service account. A service
+account has no Drive storage quota and its uploads fail with `storageQuotaExceeded`.
+See [ADR 0012](decisions/0012-docs-mirror-oauth-not-service-account.md) before
+"simplifying" this.
+
+The Drive folder holds a copy of this file. It contains no secret values, but it is a
+complete map of every account and API this system depends on. **Share the folder with
+people who would inherit the system, not with "anyone who has the link."**
+
 ## Rotation notes
 
 | Secret | On rotation |
@@ -121,5 +139,5 @@ thing to check.
 | `JWT_SECRET` | Every crew member is logged out and must sign in again. Do it at night, not mid-move. |
 | `GOOGLE_MAPS_API_KEY` | Safe. Features degrade during the gap; nothing is lost. |
 | `POSTMARK_SERVER_TOKEN` | Safe, but nobody can reset a password until it is back. Verify the sender signature still matches `SMTP_FROM`. |
-| Google OAuth token | Must be repasted per environment. Sheets exports queue up in Postgres and the auto-reconciler backfills them once access returns, so a short outage is recoverable. |
+| Google OAuth token | Must be repasted per environment. **Also update the `GOOGLE_OAUTH_TOKEN_JSON` GitHub Actions secret**, or the docs mirror keeps using the revoked token and its workflow starts failing. Sheets exports queue up in Postgres and the auto-reconciler backfills them once access returns, so a short outage is recoverable. |
 | Database password | Update `DATABASE_URL` on Render. The app will not boot without a valid one. |

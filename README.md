@@ -121,6 +121,11 @@ These are non-negotiable and are enforced in review. Full text in
 | [docs/decisions/](docs/decisions/) | Why things are the way they are. Read before "fixing" something that looks wrong. |
 | [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md) | The pre-promotion test protocol (`/vet`). |
 
+**These docs are also mirrored to Google Drive** as Google Docs, so you can read them on
+a phone without cloning anything. A push to `staging` updates the Drive copy
+automatically (`.github/workflows/sync-docs-to-drive.yml`). The mirror is one way: edit
+the repo, never the Doc, because the Doc is overwritten on the next push.
+
 ## Who to call
 
 <!-- TODO: fill these in. This is the single most important section of this file

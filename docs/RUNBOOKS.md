@@ -194,6 +194,33 @@ of record and the Sheet is a mirror. Events backfill automatically.
 
 ---
 
+## The docs mirror stopped updating
+
+Symptoms: the "Sync docs to Drive" workflow is red in the GitHub Actions tab, or the
+Google Docs in the Drive folder are stale relative to the repo.
+
+**Nothing in the app is broken.** This workflow only copies documentation into Drive.
+Crew are unaffected, no data is at risk, and you can ignore it until convenient.
+
+1. **Open the failed run** in the Actions tab and read the error.
+2. **`invalid_grant` or a refresh failure** means the Google OAuth token was rotated or
+   revoked, and the `GOOGLE_OAUTH_TOKEN_JSON` repository secret still holds the old
+   one. Copy the current authorized-user JSON (the same value in `system_config`, key
+   `google_oauth_token`) into **Settings > Secrets and variables > Actions**.
+3. **`storageQuotaExceeded`** means someone swapped the user token for a service-account
+   key. Service accounts have no Drive storage. Put the user token back and read
+   [ADR 0012](decisions/0012-docs-mirror-oauth-not-service-account.md).
+4. **A 404 on the folder** means someone pointed the script at a folder created by hand
+   in the Drive UI. The `drive.file` scope cannot see those. Let the script create its
+   own folder.
+5. **Re-run it** from the Actions tab ("Run workflow"), which also works for seeding the
+   folder the first time without pushing a doc change.
+
+Data impact: none. The repo is the source of truth; the Drive copy is disposable and is
+rebuilt on the next successful run.
+
+---
+
 ## Known defects
 
 Live bugs that are known and not yet fixed. If you hit one of these, you have found
