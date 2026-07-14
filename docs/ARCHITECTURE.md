@@ -187,6 +187,38 @@ because carrying the Alembic import surface into the web worker was OOM-killing 
 uvicorn are there for the same reason. See
 [ADR 0002](decisions/0002-render-start-command.md) before touching any of it.
 
+## The Google Apps Script layer (`apps_script/`)
+
+**There is a fourth runtime, and it is easy to miss.** Besides the backend, the
+frontend, and the Sheet itself, some behaviour lives in **Google Apps Script bound
+to the spreadsheet** (Sheet → Extensions → Apps Script). It is not deployed by CI,
+it is not imported by anything, and nothing in a code search will lead you to it.
+
+| File | What it does |
+|---|---|
+| `nightly_crew_email.gs` | Time-triggered, ~9 PM Mountain. Reads `JobReports` + `Incidents`, emails new crew feedback and new incidents (with Drive photo links) to management. |
+| `job_summary_sidebar.gs` / `.html` | The Job Summary sidebar in the Sheet. |
+| `reorder_sheets_newest_first.gs` | Sheet housekeeping. |
+
+**The files in this repo are the source of truth, but they are not what runs.**
+What runs is whatever is pasted into the Apps Script editor. Editing the file here
+changes nothing until somebody pastes it in. Treat a change to `apps_script/` as
+undeployed until that happens.
+
+Two consequences worth knowing before you touch the nightly email:
+
+- **State cannot live on the data rows.** The backend exports replace-style: it
+  deletes the row for a `job_uuid` / `incident_uuid` and re-appends it on every save.
+  Any "already emailed" flag written onto a `JobReports` or `Incidents` row would be
+  wiped the next time the crew saved. That is why the script keeps its own
+  `FeedbackEmailLog` and `IncidentEmailLog` tabs, keyed by uuid, which the backend
+  never touches.
+- **It reads the sheet, not the database.** So anything the email needs must actually
+  be exported to a tab first. `incidents.photo_urls` is the cautionary tale: it was a
+  snapshot written when the incident was filed, and crew attach photos *after* filing,
+  so the column was nearly always empty. It is now rebuilt from the `photos` table on
+  export, and tagging a photo re-exports its incident.
+
 ## The docs mirror
 
 There is one CI workflow, and it has nothing to do with shipping code.

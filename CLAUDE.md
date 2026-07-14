@@ -125,6 +125,7 @@ The user-migration script is `ON CONFLICT DO NOTHING`, so a crew member who exis
 - `backend/app/integrations/sheets_export.py`, Google Sheets writes.
 - `backend/app/integrations/drive_upload.py`, Drive uploads (estimator photos have their own folder).
 - `backend/scripts/migrate_users_staging_to_prod.py`, one-shot user migration, idempotent.
+- `apps_script/`, Google Apps Script bound to the Sheet. **A fourth runtime that CI does not deploy**: the files here are the source of truth, but what runs is whatever has been pasted into the Sheet's script editor. `nightly_crew_email.gs` is the ~9 PM crew-feedback + incidents email. A change here is not shipped until somebody pastes it in.
 - `frontend/src/pages/`, route-level screens.
 - `frontend/src/components/`, shared UI.
 - `frontend/src/lib/`, client-side stores and offline queues (`materialsStore`, `estimatorQueue`, etc.).

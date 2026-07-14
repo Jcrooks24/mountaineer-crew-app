@@ -221,6 +221,43 @@ rebuilt on the next successful run.
 
 ---
 
+## The nightly crew email did not arrive
+
+Symptoms: no "Crew feedback" / "Incidents" email around 9 PM Mountain, or it arrived
+with something missing.
+
+**Nothing in the app is broken and no data is at risk.** The email is a **Google Apps
+Script bound to the Sheet**, not backend code, so nothing in Render logs will mention
+it. Source of truth is `apps_script/nightly_crew_email.gs`, but what actually runs is
+whatever is pasted into the Sheet's script editor (Extensions > Apps Script).
+
+1. **Run `dryRunNightlyCrewEmail()`** from the Apps Script editor and read View > Logs.
+   It prints the exact email it would send, sends nothing, and writes nothing. This
+   answers "is it broken, or was there genuinely nothing new" in one step.
+2. **"Nothing new to send"** is usually correct, not a bug. An item is emailed once and
+   then logged; it is only re-sent if the crew edits it. Check the `FeedbackEmailLog` /
+   `IncidentEmailLog` tabs: if a uuid is there with a matching hash, it was already sent.
+3. **A tab was renamed.** The log prints `Tab not found: ...` or `missing column(s): ...`
+   and returns without sending. The script targets **prod** tabs (`JobReports`,
+   `Incidents`); the staging sheet uses the `*Staging` names.
+4. **The trigger is gone or doubled.** Apps Script editor > Triggers (clock icon). Run
+   `installNightlyTrigger()` to fix either case: it deletes existing triggers for both
+   the current and legacy handler names before creating one, so re-running it cannot
+   leave you with two triggers sending two emails.
+5. **The email arrived but an incident had no photo links.** The script reads
+   `Incidents.photo_urls` from the sheet, which the backend rebuilds from the `photos`
+   table whenever a photo is tagged to an incident. If that column is empty in the
+   sheet, the problem is upstream, in the sheet export, not in the script: see
+   "Data is not reaching the Google Sheet".
+6. **Quota.** A Gmail/Apps Script account has a daily send limit. Exceeding it fails the
+   send but the script only writes its log tabs *after* a successful send, so nothing is
+   silently marked as delivered. It goes out on the next run.
+
+Data impact: none. Nothing is deleted, and an email that fails to send stays unlogged
+and is retried the next night.
+
+---
+
 ## Known defects
 
 Live bugs that are known and not yet fixed. If you hit one of these, you have found
