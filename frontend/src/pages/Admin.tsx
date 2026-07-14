@@ -1374,6 +1374,31 @@ const HC_SCHEDULED_COLORS: MonthScheduledPalette = { bg: "#4285f4", fg: "#ffffff
 
 const HC_MONTH_KEY = "crew_admin_hc_month_v1";
 
+// Local-date helpers for the rolling window. All parsing is done as LOCAL noon,
+// never `new Date("2026-07-14")`, which JS parses as UTC midnight and renders as
+// the previous day for anyone west of Greenwich - i.e. everyone here.
+function isoToDate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0);
+}
+
+function dateToIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function todayIso(): string {
+  return dateToIso(new Date());
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const d = isoToDate(iso);
+  d.setDate(d.getDate() + days);
+  return dateToIso(d);
+}
+
 function MonthScheduleView({
   users,
   tags,
@@ -1389,38 +1414,51 @@ function MonthScheduleView({
     return `${y}-${m}-${day}`;
   }, []);
 
-  // year + 0-indexed month, defaulting to today's month.
-  const [year, setYear] = useState<number>(() => new Date().getFullYear());
-  const [month, setMonth] = useState<number>(() => new Date().getMonth());
+  // ROLLING 30-DAY WINDOW, not a calendar month.
+  //
+  // A calendar month is the wrong shape for scheduling: on the 28th, "this month"
+  // is almost entirely the past, and the days you actually need to staff are in a
+  // different view. The window is anchored on a start date that defaults to today,
+  // so the useful days are always on screen.
+  //
+  // The window crosses month boundaries, so every date here is built with real
+  // Date arithmetic. The old code assembled ISO strings by concatenating the
+  // month state, which silently produces "2026-07-33" the moment a window spills
+  // into August.
+  const WINDOW_DAYS = 30;
 
-  const monthLabel = useMemo(
-    () => new Date(year, month, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-    [year, month],
-  );
-
-  // Bounds for the API range query.
-  const lastDayOfMonth = useMemo(() => new Date(year, month + 1, 0).getDate(), [year, month]);
-  const monthStart = `${year}-${String(month + 1).padStart(2, "0")}-01`;
-  const monthEnd = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDayOfMonth).padStart(2, "0")}`;
+  const [anchor, setAnchor] = useState<string>(() => todayIso());
 
   const dayList = useMemo(() => {
     const out: string[] = [];
-    for (let d = 1; d <= lastDayOfMonth; d++) {
-      out.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
-    }
+    for (let i = 0; i < WINDOW_DAYS; i++) out.push(addDaysIso(anchor, i));
     return out;
-  }, [year, month, lastDayOfMonth]);
+  }, [anchor]);
+
+  const rangeStart = dayList[0];
+  const rangeEnd = dayList[dayList.length - 1];
+
+  const rangeLabel = useMemo(() => {
+    const fmt = (iso: string) =>
+      isoToDate(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const endYear = isoToDate(rangeEnd).getFullYear();
+    return `${fmt(rangeStart)} - ${fmt(rangeEnd)}, ${endYear}`;
+  }, [rangeStart, rangeEnd]);
 
   const [rows, setRows] = useState<AvailabilityRangeRow[]>([]);
   const [scheduledRows, setScheduledRows] = useState<ScheduledJobRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // The pinned row. The table is far wider than the screen, so when you scroll
+  // sideways to reach an employee you lose track of which day you are on. Click
+  // the day cell to pin it; click again to unpin.
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${monthStart}&end=${monthEnd}`)
+    apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${rangeStart}&end=${rangeEnd}`)
       .then((r) => {
         if (cancelled) return;
         setRows(r.days);
@@ -1429,7 +1467,7 @@ function MonthScheduleView({
       .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [monthStart, monthEnd]);
+  }, [rangeStart, rangeEnd]);
 
   const tagsById = useMemo(() => {
     const m = new Map<number, EmployeeTag>();
@@ -1542,30 +1580,37 @@ function MonthScheduleView({
     return m;
   }, [scheduledRows]);
 
-  function shiftMonth(delta: number) {
-    let m = month + delta;
-    let y = year;
-    while (m < 0) { m += 12; y -= 1; }
-    while (m > 11) { m -= 12; y += 1; }
-    setMonth(m);
-    setYear(y);
+  // Step by a whole window. A half-window step would be friendlier for spotting
+  // things that straddle the edge, but a full step means paging never shows the
+  // same day twice, which is what admin actually asked for.
+  function shiftWindow(deltaDays: number) {
+    setAnchor((a) => addDaysIso(a, deltaDays));
+    setSelectedDay(null);
   }
 
   function jumpToToday() {
-    const now = new Date();
-    setYear(now.getFullYear());
-    setMonth(now.getMonth());
+    setAnchor(todayIso());
+    setSelectedDay(null);
   }
 
   return (
     <>
-      {/* Row hover highlight. HC mode uses a bright inset ring + darker
-          tint because the plain dark overlay is invisible against the
-          saturated blue Scheduled cells (#4285f4). Non-HC keeps the
-          cheap dark tint since the muted fills read fine with it. */}
+      {/* Row hover + selection. HC mode uses a bright inset ring + darker tint
+          because the plain dark overlay is invisible against the saturated blue
+          Scheduled cells (#4285f4). Non-HC keeps the cheap dark tint since the
+          muted fills read fine with it.
+
+          Selection is a CLASS rule, not an inline style, on purpose: an inline
+          boxShadow on the td would be beaten by nothing and would in turn clobber
+          the hover rule. As a class it composes, and `.selected` is declared after
+          `:hover` so a pinned row stays visibly pinned while the pointer is
+          elsewhere. Selection outranks hover deliberately: the whole point is to
+          keep your eye on ONE row while you scroll a wide table sideways. */}
       <style>{highContrast
-        ? `.month-row:hover td { box-shadow: inset 0 0 0 3px rgba(255,255,255,0.75), inset 0 0 0 9999px rgba(0,0,0,0.30); }`
-        : `.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.22); }`
+        ? `.month-row:hover td { box-shadow: inset 0 0 0 3px rgba(255,255,255,0.75), inset 0 0 0 9999px rgba(0,0,0,0.30); }
+           .month-row.selected td { box-shadow: inset 0 0 0 2px var(--brand), inset 0 0 0 9999px rgba(0,0,0,0.20); }`
+        : `.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.22); }
+           .month-row.selected td { box-shadow: inset 0 0 0 2px var(--brand), inset 0 0 0 9999px rgba(0,0,0,0.14); }`
       }</style>
       <div
         className="card"
@@ -1576,14 +1621,14 @@ function MonthScheduleView({
       >
         <button
           type="button"
-          onClick={() => shiftMonth(-1)}
+          onClick={() => shiftWindow(-WINDOW_DAYS)}
           style={{ padding: "6px 14px", fontSize: 16, fontWeight: 700 }}
-          aria-label="Previous month"
+          aria-label="Previous 30 days"
         >
           ‹
         </button>
         <div className="col" style={{ alignItems: "center", gap: 2 }}>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>{monthLabel}</div>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>{rangeLabel}</div>
           <button
             type="button"
             onClick={jumpToToday}
@@ -1598,9 +1643,9 @@ function MonthScheduleView({
         </div>
         <button
           type="button"
-          onClick={() => shiftMonth(1)}
+          onClick={() => shiftWindow(WINDOW_DAYS)}
           style={{ padding: "6px 14px", fontSize: 16, fontWeight: 700 }}
-          aria-label="Next month"
+          aria-label="Next 30 days"
         >
           ›
         </button>
@@ -1803,26 +1848,48 @@ function MonthScheduleView({
             </thead>
             <tbody>
               {dayList.map((dIso) => {
-                const dNum = parseInt(dIso.slice(8), 10);
-                const dt = new Date(year, month, dNum);
+                // Parse the day from the ISO string itself. It used to be built
+                // from the month/year state, which is wrong the moment a rolling
+                // window crosses into the next month: every spilled day rendered
+                // with the previous month's weekday.
+                const dt = isoToDate(dIso);
+                const dNum = dt.getDate();
+                const mon = dt.toLocaleDateString("en-US", { month: "short" });
                 const dow = dt.toLocaleDateString("en-US", { weekday: "short" });
                 const isToday = dIso === today;
                 const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+                const isSelected = dIso === selectedDay;
                 return (
-                  <tr key={dIso} className="month-row">
+                  <tr
+                    key={dIso}
+                    className={`month-row${isSelected ? " selected" : ""}`}
+                  >
                     <td
+                      // Click-to-select lives on the DAY cell, not the row: every
+                      // other cell already has a click that cycles availability, and
+                      // a row-level handler would fight it.
+                      onClick={() => setSelectedDay((cur) => (cur === dIso ? null : dIso))}
+                      title={isSelected ? "Click to unpin this row" : "Click to pin this row while scrolling"}
                       style={{
                         position: "sticky", left: 0, zIndex: 1,
-                        background: isToday ? "rgba(93,214,194,0.10)" : "var(--card)",
+                        // Must stay OPAQUE: employee columns scroll underneath it.
+                        background: isSelected
+                          ? "var(--card2)"
+                          : isToday
+                            ? "rgba(93,214,194,0.10)"
+                            : "var(--card)",
                         borderBottom: "1px solid var(--border)",
                         borderRight: "1px solid var(--border)",
+                        borderLeft: isSelected ? "3px solid var(--brand)" : "3px solid transparent",
                         padding: "4px 8px", fontSize: 12,
-                        fontWeight: isToday ? 800 : 600,
+                        fontWeight: isToday || isSelected ? 800 : 600,
                         color: isToday ? "var(--brand)" : (isWeekend ? "var(--muted)" : "var(--text)"),
                         whiteSpace: "nowrap",
+                        cursor: "pointer",
+                        userSelect: "none",
                       }}
                     >
-                      {dNum}{" "}
+                      {mon} {dNum}{" "}
                       <span style={{ color: "var(--muted)", fontWeight: 400 }}>{dow}</span>
                     </td>
                     {activeUsers.map((u) => {
@@ -1860,28 +1927,45 @@ function MonthScheduleView({
                             minHeight: 26,
                             background: cellBg,
                             cursor: cellBusy === `${u.id}:${dIso}` ? "wait" : "pointer",
-                            // Highlight a conflict (scheduled cell on a
-                            // submitted-availability day) with the
-                            // availability color as a tinted outline.
-                            // Conflict outline: HC saturated bg + white fg
-                            // needs a two-tone stroke that reads on ALL four
-                            // Google fills. A dashed pure-white outline
-                            // paired with a small inset dark ring gives
-                            // visible edges over yellow, red, green, and
-                            // blue alike.
-                            outline:
-                              isScheduled && availColors
-                                ? (highContrast ? `2px dashed #ffffff` : `2px solid ${availColors.fg}`)
-                                : undefined,
-                            outlineOffset:
-                              isScheduled && availColors ? "-2px" : undefined,
-                            boxShadow:
-                              isScheduled && availColors && highContrast
-                                ? "inset 0 0 0 3px rgba(0,0,0,0.35)"
-                                : undefined,
                             verticalAlign: "top",
                           }}
                         >
+                          {/* A scheduled cell paints over the availability color,
+                              so the availability has to come back some other way or
+                              you cannot see that somebody is booked on a day they
+                              said they were unavailable.
+
+                              It used to come back as an OUTLINE around the cell. In
+                              high-contrast that outline was hardcoded white-dashed,
+                              because no single stroke color reads against all four
+                              saturated fills - which meant the one thing the outline
+                              existed to tell you (WHICH availability) was exactly
+                              the thing it threw away. A white ring says "there is a
+                              conflict" and nothing about what kind.
+
+                              A chip carries the actual color instead. It is the
+                              availability color itself, on every theme and in both
+                              contrast modes, so red-on-blue reads as "booked but
+                              unavailable" at a glance. */}
+                          {isScheduled && availColors && (
+                            <span
+                              title={`Availability: ${availColors.label}`}
+                              style={{
+                                display: "inline-block",
+                                width: 10,
+                                height: 10,
+                                borderRadius: 3,
+                                background: availColors.bg,
+                                border: `2px solid ${availColors.fg}`,
+                                boxSizing: "border-box",
+                                marginBottom: 3,
+                                // Keep it legible on the saturated Scheduled fill:
+                                // a hairline of the cell's own text color separates
+                                // the chip from the blue behind it.
+                                outline: `1px solid ${scheduledPalette.fg}`,
+                              }}
+                            />
+                          )}
                           {isScheduled && (
                             <div
                               style={{
@@ -1967,6 +2051,27 @@ function MonthScheduleView({
           />
           <span>Not submitted</span>
         </span>
+        {/* Explain the chip, or it reads as decoration. */}
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              width: 14, height: 14, borderRadius: 3,
+              background: scheduledPalette.bg,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            <span
+              style={{
+                width: 8, height: 8, borderRadius: 2,
+                background: statusPalette.unavailable.bg,
+                border: `2px solid ${statusPalette.unavailable.fg}`,
+                boxSizing: "border-box",
+                outline: `1px solid ${scheduledPalette.fg}`,
+              }}
+            />
+          </span>
+          <span>Chip = their availability on a scheduled day</span>
+        </span>
       </div>
 
       {/* Copy-pasteable reminder for Google Voice SMS. Lists who hasn't
@@ -2004,7 +2109,7 @@ function MonthScheduleView({
               </div>
               {notSubmitted.length > 0 && (
                 <div className="small" style={{ color: "var(--muted)", marginTop: 10 }}>
-                  Not submitted for this month ({notSubmitted.length}):{" "}
+                  Not submitted for this window ({notSubmitted.length}):{" "}
                   <span style={{ color: "var(--text)" }}>{notSubmitted.map((u) => u.name || u.email).join(", ")}</span>
                 </div>
               )}
