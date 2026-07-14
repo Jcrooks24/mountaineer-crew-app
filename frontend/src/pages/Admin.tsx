@@ -371,7 +371,7 @@ function IncidentsAdminTab() {
       ) : (
         <div className="col" style={{ gap: 10 }}>
           {shown.map((inc) => {
-            const color = inc.severity === "major" ? "var(--danger)" : inc.severity === "moderate" ? "#f59e0b" : "var(--ok)";
+            const color = inc.severity === "major" ? "var(--danger)" : inc.severity === "moderate" ? "var(--warn)" : "var(--ok)";
             return (
               <div key={inc.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, opacity: inc.resolved ? 0.6 : 1 }}>
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -4255,7 +4255,7 @@ function SheetSyncHealthCard() {
                       <td style={{ padding: "4px 6px", color: s.tab_exists ? "var(--ok)" : "var(--danger)", fontWeight: 700 }}>
                         {s.tab_exists ? "✓" : "missing"}
                       </td>
-                      <td style={{ padding: "4px 6px", color: s.env_set ? "var(--text)" : "#f59e0b" }} title={s.env_set ? "" : `${s.env_var} not set - using default tab`}>
+                      <td style={{ padding: "4px 6px", color: s.env_set ? "var(--text)" : "var(--warn)" }} title={s.env_set ? "" : `${s.env_var} not set - using default tab`}>
                         {s.env_set ? "yes" : "default"}
                       </td>
                       <td style={{ padding: "4px 6px", color: s.last_error_at ? "var(--danger)" : "var(--muted)" }}>

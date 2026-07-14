@@ -170,8 +170,16 @@ def upsert_job_report(
 
     # Non-raters can't create or change skill ratings. Keep whatever a rater
     # already saved on the existing report (matched by employee name) and drop
-    # anything the non-rater's payload carries. Never wipes a rater's data -
-    # that lives on `existing` and is re-applied here.
+    # anything the non-rater's payload carries.
+    #
+    # `preserve_employee_hours` closes the bypass-by-omission hole: stripping the
+    # rating fields off the entries the payload HAS does nothing if the payload
+    # has no entries at all. A non-rater posting an empty employee_hours list
+    # (delete every row in the editor and save) would otherwise write NULL over
+    # employee_hours_json and take every rating a rater had set with it. So when
+    # a non-rater sends nothing, we keep what is already stored rather than
+    # letting an empty payload erase it.
+    preserve_employee_hours = False
     if not _is_skill_rater(current_user):
         if body.employee_hours:
             prior_by_name: dict = {}
@@ -182,6 +190,8 @@ def upsert_job_report(
                 keep = prior_by_name.get(entry.name)
                 entry.skill_ratings = keep.skill_ratings if keep else None
                 entry.skill_rating = keep.skill_rating if keep else None
+        elif existing and existing.employee_hours_json:
+            preserve_employee_hours = True
         # Job type moved behind the same gate (it decides which skills get
         # rated), so it needs the same server-side enforcement: a non-rater's
         # save preserves the tags a rater set and can't introduce its own. The
@@ -190,11 +200,14 @@ def upsert_job_report(
             _decode_job_type_tags(existing.job_type_tags_json) if existing else None
         ) or []
 
-    employee_hours_json = (
-        json.dumps([e.model_dump() for e in body.employee_hours])
-        if body.employee_hours
-        else None
-    )
+    if preserve_employee_hours:
+        employee_hours_json = existing.employee_hours_json
+    else:
+        employee_hours_json = (
+            json.dumps([e.model_dump() for e in body.employee_hours])
+            if body.employee_hours
+            else None
+        )
     job_type_tags_json = (
         json.dumps(body.job_type_tags) if body.job_type_tags else None
     )

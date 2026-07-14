@@ -4,6 +4,8 @@ import { BetaTag } from "../components/BetaTag";
 import { formatMountainDateTime } from "../lib/time";
 import {
   submitOffJob,
+  retryFailedOffJob,
+  discardFailedOffJob,
   pendingOffJob,
   fetchMyOffJob,
   drainOffJob,
@@ -21,8 +23,14 @@ function todayLocalIso(): string {
 
 const PAY_OPTIONS: PayStructure[] = ["regular", "non_billable", "other"];
 
-// A row is either a synced server entry or a still-queued local one.
-type DisplayRow = OffJobOut & { pending?: boolean };
+// A row is either a synced server entry, a still-queued local one, or one the
+// server permanently refused (failed_at set): still on this phone, waiting on a
+// person, never silently deleted (ADR 0013).
+type DisplayRow = OffJobOut & {
+  pending?: boolean;
+  failed_at?: string;
+  failed_reason?: string;
+};
 
 export default function OffJob() {
   const nav = useNavigate();
@@ -59,8 +67,38 @@ export default function OffJob() {
       notes: p.notes,
       created_at: new Date().toISOString(),
       pending: true,
+      failed_at: p.failed_at,
+      failed_reason: p.failed_reason,
     }));
     return pending;
+  }
+
+  async function retryEntry(entryUuid: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const rejected = await retryFailedOffJob(entryUuid);
+      if (rejected.includes(entryUuid)) {
+        const again = pendingOffJob().find((p) => p.entry_uuid === entryUuid);
+        setErr(`Still not sent: ${again?.failed_reason || "the server rejected it again."}`);
+      } else {
+        setOk("Off-job hours submitted.");
+      }
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function discardEntry(entryUuid: string) {
+    // Confirm-gated: the only path that destroys the entry, and it was never
+    // sent, so there is no other copy.
+    const proceed = window.confirm(
+      "Delete these hours?\n\nThey were never sent to the office, so this permanently removes the only copy.",
+    );
+    if (!proceed) return;
+    discardFailedOffJob(entryUuid);
+    await refresh();
   }
 
   async function refresh() {
@@ -103,7 +141,7 @@ export default function OffJob() {
 
     setBusy(true);
     try {
-      await submitOffJob({
+      const { failedReason } = await submitOffJob({
         entry_uuid: newOffJobUuid(),
         work_date: workDate || null,
         start_time: startTime.trim() || null,
@@ -113,6 +151,15 @@ export default function OffJob() {
         pay_other_note: pay === "other" ? payOther.trim() || null : null,
         notes: notes.trim(),
       });
+      if (failedReason) {
+        // Refused by the server. The hours are still on this phone and listed
+        // below with a Retry, but do not tell somebody their hours are filed
+        // when they are not: these feed payroll.
+        setErr(`Not sent: ${failedReason} The entry is still saved on this phone - retry it below.`);
+        await refresh();
+        setBusy(false);
+        return;
+      }
       setOk(navigator.onLine ? "Off-job hours submitted." : "Saved - will submit when back online.");
       resetForm();
       await refresh();
@@ -212,7 +259,15 @@ export default function OffJob() {
         ) : (
           <div className="col" style={{ gap: 6 }}>
             {rows.map((r) => (
-              <div key={r.entry_uuid} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 10, opacity: r.pending ? 0.7 : 1 }}>
+              <div
+                key={r.entry_uuid}
+                style={{
+                  border: `1px solid ${r.failed_at ? "var(--danger)" : "var(--border)"}`,
+                  borderRadius: 10,
+                  padding: 10,
+                  opacity: r.pending && !r.failed_at ? 0.7 : 1,
+                }}
+              >
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>
                     {r.hours}h
@@ -220,14 +275,50 @@ export default function OffJob() {
                       {PAY_STRUCTURE_LABELS[r.pay_structure]}{r.pay_structure === "other" && r.pay_other_note ? ` - ${r.pay_other_note}` : ""}
                     </span>
                   </span>
-                  <span className="small" style={{ color: "var(--muted)" }}>
-                    {r.pending ? "Syncing…" : (r.work_date || formatMountainDateTime(r.created_at))}
+                  <span
+                    className="small"
+                    style={{ color: r.failed_at ? "var(--danger)" : "var(--muted)", fontWeight: r.failed_at ? 700 : 400 }}
+                  >
+                    {r.failed_at ? "Not sent" : r.pending ? "Syncing…" : (r.work_date || formatMountainDateTime(r.created_at))}
                   </span>
                 </div>
                 <div style={{ fontSize: 14, marginTop: 4 }}>{r.notes}</div>
                 {(r.start_time || r.end_time) && (
                   <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                     {r.start_time || "?"}–{r.end_time || "?"}
+                  </div>
+                )}
+                {r.failed_at && (
+                  <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="small" style={{ color: "var(--muted)" }}>{r.failed_reason}</div>
+                    <div className="small" style={{ marginTop: 4 }}>
+                      It is still saved on this phone. Nothing has been lost.
+                    </div>
+                    <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                      <button
+                        className="btnPrimary"
+                        disabled={busy}
+                        style={{ padding: "8px 14px", fontSize: 13, minHeight: 40 }}
+                        onClick={() => retryEntry(r.entry_uuid)}
+                      >
+                        Retry
+                      </button>
+                      <button
+                        disabled={busy}
+                        style={{
+                          padding: "8px 14px",
+                          fontSize: 13,
+                          minHeight: 40,
+                          borderRadius: 8,
+                          border: "1px solid var(--border)",
+                          background: "transparent",
+                          color: "var(--muted)",
+                        }}
+                        onClick={() => discardEntry(r.entry_uuid)}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

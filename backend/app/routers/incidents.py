@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_current_user, get_db, require_admin
 from app.db.models.incident import Incident
 from app.db.models.user import User
-from app.integrations.sheets_export import export_incident_to_sheets, run_export_in_background
+from app.integrations.sheets_export import schedule_incident_export
 
 
 router = APIRouter(prefix="/api/incidents", tags=["incidents"])
@@ -90,22 +90,24 @@ def _to_out(inc: Incident) -> IncidentOut:
 
 
 def _export(inc: Incident) -> None:
-    run_export_in_background(export_incident_to_sheets, _to_out(inc).model_dump())
+    # Coalesced, not a bare background export: the incident export is
+    # delete-then-append, and photo uploads fire one per photo. Two concurrent
+    # exports for the same incident would each delete, then each append, leaving
+    # two rows for one incident in the admin's sheet. The worker re-reads the DB,
+    # so it does not need the payload.
+    schedule_incident_export(inc.incident_uuid)
 
 
 def export_incident_by_uuid(db: Session, incident_uuid: str) -> None:
     """Re-export one incident to the sheet by uuid. Called from the photo upload
     route when a photo is tagged to an incident: the incident row carries a
     photo_urls column, and photos are almost always attached *after* the incident
-    is filed, so without this the sheet's photo links stay empty forever. Quiet
-    no-op if the incident isn't found (a photo can be tagged to an incident whose
-    own POST is still sitting in the offline queue; that POST exports on arrival)."""
+    is filed, so without this the sheet's photo links stay empty forever.
+
+    Safe to call in a burst (one photo upload each): the export coalesces."""
     uuid = (incident_uuid or "").strip()
-    if not uuid:
-        return
-    inc = db.query(Incident).filter(Incident.incident_uuid == uuid).first()
-    if inc is not None:
-        _export(inc)
+    if uuid:
+        schedule_incident_export(uuid)
 
 
 @router.post("", response_model=IncidentOut, status_code=201)

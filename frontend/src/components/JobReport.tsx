@@ -1268,15 +1268,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       {longDistance && (driveOnly || mixedLd) && (
         <div
           style={{
-            border: "1px solid #f59e0b",
-            background: "rgba(245,158,11,0.12)",
+            border: "1px solid var(--warn)",
+            background: "var(--warn-bg)",
             borderRadius: 10,
             padding: "10px 12px",
             fontSize: 13,
             lineHeight: 1.5,
           }}
         >
-          <strong style={{ color: "#f59e0b" }}>Pay reminder (long-distance driving):</strong>{" "}
+          <strong style={{ color: "var(--warn)" }}>Pay reminder (long-distance driving):</strong>{" "}
           Movers are <strong>not</strong> paid hourly for drive time - long-distance
           driving is paid at a fixed rate. Do not enter drive time as billable/hourly pay.
         </div>

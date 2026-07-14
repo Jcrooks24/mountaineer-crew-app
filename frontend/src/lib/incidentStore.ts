@@ -3,10 +3,25 @@
 // drained (idempotent by incident_uuid) when connectivity returns - mirroring
 // the job-inventory queue.
 
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch } from "../api/client";
+import {
+  CLEARED_FAILURE,
+  failureMark,
+  isPermanentRejection,
+  type MaybeFailed,
+} from "./queueFailure";
 
 export type Severity = "minor" | "moderate" | "major";
 export type Attributable = "yes" | "no" | "unknown";
+
+const FIELD_LABELS: Record<string, string> = {
+  description: "What happened",
+  severity: "Severity",
+  incident_date: "Date",
+  attributed_crew: "Crew member",
+  claim_number: "Claim number",
+  job_uuid: "Job",
+};
 
 export type IncidentPayload = {
   incident_uuid: string;
@@ -35,21 +50,32 @@ export type IncidentOut = IncidentPayload & {
 
 const QUEUE_KEY = "crew_incident_queue_v1";
 
-function loadAll(): IncidentPayload[] {
+// A queued incident, plus the failure mark it carries if the server refused it.
+export type QueuedIncident = IncidentPayload & MaybeFailed;
+
+function loadAll(): QueuedIncident[] {
   try {
     const raw = localStorage.getItem(QUEUE_KEY);
-    return raw ? (JSON.parse(raw) as IncidentPayload[]) : [];
+    return raw ? (JSON.parse(raw) as QueuedIncident[]) : [];
   } catch {
     return [];
   }
 }
 
-function saveAll(q: IncidentPayload[]): void {
+function saveAll(q: QueuedIncident[]): void {
   try {
     localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
   } catch {
     /* quota - noop */
   }
+}
+
+function patch(incidentUuid: string, fields: MaybeFailed): void {
+  saveAll(
+    loadAll().map((x) =>
+      x.incident_uuid === incidentUuid ? { ...x, ...fields } : x,
+    ),
+  );
 }
 
 export function enqueueIncident(p: IncidentPayload): void {
@@ -58,33 +84,70 @@ export function enqueueIncident(p: IncidentPayload): void {
   saveAll(q);
 }
 
-export function pendingIncidents(jobUuid: string): IncidentPayload[] {
+export function pendingIncidents(jobUuid: string): QueuedIncident[] {
   return loadAll().filter((x) => (x.job_uuid || "") === jobUuid);
 }
 
-// Drain queued incidents. Idempotent server-side, so a retry is always safe.
-export async function drainIncidents(): Promise<void> {
-  if (!navigator.onLine) return;
+/**
+ * Drain queued incidents. Idempotent server-side, so a retry is always safe.
+ *
+ * A permanent 4xx does NOT delete the incident (ADR 0013). An incident is a
+ * liability record whose photos exist only on that phone; deleting it because we
+ * sent a payload the API refused destroys the only copy, silently. It is marked
+ * failed instead, skipped by the drain so it cannot wedge the queue behind it,
+ * and surfaced to the crew member with the reason and a Retry.
+ *
+ * Returns the uuids that were rejected on this pass, so a caller that just hit
+ * submit can tell the crew member the truth rather than showing a success toast.
+ */
+export async function drainIncidents(): Promise<string[]> {
+  if (!navigator.onLine) return [];
+  const rejected: string[] = [];
   for (const p of loadAll()) {
+    if (p.failed_at) continue; // waiting on a person, not on the network
     try {
       await apiFetch("/api/incidents", { method: "POST", body: JSON.stringify(p) });
       saveAll(loadAll().filter((x) => x.incident_uuid !== p.incident_uuid));
     } catch (e) {
-      // Permanent client error (bad data) → drop so it can't wedge the queue.
-      // Network / auth / 5xx → stop and retry the whole queue next pass.
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 403 && e.status !== 408) {
-        saveAll(loadAll().filter((x) => x.incident_uuid !== p.incident_uuid));
+      if (isPermanentRejection(e)) {
+        patch(p.incident_uuid, failureMark(e, FIELD_LABELS));
+        rejected.push(p.incident_uuid);
       } else {
-        return;
+        return rejected; // transient: stop, retry the whole queue next pass
       }
     }
   }
+  return rejected;
 }
 
-// Submit an incident: queue for durability, then try to flush immediately.
-export async function submitIncident(p: IncidentPayload): Promise<void> {
+/**
+ * Submit an incident: queue for durability, then try to flush immediately.
+ * Returns the failure reason when the server permanently refused it, so the
+ * caller does not report success over a submission that did not land.
+ */
+export async function submitIncident(p: IncidentPayload): Promise<{ failedReason?: string }> {
   enqueueIncident(p);
-  await drainIncidents();
+  const rejected = await drainIncidents();
+  if (rejected.includes(p.incident_uuid)) {
+    const entry = loadAll().find((x) => x.incident_uuid === p.incident_uuid);
+    return { failedReason: entry?.failed_reason || "The server rejected this report." };
+  }
+  return {};
+}
+
+/** Clear the failed mark so the next drain picks the incident up again. */
+export async function retryFailedIncident(incidentUuid: string): Promise<string[]> {
+  patch(incidentUuid, CLEARED_FAILURE);
+  return drainIncidents();
+}
+
+/**
+ * Explicit, crew-initiated delete of a failed incident. The ONLY way one leaves
+ * the queue without reaching the server. Confirm before calling: this is the
+ * destructive path ADR 0013 exists to keep out of the automatic drain.
+ */
+export function discardFailedIncident(incidentUuid: string): void {
+  saveAll(loadAll().filter((x) => x.incident_uuid !== incidentUuid));
 }
 
 // Retroactive "resolved on site" for an incident still in the offline queue:

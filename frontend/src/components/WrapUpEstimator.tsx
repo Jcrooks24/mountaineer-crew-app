@@ -174,7 +174,9 @@ export default function WrapUpEstimator({ jobUuid, onWrapUpChange }: Props) {
     border: "1px solid var(--border)",
     background: "var(--bg)",
     color: "var(--text)",
-    fontSize: 14,
+    // 16px: anything smaller makes iOS Safari zoom the page on focus and stay
+    // zoomed. See the same note in ActualInventory and index.css.
+    fontSize: 16,
     boxSizing: "border-box",
   };
 

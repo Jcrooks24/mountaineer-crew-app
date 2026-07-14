@@ -1,7 +1,7 @@
 # 0013. A queue never deletes work the server rejected
 
-**Status:** Active. Implemented in `reimbursementStore` only. **Five queues still need
-this.** See "Still to port" below.
+**Status:** Active. Implemented in `reimbursementStore`, `incidentStore`, `offJobStore`,
+and `jobInventoryQueue`. **Six queues still need this.** See "Still to port" below.
 
 ## Context
 
@@ -74,9 +74,21 @@ Translate the server's error into the words the form uses. FastAPI's raw
 `{detail: [{loc: ["body","odometer_start"], msg: "..."}]}` is not something to put in
 front of a crew member on a phone.
 
+## The localStorage variant
+
+`reimbursementStore` is IndexedDB because it carries photo blobs. The plain-localStorage
+queues share the pieces in **`frontend/src/lib/queueFailure.ts`**: the `QueueFailure`
+type, `isPermanentRejection()` (which is where 401/403/408 are held as *transient*), and
+`describeApiError()`. `incidentStore.ts` is the shortest worked example to copy.
+
+One extra trap the localStorage queues have and reimbursements does not: **a stale-entry
+pruner.** `jobInventoryQueue.pruneStale()` drops anything older than 14 days. A failed
+entry must be exempt, or the queue destroys the crew member's work on a timer instead of
+on a 4xx, which is the same outcome by a slower route.
+
 ## Still to port
 
-These five queues all keep the original delete-on-4xx behaviour. Each one can destroy
+These six queues all keep the original delete-on-4xx behaviour. Each one can destroy
 field work exactly as reimbursements did:
 
 | Store | What it can destroy |
@@ -86,10 +98,20 @@ field work exactly as reimbursements did:
 | `bolStore` | Bills of lading, including customer signatures. |
 | `ldDayStore` | Long-distance day records. Feeds per-diem and drive-day pay. |
 | `officeHoursStore` | Office hours entries. Feeds payroll. |
+| `estimatorQueue` | Estimate line items. Feeds the customer's quote. |
 
 Port the pattern when each store is next touched, or as one deliberate sweep. Keep the
 entry in [Known defects](../RUNBOOKS.md#known-defects) accurate as they land, and delete
 it only when the last one is done.
+
+**A warning from this ADR's own first week.** It was written on 2026-07-13. The very next
+release added three new queues (incidents, off-job hours, job inventory), every one of
+them with the banned delete-on-4xx, and the incident queue went further and showed the
+crew member a green *"Incident submitted"* over a report it had just destroyed. Nobody
+was ignoring this document; it simply did not occur to anyone that a *new* queue was in
+scope for a rule phrased as a list of old ones. So: **this rule binds every queue,
+including the one you are about to write.** A new queue that deletes on 4xx is not a
+queue that has yet to be ported. It is a regression.
 
 ## Why it is written down
 

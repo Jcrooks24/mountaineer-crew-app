@@ -10,6 +10,8 @@ import {
   pendingIncidents,
   resolveQueuedIncident,
   resolveSyncedIncident,
+  retryFailedIncident,
+  discardFailedIncident,
   newIncidentUuid,
   newClaimNumber,
   type IncidentOut,
@@ -19,7 +21,7 @@ import {
 
 const SEVERITIES: { value: Severity; label: string; color: string }[] = [
   { value: "minor", label: "Minor", color: "var(--ok)" },
-  { value: "moderate", label: "Moderate", color: "#f59e0b" },
+  { value: "moderate", label: "Moderate", color: "var(--warn)" },
   { value: "major", label: "Major", color: "var(--danger)" },
 ];
 
@@ -67,6 +69,11 @@ export default function IncidentReport({
   const [resolved, setResolved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Bumped whenever the local queue changes. The queued list used to be memoed
+  // on the `status` string, which meant setting status to a value it already
+  // held did not re-render, and a queue edit silently failed to show.
+  const [tick, setTick] = useState(0);
+
   async function refresh() {
     try {
       const list = await fetchJobIncidents(jobUuid);
@@ -76,9 +83,20 @@ export default function IncidentReport({
     }
   }
 
-  useEffect(() => { if (jobUuid) refresh(); /* eslint-disable-next-line */ }, [jobUuid]);
+  // Guard the fetch against a job switch: this component is not keyed on
+  // jobUuid, so a slow GET for the previous job could resolve after the new
+  // job's effect ran and hand the Photos tab the WRONG job's claim numbers to
+  // attach to.
+  useEffect(() => {
+    if (!jobUuid) return;
+    let cancelled = false;
+    fetchJobIncidents(jobUuid)
+      .then((list) => { if (!cancelled) setIncidents(list); })
+      .catch(() => { /* offline - show queued below */ });
+    return () => { cancelled = true; };
+  }, [jobUuid]);
 
-  const queued = useMemo(() => pendingIncidents(jobUuid), [jobUuid, status]);
+  const queued = useMemo(() => pendingIncidents(jobUuid), [jobUuid, status, tick]);
 
   // Surface the union of synced + queued incidents to the parent so it can
   // offer a photo attach target. Deduped by incident_uuid (synced wins).
@@ -139,7 +157,17 @@ export default function IncidentReport({
       photo_urls: [],
     };
     try {
-      await submitIncident(payload);
+      const { failedReason } = await submitIncident(payload);
+      if (failedReason) {
+        // The server refused this payload. The report is NOT lost (it stays in
+        // the queue, marked, and is listed below with Retry), but we must not
+        // claim it was submitted. Telling somebody their incident is filed when
+        // it is not is how a liability record quietly stops existing.
+        setStatus("");
+        setErr(`Not sent: ${failedReason} It is still saved on this phone - see below to retry it.`);
+        setBusy(false);
+        return;
+      }
       setStatus(
         navigator.onLine
           ? `Incident submitted - Claim ${claimNumber}`
@@ -160,10 +188,42 @@ export default function IncidentReport({
     }
   }
 
+  async function retryQueued(uuid: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const rejected = await retryFailedIncident(uuid);
+      if (rejected.includes(uuid)) {
+        const again = pendingIncidents(jobUuid).find((x) => x.incident_uuid === uuid);
+        setErr(`Still not sent: ${again?.failed_reason || "the server rejected it again."}`);
+      } else {
+        setStatus("Incident sent");
+        await refresh();
+      }
+    } finally {
+      setTick((t) => t + 1);
+      setBusy(false);
+    }
+  }
+
+  function discardQueued(uuid: string, claim: string) {
+    // Confirm-gated: this is the only path that destroys the report, and its
+    // photos may exist nowhere else.
+    const ok = window.confirm(
+      `Delete incident ${claim}?\n\nThis permanently removes it from this phone. It was never sent to the office, so there is no other copy.`,
+    );
+    if (!ok) return;
+    discardFailedIncident(uuid);
+    setTick((t) => t + 1);
+  }
+
   // Retroactively mark a still-queued incident resolved on site (edits the
   // offline payload so it syncs already-resolved).
   function markQueuedResolved(uuid: string) {
-    if (resolveQueuedIncident(uuid, true)) setStatus("Marked resolved on site");
+    if (resolveQueuedIncident(uuid, true)) {
+      setStatus("Marked resolved on site");
+      setTick((t) => t + 1);
+    }
   }
 
   // Retroactively mark a synced incident resolved on site (crew endpoint).
@@ -259,15 +319,64 @@ export default function IncidentReport({
         </div>
       )}
 
-      {/* Queued (not yet synced) */}
+      {/* Queued (not yet synced). A `failed_at` entry is one the server refused:
+          it is still here, on this phone, and it leaves only if the crew member
+          retries it or explicitly deletes it (ADR 0013). */}
       {queued.length > 0 && (
         <div className="col" style={{ gap: 6, marginBottom: 10 }}>
           {queued.map((q) => (
-            <IncidentRow key={q.incident_uuid} claimNumber={q.claim_number} severity={q.severity} date={q.incident_date}
-              description={q.description} attributed={q.attributed_crew} resolved={q.resolved}
-              photoCount={photoCounts?.[q.incident_uuid] || 0}
-              onResolve={q.resolved ? undefined : () => markQueuedResolved(q.incident_uuid)}
-              busy={busy} pending />
+            <div key={q.incident_uuid}>
+              <IncidentRow claimNumber={q.claim_number} severity={q.severity} date={q.incident_date}
+                description={q.description} attributed={q.attributed_crew} resolved={q.resolved}
+                photoCount={photoCounts?.[q.incident_uuid] || 0}
+                onResolve={q.resolved || q.failed_at ? undefined : () => markQueuedResolved(q.incident_uuid)}
+                busy={busy} pending failed={!!q.failed_at} />
+              {q.failed_at && (
+                <div
+                  style={{
+                    border: "1px solid var(--danger)",
+                    borderTop: "none",
+                    borderRadius: "0 0 10px 10px",
+                    padding: "8px 10px",
+                  }}
+                >
+                  <div className="small" style={{ color: "var(--danger)", fontWeight: 700 }}>
+                    Not sent
+                  </div>
+                  <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                    {q.failed_reason}
+                  </div>
+                  <div className="small" style={{ marginTop: 4 }}>
+                    It is still saved on this phone. Nothing has been lost.
+                  </div>
+                  <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                    <button
+                      className="btnPrimary"
+                      disabled={busy}
+                      style={{ padding: "8px 14px", fontSize: 13, minHeight: 40 }}
+                      onClick={() => retryQueued(q.incident_uuid)}
+                    >
+                      Retry
+                    </button>
+                    <button
+                      disabled={busy}
+                      style={{
+                        padding: "8px 14px",
+                        fontSize: 13,
+                        minHeight: 40,
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                        background: "transparent",
+                        color: "var(--muted)",
+                      }}
+                      onClick={() => discardQueued(q.incident_uuid, q.claim_number)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -292,7 +401,7 @@ export default function IncidentReport({
 }
 
 function IncidentRow({
-  claimNumber, severity, date, description, attributed, createdAt, reportedBy, resolved, photoCount, pending, onResolve, busy,
+  claimNumber, severity, date, description, attributed, createdAt, reportedBy, resolved, photoCount, pending, failed, onResolve, busy,
 }: {
   claimNumber?: string | null;
   severity: string;
@@ -304,14 +413,24 @@ function IncidentRow({
   resolved?: boolean;
   photoCount?: number;
   pending?: boolean;
+  // The server permanently refused this one. It is not "syncing" and never will
+  // be on its own; it is waiting on a person. Rendered with the reason + Retry.
+  failed?: boolean;
   // When set (and not yet resolved), renders a "Mark resolved on site" button -
   // for the common case where the incident is resolved after it was reported.
   onResolve?: () => void;
   busy?: boolean;
 }) {
-  const color = severity === "major" ? "var(--danger)" : severity === "moderate" ? "#f59e0b" : "var(--ok)";
+  const color = severity === "major" ? "var(--danger)" : severity === "moderate" ? "var(--warn)" : "var(--ok)";
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 10, opacity: pending ? 0.7 : 1 }}>
+    <div
+      style={{
+        border: `1px solid ${failed ? "var(--danger)" : "var(--border)"}`,
+        borderRadius: failed ? "10px 10px 0 0" : 10,
+        padding: 10,
+        opacity: pending && !failed ? 0.7 : 1,
+      }}
+    >
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <span className="row" style={{ gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{severity}</span>
@@ -321,8 +440,12 @@ function IncidentRow({
             </span>
           )}
         </span>
-        <span className="small" style={{ color: "var(--muted)" }}>
-          {pending ? "Syncing…" : (createdAt ? formatMountainDateTime(createdAt) : (date || ""))}
+        <span className="small" style={{ color: failed ? "var(--danger)" : "var(--muted)", fontWeight: failed ? 700 : 400 }}>
+          {failed
+            ? "Not sent"
+            : pending
+              ? "Syncing…"
+              : (createdAt ? formatMountainDateTime(createdAt) : (date || ""))}
         </span>
       </div>
       <div style={{ fontSize: 14, marginTop: 4 }}>{description}</div>

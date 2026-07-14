@@ -8,6 +8,8 @@ import {
   cancelByTempId,
   pendingFor,
   pruneStale,
+  retryFailed,
+  discardFailed,
   type InventoryItemPayload,
   type PackType,
   type QueuedAdd,
@@ -16,7 +18,14 @@ import {
 
 // A rendered row is either a synced server item (positive id) or an
 // optimistic temp row (negative id) still queued for POST.
-type Row = ServerItem & { pending?: boolean };
+// A row is a synced server item, a still-queued local add, or one the server
+// permanently refused (opId + failedReason set). A refused add is NOT deleted -
+// it stays in the queue and is shown with a Retry (ADR 0013).
+type Row = ServerItem & {
+  pending?: boolean;
+  opId?: string;
+  failedReason?: string;
+};
 
 const PACK_TYPES: { value: PackType; label: string }[] = [
   { value: "CP", label: "CP" },
@@ -106,6 +115,8 @@ export default function ActualInventory({
       room: op.payload.room,
       notes: op.payload.notes,
       pending: true,
+      opId: op.id,
+      failedReason: op.failed_reason,
     };
   }
 
@@ -152,11 +163,33 @@ export default function ActualInventory({
         // Swap temp row → server row.
         setRows((prev) => prev.map((r) => (r.id === tempId ? { ...server, pending: false } : r)));
       },
-      (tempId) => {
-        // Permanent rejection: drop the temp row.
-        setRows((prev) => prev.filter((r) => r.id !== tempId));
+      (tempId, reason) => {
+        // Permanent rejection. The item is NOT dropped: it stays queued, marked,
+        // and the row now says why and offers a Retry. Silently deleting it used
+        // to mean an item the crew logged just vanished off the list.
+        setRows((prev) =>
+          prev.map((r) => (r.id === tempId ? { ...r, failedReason: reason } : r)),
+        );
       },
     );
+  }
+
+  async function retryRow(row: Row) {
+    if (!row.opId) return;
+    setErr(null);
+    retryFailed(row.opId);
+    setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, failedReason: undefined } : r)));
+    await drainQueue();
+  }
+
+  function discardRow(row: Row) {
+    if (!row.opId) return;
+    const ok = window.confirm(
+      `Remove "${row.name}"?\n\nIt was never saved to the office, so this deletes the only copy.`,
+    );
+    if (!ok) return;
+    discardFailed(row.opId);
+    setRows((prev) => prev.filter((r) => r.id !== row.id));
   }
 
   const counts = useMemo(() => {
@@ -506,9 +539,9 @@ export default function ActualInventory({
         <div className="small" style={{ color: "var(--muted)" }}>No items logged yet.</div>
       ) : (
         <>
-          <ItemGroup title="Furniture" rows={furnitureRows} onQty={changeQty} onRemove={removeRow} />
-          <ItemGroup title="Boxes" rows={boxRows} onQty={changeQty} onRemove={removeRow} />
-          <ItemGroup title="Chow (loose items)" rows={chowRows} onQty={changeQty} onRemove={removeRow} />
+          <ItemGroup title="Furniture" rows={furnitureRows} onQty={changeQty} onRemove={removeRow} onRetry={retryRow} onDiscard={discardRow} />
+          <ItemGroup title="Boxes" rows={boxRows} onQty={changeQty} onRemove={removeRow} onRetry={retryRow} onDiscard={discardRow} />
+          <ItemGroup title="Chow (loose items)" rows={chowRows} onQty={changeQty} onRemove={removeRow} onRetry={retryRow} onDiscard={discardRow} />
         </>
       )}
     </div>
@@ -537,43 +570,77 @@ function ItemGroup({
   rows,
   onQty,
   onRemove,
+  onRetry,
+  onDiscard,
 }: {
   title: string;
   rows: Row[];
   onQty: (row: Row, delta: number) => void;
   onRemove: (row: Row) => void;
+  onRetry: (row: Row) => void;
+  onDiscard: (row: Row) => void;
 }) {
   if (rows.length === 0) return null;
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ fontWeight: 700, fontSize: 12, color: "var(--muted)", margin: "8px 0 4px" }}>{title}</div>
-      {rows.map((r) => (
+      {rows.map((r) => {
+        const failed = !!r.failedReason;
+        return (
         <div
           key={r.id}
-          className="row"
           style={{
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 8,
             padding: "8px 0",
             borderBottom: "1px solid var(--border)",
-            opacity: r.pending ? 0.6 : 1,
+            opacity: r.pending && !failed ? 0.6 : 1,
           }}
         >
-          <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{r.name}</div>
-            <div className="small" style={{ color: "var(--muted)" }}>
-              {[r.pack_type, r.room, r.notes, r.pending ? "Syncing…" : null].filter(Boolean).join(" · ")}
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{r.name}</div>
+              <div className="small" style={{ color: failed ? "var(--danger)" : "var(--muted)" }}>
+                {[
+                  r.pack_type,
+                  r.room,
+                  r.notes,
+                  failed ? "Not sent" : r.pending ? "Syncing…" : null,
+                ].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+            <div className="row" style={{ gap: 6, alignItems: "center", flex: "0 0 auto" }}>
+              <button type="button" onClick={() => onQty(r, -1)} disabled={r.pending} style={stepBtnSm} aria-label="Decrease">−</button>
+              <span style={{ minWidth: 22, textAlign: "center", fontWeight: 700 }}>{r.qty}</span>
+              <button type="button" onClick={() => onQty(r, 1)} disabled={r.pending} style={stepBtnSm} aria-label="Increase">+</button>
+              <button type="button" onClick={() => onRemove(r)} style={{ color: "var(--danger)", marginLeft: 4 }}>Remove</button>
             </div>
           </div>
-          <div className="row" style={{ gap: 6, alignItems: "center", flex: "0 0 auto" }}>
-            <button type="button" onClick={() => onQty(r, -1)} disabled={r.pending} style={stepBtnSm} aria-label="Decrease">−</button>
-            <span style={{ minWidth: 22, textAlign: "center", fontWeight: 700 }}>{r.qty}</span>
-            <button type="button" onClick={() => onQty(r, 1)} disabled={r.pending} style={stepBtnSm} aria-label="Increase">+</button>
-            <button type="button" onClick={() => onRemove(r)} style={{ color: "var(--danger)", marginLeft: 4 }}>Remove</button>
-          </div>
+          {/* The server refused this add. It is still queued on this phone - it
+              is not deleted behind the crew's back (ADR 0013). */}
+          {failed && (
+            <div style={{ marginTop: 6, paddingLeft: 2 }}>
+              <div className="small" style={{ color: "var(--muted)" }}>{r.failedReason}</div>
+              <div className="small">It is still saved on this phone.</div>
+              <div className="row" style={{ gap: 8, marginTop: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => onRetry(r)}
+                  style={{ padding: "6px 12px", fontSize: 13, minHeight: 40, borderRadius: 8, border: "1px solid var(--brand)", background: "transparent", color: "var(--brand)", fontWeight: 700 }}
+                >
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDiscard(r)}
+                  style={{ padding: "6px 12px", fontSize: 13, minHeight: 40, borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)" }}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -585,7 +652,11 @@ const inputStyle: React.CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--bg)",
   color: "var(--text)",
-  fontSize: 14,
+  // 16px, not 14: iOS Safari auto-zooms the page on focus when an input's
+  // computed font-size is under 16px, and does not zoom back out. index.css sets
+  // this globally for exactly that reason; overriding it here reintroduced the
+  // bug on every field in this form.
+  fontSize: 16,
   boxSizing: "border-box",
 };
 

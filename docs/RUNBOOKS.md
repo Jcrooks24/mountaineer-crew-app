@@ -281,8 +281,9 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    not theoretical: a real mileage submission was destroyed by a 422 on staging, which
    is what prompted the fix.
 
-   **Still unfixed in five queues**, which all keep the original drop-on-4xx behaviour
-   and can each destroy field work the same way:
+   **Fixed in four queues** (`reimbursementStore`, `incidentStore`, `offJobStore`,
+   `jobInventoryQueue`). **Still unfixed in six**, which all keep the original
+   drop-on-4xx behaviour and can each destroy field work the same way:
 
    | Store | What a 4xx can destroy |
    |---|---|
@@ -291,11 +292,19 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    | `bolStore` | Bills of lading, including customer signatures. |
    | `ldDayStore` | Long-distance day records. Feeds per-diem and drive-day pay. |
    | `officeHoursStore` | Office hours entries. Feeds payroll. |
+   | `estimatorQueue` | Estimate line items. Feeds the customer's quote. |
 
    The pattern to copy, and why deleting is the tempting wrong answer, is written up in
    [ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md). The reference
-   implementation is `reimbursementStore.ts`. Delete this defect entry only when the
-   last of the five is done.
+   implementations are `reimbursementStore.ts` (IndexedDB, with photo blobs) and
+   `incidentStore.ts` (localStorage, the simpler one to copy). The shared pieces are in
+   `lib/queueFailure.ts`. Delete this defect entry only when the last of the six is done.
+
+   **How this list went stale once already, so keep it honest:** the ADR was written on
+   2026-07-13, and the same release then shipped three *new* queues (incidents, off-job
+   hours, job inventory) that all had the banned drop-on-4xx behaviour, while this table
+   still said "five". A count that is not updated when a queue is added is worse than no
+   count, because it reads as an audit that was done. If you add a queue, add it here.
 
    **Note the production gap:** the reimbursement fix was hotfixed to `main`
    (`724e3e1`), but the five above are unfixed on **both** branches, so this is losing

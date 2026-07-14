@@ -6,7 +6,21 @@
 // queue survives reloads; the section drains it on mount and merges pending
 // adds into its rendered state. Keyed by job_uuid.
 
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch } from "../api/client";
+import {
+  CLEARED_FAILURE,
+  failureMark,
+  isPermanentRejection,
+  type MaybeFailed,
+} from "./queueFailure";
+
+const FIELD_LABELS: Record<string, string> = {
+  name: "Item name",
+  qty: "Quantity",
+  pack_type: "Pack type",
+  room: "Room",
+  notes: "Notes",
+};
 
 // Box pack type: CP (carrier packed), PBO (packed by owner), NA. Null/"" for
 // furniture. Required on the client when adding a box.
@@ -27,7 +41,7 @@ export type QueuedAdd = {
   jobUuid: string;
   payload: InventoryItemPayload;
   createdAt: string; // ISO
-};
+} & MaybeFailed;
 
 export type ServerItem = {
   id: number;
@@ -80,13 +94,32 @@ export function cancelByTempId(tempId: number): boolean {
   return false;
 }
 
+function patch(opId: string, fields: MaybeFailed): void {
+  saveAll(loadAll().map((o) => (o.id === opId ? { ...o, ...fields } : o)));
+}
+
 export function pendingFor(jobUuid: string): QueuedAdd[] {
   return loadAll().filter((o) => o.jobUuid === jobUuid);
+}
+
+/** Clear the failed mark so the next drain picks the op up again. */
+export function retryFailed(opId: string): void {
+  patch(opId, CLEARED_FAILURE);
+}
+
+/** Explicit, crew-initiated delete of a failed op. The only way one leaves the
+ *  queue without reaching the server. */
+export function discardFailed(opId: string): void {
+  removeOp(opId);
 }
 
 export function pruneStale(): void {
   const cutoff = Date.now() - MAX_AGE_DAYS * 86_400_000;
   const q = loadAll().filter((o) => {
+    // A failed op is waiting on a person, not on the network. Ageing it out would
+    // destroy the crew member's work on a timer, which is the same silent loss
+    // ADR 0013 bans, just slower. It leaves only when they say so.
+    if (o.failed_at) return true;
     const t = Date.parse(o.createdAt);
     return !Number.isFinite(t) || t >= cutoff;
   });
@@ -101,11 +134,14 @@ export function pruneStale(): void {
 // sit in localStorage forever: nothing would mount to drain it, and pruneStale
 // would eventually throw the work away. So the app drains the whole queue on
 // boot and on reconnect, regardless of which tab (or mode) the crew are in.
-// Same failure policy as drain(): permanent 4xx drops the op, anything
-// transient leaves it queued for the next pass.
+// Same failure policy as drain(): a permanent 4xx MARKS the op failed and leaves
+// it in the queue (ADR 0013), anything transient leaves it queued for the next
+// pass. This path has no UI attached, so it must never be the one that destroys
+// an item nobody is watching.
 export async function drainAll(): Promise<void> {
   if (!navigator.onLine) return;
   for (const op of loadAll()) {
+    if (op.failed_at) continue; // waiting on a person, not on the network
     try {
       await apiFetch<ServerItem>(
         `/api/job-inventory/${encodeURIComponent(op.jobUuid)}/items`,
@@ -113,15 +149,8 @@ export async function drainAll(): Promise<void> {
       );
       removeOp(op.id);
     } catch (e) {
-      if (
-        e instanceof ApiError &&
-        e.status >= 400 &&
-        e.status < 500 &&
-        e.status !== 408 &&
-        e.status !== 401 &&
-        e.status !== 403
-      ) {
-        removeOp(op.id);
+      if (isPermanentRejection(e)) {
+        patch(op.id, failureMark(e, FIELD_LABELS));
       } else {
         return;
       }
@@ -130,18 +159,22 @@ export async function drainAll(): Promise<void> {
 }
 
 // Drain queued adds for one job. `onResolved` fires per successful POST so the
-// caller can swap tempId → server id. `onDropped` fires on a permanent 4xx so
-// the caller removes the temp row. Network / 5xx / auth errors leave the op
-// queued for the next pass (an expired token is transient; dropping would lose
-// field work).
+// caller can swap tempId → server id. `onFailed` fires on a permanent 4xx so the
+// caller can render the row as "not sent" with the reason. Network / 5xx / auth
+// errors leave the op queued for the next pass (an expired token is transient;
+// dropping would lose field work).
+//
+// The op is NOT removed on a permanent 4xx (ADR 0013). It stays in the queue,
+// marked, and leaves only when the crew member retries it or discards it.
 export async function drain(
   jobUuid: string,
   onResolved: (tempId: number, server: ServerItem) => void,
-  onDropped: (tempId: number, reason: string) => void,
+  onFailed: (tempId: number, reason: string) => void,
 ): Promise<void> {
   if (!navigator.onLine) return;
   const q = pendingFor(jobUuid);
   for (const op of q) {
+    if (op.failed_at) continue; // waiting on a person, not on the network
     try {
       const server = await apiFetch<ServerItem>(
         `/api/job-inventory/${encodeURIComponent(op.jobUuid)}/items`,
@@ -154,16 +187,10 @@ export async function drain(
       removeOp(op.id);
       onResolved(op.tempId, server);
     } catch (e) {
-      if (
-        e instanceof ApiError &&
-        e.status >= 400 &&
-        e.status < 500 &&
-        e.status !== 408 &&
-        e.status !== 401 &&
-        e.status !== 403
-      ) {
-        removeOp(op.id);
-        onDropped(op.tempId, e.message);
+      if (isPermanentRejection(e)) {
+        const mark = failureMark(e, FIELD_LABELS);
+        patch(op.id, mark);
+        onFailed(op.tempId, mark.failed_reason);
       } else {
         return;
       }

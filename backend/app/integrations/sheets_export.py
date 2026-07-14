@@ -79,6 +79,10 @@ _job_inventory_export_in_flight: Set[str] = set()
 _job_inventory_export_rerun: Set[str] = set()
 _job_inventory_export_lock = threading.Lock()
 
+_incident_export_in_flight: Set[str] = set()
+_incident_export_rerun: Set[str] = set()
+_incident_export_lock = threading.Lock()
+
 # Serialize note-cell updates per event_id so rapid edits on the same event
 # (or client retries) can't stack multiple in-memory googleapiclient instances
 # in the pool queue. Bounded so the dict can't grow forever as new event_ids
@@ -2088,8 +2092,14 @@ def _job_inventory_export_worker(job_uuid: str) -> None:
             payload = _build_job_inventory_payload(db, job_uuid)
             if payload is not None:
                 export_job_inventory_to_sheets(db, payload)
+            # Record health the same way the estimate worker does. Without this
+            # the sync's registry entries never get a last_ok_at / last_error, so
+            # Admin > System Check reports it as fine forever and cannot see this
+            # export silently failing.
+            record_sheet_sync(db, "export_job_inventory_to_sheets", True)
         except Exception as exc:
             print(f"[sheets] job-inventory export failed ({job_uuid}): {exc}")
+            record_sheet_sync(db, "export_job_inventory_to_sheets", False, str(exc))
         finally:
             try:
                 db.close()
@@ -2196,6 +2206,90 @@ def export_incident_to_sheets(db: Session, inc: Dict[str, Any]) -> int:
     }
     _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
     return 1
+
+
+def _build_incident_payload(db: Session, incident_uuid: str) -> Optional[Dict[str, Any]]:
+    """Re-read one incident from the DB into the export shape. The worker calls
+    this when it runs, so a coalesced export always writes the latest committed
+    state rather than a stale payload captured at request time."""
+    from app.db.models.incident import Incident  # local import to avoid cycles
+
+    inc = (
+        db.query(Incident)
+        .filter(Incident.incident_uuid == incident_uuid)
+        .first()
+    )
+    if inc is None:
+        return None
+    try:
+        photo_urls = json.loads(inc.photo_urls or "[]")
+    except (ValueError, TypeError):
+        photo_urls = []
+    return {
+        "incident_uuid": inc.incident_uuid,
+        "claim_number": inc.claim_number,
+        "incident_date": inc.incident_date,
+        "job_uuid": inc.job_uuid,
+        "job_name": inc.job_name,
+        "reported_by_name": inc.reported_by_name,
+        "attributed_crew": inc.attributed_crew,
+        "severity": inc.severity,
+        "attributable": inc.attributable,
+        "description": inc.description,
+        "est_cost": inc.est_cost,
+        "resolved": inc.resolved,
+        "notes": inc.notes,
+        "photo_urls": photo_urls,
+        "created_at": inc.created_at.isoformat() if inc.created_at else "",
+    }
+
+
+def _incident_export_worker(incident_uuid: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_incident_payload(db, incident_uuid)
+            if payload is not None:
+                export_incident_to_sheets(db, payload)
+            record_sheet_sync(db, "export_incident_to_sheets", True)
+        except Exception as exc:
+            print(f"[sheets] incident export failed ({incident_uuid}): {exc}")
+            record_sheet_sync(db, "export_incident_to_sheets", False, str(exc))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _incident_export_lock:
+            if incident_uuid in _incident_export_rerun:
+                _incident_export_rerun.discard(incident_uuid)
+                continue
+            _incident_export_in_flight.discard(incident_uuid)
+            return
+
+
+def schedule_incident_export(incident_uuid: str) -> None:
+    """Coalesce repeated exports for the same incident into one in-flight worker
+    with at most one pending rerun.
+
+    This MUST be used instead of firing export_incident_to_sheets directly.
+    The export is replace-style (delete every row for this incident_uuid, then
+    append one), and every photo tagged to an incident triggers another export so
+    its photo_urls column stays current. Uploading a batch of photos therefore
+    fires several exports at once; with two pool workers they interleave as
+    A.delete, B.delete (finds nothing to delete), A.append, B.append, and the
+    incident ends up in the admin's sheet TWICE. Coalescing collapses the burst
+    into one write of the final state."""
+    if not incident_uuid:
+        return
+    with _incident_export_lock:
+        if incident_uuid in _incident_export_in_flight:
+            _incident_export_rerun.add(incident_uuid)
+            return
+        _incident_export_in_flight.add(incident_uuid)
+    _EXPORT_POOL.submit(_incident_export_worker, incident_uuid)
 
 
 # ── Admin entry-status sweep ─────────────────────────────────────────────────
