@@ -52,7 +52,7 @@ class UserAdminResponse(BaseModel):
     phone: Optional[str] = None
     role: str
     is_active: bool
-    is_crew_lead: bool = False
+    is_skill_rater: bool = False
     tag_ids: List[int] = []
     alias_count: int = 0
     # Free-form text the crew maintains on their availability page. Surfaced
@@ -66,7 +66,7 @@ class UserAdminResponse(BaseModel):
 class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
     role: Optional[str] = None
-    is_crew_lead: Optional[bool] = None
+    is_skill_rater: Optional[bool] = None
     name: Optional[str] = None
     phone: Optional[str] = None
 
@@ -102,7 +102,7 @@ def _user_with_tags(
         phone=user.phone,
         role=user.role,
         is_active=user.is_active,
-        is_crew_lead=bool(user.is_crew_lead),
+        is_skill_rater=bool(user.is_skill_rater),
         tag_ids=tag_ids,
         alias_count=alias_count,
         scheduling_notes=user.scheduling_notes or "",
@@ -147,14 +147,16 @@ def update_user(
 
     if payload.is_active is not None:
         user.is_active = payload.is_active
-    # Three roles: user (crew), crew_lead (gated skill/job-type + hours verify),
-    # admin. Unknown values are ignored so a bad client can't set a junk role.
+    # Three roles: user (crew), crew_lead (hours verify), admin. Unknown values
+    # are ignored so a bad client can't set a junk role. Note crew_lead does not
+    # grant skill rating - that is the separate is_skill_rater designation below.
     if payload.role is not None and payload.role in ("user", "crew_lead", "admin"):
         user.role = payload.role
-    # Skill-rating designation (independent of role). No self-lockout concern
-    # since it grants a capability rather than removing access.
-    if payload.is_crew_lead is not None:
-        user.is_crew_lead = payload.is_crew_lead
+    # Skill-rating designation (independent of role, see ADR 0014). No
+    # self-lockout concern since it grants a capability rather than removing
+    # access.
+    if payload.is_skill_rater is not None:
+        user.is_skill_rater = payload.is_skill_rater
     if payload.name is not None:
         user.name = payload.name.strip() or None
     if payload.phone is not None:

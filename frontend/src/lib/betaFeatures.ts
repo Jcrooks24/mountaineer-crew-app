@@ -31,7 +31,7 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   "overagePrompt",
   "multiPhoto",
   "incidentReporting",
-  "crewLead",
+  "skillRater",
   "offJobHours",
   "chowVolume",
   "returnTrip",

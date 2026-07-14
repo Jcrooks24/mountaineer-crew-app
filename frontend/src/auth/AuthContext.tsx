@@ -9,9 +9,9 @@ export type User = {
   name?: string | null;
   role?: string;
   is_active?: boolean;
-  // Admin-set flag gating who can view/fill skill ratings on the Job Report
-  // (distinct from the crew_lead role, which also grants report submit powers).
-  is_crew_lead?: boolean;
+  // Admin-set flag gating who can view/fill the job type + skill ratings on the
+  // Job Report. Independent of role: the crew_lead role does not grant it.
+  is_skill_rater?: boolean;
   profile_photo?: string | null;
   scheduling_notes?: string;
 };
@@ -30,10 +30,13 @@ export type DirectoryEntry = {
 export type PreviewRole = "crew_lead" | "skill_rater" | "crew";
 const STAGING = import.meta.env.VITE_STAGING === "true";
 const PREVIEW_KEY = "mm_preview_role_v1";
-const PREVIEW_OVERRIDES: Record<PreviewRole, { role: string; is_crew_lead: boolean }> = {
-  crew_lead: { role: "crew_lead", is_crew_lead: false },
-  skill_rater: { role: "user", is_crew_lead: true },
-  crew: { role: "user", is_crew_lead: false },
+// Note crew_lead previews with is_skill_rater false: that is the whole point of
+// ADR 0014 - a lead who has not been designated a rater sees no skill rows and
+// no job-type picker. Preview it to confirm that.
+const PREVIEW_OVERRIDES: Record<PreviewRole, { role: string; is_skill_rater: boolean }> = {
+  crew_lead: { role: "crew_lead", is_skill_rater: false },
+  skill_rater: { role: "user", is_skill_rater: true },
+  crew: { role: "user", is_skill_rater: false },
 };
 
 type AuthState = {
@@ -192,7 +195,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // previewing as crew can still switch back.
   const canPreview = STAGING && user?.role === "admin";
 
-  // The role/is_crew_lead the rest of the app sees. When previewing, overlay
+  // The role/is_skill_rater the rest of the app sees. When previewing, overlay
   // the chosen role onto the real user (id/name/email stay real). The cached
   // profile is never overwritten with a previewed role - only server responses
   // are saved via setUser.
@@ -200,7 +203,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!user) return null;
     if (!canPreview || !previewRole) return user;
     const o = PREVIEW_OVERRIDES[previewRole];
-    return { ...user, role: o.role, is_crew_lead: o.is_crew_lead };
+    return { ...user, role: o.role, is_skill_rater: o.is_skill_rater };
   }, [user, canPreview, previewRole]);
 
   const value = useMemo(

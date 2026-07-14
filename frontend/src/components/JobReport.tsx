@@ -287,16 +287,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const nav = useNavigate();
   const { user } = useAuth();
 
-  // Crew Lead gating: skill ratings + job type are crew-lead (or admin) tasks.
-  // Regular crew fill the rest of the report (it syncs cross-device, so a lead
-  // can finish + submit from their own device). Editing is gated on an
-  // admin-set designation only - either the crew_lead/admin role or the
-  // dedicated is_crew_lead flag an admin sets per person. There is deliberately
-  // no self-assess escape hatch: skills stay view-only for everyone else so a
-  // non-designated crew member can't rate the crew.
-  const canLead =
-    user?.role === "admin" || user?.role === "crew_lead" || !!user?.is_crew_lead;
-  const leadEditable = canLead;
+  // Skill-rater gating: the job type and the per-employee skill ratings are
+  // editable only by admins and people an admin has explicitly designated a
+  // skill rater. The crew_lead role does NOT grant this (ADR 0014) - rating the
+  // crew is a smaller, more deliberate job than leading it, so leads are raters
+  // only when an admin says so. Everyone else fills the rest of the report as
+  // normal (it syncs cross-device, so a rater can finish it from their own
+  // device). There is deliberately no self-assess escape hatch. Mirrored
+  // server-side in job_report.py::_is_skill_rater.
+  const canRate = user?.role === "admin" || !!user?.is_skill_rater;
 
   // Long-distance documents: PODS + BOL (with multi-day trip linking).
   const [bolStatus, setBolStatus] = useState<string>("");
@@ -1283,7 +1282,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
-      {/* Overage check - self-hides unless this job has a linked estimate. */}
+      {/* Estimate reference - self-hides unless this job has a linked estimate. */}
       <OverageCheck
         jobUuid={jobUuid}
         value={data.overage_note}
@@ -1307,20 +1306,20 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             below, so the crew must pick it before the skill rows are meaningful. */}
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
           Job type<BetaTag feature="jobTypeTags" />
-          <BetaTag feature="crewLead" style={{ marginTop: 0 }} />
+          <BetaTag feature="skillRater" style={{ marginTop: 0 }} />
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           {ht.jobTypeHint}
         </div>
-        <LeadGate leadEditable={leadEditable} what="job type" />
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)", opacity: leadEditable ? 1 : 0.55 }}>
+        <RaterGate canRate={canRate} what="job type" />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)", opacity: canRate ? 1 : 0.55 }}>
           {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
             const active = data.job_type_tags.includes(tag);
             return (
               <button
                 key={tag}
                 type="button"
-                disabled={!leadEditable}
+                disabled={!canRate}
                 onClick={() => {
                   setData((prev) => ({
                     ...prev,
@@ -1338,7 +1337,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 400,
                   fontSize: 13,
-                  cursor: leadEditable ? "pointer" : "not-allowed",
+                  cursor: canRate ? "pointer" : "not-allowed",
                 }}
               >
                 {tag}
@@ -1347,7 +1346,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           })}
         </div>
 
-        <InventoryCountsSummary jobUuid={jobUuid} />
+        {/* Inventory is logged on long-distance jobs only (ADR 0015). On a local
+            job there is no Inventory tab, so this line would be a permanent
+            "none logged yet" pointing at a tab the crew can't see. */}
+        {longDistance && <InventoryCountsSummary jobUuid={jobUuid} />}
 
         {/* Wrap-up estimator sits directly above the hours record because it
             feeds it: the projected wrap-up time is offered as an End option in
@@ -1357,7 +1359,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee man-hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
-          {leadEditable && <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />}
+          {canRate && <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />}
         </div>
         {/* Non-billable time is no longer a per-entry toggle here - it goes in
             the off-job hours report so payroll and billing stay clean. */}
@@ -1366,10 +1368,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           non-billable or off-job time (shop work, errands, anything not billed to
           this job), use <strong>Profile → Log Off-Job Hours</strong> instead.
         </div>
-        {/* Skill ratings are visible only to skill raters (crew leads / admins /
-            is_crew_lead). Regular crew don't see the hint or the per-employee
-            stars at all - not just a disabled version. */}
-        {relevantSkills.length > 0 && leadEditable && ht.skillsHint && (
+        {/* Skill ratings are visible only to admins and designated skill raters.
+            Everyone else (including crew leads) doesn't see the hint or the
+            per-employee stars at all - not just a disabled version. */}
+        {relevantSkills.length > 0 && canRate && ht.skillsHint && (
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
             {ht.skillsHint}
           </div>
@@ -1541,7 +1543,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                         {" "}(actual {emp.hours.toFixed(2)}h)
                       </span>
                     </div>
-                    {leadEditable && (
+                    {canRate && (
                       <div style={{ marginTop: 6 }}>
                         <EmployeeSkillRatings
                           skills={relevantSkills}
@@ -2164,16 +2166,16 @@ function EmployeeSkillRatings({
   );
 }
 
-// Crew-lead gate for skill ratings / job type. Regular crew see a lock note with
-// a "no crew lead here" self-assessment escape hatch; leads/admins (or once
-// self-assessment is on) see nothing and edit normally.
-function LeadGate({ leadEditable, what }: { leadEditable: boolean; what: string }) {
-  if (leadEditable) return null;
+// Skill-rater gate for the job type / skill ratings. Anyone who is not a
+// designated rater sees a lock note instead of the controls - there is no
+// self-assessment escape hatch. Raters and admins see nothing and edit normally.
+function RaterGate({ canRate, what }: { canRate: boolean; what: string }) {
+  if (canRate) return null;
   return (
     <div style={{ border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
       <div className="small" style={{ color: "var(--muted)" }}>
-        A crew lead handles the {what} for this job. Ask an admin to grant crew-lead
-        access if you need to fill this in.
+        A designated skill rater handles the {what} for this job. Ask an admin for
+        skill-rater access if you need to fill this in.
       </div>
     </div>
   );
@@ -2434,9 +2436,21 @@ function InventoryCountsSummary({ jobUuid }: { jobUuid: string }) {
   );
 }
 
-// Overage conversation: when this job has a linked estimate, compare the
-// actual inventory (furniture/boxes) against it, surface the estimate's access
-// notes, and - when actual runs over - prompt the crew to note what changed.
+// What the office estimated for this job, shown to the crew for reference.
+//
+// This used to compare the estimate's item counts against the actual inventory
+// the crew logged and flag an overage. That comparison is gone: the item lists
+// on the estimate side come from SmartMoving, where inventory is not reliably
+// entered, so "actual vs estimated items" was measuring the estimator's data
+// entry rather than the job. The comparison that does hold up is estimated vs
+// actual man-hours, and that already lives under Total man-hours below - it is
+// deliberately not duplicated here.
+//
+// So this card is now informational: the estimate's numbers, its access and
+// special-item notes (the part crew actually act on), and a free-text note for
+// anything that came in different. The note still lands in the `overage_note`
+// column of the JobReports sheet.
+//
 // Self-hides when there is no linked estimate (by-job 404) or on any fetch
 // error, so it never blocks the report.
 type ByJobEstimate = {
@@ -2463,7 +2477,6 @@ function OverageCheck({
   const { settings } = useTheme();
   const ht = settings.helpTexts;
   const [est, setEst] = useState<ByJobEstimate | "none" | null>(null);
-  const [counts, setCounts] = useState<{ furniture: number; boxes: number } | null>(null);
 
   useEffect(() => {
     if (!jobUuid) { setEst("none"); return; }
@@ -2472,11 +2485,6 @@ function OverageCheck({
     apiFetch<ByJobEstimate>(`/api/estimates/by-job/${encodeURIComponent(jobUuid)}`)
       .then((e) => { if (!cancelled) setEst(e); })
       .catch(() => { if (!cancelled) setEst("none"); }); // 404 / error = no linked estimate → hide
-    apiFetch<{ furniture_count: number; box_count: number }>(
-      `/api/job-inventory/${encodeURIComponent(jobUuid)}`,
-    )
-      .then((r) => { if (!cancelled) setCounts({ furniture: r.furniture_count, boxes: r.box_count }); })
-      .catch(() => {});
     return () => { cancelled = true; };
   }, [jobUuid]);
 
@@ -2484,32 +2492,38 @@ function OverageCheck({
 
   const estFurniture = est.items.filter((i) => !isBoxItem(i.name)).reduce((s, i) => s + (i.qty || 0), 0);
   const estBoxes = est.items.filter((i) => isBoxItem(i.name)).reduce((s, i) => s + (i.qty || 0), 0);
-  const actFurniture = counts?.furniture ?? 0;
-  const actBoxes = counts?.boxes ?? 0;
-  const overFurniture = actFurniture - estFurniture;
-  const overBoxes = actBoxes - estBoxes;
-  const isOver = overFurniture > 0 || overBoxes > 0;
-  const hasActual = counts != null && actFurniture + actBoxes > 0;
+  const hasItems = estFurniture + estBoxes > 0;
   const hasAccess = est.origin_access_notes || est.destination_access_notes || est.special_items_notes;
 
   return (
-    <div className="card" style={{ borderColor: isOver ? "var(--danger)" : undefined }}>
+    <div className="card">
       <div className="row" style={{ alignItems: "center", gap: 8 }}>
-        <div className="sectionTitle" style={{ marginBottom: 0 }}>Estimate check</div>
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Estimate</div>
         <BetaTag feature="overagePrompt" style={{ marginTop: 0 }} />
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-        This job has a linked estimate - confirm the actual inventory and access against it.
+        What the office estimated for this job. Read the access notes before you get there,
+        and flag anything that came in different at the bottom.
       </div>
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-        <CompareTile label="Furniture" est={estFurniture} act={actFurniture} over={overFurniture} />
-        <CompareTile label="Boxes" est={estBoxes} act={actBoxes} over={overBoxes} />
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
+        {est.estimated_hours != null && (
+          <EstTile label="Hours" value={`${est.estimated_hours.toFixed(1)}h`} />
+        )}
+        {hasItems && <EstTile label="Furniture" value={String(estFurniture)} />}
+        {hasItems && <EstTile label="Boxes" value={String(estBoxes)} />}
+        {est.estimated_weight_lbs > 0 && (
+          <EstTile label="Weight" value={`${est.estimated_weight_lbs.toLocaleString()} lb`} />
+        )}
+        {est.estimated_cubic_ft > 0 && (
+          <EstTile label="Volume" value={`${est.estimated_cubic_ft.toLocaleString()} cu ft`} />
+        )}
       </div>
 
-      {!hasActual && (
+      {hasItems && (
         <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-          No actual inventory logged yet - add it on the <strong>Inventory</strong> tab to compare.
+          Item counts are what the estimator entered, not a target to hit. The comparison that
+          matters is estimated vs actual man-hours, shown with the hours below.
         </div>
       )}
 
@@ -2521,38 +2535,30 @@ function OverageCheck({
         </div>
       )}
 
-      {isOver ? (
-        <div style={{ marginTop: 6 }}>
-          <div className="small" style={{ color: "var(--danger)", fontWeight: 700, marginBottom: 6 }}>
-            Actual is over the estimate{overFurniture > 0 ? ` · +${overFurniture} furniture` : ""}
-            {overBoxes > 0 ? ` · +${overBoxes} boxes` : ""}. Note what changed:
-          </div>
-          {ht.overageHint && (
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>{ht.overageHint}</div>
-          )}
-          <textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            rows={3}
-            placeholder="Extra items, packing not expected, different access, added stairs/parking…"
-            style={textareaStyle}
-          />
+      <div style={{ marginTop: 6 }}>
+        <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>
+          Anything different from the estimate?
         </div>
-      ) : hasActual ? (
-        <div className="small" style={{ color: "var(--ok)" }}>Actual inventory is within the estimate.</div>
-      ) : null}
+        {ht.overageHint && (
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>{ht.overageHint}</div>
+        )}
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={3}
+          placeholder="Extra items, packing not expected, different access, added stairs/parking…"
+          style={textareaStyle}
+        />
+      </div>
     </div>
   );
 }
 
-function CompareTile({ label, est, act, over }: { label: string; est: number; act: number; over: number }) {
+function EstTile({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
+    <div style={{ flex: "1 1 30%", minWidth: 90, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
       <div className="small" style={{ color: "var(--muted)" }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 700 }}>
-        {act} <span className="small" style={{ color: "var(--muted)", fontWeight: 400 }}>/ {est} est</span>
-      </div>
-      {over > 0 && <div className="small" style={{ color: "var(--danger)", fontWeight: 600 }}>+{over} over</div>}
+      <div style={{ fontSize: 15, fontWeight: 700 }}>{value}</div>
     </div>
   );
 }

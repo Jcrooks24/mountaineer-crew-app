@@ -131,6 +131,16 @@ Errors are classified: a 4xx (except 401, 403, 408) is treated as permanent and
 the op is dropped; everything else stays queued. 401 and 403 are deliberately
 transient so an expired token never destroys a day of queued field work.
 
+**A queue must not depend on its own UI being mounted.** Most drains hang off the
+component that owns the feature, which is fine right up until that component stops
+rendering. The job-inventory queue drained only from inside `ActualInventory`, so
+hiding the Inventory tab on local jobs
+([ADR 0015](decisions/0015-inventory-logging-is-paused-on-local-jobs.md)) would have
+stranded every item queued offline on a local job: nothing left to mount, nothing left
+to drain, and `pruneStale` deleting it 14 days later. It now exposes `drainAll()`, which
+`App.tsx` calls on boot and on reconnect regardless of tab or mode. Any queue whose UI
+can be feature-flagged off needs the same treatment.
+
 **Why retries are safe:** every payload carries a client-generated UUID, and the
 backend upserts on it. This is the single invariant that makes the whole offline
 design work, and as of 2026-07-13 every queue honors it (the estimator and

@@ -9,9 +9,9 @@ long-term record; prod starts with its own empty tables for those.
 Merge policy: if a crew member's email already exists in prod, the
 prod row is left untouched (prod wins — they've been actively using
 their prod account). Only staging-only emails are inserted. The
-staging row's is_active, role, name, profile_photo, and password_hash
-all carry across so the crew member logs in with the same credentials
-they've been using on staging.
+staging row's is_active, role, name, profile_photo, is_skill_rater, and
+password_hash all carry across so the crew member logs in with the same
+credentials they've been using on staging.
 
 Safe to re-run: ON CONFLICT (email) DO NOTHING.
 
@@ -46,6 +46,10 @@ COPIED_COLUMNS = [
     "role",
     "is_active",
     "profile_photo",
+    # Skill-rater designation. Copied for the same reason as `role`: a
+    # staging-only crew member who was designated a rater should arrive in prod
+    # designated, rather than silently losing the capability at promotion.
+    "is_skill_rater",
 ]
 # Not copied: id (let prod auto-assign), reset_token + reset_token_expiry
 # (any in-flight staging reset is invalidated at promotion — crew re-request

@@ -8,6 +8,7 @@ import ActualInventory from "./components/ActualInventory";
 import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport";
 import { drainIncidents } from "./lib/incidentStore";
 import { drainOffJob } from "./lib/offJobStore";
+import { drainAll as drainJobInventory } from "./lib/jobInventoryQueue";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
@@ -343,6 +344,16 @@ export default function App() {
     setMode(val);
     localStorage.setItem(MODE_KEY, val);
   }
+
+  // The Inventory tab only exists in long-distance mode. Today the mode switch
+  // itself lives on the Timeline tab, so nobody can be sitting on Inventory at
+  // the moment it flips to local - but that is a layout coincidence, not a
+  // guarantee. If the switch ever moves, the crew would land on a tab whose
+  // button is gone and whose body renders nothing: a blank screen with no way
+  // back. Cheap insurance.
+  useEffect(() => {
+    if (!longDistance && tab === "inventory") setTab("timeline");
+  }, [longDistance, tab]);
 
   // Long-distance day plan - drives whether the timeline shows the labor Actions
   // buttons (packing/loading/unloading/unpacking) or the RODS recorder (driving).
@@ -1718,13 +1729,17 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainPendingPhotos(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainPendingPhotos(); void drainJobInventory(); };
     const onOffline = () => setIsOnline(false);
     // Flush any incidents + off-job hours + un-uploaded photos queued while
     // offline on this mount too.
     drainIncidents();
     drainOffJob();
     void drainPendingPhotos();
+    // Inventory adds queued offline: drained here rather than only inside
+    // ActualInventory, because that component no longer mounts on local jobs.
+    // Anything a crew member logged before the tab went away still syncs.
+    void drainJobInventory();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
@@ -1995,9 +2010,14 @@ export default function App() {
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
         </button>
-        <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
-          Inventory
-        </button>
+        {/* Inventory is long-distance only: item-by-item logging was too slow to
+            be worth it on a local job, and it is paused there until there's a
+            faster capture flow (ADR 0015). LD keeps it - the BOL needs it. */}
+        {longDistance && (
+          <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
+            Inventory
+          </button>
+        )}
         <button
           className={"tab " + (tab === "report" ? "active" : "")}
           onClick={() => setTab("report")}
@@ -2772,8 +2792,9 @@ export default function App() {
         </>
       )}
 
-      {/* Inventory: actual inventory (all jobs) + BOL packing inventory (LD load days) */}
-      {tab === "inventory" && (
+      {/* Inventory: actual inventory + BOL packing inventory (LD load days).
+          Long-distance only - see the tab button above. */}
+      {tab === "inventory" && longDistance && (
         jobUuid ? (
           <>
             <ActualInventory jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />

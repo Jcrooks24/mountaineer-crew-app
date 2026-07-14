@@ -151,10 +151,12 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
 
 
 def _is_skill_rater(user: User) -> bool:
-    """Skill ratings are editable only by admins, crew leads, or admin-designated
-    skill raters (users.is_crew_lead). Enforced server-side so a stale or tampered
-    client can't persist skill edits from a regular crew member."""
-    return user.role in ("admin", "crew_lead") or bool(getattr(user, "is_crew_lead", False))
+    """Job type and skill ratings are editable only by admins and admin-designated
+    skill raters (users.is_skill_rater). The crew_lead role does NOT grant this on
+    its own (ADR 0014) - rating is deliberately a smaller group than the leads.
+    Enforced server-side so a stale or tampered client can't persist skill edits
+    from a regular crew member."""
+    return user.role == "admin" or bool(getattr(user, "is_skill_rater", False))
 
 
 @router.post("", response_model=JobReportResponse)
@@ -170,15 +172,23 @@ def upsert_job_report(
     # already saved on the existing report (matched by employee name) and drop
     # anything the non-rater's payload carries. Never wipes a rater's data -
     # that lives on `existing` and is re-applied here.
-    if body.employee_hours and not _is_skill_rater(current_user):
-        prior_by_name: dict = {}
-        if existing:
-            prior = _decode_employee_hours(existing.employee_hours_json) or []
-            prior_by_name = {e.name: e for e in prior}
-        for entry in body.employee_hours:
-            keep = prior_by_name.get(entry.name)
-            entry.skill_ratings = keep.skill_ratings if keep else None
-            entry.skill_rating = keep.skill_rating if keep else None
+    if not _is_skill_rater(current_user):
+        if body.employee_hours:
+            prior_by_name: dict = {}
+            if existing:
+                prior = _decode_employee_hours(existing.employee_hours_json) or []
+                prior_by_name = {e.name: e for e in prior}
+            for entry in body.employee_hours:
+                keep = prior_by_name.get(entry.name)
+                entry.skill_ratings = keep.skill_ratings if keep else None
+                entry.skill_rating = keep.skill_rating if keep else None
+        # Job type moved behind the same gate (it decides which skills get
+        # rated), so it needs the same server-side enforcement: a non-rater's
+        # save preserves the tags a rater set and can't introduce its own. The
+        # crew still submit the report - only these two fields are held back.
+        body.job_type_tags = (
+            _decode_job_type_tags(existing.job_type_tags_json) if existing else None
+        ) or []
 
     employee_hours_json = (
         json.dumps([e.model_dump() for e in body.employee_hours])

@@ -41,7 +41,7 @@ type AdminUser = {
   phone: string | null;
   role: string;
   is_active: boolean;
-  is_crew_lead: boolean;
+  is_skill_rater: boolean;
   tag_ids: number[];
   alias_count: number;
   scheduling_notes: string;
@@ -469,12 +469,12 @@ function EmployeesTab() {
     }
   }
 
-  async function toggleCrewLead(u: AdminUser) {
+  async function toggleSkillRater(u: AdminUser) {
     setBusy(u.id);
     try {
       const updated = await apiFetch<AdminUser>(`/api/admin/users/${u.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ is_crew_lead: !u.is_crew_lead }),
+        body: JSON.stringify({ is_skill_rater: !u.is_skill_rater }),
       });
       setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
     } catch (e: any) {
@@ -686,12 +686,12 @@ function EmployeesTab() {
                       <option value="admin">Admin</option>
                     </select>
                     <button
-                      className={`roster-btn ${u.is_crew_lead ? "ok" : ""}`}
+                      className={`roster-btn ${u.is_skill_rater ? "ok" : ""}`}
                       disabled={busy === u.id}
-                      onClick={() => toggleCrewLead(u)}
-                      title="Allow this person to view and fill out per-employee skill ratings on the Job Report. Admins and crew leads can always rate skills; use this to designate a rater without changing their role."
+                      onClick={() => toggleSkillRater(u)}
+                      title="Allow this person to set the job type and fill out per-employee skill ratings on the Job Report. This is the only way to grant it apart from being an admin: the Crew lead role does NOT include skill rating, so designate each rater here."
                     >
-                      {u.is_crew_lead ? "Skill rater ✓" : "Skill rater"}
+                      {u.is_skill_rater ? "Skill rater ✓" : "Skill rater"}
                     </button>
                     <button
                       className="roster-btn"

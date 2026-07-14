@@ -93,6 +93,42 @@ export function pruneStale(): void {
   saveAll(q);
 }
 
+// Drain every queued add, across all jobs, with no UI callbacks.
+//
+// Inventory logging is hidden on local jobs (ADR 0015), and the per-job drain
+// below only ever runs while ActualInventory is mounted. Without this, an item
+// a crew member queued offline on a local job before that change shipped would
+// sit in localStorage forever: nothing would mount to drain it, and pruneStale
+// would eventually throw the work away. So the app drains the whole queue on
+// boot and on reconnect, regardless of which tab (or mode) the crew are in.
+// Same failure policy as drain(): permanent 4xx drops the op, anything
+// transient leaves it queued for the next pass.
+export async function drainAll(): Promise<void> {
+  if (!navigator.onLine) return;
+  for (const op of loadAll()) {
+    try {
+      await apiFetch<ServerItem>(
+        `/api/job-inventory/${encodeURIComponent(op.jobUuid)}/items`,
+        { method: "POST", body: JSON.stringify({ ...op.payload, item_uuid: op.id }) },
+      );
+      removeOp(op.id);
+    } catch (e) {
+      if (
+        e instanceof ApiError &&
+        e.status >= 400 &&
+        e.status < 500 &&
+        e.status !== 408 &&
+        e.status !== 401 &&
+        e.status !== 403
+      ) {
+        removeOp(op.id);
+      } else {
+        return;
+      }
+    }
+  }
+}
+
 // Drain queued adds for one job. `onResolved` fires per successful POST so the
 // caller can swap tempId → server id. `onDropped` fires on a permanent 4xx so
 // the caller removes the temp row. Network / 5xx / auth errors leave the op

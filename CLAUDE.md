@@ -90,12 +90,14 @@ Only run when explicitly asked to promote.
 
 1. **Merge** `staging` into `main`. Render auto-deploys main on push.
 2. **Verify the start command above is set** on the Render prod service before promoting (only needed once; persists across deploys). Migrations now run as part of the start command, not at app startup.
-3. **Run the user-migration script:** `backend/scripts/migrate_users_staging_to_prod.py`. It copies `email`, `password_hash`, `name`, `role`, `is_active`, `profile_photo` from staging Postgres to prod Postgres with `ON CONFLICT (email) DO NOTHING` (prod wins on conflicts). Crew who only exist on staging would otherwise have to re-register. Dry-run first:
+3. **Run the user-migration script:** `backend/scripts/migrate_users_staging_to_prod.py`. It copies `email`, `password_hash`, `name`, `role`, `is_active`, `profile_photo`, `is_skill_rater` from staging Postgres to prod Postgres with `ON CONFLICT (email) DO NOTHING` (prod wins on conflicts). Crew who only exist on staging would otherwise have to re-register. Dry-run first:
    ```
    STAGING_DATABASE_URL=... PROD_DATABASE_URL=... \
      python backend/scripts/migrate_users_staging_to_prod.py --dry-run
    ```
 4. **Verify prod env vars** (see checklist below). Missing/stale values here have caused a crew member to be unable to reset their password post-promotion.
+
+**One-time, on the promotion that carries [ADR 0014](docs/decisions/0014-skill-rating-is-designated-not-inherited.md):** the `crew_lead` role stops granting skill rating. Every prod crew lead who should keep rating needs the **Skill rater** toggle set on them in Admin → roster. Do this in the same sitting as the promotion, or leads will quietly find the skill rows and the job-type picker gone the next morning. `ON CONFLICT DO NOTHING` means the migration script will not fix it for anyone who already exists in prod.
 
 ### Post-promotion env-var checklist
 
@@ -132,3 +134,4 @@ The user-migration script is `ON CONFLICT DO NOTHING`, so a crew member who exis
 
 - `POST /api/users` is admin-gated. Self-service signup is `POST /api/auth/signup` (pending-approval).
 - `PATCH /api/dvir/{id}/mechanic-sign` is admin-gated, the mechanic-review UI only renders for admins handing the device off.
+- **Skill ratings and the job-type picker** are gated on `role == "admin" or users.is_skill_rater`, a per-person flag an admin sets from the roster. The `crew_lead` role does **not** grant them, see [ADR 0014](docs/decisions/0014-skill-rating-is-designated-not-inherited.md). Enforced server-side in `job_report.py::_is_skill_rater`: a non-rater's report save preserves the skills and job type a rater already set and drops whatever its own payload carries, so hiding the UI is not the only thing standing in the way.
