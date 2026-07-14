@@ -20,18 +20,28 @@ from sqlalchemy.orm import Session
 from app.core.deps import require_admin
 from app.db.models.admin_entry_status import AdminEntryStatus
 from app.db.models.admin_note import AdminNote
+from app.db.models.bol import DigitalBOL
 from app.db.models.dvir import DVIR
+from app.db.models.estimate import Estimate
 from app.db.models.event import Event
+from app.db.models.incident import Incident
 from app.db.models.job_bill import JobBill
+from app.db.models.job_inventory import JobInventoryItem
 from app.db.models.job_report import JobReport
+from app.db.models.long_distance import LdDay
 from app.db.models.materials import MaterialsSubmission
 from app.db.models.photo import Photo
+from app.db.models.reimbursement import Reimbursement
 from app.db.models.system_config import SystemConfig
 from app.db.models.employee_tag import user_employee_tags
 from app.db.models.user import User
 from app.db.models.user_email_alias import UserEmailAlias
 from app.db.session import get_db
-from app.integrations.sheets_export import update_entry_status_in_sheets
+from app.integrations.sheets_export import (
+    _billable_man_hours,
+    estimated_hours_for,
+    update_entry_status_in_sheets,
+)
 
 DVIR_UNITS_KEY = "dvir_units"
 DEFAULT_DVIR_UNITS = ["26INT", "24FR8", "16FORD"]
@@ -395,6 +405,19 @@ def job_search(
 # Per-job summary (all sources collated by job_uuid)
 # ---------------------------
 
+def _decode_json_list(raw: Optional[str]) -> list:
+    """Decode a JSON-array text column, tolerating junk. A malformed blob must not
+    take down the whole job summary: the point of this page is that admin can see a
+    job whole, so one bad column degrades to an empty list rather than a 500."""
+    if not raw:
+        return []
+    try:
+        val = _json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return val if isinstance(val, list) else []
+
+
 def _iso(dt: Any) -> Optional[str]:
     """Serialize a datetime for the JSON response. Naive datetimes in this
     app are stored as UTC; emit them with a trailing 'Z' so the browser
@@ -484,6 +507,61 @@ def job_summary(
         .all()
     )
 
+    # ── Sources added because the summary had fallen behind the app ──────────
+    # Every feature below is keyed by job_uuid and was already reaching the Google
+    # Sheet, but never reached this page, so admin had to open the sheet (or three
+    # tabs of it) to see a job whole. Off-job hours, office hours and availability
+    # are deliberately absent: they are not job-scoped and cannot be joined here.
+    inventory_items = (
+        db.query(JobInventoryItem)
+        .filter(JobInventoryItem.job_uuid == job_uuid)
+        .order_by(JobInventoryItem.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
+        .all()
+    )
+    incidents = (
+        db.query(Incident)
+        .filter(Incident.job_uuid == job_uuid)
+        .order_by(Incident.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
+        .all()
+    )
+    estimate = (
+        db.query(Estimate)
+        .filter(Estimate.job_uuid == job_uuid)
+        .order_by(Estimate.updated_at.desc())
+        .first()
+    )
+    bol = (
+        db.query(DigitalBOL)
+        .filter(DigitalBOL.job_uuid == job_uuid)
+        .order_by(DigitalBOL.updated_at.desc())
+        .first()
+    )
+    ld_days = (
+        db.query(LdDay)
+        .filter(LdDay.job_uuid == job_uuid)
+        .order_by(LdDay.date.asc())
+        .limit(JOB_SUMMARY_CAP)
+        .all()
+    )
+    reimbursements = (
+        db.query(Reimbursement)
+        .filter(Reimbursement.job_uuid == job_uuid)
+        .order_by(Reimbursement.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
+        .all()
+    )
+
+    employee_hours = _json.loads(report.employee_hours_json or "[]") if report else []
+    if not isinstance(employee_hours, list):
+        employee_hours = []
+
+    # Est-vs-actual hours. Same helpers the sheet export uses, so the page and the
+    # spreadsheet can never disagree about a number admin is reading off both.
+    est_hours, est_hours_source = estimated_hours_for(db, job_uuid)
+    actual_man_hours = _billable_man_hours(employee_hours)
+
     # Pick the most-common job_name from events/materials so the header reads cleanly.
     name_candidates: List[str] = []
     for e in events:
@@ -540,16 +618,126 @@ def job_summary(
         "job_report": None if not report else {
             "submitted_by_name": report.submitted_by_name,
             "personal_vehicles": report.personal_vehicles,
+            "bill_personal_vehicles": bool(report.bill_personal_vehicles),
             "dumpster_pct": report.dumpster_pct,
             "recycling_pct": report.recycling_pct,
             "billing_method": report.billing_method,
             "review_candidate": report.review_candidate,
             "hours_match": report.hours_match,
+            "hours_verified": bool(report.hours_verified),
             "hours_mismatch_reason": report.hours_mismatch_reason,
-            "employee_hours": _json.loads(report.employee_hours_json or "[]") or [],
+            # These all existed on the model and in the sheet, and none of them
+            # reached this page. The job type in particular decides which skills
+            # the crew were rated on, so a rating with no job type next to it is
+            # not interpretable.
+            "job_type_tags": _decode_json_list(report.job_type_tags_json),
+            "truck_fullness": _decode_json_list(report.truck_fullness_json),
+            "out_of_town": bool(report.out_of_town),
+            "has_crew_feedback": report.has_crew_feedback,
+            "crew_feedback": report.crew_feedback or "",
+            "overage_note": report.overage_note or "",
+            "employee_hours": employee_hours,
             "created_at": _iso(report.created_at),
             "updated_at": _iso(report.updated_at),
         },
+        # Est vs actual is the whole point of collecting estimated hours, and it
+        # was visible only in the spreadsheet. Null estimate = no baseline, which
+        # the UI renders as "no estimate linked" rather than as a zero.
+        "hours": {
+            "estimated_hours": est_hours,
+            "estimated_hours_source": est_hours_source,
+            "actual_man_hours": actual_man_hours,
+            "hours_delta": (
+                None if est_hours is None else round(actual_man_hours - est_hours, 2)
+            ),
+        },
+        "inventory": {
+            "furniture_count": sum(
+                (it.qty or 0) for it in inventory_items if not it.is_box
+            ),
+            "box_count": sum((it.qty or 0) for it in inventory_items if it.is_box),
+            "items": [
+                {
+                    "name": it.name,
+                    "qty": it.qty,
+                    "is_box": bool(it.is_box),
+                    "pack_type": it.pack_type,
+                    "room": it.room,
+                    "notes": it.notes,
+                    "created_by_name": it.created_by_name,
+                }
+                for it in inventory_items
+            ],
+        },
+        "incidents": [
+            {
+                "incident_uuid": i.incident_uuid,
+                "claim_number": i.claim_number,
+                "incident_date": i.incident_date,
+                "severity": i.severity,
+                "attributable": i.attributable,
+                "attributed_crew": i.attributed_crew,
+                "description": i.description,
+                "est_cost": float(i.est_cost) if i.est_cost is not None else None,
+                "resolved": bool(i.resolved),
+                "notes": i.notes,
+                "reported_by_name": i.reported_by_name,
+                # Rebuilt from the photos table, not the incident's stale snapshot
+                # (photos are attached AFTER the incident is filed).
+                "photo_urls": [
+                    p.drive_url
+                    for p in photos
+                    if p.incident_uuid == i.incident_uuid and p.drive_url
+                ],
+                "created_at": _iso(i.created_at),
+            }
+            for i in incidents
+        ],
+        "estimate": None if not estimate else {
+            "estimate_uuid": estimate.estimate_uuid,
+            "customer_name": estimate.customer_name,
+            "estimated_hours": estimate.estimated_hours,
+            "estimated_weight_lbs": estimate.estimated_weight_lbs,
+            "estimated_cubic_ft": estimate.estimated_cubic_ft,
+            "origin_access_notes": estimate.origin_access_notes,
+            "destination_access_notes": estimate.destination_access_notes,
+            "special_items_notes": estimate.special_items_notes,
+            "item_count": len(estimate.items or []),
+        },
+        "bol": None if not bol else {
+            "bol_id": bol.bol_id,
+            "status": bol.status,
+            "item_count": len(_json.loads(bol.items_json or "[]") or []),
+            "inventory_verified": getattr(bol, "inventory_verified", None),
+            "inventory_note": getattr(bol, "inventory_note", None),
+            "signed_pdf_url": getattr(bol, "signed_pdf_url", None),
+            "updated_at": _iso(bol.updated_at),
+        },
+        # Per-diem and drive days. $50/day/person, so admin needs the count, not
+        # just the flag.
+        "ld_days": [
+            {
+                "driver_name": ld.driver_name,
+                "date": ld.date,
+                "out_of_town": bool(ld.out_of_town),
+                "drive_day": bool(ld.drive_day),
+            }
+            for ld in ld_days
+        ],
+        "reimbursements": [
+            {
+                "reimbursement_uuid": r.reimbursement_uuid,
+                "type": r.type,
+                "user_name": r.user_name,
+                "amount": float(r.amount) if r.amount is not None else None,
+                "category": r.category,
+                "vendor": r.vendor,
+                "status": r.status,
+                "notes": r.notes,
+                "created_at": _iso(r.created_at),
+            }
+            for r in reimbursements
+        ],
         "bill": None if not bill else {
             "saved_by_name": bill.saved_by_name,
             "items": _json.loads(bill.items_json or "[]"),

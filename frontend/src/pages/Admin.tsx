@@ -5987,22 +5987,100 @@ type JobSummary = {
   job_report: {
     submitted_by_name: string | null;
     personal_vehicles: number;
+    bill_personal_vehicles: boolean;
     dumpster_pct: number;
     recycling_pct: number;
     billing_method: string;
     review_candidate: "yes" | "no" | "na";
     hours_match: boolean;
+    hours_verified: boolean;
     hours_mismatch_reason: string | null;
+    job_type_tags: string[];
+    truck_fullness: Array<{ truck?: string; vertical_pct?: number; horizontal_pct?: number }>;
+    out_of_town: boolean;
+    has_crew_feedback: boolean | null;
+    crew_feedback: string;
+    overage_note: string;
     employee_hours: Array<{
+      user_id?: number;
       name: string;
       start: string;
       end: string;
       break_hours: number;
       hours: number;
       non_billable?: boolean;
+      // Per-skill ratings, keyed by skill name. -1 = the rater marked it N/A.
+      skill_ratings?: Record<string, number> | null;
+      skill_rating?: number | null;
     }>;
     updated_at: string | null;
   } | null;
+  hours: {
+    estimated_hours: number | null;
+    estimated_hours_source: string;
+    actual_man_hours: number;
+    hours_delta: number | null;
+  };
+  inventory: {
+    furniture_count: number;
+    box_count: number;
+    items: Array<{
+      name: string;
+      qty: number;
+      is_box: boolean;
+      pack_type: string | null;
+      room: string | null;
+      notes: string | null;
+      created_by_name: string | null;
+    }>;
+  };
+  incidents: Array<{
+    incident_uuid: string;
+    claim_number: string | null;
+    incident_date: string | null;
+    severity: string;
+    attributable: string;
+    attributed_crew: string | null;
+    description: string;
+    est_cost: number | null;
+    resolved: boolean;
+    notes: string | null;
+    reported_by_name: string | null;
+    photo_urls: string[];
+    created_at: string | null;
+  }>;
+  estimate: {
+    estimate_uuid: string;
+    customer_name: string;
+    estimated_hours: number | null;
+    estimated_weight_lbs: number;
+    estimated_cubic_ft: number;
+    origin_access_notes: string | null;
+    destination_access_notes: string | null;
+    special_items_notes: string | null;
+    item_count: number;
+  } | null;
+  bol: {
+    bol_id: string;
+    status: string;
+    item_count: number;
+    inventory_verified: number | null;
+    inventory_note: string | null;
+    signed_pdf_url: string | null;
+    updated_at: string | null;
+  } | null;
+  ld_days: Array<{ driver_name: string; date: string; out_of_town: boolean; drive_day: boolean }>;
+  reimbursements: Array<{
+    reimbursement_uuid: string;
+    type: string;
+    user_name: string;
+    amount: number | null;
+    category: string | null;
+    vendor: string | null;
+    status: string;
+    notes: string | null;
+    created_at: string | null;
+  }>;
   bill: {
     saved_by_name: string | null;
     items: Array<{ label?: string; qty?: number; unit?: string; rate?: number; discount?: number }>;
@@ -6028,6 +6106,16 @@ type JobCandidate = {
   material_count: number;
   entered: boolean;
 };
+
+/** Small labelled number, for the summary's comparison rows. */
+function SummaryTile({ label, value, accent }: { label: string; value: string; accent?: string }) {
+  return (
+    <div style={{ flex: "1 1 120px", minWidth: 110, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
+      <div className="small" style={{ color: "var(--muted)" }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: accent || "var(--text)" }}>{value}</div>
+    </div>
+  );
+}
 
 function JobSummaryTab() {
   const [date, setDate] = useState("");
@@ -6451,14 +6539,18 @@ function JobSummaryTab() {
                           return (
                             <div
                               key={i}
+                              style={{
+                                padding: "8px 0",
+                                borderBottom: "1px solid var(--border)",
+                                opacity: emp.non_billable ? 0.7 : 1,
+                              }}
+                            >
+                            <div
                               className="row"
                               style={{
                                 justifyContent: "space-between",
                                 alignItems: "center",
                                 gap: 8,
-                                padding: "8px 0",
-                                borderBottom: "1px solid var(--border)",
-                                opacity: emp.non_billable ? 0.7 : 1,
                               }}
                             >
                               <div style={{ minWidth: 0 }}>
@@ -6503,6 +6595,33 @@ function JobSummaryTab() {
                                 )}
                               </div>
                             </div>
+                            {/* Skill ratings. They were already in this API response
+                                and simply never rendered, so the entire skills
+                                feature was invisible to the person it was built for.
+                                -1 is the rater's explicit "not applicable", which is
+                                different from unrated (absent) and from a 0. */}
+                            {emp.skill_ratings && Object.keys(emp.skill_ratings).length > 0 && (
+                              <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
+                                {Object.entries(emp.skill_ratings).map(([skill, score]) => (
+                                  <span
+                                    key={skill}
+                                    className="small"
+                                    style={{
+                                      border: "1px solid var(--border)",
+                                      borderRadius: 999,
+                                      padding: "1px 8px",
+                                      color: score === -1 ? "var(--muted)" : "var(--text)",
+                                    }}
+                                  >
+                                    {skill}:{" "}
+                                    <strong style={{ color: score === -1 ? "var(--muted)" : "var(--brand)" }}>
+                                      {score === -1 ? "N/A" : `${score}/5`}
+                                    </strong>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                           );
                         })}
                       </div>
@@ -6613,9 +6732,266 @@ function JobSummaryTab() {
                     ? ` - ${summary.job_report.hours_mismatch_reason}`
                     : ""}
                 </div>
+                {/* Everything below existed on the report and in the sheet, and none
+                    of it reached this page. Job type in particular decides which
+                    skills the crew were rated on, so a rating with no job type
+                    beside it is not interpretable. */}
+                <div className="small">
+                  <strong>Job type:</strong>{" "}
+                  {summary.job_report.job_type_tags.length
+                    ? summary.job_report.job_type_tags.join(", ")
+                    : "not set"}
+                </div>
+                <div className="small">
+                  <strong>Hours verified by lead:</strong> {summary.job_report.hours_verified ? "Yes" : "No"}
+                </div>
+                {summary.job_report.bill_personal_vehicles && (
+                  <div className="small"><strong>Bill personal vehicles:</strong> Yes</div>
+                )}
+                {summary.job_report.out_of_town && (
+                  <div className="small"><strong>Out of town:</strong> Yes</div>
+                )}
+                {summary.job_report.truck_fullness.length > 0 && (
+                  <div className="small">
+                    <strong>Truck fullness:</strong>{" "}
+                    {summary.job_report.truck_fullness
+                      .map((t) => `${t.truck ?? "truck"} ${t.vertical_pct ?? 0}%v / ${t.horizontal_pct ?? 0}%h`)
+                      .join(" · ")}
+                  </div>
+                )}
+                {summary.job_report.overage_note && (
+                  <div className="small" style={{ marginTop: 4 }}>
+                    <strong>Different from estimate:</strong> {summary.job_report.overage_note}
+                  </div>
+                )}
+                {summary.job_report.crew_feedback && (
+                  <div
+                    className="small"
+                    style={{
+                      marginTop: 6,
+                      padding: "6px 8px",
+                      borderLeft: "3px solid var(--brand)",
+                      background: "var(--card2)",
+                    }}
+                  >
+                    <strong>Crew feedback:</strong> {summary.job_report.crew_feedback}
+                  </div>
+                )}
               </div>
             )}
           </div>
+
+          {/* ── Est vs actual hours ──
+              The reason estimated hours are collected at all. It was computed and
+              written to the sheet and never shown here, so the one number the
+              office is judged on lived only in a spreadsheet column. */}
+          <div className="card">
+            <div className="sectionTitle">Hours: estimated vs actual</div>
+            {summary.hours.estimated_hours == null ? (
+              <div className="small" style={{ color: "var(--muted)" }}>
+                No estimate linked and no scheduled duration, so there is no baseline to
+                compare against. Actual man-hours: <strong>{summary.hours.actual_man_hours.toFixed(2)}h</strong>.
+              </div>
+            ) : (
+              <div className="row wrap" style={{ gap: 10, alignItems: "center" }}>
+                <SummaryTile
+                  label={`Estimated (${summary.hours.estimated_hours_source || "unknown"})`}
+                  value={`${summary.hours.estimated_hours.toFixed(2)}h`}
+                />
+                <SummaryTile label="Actual man-hours" value={`${summary.hours.actual_man_hours.toFixed(2)}h`} />
+                <SummaryTile
+                  label={
+                    (summary.hours.hours_delta ?? 0) > 0.01
+                      ? "Over"
+                      : (summary.hours.hours_delta ?? 0) < -0.01
+                        ? "Under"
+                        : "On target"
+                  }
+                  value={`${(summary.hours.hours_delta ?? 0) > 0 ? "+" : ""}${(summary.hours.hours_delta ?? 0).toFixed(2)}h`}
+                  accent={
+                    (summary.hours.hours_delta ?? 0) > 0.01
+                      ? "var(--danger)"
+                      : (summary.hours.hours_delta ?? 0) < -0.01
+                        ? "var(--ok)"
+                        : undefined
+                  }
+                />
+              </div>
+            )}
+          </div>
+
+          {/* ── Incidents ──
+              A liability record. It was reaching the sheet and not this page, so the
+              one screen called "every source for a job" omitted the damage claims. */}
+          <div className="card" style={{ borderColor: summary.incidents.length ? "var(--danger)" : undefined }}>
+            <div className="sectionTitle">Incidents ({summary.incidents.length})</div>
+            {summary.incidents.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>None reported.</div>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                {summary.incidents.map((i) => (
+                  <div
+                    key={i.incident_uuid}
+                    style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 10 }}
+                  >
+                    <div className="row wrap" style={{ gap: 8, alignItems: "center" }}>
+                      <span style={{ fontWeight: 800, fontSize: 12, textTransform: "uppercase", color: i.severity === "major" ? "var(--danger)" : i.severity === "moderate" ? "var(--warn)" : "var(--ok)" }}>
+                        {i.severity}
+                      </span>
+                      {i.claim_number && (
+                        <span className="small" style={{ fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
+                          {i.claim_number}
+                        </span>
+                      )}
+                      {i.resolved && <span className="small" style={{ color: "var(--ok)" }}>Resolved</span>}
+                      <span className="small" style={{ color: "var(--muted)", marginLeft: "auto" }}>{i.incident_date || ""}</span>
+                    </div>
+                    <div style={{ fontSize: 14, marginTop: 4 }}>{i.description || "(no description)"}</div>
+                    <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                      {[
+                        i.reported_by_name ? `Reported by ${i.reported_by_name}` : null,
+                        i.attributed_crew ? `Attributed to ${i.attributed_crew}` : null,
+                        i.attributable && i.attributable !== "unknown" ? `Attributable: ${i.attributable}` : null,
+                        i.est_cost != null ? `Est. cost $${i.est_cost.toFixed(2)}` : null,
+                      ].filter(Boolean).join(" · ")}
+                    </div>
+                    {i.photo_urls.length > 0 && (
+                      <div className="row wrap" style={{ gap: 8, marginTop: 6 }}>
+                        {i.photo_urls.map((u, n) => (
+                          <a key={u} href={u} target="_blank" rel="noreferrer" className="small" style={{ color: "var(--brand)" }}>
+                            Photo {n + 1}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Estimate ── */}
+          <div className="card">
+            <div className="sectionTitle">Estimate</div>
+            {!summary.estimate ? (
+              <div className="small" style={{ color: "var(--muted)" }}>No estimate linked to this job.</div>
+            ) : (
+              <div className="col" style={{ gap: 4 }}>
+                <div className="small"><strong>Customer:</strong> {summary.estimate.customer_name}</div>
+                <div className="row wrap" style={{ gap: 10, marginTop: 4, marginBottom: 4 }}>
+                  {summary.estimate.estimated_hours != null && (
+                    <SummaryTile label="Est. hours" value={`${summary.estimate.estimated_hours.toFixed(1)}h`} />
+                  )}
+                  <SummaryTile label="Items" value={String(summary.estimate.item_count)} />
+                  {summary.estimate.estimated_weight_lbs > 0 && (
+                    <SummaryTile label="Weight" value={`${summary.estimate.estimated_weight_lbs.toLocaleString()} lb`} />
+                  )}
+                  {summary.estimate.estimated_cubic_ft > 0 && (
+                    <SummaryTile label="Volume" value={`${summary.estimate.estimated_cubic_ft.toLocaleString()} cu ft`} />
+                  )}
+                </div>
+                {summary.estimate.origin_access_notes && (
+                  <div className="small"><strong>Origin access:</strong> {summary.estimate.origin_access_notes}</div>
+                )}
+                {summary.estimate.destination_access_notes && (
+                  <div className="small"><strong>Destination access:</strong> {summary.estimate.destination_access_notes}</div>
+                )}
+                {summary.estimate.special_items_notes && (
+                  <div className="small"><strong>Special items:</strong> {summary.estimate.special_items_notes}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── Inventory ── */}
+          <div className="card">
+            <div className="sectionTitle">
+              Inventory ({summary.inventory.furniture_count} furniture · {summary.inventory.box_count} boxes)
+            </div>
+            {summary.inventory.items.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>
+                Nothing logged. Inventory is collected on long-distance jobs only (ADR 0015).
+              </div>
+            ) : (
+              <div className="col" style={{ gap: 2 }}>
+                {summary.inventory.items.map((it, i) => (
+                  <div key={i} className="small">
+                    {it.qty} × {it.name}
+                    <span style={{ color: "var(--muted)" }}>
+                      {[it.pack_type, it.room, it.notes].filter(Boolean).length
+                        ? ` - ${[it.pack_type, it.room, it.notes].filter(Boolean).join(" · ")}`
+                        : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Bill of lading ── */}
+          {summary.bol && (
+            <div className="card">
+              <div className="sectionTitle">Bill of Lading</div>
+              <div className="col" style={{ gap: 4 }}>
+                <div className="small"><strong>Status:</strong> {summary.bol.status}</div>
+                <div className="small"><strong>Items:</strong> {summary.bol.item_count}</div>
+                {summary.bol.inventory_verified != null && (
+                  <div className="small">
+                    <strong>Inventory verified:</strong> {summary.bol.inventory_verified ? "Yes" : "No"}
+                    {summary.bol.inventory_note ? ` - ${summary.bol.inventory_note}` : ""}
+                  </div>
+                )}
+                {summary.bol.signed_pdf_url && (
+                  <a className="small" href={summary.bol.signed_pdf_url} target="_blank" rel="noreferrer" style={{ color: "var(--brand)" }}>
+                    Open signed PDF
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Long-distance per-diem / drive days ──
+              $50 per person per out-of-town day, so admin needs the count, not the flag. */}
+          {summary.ld_days.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Long-distance days</div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+                Per-diem is owed per out-of-town day, per person.
+              </div>
+              <div className="col" style={{ gap: 2 }}>
+                {summary.ld_days.map((d, i) => (
+                  <div key={i} className="small">
+                    {d.date} - <strong>{d.driver_name}</strong>
+                    <span style={{ color: "var(--muted)" }}>
+                      {[d.out_of_town ? "out of town" : null, d.drive_day ? "drive day" : null]
+                        .filter(Boolean).join(" · ") || " no flags"}
+                    </span>
+                  </div>
+                ))}
+                <div className="small" style={{ marginTop: 6, fontWeight: 700 }}>
+                  Per-diem days: {summary.ld_days.filter((d) => d.out_of_town).length} · Drive days:{" "}
+                  {summary.ld_days.filter((d) => d.drive_day).length}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Reimbursements tied to this job ── */}
+          {summary.reimbursements.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Reimbursements ({summary.reimbursements.length})</div>
+              <div className="col" style={{ gap: 4 }}>
+                {summary.reimbursements.map((r) => (
+                  <div key={r.reimbursement_uuid} className="small">
+                    <strong>{r.user_name}</strong> - {r.type}
+                    {r.amount != null ? ` $${r.amount.toFixed(2)}` : ""}
+                    {r.category ? ` (${r.category})` : ""}
+                    <span style={{ color: "var(--muted)" }}> · {r.status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="card">
             <div className="sectionTitle">
