@@ -1,6 +1,7 @@
 # 0017. An offline queue stores the bytes, never a File handle
 
-**Status:** Active. Fixed in `reimbursementStore` and the job-photo queue 2026-07-14.
+**Status:** Active. Applied to **every** queue that persists an image, 2026-07-14.
+Shared implementation: `frontend/src/lib/queuedPhoto.ts`. Do not hand-roll a second one.
 
 ## Context
 
@@ -63,6 +64,26 @@ dead or reads back empty. The entry is marked failed with words a crew member ca
 act on ("the photo can no longer be read from this phone, the rest of the claim is
 safe, retake it") rather than being posted as an empty body. Per
 [ADR 0013](0013-rejected-queue-work-is-never-deleted.md) the claim itself is kept.
+
+## Where it applies (the full sweep)
+
+Every place that persists an image and uploads it later. All of them now go through
+`lib/queuedPhoto.ts`:
+
+| Queue | Carries | Was it broken? |
+|---|---|---|
+| `reimbursementStore` | Receipt + odometer photos | **Yes.** Stored the raw `File`. This is the bug that surfaced. |
+| `photoStore` (via `App.tsx`) | Job photos and **incident photos** | **Yes.** Stored the raw `File`. Had not bitten yet. Incident photos exist on one phone and nowhere else. |
+| `photoStore` (via `bolStore`) | BOL item photos | Safe by accident: it resized through a canvas first, which produces a fresh in-memory Blob and severs the handle. Now byte-backed explicitly rather than by luck. |
+
+Checked and **not** affected, because the `File` is used immediately in the same
+interaction and never persisted: the estimator photo batch (React state, resized on
+upload), the admin catalogue CSV import, the document library upload, and the profile
+photo (converted straight to a data URL).
+
+**The test for whether a new feature needs this:** does a `File` or `Blob` outlive the
+event handler that produced it? If it is written to IndexedDB, localStorage, or any
+queue that drains later, it must be bytes.
 
 ## Consequences
 

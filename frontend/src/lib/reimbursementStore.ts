@@ -11,6 +11,15 @@
 
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
+import {
+  slotToBlob,
+  toQueuedPhoto,
+  UnreadablePhotoError,
+  type PhotoSlot,
+} from "./queuedPhoto";
+
+export { toQueuedPhoto, slotToBlob, UnreadablePhotoError };
+export type { QueuedPhoto } from "./queuedPhoto";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,32 +74,6 @@ export type QueueFailure = {
   failed_reason: string;
 };
 
-/**
- * A photo held in the queue, stored as its own BYTES.
- *
- * It used to be the `File` straight off the <input>. A File is a *reference to a
- * file on disk*, not the data, and this queue persists it to IndexedDB and
- * uploads it later - sometimes days later, across reloads and app restarts. On
- * iOS/WebKit that reference can go stale (the OS moves or reclaims the backing
- * file), and a stale File does not fail loudly: appending it to FormData produces
- * a request whose body never serialises, so the server receives an empty body and
- * reports EVERY form field as missing. That is a 422 on `reimbursement_uuid` -
- * the only field without a default - which reads like the client forgot to send
- * an id it demonstrably did send, and it repeats forever because the dead
- * reference never heals.
- *
- * Storing the bytes makes the queued submission self-contained: once it is in the
- * queue it no longer depends on anything outside it. Structured-clone stores an
- * ArrayBuffer as real bytes, so it survives a reload.
- */
-export type QueuedPhoto = {
-  bytes: ArrayBuffer;
-  type: string; // mime, e.g. "image/jpeg"
-};
-
-/** Legacy entries (queued before the change above) still hold a raw File/Blob. */
-type PhotoSlot = QueuedPhoto | Blob | null | undefined;
-
 // Every field below the uuid/type is optional - crew may submit a partial
 // request and the admin follows up. null means "not provided".
 export type MileageQueueEntry = {
@@ -125,47 +108,6 @@ export type ExpenseQueueEntry = {
   receipt_blob: PhotoSlot;
   created_at: string;
 } & Partial<QueueFailure>;
-
-/** Read a picked File into bytes at ENQUEUE time, while it is still valid. */
-export async function toQueuedPhoto(file: File | Blob | null): Promise<QueuedPhoto | null> {
-  if (!file) return null;
-  const bytes = await file.arrayBuffer();
-  return { bytes, type: file.type || "image/jpeg" };
-}
-
-/**
- * Turn a stored slot back into an uploadable Blob.
- *
- * Throws `UnreadablePhotoError` when a LEGACY entry's File reference has gone
- * stale. Throwing is the point: the alternative is appending a dead reference to
- * FormData and shipping an empty body, which is the silent failure this whole
- * change exists to stop.
- */
-export class UnreadablePhotoError extends Error {}
-
-export async function slotToBlob(slot: PhotoSlot): Promise<Blob | null> {
-  if (!slot) return null;
-  if (slot instanceof Blob) {
-    // Legacy: a File/Blob persisted before we stored bytes. Force it to
-    // materialise NOW so a dead handle surfaces here, as a real error we can
-    // show the crew member, rather than as an empty request body.
-    let bytes: ArrayBuffer;
-    try {
-      bytes = await slot.arrayBuffer();
-    } catch {
-      throw new UnreadablePhotoError("photo could not be read from this device");
-    }
-    if (bytes.byteLength === 0) {
-      throw new UnreadablePhotoError("photo could not be read from this device");
-    }
-    return new Blob([bytes], { type: slot.type || "image/jpeg" });
-  }
-  if (!slot.bytes || slot.bytes.byteLength === 0) {
-    throw new UnreadablePhotoError("photo could not be read from this device");
-  }
-  return new Blob([slot.bytes], { type: slot.type || "image/jpeg" });
-}
-
 
 // Expense categories - fixed list so the form offers a dropdown rather than
 // free text, keeping the Reimbursements sheet filterable for admin.

@@ -27,6 +27,7 @@
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
 import { addPhoto, updatePhoto, listPhotosForJob } from "./photoStore";
+import { slotToBlob, toQueuedPhoto } from "./queuedPhoto";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -725,7 +726,8 @@ export async function captureItemPhoto(
       created_at: new Date().toISOString(),
       mime: "image/jpeg",
       caption,
-      blob: resized,
+      // Bytes, not a Blob handle (ADR 0017).
+      blob: await toQueuedPhoto(resized),
       drive_status: "pending",
     });
   } catch {
@@ -770,7 +772,11 @@ export async function retryPendingPhotos(draft: BOLDraft): Promise<BOLDraft> {
       const s = byId.get(p.photo_id);
       if (!s) { photos.push(p); continue; }
       try {
-        const up = await uploadPhoto(p.photo_id, draft, s.blob, s.caption || p.caption || "BOL item");
+        // Throws if the photo's bytes are gone, rather than uploading an empty
+        // body that the server would reject as a missing photo_id (ADR 0017).
+        const source = await slotToBlob(s.blob);
+        if (!source) throw new Error("Photo has no image data");
+        const up = await uploadPhoto(p.photo_id, draft, source, s.caption || p.caption || "BOL item");
         changed = true;
         try { await updatePhoto(p.photo_id, { drive_status: "uploaded", drive_url: up.drive_url }); } catch {}
         photos.push({ ...p, drive_url: up.drive_url, thumb_url: up.thumb_url, pending: false });

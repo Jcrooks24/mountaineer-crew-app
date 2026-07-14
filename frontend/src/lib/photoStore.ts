@@ -2,13 +2,24 @@
 // Minimal IndexedDB wrapper for storing job photos offline.
 // No external libs. Explicit + debuggable.
 
+import type { PhotoSlot } from "./queuedPhoto";
+
 export type StoredPhoto = {
   id: string;          // uuid
   job_uuid: string;
   created_at: string;  // ISO
   mime: string;
   caption: string;
-  blob: Blob;          // actual image
+  // The image, as BYTES (QueuedPhoto), not as a File/Blob handle. See ADR 0017:
+  // a handle persisted here can go stale on iOS, and a stale handle uploads an
+  // EMPTY body rather than failing, which surfaces as the server complaining that
+  // a field the client provably sent is missing. Legacy rows still hold a raw
+  // Blob; read them through slotToBlob() so a dead one throws instead of
+  // silently producing an empty upload.
+  //
+  // This is the queue behind job photos, INCIDENT photos, and BOL item photos.
+  // Incident photos exist on exactly one phone and nowhere else.
+  blob: PhotoSlot;
   drive_status?: "pending" | "uploaded" | "failed";
   drive_url?: string;
   drive_error?: string;

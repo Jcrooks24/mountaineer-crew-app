@@ -15,6 +15,7 @@ import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
+import { slotToBlob, slotToPreviewBlob, toQueuedPhoto, UnreadablePhotoError } from "./lib/queuedPhoto";
 import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
 import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
 import {
@@ -447,6 +448,36 @@ export default function App() {
 
   // Photos
   const [photos, setPhotos] = useState<StoredPhoto[]>([]);
+  // Object URLs for the local photo previews, keyed by photo id.
+  //
+  // Photos are stored as BYTES now (ADR 0017), so a preview URL cannot be built
+  // synchronously in render the way it could from a Blob. Built here instead, and
+  // revoked when the set changes, which also fixes a leak: the old code called
+  // URL.createObjectURL on every render and never revoked any of them.
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const made: string[] = [];
+    (async () => {
+      const next: Record<string, string> = {};
+      for (const p of photos) {
+        const blob = await slotToPreviewBlob(p.blob);
+        if (!blob) continue; // unreadable: no thumbnail, but the row still renders
+        const url = URL.createObjectURL(blob);
+        made.push(url);
+        next[p.id] = url;
+      }
+      if (cancelled) {
+        made.forEach((u) => URL.revokeObjectURL(u));
+        return;
+      }
+      setPreviewUrls(next);
+    })();
+    return () => {
+      cancelled = true;
+      made.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [photos]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string>("");
   // Pending batch: crew queue several photos (library multi-select and/or one
@@ -1475,14 +1506,13 @@ export default function App() {
     // serialises, so the server sees an empty body. Reading it once, here, while
     // the handle is still live, makes the queued photo self-contained. See
     // ADR 0017.
-    const bytes = await file.arrayBuffer();
     const stored: StoredPhoto = {
       id: photoId,
       job_uuid: jobUuid.trim(),
       created_at: new Date().toISOString(),
       mime: file.type || "image/jpeg",
       caption,
-      blob: new Blob([bytes], { type: file.type || "image/jpeg" }),
+      blob: await toQueuedPhoto(file),
       drive_status: "pending",
       incident_uuid: inc?.incident_uuid,
       claim_number: inc?.claim_number,
@@ -1591,7 +1621,12 @@ export default function App() {
   async function pushPhotoToDrive(photo: StoredPhoto): Promise<string | null> {
     try {
       const form = new FormData();
-      const resized = await resizeImage(photo.blob);
+      // Materialise the bytes BEFORE building the request. A dead handle throws
+      // here, where the photo is marked failed and the crew member is told, rather
+      // than silently producing a request with no body (ADR 0017).
+      const source = await slotToBlob(photo.blob);
+      if (!source) throw new Error("Photo has no image data");
+      const resized = await resizeImage(source);
       form.append("file", resized, photo.id + ".jpg");
       form.append("photo_id", photo.id);
       form.append("job_uuid", photo.job_uuid);
@@ -1617,6 +1652,15 @@ export default function App() {
       await updatePhoto(photo.id, { drive_status: "failed", drive_error: errMsg });
       return errMsg;
     } catch (uploadErr: any) {
+      // An unreadable photo is not a network problem and retrying will never fix
+      // it, so do not tell the crew member it will retry when they are back
+      // online. Say what actually happened and what to do (ADR 0017). The row is
+      // kept either way - it is never deleted out from under them.
+      if (uploadErr instanceof UnreadablePhotoError) {
+        const msg = "This photo can no longer be read from this phone. Retake it.";
+        await updatePhoto(photo.id, { drive_status: "failed", drive_error: msg });
+        return msg;
+      }
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
       const msg = offline
         ? "Offline - photo will retry when you're back online"
@@ -2649,7 +2693,7 @@ export default function App() {
             ) : (
               <div className="col" style={{ gap: 12 }}>
                 {photos.map((p) => {
-                  const url = URL.createObjectURL(p.blob);
+                  const url = previewUrls[p.id];
                   const driveOk = p.drive_status === "uploaded";
                   const driveFail = p.drive_status === "failed";
                   return (
