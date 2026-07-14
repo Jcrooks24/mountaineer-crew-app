@@ -93,4 +93,6 @@ class JobReport(Base):
 
     # Timestamps
     created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=False)
+    # Indexed: the worked-hours query filters on it to bound its scan to the
+    # last two weeks (see routers/hours.py).
+    updated_at = Column(DateTime, nullable=False, index=True)

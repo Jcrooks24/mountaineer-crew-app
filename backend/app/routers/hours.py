@@ -11,6 +11,15 @@ Weeks start Monday, in Mountain time. Regular vs OT is computed per week from th
 billable total (job hours + off-job "regular"); anything over 40 hrs is OT.
 Non-billable and "other" off-job pay structures are their own buckets and do not
 count toward the 40-hour OT threshold.
+
+**Bounded to the last two Monday-anchored weeks.** This endpoint is hit by every
+crew member on every Profile mount. It originally loaded EVERY job report ever
+written, JSON-parsed each one's employee-hours blob to find the caller's name,
+and then pulled every event row for every job they had ever touched. That cost
+grows forever with the company, on a 512 MB Render worker with a history of OOM
+kills (see CLAUDE.md). The window makes the query cost constant instead: it does
+not grow as the company ages. Widening it is not free, read the note on
+_window_start before you do.
 """
 import json
 from collections import defaultdict
@@ -18,10 +27,15 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
-from app.core.time_utils import utc_naive_to_mountain_date
+from app.core.time_utils import (
+    MOUNTAIN_TZ,
+    mountain_day_utc_bounds,
+    utc_naive_to_mountain_date,
+)
 from app.db.models.event import Event
 from app.db.models.job_report import JobReport
 from app.db.models.off_job_entry import OffJobEntry
@@ -31,10 +45,28 @@ router = APIRouter(prefix="/api/hours", tags=["hours"])
 
 OT_THRESHOLD = 40.0
 
+# How many Monday-anchored weeks the card shows: the current week plus the one
+# before it. Anchoring on Monday (rather than "14 days back from now") keeps the
+# weekly buckets whole, so the first row is never a partial week whose OT total
+# looks wrong.
+WINDOW_WEEKS = 2
+
 
 def _week_start(d: date) -> date:
     """Monday of the week containing d."""
     return d - timedelta(days=d.weekday())
+
+
+def _window_start() -> date:
+    """Monday of the earliest week we report on.
+
+    Every row the endpoint touches is filtered on this, so it is the single knob
+    controlling how much of the database this query reads. Raising WINDOW_WEEKS
+    widens a scan that runs on every Profile mount for every crew member; the
+    endpoint was unbounded once and that is the thing being fixed here.
+    """
+    today_mt = datetime.now(MOUNTAIN_TZ).date()
+    return _week_start(today_mt) - timedelta(days=7 * (WINDOW_WEEKS - 1))
 
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
@@ -46,20 +78,53 @@ def _parse_date(s: Optional[str]) -> Optional[date]:
         return None
 
 
+def _like_escape(s: str) -> str:
+    """Escape LIKE wildcards so a name containing % or _ is matched literally."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @router.get("/worked-history")
 def worked_history(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     my_name = (current_user.name or "").strip().lower()
+    window_start = _window_start()
+    # Naive-UTC instant at the start of that Mountain day, ready to compare
+    # against the naive-UTC timestamp columns.
+    window_start_utc, _ = mountain_day_utc_bounds(window_start)
 
     # --- Job-report hours (matched by employee name), summed per job_uuid ---
     job_hours: dict[str, float] = defaultdict(float)
     report_updated: dict[str, datetime] = {}
     if my_name:
-        rows = db.query(
-            JobReport.job_uuid, JobReport.employee_hours_json, JobReport.updated_at
-        ).all()
+        # Two filters do the work, and neither is cosmetic:
+        #
+        # updated_at: a report is written during or after the job it describes, so
+        #   its updated_at is always >= the job's own date. A job inside the window
+        #   therefore cannot have a report older than the window, which makes this
+        #   a safe prefilter (no false negatives). It is COARSE in the other
+        #   direction though: a report edited yesterday for a job three months ago
+        #   passes it. That is re-checked exactly against the real job date below.
+        #
+        # employee_hours_json ILIKE name: the caller's name is embedded in the JSON
+        #   blob. This is a substring test, so it can false-POSITIVE (one name
+        #   contained in another, e.g. "Jo" inside "Joanna"); the exact
+        #   name comparison in the loop is what actually decides. Its job is only
+        #   to stop us dragging every other crew member's reports into memory.
+        rows = (
+            db.query(
+                JobReport.job_uuid, JobReport.employee_hours_json, JobReport.updated_at
+            )
+            .filter(
+                JobReport.updated_at >= window_start_utc,
+                JobReport.employee_hours_json.isnot(None),
+                JobReport.employee_hours_json.ilike(
+                    f"%{_like_escape(my_name)}%", escape="\\"
+                ),
+            )
+            .all()
+        )
         for job_uuid, eh_json, updated_at in rows:
             report_updated[job_uuid] = updated_at
             if not eh_json:
@@ -74,24 +139,52 @@ def worked_history(
 
     # Date each job by its earliest event (Mountain date); fall back to the
     # report's updated_at when a job has no synced events.
+    #
+    # min() in SQL, grouped: this used to pull EVERY event row for every job the
+    # crew member had touched and take the minimum in Python. A busy job has
+    # hundreds of events and none of them were needed beyond the first.
     job_date: dict[str, date] = {}
     if job_hours:
         uuids = list(job_hours.keys())
-        earliest: dict[str, datetime] = {}
-        for job_uuid, ts in (
-            db.query(Event.job_uuid, Event.timestamp).filter(Event.job_uuid.in_(uuids)).all()
-        ):
-            if ts is None:
-                continue
-            if job_uuid not in earliest or ts < earliest[job_uuid]:
-                earliest[job_uuid] = ts
+        earliest: dict[str, datetime] = {
+            job_uuid: ts
+            for job_uuid, ts in db.query(
+                Event.job_uuid, func.min(Event.timestamp)
+            )
+            .filter(Event.job_uuid.in_(uuids))
+            .group_by(Event.job_uuid)
+            .all()
+            if ts is not None
+        }
         for u in uuids:
             ts = earliest.get(u) or report_updated.get(u)
-            if ts is not None:
-                job_date[u] = utc_naive_to_mountain_date(ts)
+            if ts is None:
+                continue
+            d = utc_naive_to_mountain_date(ts)
+            # The exact check the coarse updated_at prefilter could not make: an
+            # old job whose report was edited recently is dated by the JOB, not by
+            # the edit, so it drops out here.
+            if d >= window_start:
+                job_date[u] = d
 
     # --- Off-job hours (matched by user id) ---
-    off = db.query(OffJobEntry).filter(OffJobEntry.submitted_by_id == current_user.id).all()
+    # work_date is an ISO "YYYY-MM-DD" string, so a lexicographic >= is a real
+    # date comparison. Entries with no work_date fall back to created_at, and the
+    # filter has to allow for both or those rows vanish.
+    off = (
+        db.query(OffJobEntry)
+        .filter(
+            OffJobEntry.submitted_by_id == current_user.id,
+            or_(
+                OffJobEntry.work_date >= window_start.isoformat(),
+                and_(
+                    OffJobEntry.work_date.is_(None),
+                    OffJobEntry.created_at >= window_start_utc,
+                ),
+            ),
+        )
+        .all()
+    )
 
     # --- Bucket by week ---
     weeks: dict[date, dict] = defaultdict(
@@ -108,6 +201,11 @@ def worked_history(
         if d is None and entry.created_at is not None:
             d = utc_naive_to_mountain_date(entry.created_at)
         if d is None:
+            continue
+        # A malformed work_date string can slip past the SQL comparison (it is a
+        # text column, not a date). Re-check against the real parsed date so a
+        # junk value cannot smuggle an out-of-window week into the response.
+        if d < window_start:
             continue
         ws = _week_start(d)
         ps = (entry.pay_structure or "regular").lower()

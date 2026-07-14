@@ -501,7 +501,10 @@ type WorkedHistory = {
   };
 };
 
-const WORKED_WEEKS_INITIAL = 6;
+// The endpoint returns a hard two-week window (see routers/hours.py): it used to
+// load every job report ever written on every Profile mount, which is an OOM risk
+// on the 512 MB worker. There is deliberately no "show older weeks" expander,
+// because there is nothing older to show.
 
 // week_start is the Monday; render "Mon D - Sun D".
 function fmtWeek(iso: string): string {
@@ -526,7 +529,6 @@ function HoursTile({ label, value, accent }: { label: string; value: number; acc
 function WorkedHoursCard() {
   const [data, setData] = useState<WorkedHistory | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     apiFetch<WorkedHistory>("/api/hours/worked-history")
@@ -535,8 +537,6 @@ function WorkedHoursCard() {
   }, []);
 
   const weeks = data?.weeks ?? [];
-  const visible = expanded ? weeks : weeks.slice(0, WORKED_WEEKS_INITIAL);
-  const hidden = Math.max(0, weeks.length - WORKED_WEEKS_INITIAL);
   const s = data?.summary;
 
   return (
@@ -546,7 +546,7 @@ function WorkedHoursCard() {
         <BetaTag feature="workedHours" style={{ marginTop: 0 }} />
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-        Your logged hours by week. Overtime is anything over 40 hrs in a week.
+        Your logged hours for the last two weeks. Overtime is anything over 40 hrs in a week.
       </div>
       {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
       {data == null && !err && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
@@ -569,7 +569,7 @@ function WorkedHoursCard() {
                 <span style={{ width: 42, textAlign: "right" }}>OT</span>
                 <span style={{ width: 56, textAlign: "right" }}>N-bill</span>
               </div>
-              {visible.map((w) => (
+              {weeks.map((w) => (
                 <div key={w.week_start} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
                   <span style={{ flex: "1 1 auto" }}>{fmtWeek(w.week_start)}</span>
                   <span style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
@@ -577,11 +577,6 @@ function WorkedHoursCard() {
                   <span style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
                 </div>
               ))}
-              {hidden > 0 && (
-                <button onClick={() => setExpanded((v) => !v)} style={{ fontSize: 12, alignSelf: "flex-start", marginTop: 8 }}>
-                  {expanded ? "Show recent only" : `Show ${hidden} older week${hidden === 1 ? "" : "s"}`}
-                </button>
-              )}
             </div>
           )}
         </>

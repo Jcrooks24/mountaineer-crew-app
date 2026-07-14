@@ -18,7 +18,9 @@ class OffJobEntry(Base):
     # Client-generated UUID - idempotency key for the offline queue.
     entry_uuid = Column(String, unique=True, index=True, nullable=False)
 
-    submitted_by_id = Column(Integer, nullable=True)
+    # Indexed: filtered on by the crew's own off-job list and by the
+    # worked-hours query, both of which run per user on a growing table.
+    submitted_by_id = Column(Integer, nullable=True, index=True)
     submitted_by_name = Column(String, nullable=True)
 
     # When the work happened (YYYY-MM-DD).
