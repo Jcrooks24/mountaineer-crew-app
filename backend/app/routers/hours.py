@@ -89,15 +89,30 @@ def worked_history(
     current_user: User = Depends(get_current_user),
 ):
     my_name = (current_user.name or "").strip().lower()
+    my_id = current_user.id
     window_start = _window_start()
     # Naive-UTC instant at the start of that Mountain day, ready to compare
     # against the naive-UTC timestamp columns.
     window_start_utc, _ = mountain_day_utc_bounds(window_start)
 
-    # --- Job-report hours (matched by employee name), summed per job_uuid ---
+    def _is_me(entry: dict) -> bool:
+        """Does this employee-hours row belong to the caller?
+
+        user_id is the real key. Rows written before that field existed have only
+        a name, so they still match on the name string, which is why the fallback
+        stays: dropping it would silently zero out every crew member's history.
+        A row that HAS a user_id is matched on it alone - if it names somebody
+        else's id, a matching name is a coincidence, not a claim.
+        """
+        uid = entry.get("user_id")
+        if isinstance(uid, int):
+            return uid == my_id
+        return (entry.get("name") or "").strip().lower() == my_name
+
+    # --- Job-report hours (matched by roster user_id, or name on legacy rows) ---
     job_hours: dict[str, float] = defaultdict(float)
     report_updated: dict[str, datetime] = {}
-    if my_name:
+    if my_name or my_id:
         # Two filters do the work, and neither is cosmetic:
         #
         # updated_at: a report is written during or after the job it describes, so
@@ -107,11 +122,35 @@ def worked_history(
         #   direction though: a report edited yesterday for a job three months ago
         #   passes it. That is re-checked exactly against the real job date below.
         #
-        # employee_hours_json ILIKE name: the caller's name is embedded in the JSON
-        #   blob. This is a substring test, so it can false-POSITIVE (one name
-        #   contained in another, e.g. "Jo" inside "Joanna"); the exact
-        #   name comparison in the loop is what actually decides. Its job is only
-        #   to stop us dragging every other crew member's reports into memory.
+        # ILIKE on the JSON blob: a coarse "might mention me" test, in EITHER of the
+        #   two shapes a row can take. Current rows carry the roster id, so we look
+        #   for the serialized `"user_id": 42`; legacy rows have only a name, so we
+        #   also look for the name. Both are substring tests and both can
+        #   false-POSITIVE (`"user_id": 4` is a prefix of `"user_id": 42`; "Jo" sits
+        #   inside "Joanna"). That is fine: _is_me() is what actually decides. Their
+        #   only job is to stop us dragging every other crew member's reports into
+        #   memory.
+        #
+        #   Both halves are needed. Matching only the name would MISS a row keyed to
+        #   this user's id after they were renamed in the roster, which is precisely
+        #   the failure the user_id key exists to prevent.
+        maybe_mine = [
+            JobReport.employee_hours_json.ilike(
+                f'%"user_id": {my_id}%', escape="\\"
+            ),
+            # json.dumps with no separators arg writes `"user_id": 42`, but do not
+            # bet the query on one serializer's spacing.
+            JobReport.employee_hours_json.ilike(
+                f'%"user_id":{my_id}%', escape="\\"
+            ),
+        ]
+        if my_name:
+            maybe_mine.append(
+                JobReport.employee_hours_json.ilike(
+                    f"%{_like_escape(my_name)}%", escape="\\"
+                )
+            )
+
         rows = (
             db.query(
                 JobReport.job_uuid, JobReport.employee_hours_json, JobReport.updated_at
@@ -119,9 +158,7 @@ def worked_history(
             .filter(
                 JobReport.updated_at >= window_start_utc,
                 JobReport.employee_hours_json.isnot(None),
-                JobReport.employee_hours_json.ilike(
-                    f"%{_like_escape(my_name)}%", escape="\\"
-                ),
+                or_(*maybe_mine),
             )
             .all()
         )
@@ -134,7 +171,7 @@ def worked_history(
             except Exception:
                 continue
             for e in entries or []:
-                if (e.get("name") or "").strip().lower() == my_name:
+                if isinstance(e, dict) and _is_me(e):
                     job_hours[job_uuid] += float(e.get("hours") or 0)
 
     # Date each job by its earliest event (Mountain date); fall back to the

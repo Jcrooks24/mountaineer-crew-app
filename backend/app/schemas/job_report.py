@@ -77,6 +77,12 @@ class EmployeeHoursEntry(BaseModel):
     at display + sheet-export time, so the unrounded value stays
     available downstream.
     """
+    # The roster user this row is for. THIS is the match key: the worked-hours
+    # summary joins on it, so a rename, a nickname, or a typo no longer silently
+    # drops somebody's hours. `name` is kept for display and for the sheet, and is
+    # the only thing legacy rows (written before this field existed) have, so the
+    # server still falls back to matching on it. Optional for exactly that reason.
+    user_id: Optional[int] = None
     name: str
     start: str = ""           # "HH:MM" 24-hour or empty if user logged duration only
     end: str = ""             # "HH:MM" 24-hour or empty

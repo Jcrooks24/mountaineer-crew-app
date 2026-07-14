@@ -7,6 +7,11 @@
 // export time. `non_billable` rows show in the table but contribute 0 to
 // total man-hours and are excluded from the Bill Helper autopopulate.
 export type EmployeeHoursEntry = {
+  // Roster user id. THIS is the match key the worked-hours summary joins on, so a
+  // rename or a nickname no longer detaches somebody from their own hours. Absent
+  // on legacy rows written before the roster was required, which the server still
+  // falls back to matching by name.
+  user_id?: number;
   name: string;
   start: string;
   end: string;

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { fetchRemoteBol, listOpenBols, type OpenBol } from "../lib/bolStore";
 import RodsSignoff from "./RodsSignoff";
-import RosterTypeahead from "./RosterTypeahead";
+import RosterPicker from "./RosterPicker";
 
 // Multi-day LD trips: each day is its own calendar event / job_uuid, so the
 // driver can link a day to the trip's in-progress BOL. The link is the trip's
@@ -703,6 +703,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   }, [sortedEvents]);
 
   const [editName, setEditName] = useState<string>("");
+  // Roster id of the person being edited. This, not the name, is the match
+  // key the hours summary joins on. null while nothing is picked, and on a
+  // legacy row whose name is not on the roster.
+  const [editUserId, setEditUserId] = useState<number | null>(null);
   const [editStart, setEditStart] = useState<SlotPick>(emptySlot);
   const [editEnd, setEditEnd] = useState<SlotPick>(emptySlot);
   // uid is a stable React key so removing a middle break doesn't reuse
@@ -907,6 +911,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
   function resetEditor() {
     setEditName("");
+    setEditUserId(null);
     setEditStart(defaultStart);
     setEditEnd(defaultEnd);
     setEditBreaks([]);
@@ -917,7 +922,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   function saveEmployee() {
     const name = editName.trim();
     if (!name) {
-      setEditError("Enter an employee name.");
+      setEditError("Pick the crew member from the roster.");
+      return;
+    }
+    // A row with no roster id can only be a legacy one loaded for edit (its name
+    // predates the roster requirement). A NEW row must always be keyed to a real
+    // person, or it lands in payroll matched to nobody.
+    if (editUserId == null && editingIndex === null) {
+      setEditError("Pick the crew member from the roster.");
       return;
     }
     if (editorPreview.kind === "error") {
@@ -929,6 +941,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       return;
     }
     const baseEntry: EmployeeHoursEntry = {
+      user_id: editUserId ?? undefined,
       name,
       start: slotToHHMM(editStart),
       end: slotToHHMM(editEnd),
@@ -963,6 +976,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     const emp = data.employee_hours[i];
     if (!emp) return;
     setEditName(emp.name);
+    setEditUserId(emp.user_id ?? null);
     setEditStart({ selection: MANUAL_SENTINEL, manualTime: emp.start || "" });
     setEditEnd({ selection: MANUAL_SENTINEL, manualTime: emp.end || "" });
     setEditBreaks([]); // Drop break detail; crew re-adds breaks if they want different math.
@@ -1440,11 +1454,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   Editing entry #{editingIndex + 1}. Save replaces the row; Cancel keeps the original.
                 </div>
               )}
-              <RosterTypeahead
-                placeholder="Employee name"
-                value={editName}
-                onChange={(v) => { setEditName(v); setEditError(null); }}
-                style={{ width: "100%" }}
+              <RosterPicker
+                userId={editUserId}
+                legacyName={editUserId == null && editName ? editName : undefined}
+                onChange={(id, nm) => {
+                  setEditUserId(id);
+                  setEditName(nm);
+                  setEditError(null);
+                }}
               />
 
               <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>

@@ -37,8 +37,8 @@ backwards: it would delete the real designation and keep the accident.
 
 ## Decision
 
-**Skill rating is granted
-only by an explicit per-person designation. No role grants it except `admin`.**
+**Skill rating is granted only by an explicit per-person designation. No role grants it
+except `admin`.**
 
 ```python
 user.role == "admin" or bool(user.is_skill_rater)
@@ -78,9 +78,14 @@ built on.
   bug, but it is a live behaviour change for real people: designate the leads who should
   still be rating **before** promoting this to `main`.
 - The gate is enforced **server-side** in `job_report.py::_is_skill_rater`, not just
-  hidden in the UI. A non-rater's report save keeps whatever skills and job type a rater
-  previously set (re-applied from the existing row) and drops anything its own payload
-  carries. A stale client cannot write either field.
+  hidden in the UI. A non-rater's report save keeps whatever ratings a rater previously
+  set (re-applied from the existing row by employee name) and drops anything its own
+  payload carries. A stale client cannot write ratings.
+- **A non-rater cannot erase ratings by omission either.** Stripping the rating fields off
+  the entries a payload *has* does nothing if the payload has no entries: an empty
+  `employee_hours` list would write NULL over the column and take every rating with it.
+  So when a non-rater sends no entries, the stored value is preserved rather than
+  overwritten. This was a real hole, found in the pre-promotion vet.
 - `is_skill_rater` is copied by `migrate_users_staging_to_prod.py`, so a staging-only
   crew member arrives in prod with their designation intact.
 

@@ -184,12 +184,19 @@ def upsert_job_report(
     preserve_employee_hours = False
     if not _is_skill_rater(current_user):
         if body.employee_hours:
-            prior_by_name: dict = {}
+            # Key prior entries by roster user_id where the row has one, and fall
+            # back to the name for legacy rows. Keying on name alone meant renaming
+            # somebody in the roster silently detached them from their own ratings.
+            def _key(e) -> object:
+                uid = getattr(e, "user_id", None)
+                return ("id", uid) if isinstance(uid, int) else ("name", e.name)
+
+            prior_by_key: dict = {}
             if existing:
                 prior = _decode_employee_hours(existing.employee_hours_json) or []
-                prior_by_name = {e.name: e for e in prior}
+                prior_by_key = {_key(e): e for e in prior}
             for entry in body.employee_hours:
-                keep = prior_by_name.get(entry.name)
+                keep = prior_by_key.get(_key(entry))
                 entry.skill_ratings = keep.skill_ratings if keep else None
                 entry.skill_rating = keep.skill_rating if keep else None
         elif existing and existing.employee_hours_json:
