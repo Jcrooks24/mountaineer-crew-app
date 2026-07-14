@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
 import { useMergedCatalog, splitCatalogNames } from "../lib/furnitureCatalogStore";
 import { BetaTag } from "./BetaTag";
+import SuggestInput from "./SuggestInput";
 import {
   drain,
   enqueue,
@@ -10,6 +11,7 @@ import {
   pruneStale,
   retryFailed,
   discardFailed,
+  setQueuedPackType,
   type InventoryItemPayload,
   type PackType,
   type QueuedAdd,
@@ -335,6 +337,62 @@ export default function ActualInventory({
   const boxRows = rows.filter((r) => r.is_box);
   const chowRows = rows.filter((r) => isChowRow(r));
 
+  /**
+   * Set the pack type on every box already logged for this job.
+   *
+   * Most jobs are all-CP or all-PBO, and tapping the pack type once per box is
+   * the kind of repetition that makes crew stop logging boxes at all. This makes
+   * the common case one tap.
+   *
+   * Pending (not yet synced) boxes are handled too, but they cannot be PATCHed -
+   * they have no server id yet. Their queued payload is rewritten in place
+   * instead, so they arrive with the right pack type rather than silently keeping
+   * the old one.
+   */
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  async function applyPackTypeToAllBoxes(pt: PackType) {
+    if (boxRows.length === 0) return;
+    const label = PACK_TYPES.find((p) => p.value === pt)?.label ?? pt;
+    const ok = window.confirm(
+      `Set every box on this job to ${label}?\n\n${boxRows.length} box${boxRows.length === 1 ? "" : "es"} will be updated.`,
+    );
+    if (!ok) return;
+
+    setBulkBusy(true);
+    setErr(null);
+    const before = rows;
+    setRows((prev) => prev.map((r) => (r.is_box ? { ...r, pack_type: pt } : r)));
+
+    // Rewrite the queued payloads first: these never reach the PATCH endpoint.
+    for (const r of boxRows) {
+      if (r.pending && r.opId) setQueuedPackType(r.opId, pt);
+    }
+
+    const synced = boxRows.filter((r) => !r.pending);
+    const failed: string[] = [];
+    for (const r of synced) {
+      try {
+        await apiFetch(`/api/job-inventory/${encodeURIComponent(jobUuid)}/items/${r.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ pack_type: pt }),
+        });
+      } catch {
+        failed.push(r.name);
+      }
+    }
+
+    if (failed.length > 0) {
+      // Put the truth back on screen rather than showing a pack type the office
+      // will never see.
+      setRows(before);
+      setErr(
+        `Could not update ${failed.length} box${failed.length === 1 ? "" : "es"} - check connection and try again.`,
+      );
+    }
+    setBulkBusy(false);
+  }
+
   return (
     <div className="card" data-component="ActualInventory">
       <div className="row" style={{ alignItems: "center", gap: 8 }}>
@@ -356,16 +414,17 @@ export default function ActualInventory({
       {/* Add furniture - dedicated item search box. */}
       <div style={addSectionStyle}>
         <div style={addTitleStyle}>Add furniture</div>
-        <input
-          list="job-inventory-furniture"
+        {/* Not a native <datalist>: on mobile that suppresses the keyboard's
+            autocorrect strip, so crew were logging misspelled items. See
+            SuggestInput. */}
+        <SuggestInput
           value={fName}
-          onChange={(e) => setFName(e.target.value)}
+          onChange={setFName}
+          options={furnitureNames}
           placeholder="Item (start typing to search)"
+          onEnter={addFurniture}
           style={inputStyle}
         />
-        <datalist id="job-inventory-furniture">
-          {furnitureNames.map((n) => <option key={n} value={n} />)}
-        </datalist>
         <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div className="row" style={{ gap: 8, alignItems: "center" }}>
             <button type="button" onClick={() => setFQty((q) => Math.max(1, q - 1))} style={stepBtn} aria-label="Decrease quantity">−</button>
@@ -385,16 +444,13 @@ export default function ActualInventory({
       {/* Add box - dedicated box search box + required pack type (CP/PBO/NA). */}
       <div style={addSectionStyle}>
         <div style={addTitleStyle}>Add box</div>
-        <input
-          list="job-inventory-boxes"
+        <SuggestInput
           value={bName}
-          onChange={(e) => setBName(e.target.value)}
+          onChange={setBName}
+          options={boxNames}
           placeholder="Box type - Small, Medium, Large, Dish pack…"
           style={inputStyle}
         />
-        <datalist id="job-inventory-boxes">
-          {boxNames.map((n) => <option key={n} value={n} />)}
-        </datalist>
         <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div className="row" style={{ gap: 8, alignItems: "center" }}>
             <button type="button" onClick={() => setBQty((q) => Math.max(1, q - 1))} style={stepBtn} aria-label="Decrease quantity">−</button>
@@ -541,6 +597,36 @@ export default function ActualInventory({
         <>
           <ItemGroup title="Furniture" rows={furnitureRows} onQty={changeQty} onRemove={removeRow} onRetry={retryRow} onDiscard={discardRow} />
           <ItemGroup title="Boxes" rows={boxRows} onQty={changeQty} onRemove={removeRow} onRetry={retryRow} onDiscard={discardRow} />
+          {/* Most jobs are all-CP or all-PBO. Tapping the pack type once per box
+              is the repetition that makes crew stop logging boxes at all. */}
+          {boxRows.length > 1 && (
+            <div className="row wrap" style={{ gap: 8, alignItems: "center", marginTop: 8 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>
+                Set all {boxRows.length} boxes to:
+              </span>
+              {PACK_TYPES.filter((p) => p.value !== "NA").map((p) => (
+                <button
+                  key={p.value}
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => applyPackTypeToAllBoxes(p.value)}
+                  style={{
+                    padding: "8px 14px",
+                    minHeight: 44,
+                    borderRadius: 999,
+                    border: "1px solid var(--border)",
+                    background: "transparent",
+                    color: "var(--text)",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: bulkBusy ? "wait" : "pointer",
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          )}
           <ItemGroup title="Chow (loose items)" rows={chowRows} onQty={changeQty} onRemove={removeRow} onRetry={retryRow} onDiscard={discardRow} />
         </>
       )}

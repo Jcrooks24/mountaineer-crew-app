@@ -11,6 +11,7 @@ import {
   syncQueue,
 } from "../lib/bolStore";
 import BetaTag from "./BetaTag";
+import SuggestInput from "./SuggestInput";
 
 type Props = {
   jobUuid: string;
@@ -206,18 +207,16 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
         <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
           <label className="col" style={{ gap: 4, flex: "2 1 200px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Item</span>
-            <input
-              list="bol-inv-tab-furniture"
+            {/* A native <datalist> suppresses the mobile keyboard's autocorrect
+                strip, which is why crew were logging misspelled items on the BOL.
+                Rendered suggestions instead: autocorrect works, typeahead works. */}
+            <SuggestInput
               value={itemName}
-              onChange={(e) => setItemName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addItem(); } }}
+              onChange={setItemName}
+              options={catalog.map((f) => f.name)}
+              onEnter={addItem}
               placeholder="Sofa, dresser, CP box, PBO box…"
             />
-            <datalist id="bol-inv-tab-furniture">
-              {catalog.map((f) => (
-                <option key={f.name} value={f.name} />
-              ))}
-            </datalist>
           </label>
           <label className="col" style={{ gap: 4, width: 90 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Qty</span>

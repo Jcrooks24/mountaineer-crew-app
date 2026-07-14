@@ -107,6 +107,24 @@ export function retryFailed(opId: string): void {
   patch(opId, CLEARED_FAILURE);
 }
 
+/**
+ * Rewrite a queued box's pack type before it is sent.
+ *
+ * "Apply CP to all boxes" has to reach the boxes that have not synced yet. Those
+ * have no server id, so there is nothing to PATCH: the only copy of their pack
+ * type is the payload sitting in this queue. Editing the row on screen without
+ * editing the payload would show the crew a pack type that never arrives.
+ */
+export function setQueuedPackType(opId: string, packType: PackType): void {
+  saveAll(
+    loadAll().map((o) =>
+      o.id === opId && o.payload.is_box
+        ? { ...o, payload: { ...o.payload, pack_type: packType } }
+        : o,
+    ),
+  );
+}
+
 /** Explicit, crew-initiated delete of a failed op. The only way one leaves the
  *  queue without reaching the server. */
 export function discardFailed(opId: string): void {

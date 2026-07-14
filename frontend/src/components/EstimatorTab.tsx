@@ -296,16 +296,39 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
 
   // Rooms to render = distinct rooms-with-items + pending empty rooms + an
   // "Unassigned" bucket if anything lacks a room.
+  //
+  // NEWLY ADDED ROOMS COME FIRST, newest at the very top. The list used to be
+  // sorted alphabetically, so adding "Office" dropped it into the middle of the
+  // list and the estimator had to scroll to find the room they had just created,
+  // in order to put things in it. Adding a room is always immediately followed by
+  // filling it, so the room you just made is the one you need under your thumb.
+  //
+  // A room stays pinned to the top for the rest of the session, even once it has
+  // items, because `pendingRooms` is never pruned. That is deliberate: a room that
+  // jumped back into alphabetical order the moment you added a chair would be
+  // worse than either behavior on its own.
   const rooms = useMemo<string[]>(() => {
-    const set = new Set<string>();
+    const withItems = new Set<string>();
     let hasUnassigned = false;
     for (const it of local.items) {
-      if (it.room && it.room.trim()) set.add(it.room.trim());
+      if (it.room && it.room.trim()) withItems.add(it.room.trim());
       else hasUnassigned = true;
     }
-    for (const r of pendingRooms) set.add(r);
-    const out = [...set];
-    out.sort((a, b) => a.localeCompare(b));
+
+    const seen = new Set<string>();
+    const out: string[] = [];
+    // Newest-added first.
+    for (let i = pendingRooms.length - 1; i >= 0; i--) {
+      const r = pendingRooms[i];
+      if (!seen.has(r)) { seen.add(r); out.push(r); }
+    }
+    // Then everything else, alphabetical, as before.
+    const rest = [...withItems].filter((r) => !seen.has(r)).sort((a, b) => a.localeCompare(b));
+    out.push(...rest);
+
+    // Unassigned stays where it has always been, pinned above everything. It is
+    // where items with no room land, so it is the bucket you are most likely to
+    // be emptying. Only the ordering of REAL rooms changes here.
     if (hasUnassigned) out.unshift("Unassigned");
     return out;
   }, [local.items, pendingRooms]);
