@@ -151,11 +151,13 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
 
 
 def _is_skill_rater(user: User) -> bool:
-    """Job type and skill ratings are editable only by admins and admin-designated
-    skill raters (users.is_skill_rater). The crew_lead role does NOT grant this on
-    its own (ADR 0014) - rating is deliberately a smaller group than the leads.
-    Enforced server-side so a stale or tampered client can't persist skill edits
-    from a regular crew member."""
+    """Skill ratings are editable only by admins and admin-designated skill raters
+    (users.is_skill_rater). The crew_lead role does NOT grant this on its own
+    (ADR 0014) - rating is deliberately a smaller group than the leads. Enforced
+    server-side so a stale or tampered client can't persist skill edits from a
+    regular crew member.
+
+    Job type is NOT covered by this gate: see the note in upsert_job_report."""
     return user.role == "admin" or bool(getattr(user, "is_skill_rater", False))
 
 
@@ -192,13 +194,12 @@ def upsert_job_report(
                 entry.skill_rating = keep.skill_rating if keep else None
         elif existing and existing.employee_hours_json:
             preserve_employee_hours = True
-        # Job type moved behind the same gate (it decides which skills get
-        # rated), so it needs the same server-side enforcement: a non-rater's
-        # save preserves the tags a rater set and can't introduce its own. The
-        # crew still submit the report - only these two fields are held back.
-        body.job_type_tags = (
-            _decode_job_type_tags(existing.job_type_tags_json) if existing else None
-        ) or []
+        # Job type is deliberately NOT gated. It was, briefly, on the reasoning
+        # that it decides which skills get rated. But it is also the job's basic
+        # descriptive data, and gating it meant a job with no designated rater on
+        # site recorded no job type at all. Collecting it always beats collecting
+        # it only when the right person happens to be on the crew, so any crew
+        # member sets it. Only the skill ratings above are held back.
 
     if preserve_employee_hours:
         employee_hours_json = existing.employee_hours_json

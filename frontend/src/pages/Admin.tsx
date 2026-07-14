@@ -3001,6 +3001,7 @@ function SkillsManagerCard() {
   // later). binary=true means a pass/fail (No/Yes = 0/5) rating; false = 1-5 stars.
   const [newCore, setNewCore] = useState(false);
   const [newBinary, setNewBinary] = useState(false);
+  const [newRel, setNewRel] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3024,12 +3025,22 @@ function SkillsManagerCard() {
     setBusy(true); setErr(null);
     try {
       const created = await apiFetch<AdminSkill>("/api/admin/skills", {
-        method: "POST", body: JSON.stringify({ name, core: newCore, binary: newBinary }),
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          core: newCore,
+          binary: newBinary,
+          // A core skill is rated on every job, so its job-type list is ignored
+          // by skillsForJobTypes. Send it empty rather than storing tags that
+          // read as meaningful and are not.
+          relevant_job_types: newCore ? [] : newRel,
+        }),
       });
       setSkills((prev) => [...prev, created]);
       setNewName("");
       setNewCore(false);
       setNewBinary(false);
+      setNewRel([]);
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to create skill");
     } finally { setBusy(false); }
@@ -3130,6 +3141,49 @@ function SkillsManagerCard() {
             })}
           </div>
         </div>
+
+        {/* Applies-to, on CREATE. It was previously edit-only, so a new skill was
+            born applying to no job type and therefore rated on no job at all
+            until somebody remembered to reopen it. A core skill is rated on every
+            job, so the picker is pointless there and hides itself. */}
+        {!newCore && (
+          <div className="col" style={{ gap: 6 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>
+              Applies to (leave empty and this skill is never rated)
+            </span>
+            {jobTypeNames.length === 0 ? (
+              <span className="small" style={{ color: "var(--muted)" }}>
+                No job types defined yet. Add them under Job Types first.
+              </span>
+            ) : (
+              <div className="row wrap" style={{ gap: 6 }}>
+                {jobTypeNames.map((t) => {
+                  const on = newRel.includes(t);
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() =>
+                        setNewRel((prev) => (on ? prev.filter((x) => x !== t) : [...prev, t]))
+                      }
+                      style={{
+                        padding: "3px 10px",
+                        borderRadius: 999,
+                        fontSize: 12,
+                        cursor: "pointer",
+                        border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                        background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                        color: on ? "var(--brand)" : "var(--muted)",
+                      }}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
@@ -4596,6 +4650,7 @@ function HelpTextCard() {
       fields: [
         { key: "jobTypeHint",                 label: "Job type hint" },
         { key: "skillsHint",                  label: "Skill rating hint" },
+        { key: "skillScaleHint",              label: "Star scale (what 1 and 5 mean)" },
         { key: "truckFullnessHint",           label: "Truck fullness hint" },
         { key: "overageHint",                 label: "Estimate overage hint" },
         { key: "hoursMismatchPlaceholder",    label: "Hours mismatch reason placeholder" },

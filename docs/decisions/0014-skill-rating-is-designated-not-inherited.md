@@ -37,8 +37,8 @@ backwards: it would delete the real designation and keep the accident.
 
 ## Decision
 
-**Skill rating, and the job-type picker that decides which skills get rated, are granted
-only by an explicit per-person designation. No role grants them except `admin`.**
+**Skill rating is granted
+only by an explicit per-person designation. No role grants it except `admin`.**
 
 ```python
 user.role == "admin" or bool(user.is_skill_rater)
@@ -55,10 +55,21 @@ Three parts:
 3. **`admin` keeps it**, so an admin can always correct a bad rating without first
    designating themselves.
 
-The **job type** moves behind the same gate rather than staying with the leads, because
-job type selects which skills are rated on a job. Leaving it with a wider group would
-let someone who cannot rate still decide what gets rated, which is the same authority
-wearing a different hat.
+### Job type is NOT gated (reversed 2026-07-14)
+
+Job type was briefly put behind this same gate, on the reasoning that it selects which
+skills get rated, so letting a non-rater choose it is the same authority wearing a
+different hat. That reasoning was sound and the outcome was still wrong.
+
+Job type is also the job's basic descriptive data, and gating it meant a job with no
+designated rater on the crew recorded **no job type at all**. The tidiness of the
+permission model was costing real data on real jobs. Collecting it always beats
+collecting it only when the right person happens to show up, so **any crew member sets
+the job type**, and the server does not hold it back.
+
+The cost is accepted with open eyes: a non-rater can change which skills would be rated.
+That is worth it, because the alternative was a hole in the dataset the whole feature is
+built on.
 
 ## Consequences
 

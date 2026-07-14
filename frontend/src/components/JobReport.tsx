@@ -1303,23 +1303,22 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
 
         {/* Job type comes first: it decides which skills are rated per employee
-            below, so the crew must pick it before the skill rows are meaningful. */}
+            below, so the crew must pick it before the skill rows are meaningful.
+            Deliberately NOT gated on canRate: a job with no designated rater on
+            site still needs its job type recorded. Any crew member sets it. */}
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
           Job type<BetaTag feature="jobTypeTags" />
-          <BetaTag feature="skillRater" style={{ marginTop: 0 }} />
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           {ht.jobTypeHint}
         </div>
-        <RaterGate canRate={canRate} what="job type" />
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)", opacity: canRate ? 1 : 0.55 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
           {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
             const active = data.job_type_tags.includes(tag);
             return (
               <button
                 key={tag}
                 type="button"
-                disabled={!canRate}
                 onClick={() => {
                   setData((prev) => ({
                     ...prev,
@@ -1337,7 +1336,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 400,
                   fontSize: 13,
-                  cursor: canRate ? "pointer" : "not-allowed",
+                  cursor: "pointer",
                 }}
               >
                 {tag}
@@ -1376,6 +1375,27 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             {ht.skillsHint}
           </div>
         )}
+        {/* What the ends of the scale actually mean. Without it, a 3 from one
+            rater and a 3 from another are not the same number, and the whole
+            point of rating is comparability across crews. */}
+        {relevantSkills.length > 0 && canRate && ht.skillScaleHint && (
+          <div
+            className="small"
+            style={{
+              color: "var(--muted)",
+              marginBottom: 8,
+              padding: "6px 8px",
+              border: "1px dashed var(--border)",
+              borderRadius: 8,
+              lineHeight: 1.5,
+            }}
+          >
+            {ht.skillScaleHint}
+          </div>
+        )}
+        {/* Non-raters get a one-line explanation rather than silently missing
+            stars, so "where did the skill ratings go" has an answer on screen. */}
+        {relevantSkills.length > 0 && <RaterGate canRate={canRate} />}
 
         {/* The editor is always available - even with 0-1 timeline events the
             crew can log hours via the "Manual time…" option in the pickers.
@@ -2166,16 +2186,17 @@ function EmployeeSkillRatings({
   );
 }
 
-// Skill-rater gate for the job type / skill ratings. Anyone who is not a
-// designated rater sees a lock note instead of the controls - there is no
-// self-assessment escape hatch. Raters and admins see nothing and edit normally.
-function RaterGate({ canRate, what }: { canRate: boolean; what: string }) {
+// Skill-rater gate for the skill ratings ONLY. Job type is deliberately open to
+// everyone: it is the job's descriptive data and must be collected whether or not
+// a rater is on site. Anyone who is not a designated rater sees this note instead
+// of the stars, and there is no self-assessment escape hatch.
+function RaterGate({ canRate }: { canRate: boolean }) {
   if (canRate) return null;
   return (
     <div style={{ border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
       <div className="small" style={{ color: "var(--muted)" }}>
-        A designated skill rater handles the {what} for this job. Ask an admin for
-        skill-rater access if you need to fill this in.
+        Skill ratings are filled in by a designated skill rater. Ask an admin for
+        skill-rater access if you need to rate the crew on this job.
       </div>
     </div>
   );
