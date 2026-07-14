@@ -52,3 +52,4 @@ written retroactively is a decision log that is already wrong.
 | [0014](0014-skill-rating-is-designated-not-inherited.md) | Skill rating is designated, never inherited | The `crew_lead` role does not grant it. Only `admin` + the per-person `is_skill_rater` flag do. |
 | [0015](0015-inventory-logging-is-paused-on-local-jobs.md) | Inventory logging is paused on local jobs | Hidden, not deleted. Too slow to use in the field; LD keeps it. Do not remove the code. |
 | [0016](0016-logged-items-are-snapshots-not-catalogue-references.md) | A logged item is a snapshot, not a catalogue reference | No FK to the catalogue, on purpose. **Do not normalize this**, it would rewrite history. |
+| [0017](0017-offline-queues-store-bytes-not-file-handles.md) | An offline queue stores bytes, never a File handle | A stale File uploads an empty body and 422s on a field the client provably sent. |

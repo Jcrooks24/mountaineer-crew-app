@@ -65,6 +65,32 @@ export type QueueFailure = {
   failed_reason: string;
 };
 
+/**
+ * A photo held in the queue, stored as its own BYTES.
+ *
+ * It used to be the `File` straight off the <input>. A File is a *reference to a
+ * file on disk*, not the data, and this queue persists it to IndexedDB and
+ * uploads it later - sometimes days later, across reloads and app restarts. On
+ * iOS/WebKit that reference can go stale (the OS moves or reclaims the backing
+ * file), and a stale File does not fail loudly: appending it to FormData produces
+ * a request whose body never serialises, so the server receives an empty body and
+ * reports EVERY form field as missing. That is a 422 on `reimbursement_uuid` -
+ * the only field without a default - which reads like the client forgot to send
+ * an id it demonstrably did send, and it repeats forever because the dead
+ * reference never heals.
+ *
+ * Storing the bytes makes the queued submission self-contained: once it is in the
+ * queue it no longer depends on anything outside it. Structured-clone stores an
+ * ArrayBuffer as real bytes, so it survives a reload.
+ */
+export type QueuedPhoto = {
+  bytes: ArrayBuffer;
+  type: string; // mime, e.g. "image/jpeg"
+};
+
+/** Legacy entries (queued before the change above) still hold a raw File/Blob. */
+type PhotoSlot = QueuedPhoto | Blob | null | undefined;
+
 // Every field below the uuid/type is optional - crew may submit a partial
 // request and the admin follows up. null means "not provided".
 export type MileageQueueEntry = {
@@ -77,8 +103,8 @@ export type MileageQueueEntry = {
   job_date: string;
   expense_date: string;
   notes: string;
-  odo_start_blob: Blob | null;
-  odo_end_blob: Blob | null;
+  odo_start_blob: PhotoSlot;
+  odo_end_blob: PhotoSlot;
   created_at: string;
 } & Partial<QueueFailure>;
 
@@ -96,9 +122,50 @@ export type ExpenseQueueEntry = {
   job_date: string;
   expense_date: string;
   notes: string;
-  receipt_blob: Blob | null;
+  receipt_blob: PhotoSlot;
   created_at: string;
 } & Partial<QueueFailure>;
+
+/** Read a picked File into bytes at ENQUEUE time, while it is still valid. */
+export async function toQueuedPhoto(file: File | Blob | null): Promise<QueuedPhoto | null> {
+  if (!file) return null;
+  const bytes = await file.arrayBuffer();
+  return { bytes, type: file.type || "image/jpeg" };
+}
+
+/**
+ * Turn a stored slot back into an uploadable Blob.
+ *
+ * Throws `UnreadablePhotoError` when a LEGACY entry's File reference has gone
+ * stale. Throwing is the point: the alternative is appending a dead reference to
+ * FormData and shipping an empty body, which is the silent failure this whole
+ * change exists to stop.
+ */
+export class UnreadablePhotoError extends Error {}
+
+export async function slotToBlob(slot: PhotoSlot): Promise<Blob | null> {
+  if (!slot) return null;
+  if (slot instanceof Blob) {
+    // Legacy: a File/Blob persisted before we stored bytes. Force it to
+    // materialise NOW so a dead handle surfaces here, as a real error we can
+    // show the crew member, rather than as an empty request body.
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await slot.arrayBuffer();
+    } catch {
+      throw new UnreadablePhotoError("photo could not be read from this device");
+    }
+    if (bytes.byteLength === 0) {
+      throw new UnreadablePhotoError("photo could not be read from this device");
+    }
+    return new Blob([bytes], { type: slot.type || "image/jpeg" });
+  }
+  if (!slot.bytes || slot.bytes.byteLength === 0) {
+    throw new UnreadablePhotoError("photo could not be read from this device");
+  }
+  return new Blob([slot.bytes], { type: slot.type || "image/jpeg" });
+}
+
 
 // Expense categories - fixed list so the form offers a dropdown rather than
 // free text, keeping the Reimbursements sheet filterable for admin.
@@ -463,12 +530,13 @@ export async function syncQueue(): Promise<number> {
           if (entry.odometer_end != null) {
             form.append("odometer_end", String(entry.odometer_end));
           }
-          if (entry.odo_start_blob) {
-            form.append("odometer_start_photo", entry.odo_start_blob, "odo_start.jpg");
-          }
-          if (entry.odo_end_blob) {
-            form.append("odometer_end_photo", entry.odo_end_blob, "odo_end.jpg");
-          }
+          // Materialise the photo bytes BEFORE building the request. A dead
+          // File handle throws here, where we can tell the crew member, instead
+          // of silently producing a request with no body at all.
+          const startBlob = await slotToBlob(entry.odo_start_blob);
+          if (startBlob) form.append("odometer_start_photo", startBlob, "odo_start.jpg");
+          const endBlob = await slotToBlob(entry.odo_end_blob);
+          if (endBlob) form.append("odometer_end_photo", endBlob, "odo_end.jpg");
           await postMultipart("/api/reimbursements/mileage", form);
         } else {
           if (entry.amount != null) {
@@ -477,14 +545,27 @@ export async function syncQueue(): Promise<number> {
           form.append("category", entry.category || "");
           form.append("vendor", entry.vendor || "");
           form.append("payment_method", entry.payment_method);
-          if (entry.receipt_blob) {
-            form.append("receipt_photo", entry.receipt_blob, "receipt.jpg");
-          }
+          const receiptBlob = await slotToBlob(entry.receipt_blob);
+          if (receiptBlob) form.append("receipt_photo", receiptBlob, "receipt.jpg");
           await postMultipart("/api/reimbursements/expense", form);
         }
         await removeFromQueue(entry.reimbursement_uuid);
         synced++;
       } catch (e) {
+        // A photo whose bytes cannot be read is not a network problem and will
+        // never fix itself, so retrying is pointless. Mark it failed with words
+        // that tell the crew member what to actually do: the claim is still here,
+        // the photo is the part that is gone.
+        if (e instanceof UnreadablePhotoError) {
+          await markFailed(
+            entry.reimbursement_uuid,
+            0,
+            "The photo attached to this claim can no longer be read from this phone. " +
+              "The rest of the claim is safe. Retake the photo and submit it again, " +
+              "or delete this one and re-file it.",
+          );
+          continue;
+        }
         // 401/403 are excluded - an expired token is transient; dropping the
         // op would silently lose a crew member's reimbursement submission.
         const isPermanent =

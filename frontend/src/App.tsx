@@ -1466,13 +1466,23 @@ export default function App() {
     const inc = attachIncidentUuid
       ? jobIncidents.find((x) => x.incident_uuid === attachIncidentUuid)
       : undefined;
+    // Store the photo's BYTES, not the File.
+    //
+    // A File off an <input> is a reference to a file on disk, not the data. This
+    // queue persists it and uploads it later, sometimes days later, across
+    // reloads. On iOS/WebKit that reference can go stale, and a stale File does
+    // not fail loudly: appending it to FormData yields a request whose body never
+    // serialises, so the server sees an empty body. Reading it once, here, while
+    // the handle is still live, makes the queued photo self-contained. See
+    // ADR 0017.
+    const bytes = await file.arrayBuffer();
     const stored: StoredPhoto = {
       id: photoId,
       job_uuid: jobUuid.trim(),
       created_at: new Date().toISOString(),
       mime: file.type || "image/jpeg",
       caption,
-      blob: file,
+      blob: new Blob([bytes], { type: file.type || "image/jpeg" }),
       drive_status: "pending",
       incident_uuid: inc?.incident_uuid,
       claim_number: inc?.claim_number,

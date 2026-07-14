@@ -9,6 +9,7 @@ import {
   EXPENSE_CATEGORIES,
   fetchHistory,
   newReimbursementUuid,
+  toQueuedPhoto,
   renderedRows,
   retryFailed,
   syncQueue,
@@ -179,8 +180,11 @@ export default function Reimbursement() {
           job_date: "",
           expense_date: expenseDate,
           notes,
-          odo_start_blob: odoStartFile,
-          odo_end_blob: odoEndFile,
+          // Read the picked files into BYTES now, while the File handles are
+          // still live. Persisting the File itself means persisting a reference
+          // to a file on disk, and that reference can die before the queue drains.
+          odo_start_blob: await toQueuedPhoto(odoStartFile),
+          odo_end_blob: await toQueuedPhoto(odoEndFile),
           created_at: new Date().toISOString(),
         });
         await refresh();
@@ -227,7 +231,7 @@ export default function Reimbursement() {
         job_date: "",
         expense_date: expenseDate,
         notes,
-        receipt_blob: receiptFile,
+        receipt_blob: await toQueuedPhoto(receiptFile),
         created_at: new Date().toISOString(),
       });
       await refresh();
