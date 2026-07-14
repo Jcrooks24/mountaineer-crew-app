@@ -84,7 +84,7 @@ Check it after any deploy that adds a new tab.
 | Variable | Notes |
 |---|---|
 | `VITE_API_URL` | The backend origin. **Baked in at build time**, including into the service worker's caching rules, so changing it requires a rebuild, not just a restart. Pointing prod at the staging backend is a way to lose a day of crew data. |
-| `VITE_STAGING` | Set to `true` on the **staging project only**. Enables the staging-only "Preview as role" switch. Must never be set on prod. |
+| `VITE_STAGING` | Set to `true` on the **staging project only**. Enables the staging-only "Preview as role" switch (view the app as Crew / Crew Lead / Skill Rater without logging out). Must never be set on prod. **Baked in at build time: setting it in Vercel does nothing until the staging project is redeployed**, and when it is missing the switch renders nothing at all, with no error. Admin → Advanced Settings → **System Check** reports whether it reached the running build. See `frontend/.env.example`. |
 | `VITE_BUILD_ID` | Optional. Vercel injects `VERCEL_GIT_COMMIT_SHA` automatically, which the build picks up. |
 
 ## Google Cloud specifics

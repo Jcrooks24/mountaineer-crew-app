@@ -93,6 +93,21 @@ def _export(inc: Incident) -> None:
     run_export_in_background(export_incident_to_sheets, _to_out(inc).model_dump())
 
 
+def export_incident_by_uuid(db: Session, incident_uuid: str) -> None:
+    """Re-export one incident to the sheet by uuid. Called from the photo upload
+    route when a photo is tagged to an incident: the incident row carries a
+    photo_urls column, and photos are almost always attached *after* the incident
+    is filed, so without this the sheet's photo links stay empty forever. Quiet
+    no-op if the incident isn't found (a photo can be tagged to an incident whose
+    own POST is still sitting in the offline queue; that POST exports on arrival)."""
+    uuid = (incident_uuid or "").strip()
+    if not uuid:
+        return
+    inc = db.query(Incident).filter(Incident.incident_uuid == uuid).first()
+    if inc is not None:
+        _export(inc)
+
+
 @router.post("", response_model=IncidentOut, status_code=201)
 def create_incident(
     body: IncidentIn,

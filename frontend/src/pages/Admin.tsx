@@ -4130,6 +4130,48 @@ function AdvancedSettingsPage() {
   );
 }
 
+// Reports whether the staging dev tools made it into the running build.
+//
+// VITE_STAGING is inlined by Vite at build time, and when it is missing the
+// "Preview as role" pill renders nothing: no error, no console warning, it is
+// simply absent. That failure mode cost us the ability to check what a non-rater
+// sees on the Job Report, and it is invisible from inside the app. So say it out
+// loud, here, where an admin already goes to ask "why is this not working".
+//
+// Setting the var in Vercel is NOT enough on its own: the build bakes it in, so
+// the staging project has to be redeployed before this flips to enabled.
+function StagingToolsCheck() {
+  const enabled = import.meta.env.VITE_STAGING === "true";
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+      <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
+        Staging dev tools
+      </div>
+      <div className="small" style={{ color: enabled ? "var(--ok)" : "var(--muted)" }}>
+        {enabled ? (
+          <>
+            ✓ Enabled. The <strong>VIEW AS</strong> pill at the bottom of the screen
+            previews the app as Crew, Crew Lead, or Skill Rater.
+          </>
+        ) : (
+          <>
+            Off. <code>VITE_STAGING</code> was not <code>true</code> when this build was
+            made, so the "Preview as role" pill is not rendering. On the staging project:
+            set <code>VITE_STAGING=true</code> in Vercel and <strong>redeploy</strong>
+            {" "}(the value is baked in at build time, so setting it alone changes nothing).
+            This is expected to be off on production.
+          </>
+        )}
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+        Note: previewing a role changes only what this browser renders. Your token is
+        still an admin token, so it does not test whether the server refuses the write.
+        For that, log in as a real crew account.
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────
 // Sheet-sync health check (System Check)
 // Verifies every app->sheet sync in one place. New feature syncs are picked up
@@ -4183,6 +4225,8 @@ function SheetSyncHealthCard() {
       </button>
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+
+      <StagingToolsCheck />
 
       {data && (
         <div style={{ marginTop: 12 }}>

@@ -8,6 +8,7 @@ from typing import Callable, List, Dict, Any, Optional, Set
 
 from sqlalchemy.orm import Session
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.google_cal_oauth import _build_authorized_http, _ssl_retry, _get_creds
 
@@ -2126,6 +2127,43 @@ INCIDENT_HEADERS = [
 ]
 
 
+def _incident_photo_urls(db: Session, incident_uuid: str, snapshot: Any) -> list:
+    """Every Drive URL belonging to an incident, newest link last.
+
+    `incidents.photo_urls` is only a snapshot of whatever the client had at the
+    moment the incident was filed, and the normal flow is the other way round:
+    file the incident, then get bounced to the Photos tab to attach photos to it.
+    So the snapshot is usually empty or short. The authoritative link is
+    `photos.incident_uuid` (see the model comment on Photo).
+
+    Read the photos table, union it with the snapshot (so a URL captured offline
+    and never re-uploaded is not lost), dedupe, and keep insertion order.
+    """
+    from app.db.models.photo import Photo  # local import to avoid a cycle
+
+    urls: list = []
+    seen: set = set()
+    for u in snapshot or []:
+        if isinstance(u, str) and u.strip() and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    try:
+        rows = (
+            db.query(Photo)
+            .filter(Photo.incident_uuid == incident_uuid)
+            .order_by(Photo.created_at.asc())
+            .all()
+        )
+    except SQLAlchemyError:
+        return urls  # DB blip: fall back to the snapshot rather than losing the row
+    for p in rows:
+        u = (p.drive_url or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    return urls
+
+
 def export_incident_to_sheets(db: Session, inc: Dict[str, Any]) -> int:
     """Replace-style export: one row per incident_uuid on the Incidents tab, so
     admin edits (resolve, notes, cost) overwrite in place."""
@@ -2153,7 +2191,7 @@ def export_incident_to_sheets(db: Session, inc: Dict[str, Any]) -> int:
         "est_cost": inc.get("est_cost") if inc.get("est_cost") is not None else "",
         "resolved": "Y" if inc.get("resolved") else "N",
         "notes": inc.get("notes") or "",
-        "photo_urls": ", ".join(inc.get("photo_urls") or []),
+        "photo_urls": ", ".join(_incident_photo_urls(db, uuid, inc.get("photo_urls"))),
         "created_at": inc.get("created_at") or "",
     }
     _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])

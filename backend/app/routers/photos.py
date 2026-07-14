@@ -13,6 +13,7 @@ from app.integrations.drive_upload import (
     update_drive_file_description,
     upload_photo_to_drive,
 )
+from app.routers.incidents import export_incident_by_uuid
 
 router = APIRouter(prefix="/api/photos", tags=["photos"])
 
@@ -92,6 +93,13 @@ def upload_photo(
         db.rollback()
         traceback.print_exc()
         return {"ok": False, "photo_id": photo_id, "error": "Failed to save photo record"}
+
+    # This photo belongs to an incident, so the incident's sheet row is now out
+    # of date: its photo_urls column is rebuilt from the photos table on export.
+    # Crew file the incident first and attach photos afterwards, so without this
+    # re-export the incident would sit in the sheet with no photo links at all.
+    if incident_uuid:
+        export_incident_by_uuid(db, incident_uuid)
 
     return {
         "ok": True,

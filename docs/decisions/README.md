@@ -51,3 +51,4 @@ written retroactively is a decision log that is already wrong.
 | [0013](0013-rejected-queue-work-is-never-deleted.md) | A queue never deletes work the server rejected | It marks it failed and shows the crew member. **Five queues still need this.** |
 | [0014](0014-skill-rating-is-designated-not-inherited.md) | Skill rating is designated, never inherited | The `crew_lead` role does not grant it. Only `admin` + the per-person `is_skill_rater` flag do. |
 | [0015](0015-inventory-logging-is-paused-on-local-jobs.md) | Inventory logging is paused on local jobs | Hidden, not deleted. Too slow to use in the field; LD keeps it. Do not remove the code. |
+| [0016](0016-logged-items-are-snapshots-not-catalogue-references.md) | A logged item is a snapshot, not a catalogue reference | No FK to the catalogue, on purpose. **Do not normalize this**, it would rewrite history. |
