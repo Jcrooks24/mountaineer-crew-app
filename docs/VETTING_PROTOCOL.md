@@ -65,7 +65,11 @@ duplicate.
   RODS (`rodsStore`), per-diem (`ldDayStore`), photos (`photoStore` IndexedDB),
   reimbursements (`reimbursementStore`). A new write path MUST follow this shape.
 - Sync drains in order; transient failures (offline / 5xx / 408 / 401 / 403)
-  stay queued; only permanent 4xx are dropped (poison-pill) with a `console.warn`.
+  stay queued. A permanent 4xx is **marked failed and kept**, never deleted, and
+  is shown to the crew member with a reason and a Retry
+  ([ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md)). A queue
+  that deletes rejected work is a finding, including a brand-new queue: the rule
+  binds the one you are writing now, not just the ones already on the list.
 - Drafts autosave before submit (BOL draft, RODS day, report draft) so nothing
   is lost if the app is backgrounded mid-entry.
 - **Failure modes:** a mutation that hits the API without enqueuing (lost when
@@ -75,6 +79,75 @@ duplicate.
 - **Verify:** DevTools offline -> perform the action -> reload (state persists)
   -> go online -> confirm it syncs with no dupes. Grep the changed store's
   `syncQueue` for the permanent-vs-transient split.
+
+### Behavior 1a - Queued work is SELF-CONTAINED (no live handles)
+
+**Invariant:** a queued payload is plain data. Every field is a **value** - string,
+number, boolean, `ArrayBuffer` - never a **handle** to something that lives outside
+the queue: `File`, `Blob`, `URL`, a DOM node, a stream, an object URL.
+
+This is its own check because the rest of Behavior 1 cannot see it. "The queue
+survives a reload" and "the queued payload is still USABLE after a reload" are
+different claims, and we shipped a bug that satisfied the first and failed the
+second.
+
+A `File` off an `<input>` is a *reference to a file on disk*, not the image. Persist
+it, reload, come back two days later, and the reference can be dead. **A dead
+reference does not throw.** Appending it to `FormData` produces a request whose body
+never serialises: the server gets an empty body, every form field looks absent, and
+the API complains about the one field that has no default. The error then names a
+field the client provably sends, on the first line of the form, unconditionally. See
+[ADR 0017](decisions/0017-offline-queues-store-bytes-not-file-handles.md).
+
+- **The check (10 seconds, deterministic, needs no device):** for every type that is
+  written to IndexedDB / localStorage / any queue that drains later, read its field
+  list. Any `Blob`, `File`, or `URL` in it is a **finding**.
+
+  ```
+  grep -rn ": *Blob\|: *File\|Blob | null\|File | null" frontend/src/lib
+  ```
+
+  The grep surfaces **candidates**, not findings. A `Blob` as a *function parameter*
+  or a local is fine - it is transient and dies with the call. It is a finding only
+  when the field belongs to a type that gets **persisted**. Run it against the
+  pre-fix tree and it prints exactly the four fields that were the bug
+  (`reimbursementStore`'s three `_blob` fields and `photoStore.blob`), which is the
+  standard to hold it to.
+
+  Images go in as bytes via `lib/queuedPhoto.ts` (`toQueuedPhoto` on the way in,
+  `slotToBlob` on the way out). Do not hand-roll a second copy of that.
+
+- **The upload path must materialise the bytes BEFORE building the request**, so an
+  unrecoverable payload throws where we can tell the crew member, instead of
+  silently posting an empty body.
+
+- **A round-trip unit test does NOT catch this, and will tell you it is fine.**
+  Write the entry, read it back, assert - it passes, because in a test environment
+  the handle is never dead. It is worse than no test: it is false comfort. The
+  static rule above is the check; the test is not.
+
+- **DevTools offline on desktop does NOT catch this either.** Chrome keeps blobs
+  alive. This is a WebKit/iOS failure and the crew are on phones. Any verification
+  of a binary payload that runs only on a desktop browser proves nothing about the
+  device the bug happens on.
+
+- **The test for a NEW feature:** does a `File` or `Blob` outlive the event handler
+  that produced it? If yes, it must be bytes.
+
+### Triage rule: when the server rejects a field the client provably sends
+
+If an API reports a required field missing, and you can read the client code and see
+it being sent unconditionally, **stop looking at the field.** Look at the body.
+
+"A required form field is missing" has two very different causes, and the field name
+alone cannot tell them apart: the client genuinely omitted it, **or the body never
+parsed** - empty body, dead blob, multipart with no boundary - and so *every* field
+looks missing while only the one without a default is reported.
+
+The `content-length` on the failing request is what separates them, which is why the
+422 handler in `app/main.py` logs `content-type` and `content-length` and must keep
+doing so. A payload with a photo attached and a content-length of a few hundred bytes
+is the whole diagnosis.
 
 ## Core Behavior 2 - Cross-device continuity
 
