@@ -276,7 +276,7 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
     { tab: "employees", label: "Employees",    hint: "Crew access and roles" },
     { tab: "dvir",      label: "DVIR Review",  hint: "Mechanic sign-off on inspections" },
     { tab: "estimator", label: "Estimator",    hint: "Build and price estimates" },
-    { tab: "notes",     label: "Notes",        hint: "Patch notes and admin notes" },
+    { tab: "notes",     label: "Patch Notes",  hint: "Publish app update notes to the crew" },
     { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
     { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
     { tab: "incidents", label: "Incidents",    hint: "Crew-reported incident log" },

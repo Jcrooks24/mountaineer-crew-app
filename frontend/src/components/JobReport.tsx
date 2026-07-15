@@ -1234,6 +1234,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       recyclingPct={data.recycling_pct}
       employeeHours={loaded ? data.employee_hours : undefined}
       personalVehicleCount={loaded && data.bill_personal_vehicles ? data.personal_vehicles : 0}
+      truckCount={
+        loaded
+          ? data.truck_fullness.filter((t) => (t.truck || "").trim().length > 0).length
+          : undefined
+      }
     >
       {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>

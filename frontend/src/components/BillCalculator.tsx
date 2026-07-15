@@ -34,7 +34,7 @@ type LineItem = {
   rate: number;
   unit: Unit;
   discount: number;   // per-line % (0–100)
-  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips" | "personal_vehicle";
+  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips" | "personal_vehicle" | "truck";
 };
 
 type Bill = {
@@ -184,11 +184,15 @@ type Props = {
   // Personal vehicles the crew flagged to bill as crew transport ($100/day).
   // Number of vehicles; 0 means "don't bill". One line item per vehicle.
   personalVehicleCount?: number;
+  // Number of trucks recorded in the Report's Truck fullness section. Each one
+  // auto-populates a "Truck (per hour)" line at $90/hr, mirroring how employee
+  // hours auto-populate labor lines. 0 = no trucks recorded.
+  truckCount?: number;
   children?: (slots: BillSlots) => ReactNode;
 };
 
 const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
-  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, employeeHours, personalVehicleCount, children },
+  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, employeeHours, personalVehicleCount, truckCount, children },
   ref,
 ) {
   const { settings: themeSettings } = useTheme();
@@ -432,6 +436,53 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       return { ...prev, items: nextItems };
     });
   }, [loaded, personalVehicleCount]);
+
+  // ── Trucks billed per hour ($90/hr) ──
+  // Each truck recorded in the Report's Truck fullness section gets one "Truck
+  // (per hour)" line, so admin doesn't hand-add them. The hours default to the
+  // job's longest single shift (a truck runs at least the length of the longest
+  // crew member's day) as a starting point admin can adjust; a truck line the
+  // admin has already edited keeps its qty and rate on later renders, like the
+  // labor and vehicle lines.
+  useEffect(() => {
+    if (!loaded || truckCount === undefined) return;
+    // Longest billable shift, as the default truck-hours proxy.
+    const defaultTruckHours = (employeeHours ?? []).reduce(
+      (max, e) => (e.non_billable ? max : Math.max(max, roundBillableQuarter(e.hours || 0))),
+      0,
+    ) || 1;
+    setBill((prev) => {
+      const desired = [] as LineItem[];
+      for (let i = 1; i <= truckCount; i++) {
+        const label = `Truck #${i} (per hour)`;
+        const existing = prev.items.find((it) => it.source === "truck" && it.label === label);
+        desired.push({
+          id: existing?.id ?? uuid(),
+          label,
+          // Preserve an admin-edited value; only default on first creation.
+          qty: existing ? existing.qty : defaultTruckHours,
+          rate: existing ? existing.rate : 90,
+          unit: "hr",
+          discount: existing?.discount ?? 0,
+          source: "truck",
+        });
+      }
+      const otherItems = prev.items.filter((it) => it.source !== "truck");
+      const nextItems = [...otherItems, ...desired];
+      if (nextItems.length === prev.items.length) {
+        const same = nextItems.every((n, i) => {
+          const p = prev.items[i];
+          return p && p.id === n.id && p.label === n.label &&
+            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
+            p.discount === n.discount && p.source === n.source;
+        });
+        if (same) return prev;
+      }
+      return { ...prev, items: nextItems };
+    });
+    // employeeHours only feeds the DEFAULT for a new line; existing lines are
+    // preserved, so re-running when hours change won't stomp an admin edit.
+  }, [loaded, truckCount, employeeHours]);
 
   // ── Materials: local cache + queue (offline-safe) ────────────────────────────
   function refreshMaterials() {
