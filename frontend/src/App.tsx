@@ -1009,7 +1009,13 @@ export default function App() {
         note: e.note ?? null,
         job_name: loadJobMeta(e.job_uuid)?.jobName || localStorage.getItem(JOB_NAME_PREFIX + e.job_uuid) || "",
         job_date: loadJobMeta(e.job_uuid)?.jobDate || localStorage.getItem(JOB_DATE_PREFIX + e.job_uuid) || "",
-        created_by: user?.name || user?.email || "",
+        // Send the author stamped when the event was CREATED (recordEvent), not
+        // whoever is logged in now. On a shared phone the sync can fire under a
+        // different session than the one that logged the event; overwriting with
+        // the current user misattributed A's field work to B. Fall back to the
+        // current user only for legacy queued events that predate this and have
+        // no stored author.
+        created_by: e.created_by || user?.name || user?.email || "",
       })),
     };
 

@@ -29,7 +29,10 @@ class Event(Base):
     # Defaults to `logged_at` on insert; crew can correct it via the timeline
     # UI (e.g. when an event is logged after the fact). Sheet writes use this
     # value in the `timestamp` column.
-    timestamp = Column(DateTime, nullable=False)
+    # Indexed: GET /api/events sorts by timestamp DESC on every history pull, and
+    # this table only grows. Without the index that sort is a full scan that gets
+    # slower forever (OOM-adjacent on the 512 MB worker).
+    timestamp = Column(DateTime, nullable=False, index=True)
 
     # Immutable record of when the device actually captured the event. Set
     # from the client's device time at insert and never updated thereafter -

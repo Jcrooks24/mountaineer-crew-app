@@ -39,6 +39,7 @@ from app.db.models.user_email_alias import UserEmailAlias
 from app.db.session import get_db
 from app.integrations.sheets_export import (
     _billable_man_hours,
+    _incident_photo_urls,
     estimated_hours_for,
     update_entry_status_in_sheets,
 )
@@ -682,13 +683,13 @@ def job_summary(
                 "resolved": bool(i.resolved),
                 "notes": i.notes,
                 "reported_by_name": i.reported_by_name,
-                # Rebuilt from the photos table, not the incident's stale snapshot
-                # (photos are attached AFTER the incident is filed).
-                "photo_urls": [
-                    p.drive_url
-                    for p in photos
-                    if p.incident_uuid == i.incident_uuid and p.drive_url
-                ],
+                # Same helper the sheet export uses: unions the photos table with
+                # the incident's own snapshot, so a URL captured offline and never
+                # re-uploaded is not lost, and it queries photos by incident_uuid
+                # directly rather than filtering the job's photo list (which is
+                # capped at 1000 - the incident's photos are attached later and
+                # would be exactly the truncated ones on a busy job).
+                "photo_urls": _incident_photo_urls(db, i.incident_uuid, _decode_json_list(i.photo_urls)),
                 "created_at": _iso(i.created_at),
             }
             for i in incidents
