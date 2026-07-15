@@ -14,6 +14,8 @@ import {
   enqueueAdd as storeEnqueueAdd,
   enqueueDeleteOrCancel as storeEnqueueDeleteOrCancel,
   renderedForJob,
+  retryFailedMaterial,
+  discardFailedMaterial,
   syncQueue,
   fetchAndCache,
   type LiveMaterial,
@@ -696,25 +698,42 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
               const unit = m.unitPrice == null ? "TBD" : fmt(m.unitPrice);
               const ext = m.unitPrice == null ? "-" : fmt(materialExt(m));
               return (
-                <div key={m.submissionId} style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 60px 90px 80px 28px",
-                  gap: 6, padding: "6px 12px 6px 28px",
-                  borderBottom: "1px solid var(--border)",
-                  alignItems: "center",
-                  fontSize: 12, color: "var(--text)",
-                  opacity: m.pending ? 0.75 : 1,
-                }}>
-                  <span style={{ color: "var(--muted)" }}>
-                    • {m.name}
-                    {m.pending && <span title="Waiting to sync" style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
-                  </span>
-                  <span style={{ textAlign: "right", color: "var(--muted)" }}>×{m.qty}</span>
-                  <span style={{ textAlign: "right", color: "var(--muted)" }}>{unit}</span>
-                  <span style={{ textAlign: "right", fontWeight: 600 }}>{ext}</span>
-                  <button type="button" onClick={() => removeMaterial(m.submissionId)}
-                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
-                    aria-label="Remove material">×</button>
+                <div key={m.submissionId}>
+                  <div style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 60px 90px 80px 28px",
+                    gap: 6, padding: "6px 12px 6px 28px",
+                    borderBottom: m.failed ? "none" : "1px solid var(--border)",
+                    alignItems: "center",
+                    fontSize: 12, color: "var(--text)",
+                    opacity: m.pending && !m.failed ? 0.75 : 1,
+                  }}>
+                    <span style={{ color: "var(--muted)" }}>
+                      • {m.name}
+                      {m.failed
+                        ? <span style={{ marginLeft: 6, fontSize: 10, color: "var(--danger)", fontWeight: 700 }}>NOT SENT</span>
+                        : m.pending && <span title="Waiting to sync" style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
+                    </span>
+                    <span style={{ textAlign: "right", color: "var(--muted)" }}>×{m.qty}</span>
+                    <span style={{ textAlign: "right", color: "var(--muted)" }}>{unit}</span>
+                    <span style={{ textAlign: "right", fontWeight: 600 }}>{ext}</span>
+                    <button type="button" onClick={() => removeMaterial(m.submissionId)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
+                      aria-label="Remove material">×</button>
+                  </div>
+                  {/* The server refused this item. It is kept, not deleted (ADR
+                      0013); the crew see why and can retry or discard. */}
+                  {m.failed && (
+                    <div style={{ padding: "0 12px 8px 28px", borderBottom: "1px solid var(--border)" }}>
+                      <div className="small" style={{ color: "var(--muted)" }}>{m.failedReason || "The server rejected this."}</div>
+                      <div className="row" style={{ gap: 8, marginTop: 4 }}>
+                        <button type="button" onClick={() => { void retryFailedMaterial(m.submissionId).then(refreshMaterials); }}
+                          style={{ padding: "4px 10px", fontSize: 12, minHeight: 36, borderRadius: 8, border: "1px solid var(--brand)", background: "transparent", color: "var(--brand)", fontWeight: 700 }}>Retry</button>
+                        <button type="button" onClick={() => { discardFailedMaterial(m.submissionId); refreshMaterials(); }}
+                          style={{ padding: "4px 10px", fontSize: 12, minHeight: 36, borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)" }}>Discard</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}

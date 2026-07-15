@@ -1,7 +1,8 @@
 # 0013. A queue never deletes work the server rejected
 
-**Status:** Active. Implemented in `reimbursementStore`, `incidentStore`, `offJobStore`,
-and `jobInventoryQueue`. **Six queues still need this.** See "Still to port" below.
+**Status:** Active, and **fully rolled out**: all ten offline queues honor this as of
+2026-07-15. The remaining work is crew-facing retry UI for three of them, not the
+data-loss fix. See "Still to port" below. The rule binds every *future* queue too.
 
 ## Context
 
@@ -88,21 +89,30 @@ on a 4xx, which is the same outcome by a slower route.
 
 ## Still to port
 
-These six queues all keep the original delete-on-4xx behaviour. Each one can destroy
-field work exactly as reimbursements did:
+**Done. All ten queues have been ported** (2026-07-15): `reimbursementStore`,
+`incidentStore`, `offJobStore`, `jobInventoryQueue`, then the final six -
+`rodsStore`, `materialsStore`, `bolStore`, `ldDayStore`, `officeHoursStore`,
+`estimatorQueue`. None deletes on a permanent 4xx; each marks the entry failed,
+skips it in the drain, and exposes retry/discard.
 
-| Store | What it can destroy |
-|---|---|
-| `rodsStore` | **DOT duty-status records.** Losing one is a compliance problem, not an annoyance. Do this one first. |
-| `materialsStore` | Materials logged against a job. Feeds billing. |
-| `bolStore` | Bills of lading, including customer signatures. |
-| `ldDayStore` | Long-distance day records. Feeds per-diem and drive-day pay. |
-| `officeHoursStore` | Office hours entries. Feeds payroll. |
-| `estimatorQueue` | Estimate line items. Feeds the customer's quote. |
+Surfacing varies by whether the feature already had a list view: `materialsStore`
+(BillCalculator), `officeHoursStore` (Office Hours page), and `reimbursementStore`
+show a per-row failed state with Retry/Discard. `estimatorQueue` keeps the item on
+screen with a synchronous error and the row's own delete as discard. `rodsStore`,
+`ldDayStore`, and `bolStore` have no per-op list view yet, so their failed entries
+are kept and retryable via the store API (`failedDays`/`retryFailedDay`, etc.) but
+do not yet have a dedicated crew-facing screen - **that surfacing is the remaining
+follow-up**, not the data-loss fix, which is done.
 
-Port the pattern when each store is next touched, or as one deliberate sweep. Keep the
-entry in [Known defects](../RUNBOOKS.md#known-defects) accurate as they land, and delete
-it only when the last one is done.
+**Two structural notes for the next queue:**
+
+- `bolStore` ops are ordered `submit -> sign -> pdf` on one `bol_id`. A failed op
+  **blocks the later ops for the same BOL** (a `sign` must not run when the `submit`
+  that should have created the row was refused), while independent BOLs still drain.
+  Any multi-op queue needs the same dependency guard.
+- `estimatorQueue` and `jobInventoryQueue` have a `pruneStale()` that deletes old
+  entries. A failed entry is **exempt** from it - ageing field work out on a 14-day
+  timer is the same silent loss by a slower route.
 
 **A warning from this ADR's own first week.** It was written on 2026-07-13. The very next
 release added three new queues (incidents, off-job hours, job inventory), every one of

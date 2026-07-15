@@ -25,6 +25,7 @@
  */
 
 import { apiFetch, ApiError } from "../api/client";
+import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 import { getToken } from "../auth/token";
 import { addPhoto, updatePhoto, listPhotosForJob } from "./photoStore";
 import { slotToBlob, toQueuedPhoto } from "./queuedPhoto";
@@ -558,10 +559,11 @@ const QUEUE_KEY = "crew_bol_queue_v1";
 
 // Heterogeneous op queue: inventory upsert, a signing session, or a
 // (re)generate-and-upload of the signed PDF. Drained in order on reconnect.
-type QueueOp =
+type QueueOp = (
   | { op: "submit"; bol_id: string; payload: Record<string, unknown> }
   | { op: "sign"; bol_id: string; payload: Record<string, unknown> }
-  | { op: "pdf"; bol_id: string; job_uuid: string };
+  | { op: "pdf"; bol_id: string; job_uuid: string }
+) & MaybeFailed;
 
 function loadQueue(): QueueOp[] {
   try {
@@ -634,7 +636,25 @@ function enqueuePdf(bolId: string, jobUuid: string): void {
 }
 
 export function pendingSubmitCount(): number {
-  return loadQueue().length;
+  return loadQueue().filter((o) => !o.failed_at).length;
+}
+
+/** Ops the server permanently refused, kept for the crew to retry (ADR 0013). */
+export function failedBolOps(): QueueOp[] {
+  return loadQueue().filter((o) => o.failed_at);
+}
+
+/** Clear the failed mark on every op for this BOL so the next drain retries the
+ * whole submit->sign->pdf sequence in order. */
+export function retryFailedBol(bolId: string): Promise<number> {
+  saveQueue(loadQueue().map((o) => (o.bol_id === bolId ? { ...o, ...CLEARED_FAILURE } : o)));
+  return syncQueue();
+}
+
+/** Discard every failed op for this BOL. The only path that drops them without
+ * reaching the server. A BOL carries signatures, so confirm before calling. */
+export function discardFailedBol(bolId: string): void {
+  saveQueue(loadQueue().filter((o) => !(o.bol_id === bolId && o.failed_at)));
 }
 
 async function uploadBolPdfBlob(bolId: string, blob: Blob): Promise<void> {
@@ -658,8 +678,14 @@ let syncing = false;
 
 /** Drain the op queue in order: inventory upserts, signing sessions, and PDF
  * (re)generation+upload. Transient failures (offline / 5xx / 408 / auth) stay
- * queued for retry; permanent 4xx are dropped so one bad op can't wedge the
- * queue. Returns how many ops were confirmed this run. */
+ * queued for retry.
+ *
+ * A permanent 4xx is MARKED FAILED and KEPT, never dropped (ADR 0013): these ops
+ * carry customer and carrier signatures, and destroying one on a bad payload
+ * loses a signature with no other copy. A failed op also BLOCKS the later ops for
+ * the same bol_id (a sign must not run when the submit that should have created
+ * the row was refused), so the sequence stays coherent until the crew retries it.
+ * Returns how many ops were confirmed this run. */
 export async function syncQueue(): Promise<number> {
   if (!navigator.onLine || syncing) return 0;
   syncing = true;
@@ -668,7 +694,13 @@ export async function syncQueue(): Promise<number> {
     if (q.length === 0) return 0;
     const remaining: QueueOp[] = [];
     let synced = 0;
+    // bol_ids with an unsent op earlier in this pass. A later op for the same BOL
+    // must wait behind it - the ops are ordered submit->sign->pdf and each
+    // depends on the one before.
+    const blocked = new Set<string>();
     for (const op of q) {
+      if (op.failed_at) { remaining.push(op); blocked.add(op.bol_id); continue; }
+      if (blocked.has(op.bol_id)) { remaining.push(op); continue; }
       try {
         if (op.op === "submit") {
           await apiFetch("/api/bol", { method: "POST", body: JSON.stringify(op.payload) });
@@ -678,8 +710,9 @@ export async function syncQueue(): Promise<number> {
             body: JSON.stringify(op.payload),
           });
         } else {
-          // pdf: regenerate from the persisted draft, then upload. Skip (drop)
-          // if the draft is gone or no longer matches this bol_id.
+          // pdf: regenerate from the persisted draft, then upload. A missing/
+          // mismatched draft is a genuine no-op (nothing to regenerate), not a
+          // rejection, so it is acked rather than kept.
           const d = loadDraft(op.job_uuid);
           if (!d || d.bol_id !== op.bol_id) { synced++; continue; }
           const { generateBolPdf } = await import("./bolPdf");
@@ -688,18 +721,14 @@ export async function syncQueue(): Promise<number> {
         }
         synced++;
       } catch (e) {
-        const isPermanent =
-          e instanceof ApiError &&
-          e.status >= 400 &&
-          e.status < 500 &&
-          e.status !== 408 &&
-          e.status !== 401 &&
-          e.status !== 403;
-        if (isPermanent) {
-          console.warn(`[bol] dropping poison-pill ${op.op} (${op.bol_id}): ${e instanceof Error ? e.message : e}`);
+        if (isPermanentRejection(e)) {
+          remaining.push({ ...op, ...failureMark(e) });
         } else {
           remaining.push(op);
         }
+        // Either way this op did not land, so hold the rest of the sequence for
+        // this BOL until the next pass.
+        blocked.add(op.bol_id);
       }
     }
     saveQueue(remaining);

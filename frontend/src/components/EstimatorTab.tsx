@@ -545,9 +545,12 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
         const isPermanent =
           e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408;
         if (isPermanent) {
-          removeEstimatorOp(opId);
-          dropTempItem(tempId);
-          setErr(e instanceof ApiError ? e.message : "Add failed");
+          // Do NOT delete the op or the row (ADR 0013). The estimator is right
+          // here and sees the reason now; the item stays visible and stays in the
+          // queue (the drain marks it failed and keeps it), and the row's own
+          // delete button is the discard path. Deleting it here silently threw
+          // away the line item.
+          setErr(e instanceof ApiError ? `Item not saved: ${e.message}` : "Item not saved");
         }
         // else: network / 5xx - leave queued, drain will retry
       });
@@ -582,9 +585,10 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     drainEstimatorQueue(
       local.estimate_uuid,
       (tempId, server) => resolveTempItem(tempId, server),
-      (tempId, reason) => {
-        dropTempItem(tempId);
-        setErr(`An add failed and was dropped: ${reason}`);
+      (_tempId, reason) => {
+        // The item is KEPT (marked failed in the queue), not dropped (ADR 0013).
+        // It stays on screen; the row's delete button discards it if wanted.
+        setErr(`An item could not be saved: ${reason}. It is still shown - delete it or try again.`);
       },
     );
     // Run whenever the estimate UUID changes (including drill-down/back).

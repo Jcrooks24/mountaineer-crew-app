@@ -6,7 +6,8 @@
 // reloads and navigations; the EstimateDetail component drains it on
 // mount and merges any pending adds into its rendered state.
 
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch } from "../api/client";
+import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 
 export type EstimateItemPayload = {
   name: string;
@@ -24,7 +25,7 @@ export type QueuedAdd = {
   estimateUuid: string;
   payload: EstimateItemPayload;
   createdAt: string;  // ISO
-};
+} & MaybeFailed;
 
 export type ServerItem = {
   id: number;
@@ -82,9 +83,28 @@ export function pendingFor(estimateUuid: string): QueuedAdd[] {
   return loadAll().filter((o) => o.estimateUuid === estimateUuid);
 }
 
+function patch(opId: string, fields: MaybeFailed): void {
+  saveAll(loadAll().map((o) => (o.id === opId ? { ...o, ...fields } : o)));
+}
+
+/** Clear the failed mark so the next drain retries this add. */
+export function retryFailed(opId: string): void {
+  patch(opId, CLEARED_FAILURE);
+}
+
+/** Explicit, user-initiated delete of a failed add. Only path that drops it
+ * without reaching the server. */
+export function discardFailed(opId: string): void {
+  removeOp(opId);
+}
+
 export function pruneStale(): void {
   const cutoff = Date.now() - MAX_AGE_DAYS * 86_400_000;
   const q = loadAll().filter((o) => {
+    // A failed op is waiting on a person, not the network. Ageing it out would
+    // destroy the estimate line item on a timer - the same silent loss ADR 0013
+    // bans, just slower. It leaves only when the user retries or discards it.
+    if (o.failed_at) return true;
     const t = Date.parse(o.createdAt);
     return !Number.isFinite(t) || t >= cutoff;
   });
@@ -93,17 +113,19 @@ export function pruneStale(): void {
 
 // Drain queued adds for one estimate. `onResolved` fires for each successful
 // POST so the caller can swap tempId → server id in its rendered state.
-// `onDropped` fires when the server permanently rejects an op (4xx) - the
-// caller should remove the temp row. Network errors and 5xx leave the op
-// queued for next time.
+// `onFailed` fires when the server permanently rejects an op (4xx) so the caller
+// can render that temp row as "not sent" with the reason. The op is NOT dropped
+// (ADR 0013): it stays queued, marked, and leaves only when the user retries or
+// discards it. Network errors and 5xx leave the op queued for next time.
 export async function drain(
   estimateUuid: string,
   onResolved: (tempId: number, server: ServerItem) => void,
-  onDropped: (tempId: number, reason: string) => void,
+  onFailed: (tempId: number, reason: string) => void,
 ): Promise<void> {
   if (!navigator.onLine) return;
   const q = pendingFor(estimateUuid);
   for (const op of q) {
+    if (op.failed_at) continue; // waiting on a person, not the network
     try {
       const server = await apiFetch<ServerItem>(
         `/api/estimates/${encodeURIComponent(op.estimateUuid)}/items`,
@@ -117,19 +139,10 @@ export async function drain(
       removeOp(op.id);
       onResolved(op.tempId, server);
     } catch (e) {
-      if (
-        e instanceof ApiError &&
-        e.status >= 400 &&
-        e.status < 500 &&
-        e.status !== 408 &&
-        e.status !== 401 &&
-        e.status !== 403
-      ) {
-        // Permanent rejection - drop op, let caller clean UI. 401/403 are
-        // excluded: an expired token is transient, and dropping the op would
-        // silently lose queued field work - leave it for the next pass.
-        removeOp(op.id);
-        onDropped(op.tempId, e.message);
+      if (isPermanentRejection(e)) {
+        const mark = failureMark(e);
+        patch(op.id, mark);
+        onFailed(op.tempId, mark.failed_reason);
       } else {
         // Network / 5xx / timeout / auth - leave queued, stop this pass.
         return;

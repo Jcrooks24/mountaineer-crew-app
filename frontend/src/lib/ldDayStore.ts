@@ -7,7 +7,8 @@
  * and syncs on reconnect. Admin reads the payroll totals off the sheet.
  */
 
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch } from "../api/client";
+import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 import { readActiveJob } from "./bolStore";
 
 export type LdDay = {
@@ -82,7 +83,7 @@ export function setLdDay(date: string, patch: Partial<Pick<LdDay, "out_of_town" 
 
 const QUEUE_KEY = "crew_ld_day_queue_v1";
 
-type QueuedDay = { date: string; payload: Record<string, unknown> };
+type QueuedDay = { date: string; payload: Record<string, unknown> } & MaybeFailed;
 
 function loadQueue(): QueuedDay[] {
   try {
@@ -114,6 +115,20 @@ function enqueue(day: LdDay): void {
   saveQueue(q);
 }
 
+/** Days the server permanently refused, kept for retry (ADR 0013). */
+export function failedLdDays(): QueuedDay[] {
+  return loadQueue().filter((o) => o.failed_at);
+}
+
+export function retryFailedLdDay(date: string): Promise<number> {
+  saveQueue(loadQueue().map((o) => (o.date === date ? { ...o, ...CLEARED_FAILURE } : o)));
+  return syncQueue();
+}
+
+export function discardFailedLdDay(date: string): void {
+  saveQueue(loadQueue().filter((o) => o.date !== date));
+}
+
 let syncing = false;
 
 export async function syncQueue(): Promise<number> {
@@ -125,14 +140,15 @@ export async function syncQueue(): Promise<number> {
     const remaining: QueuedDay[] = [];
     let synced = 0;
     for (const op of q) {
+      if (op.failed_at) { remaining.push(op); continue; }
       try {
         await apiFetch("/api/long-distance/day", { method: "POST", body: JSON.stringify(op.payload) });
         synced++;
       } catch (e) {
-        const permanent =
-          e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 401 && e.status !== 403;
-        if (permanent) {
-          console.warn(`[ld-day] dropping poison-pill ${op.date}: ${e instanceof Error ? e.message : e}`);
+        // A permanent 4xx is marked failed and KEPT, not dropped (ADR 0013).
+        // These records feed per-diem and drive-day pay.
+        if (isPermanentRejection(e)) {
+          remaining.push({ ...op, ...failureMark(e) });
         } else {
           remaining.push(op);
         }

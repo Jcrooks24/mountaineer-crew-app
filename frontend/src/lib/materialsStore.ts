@@ -21,7 +21,8 @@
  * from the queue (no DELETE is needed because the server never saw the add).
  */
 
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch } from "../api/client";
+import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,10 @@ export type LiveMaterial = {
   createdAt: string;
   /** True while this item is still in the local queue (not yet confirmed by the server). */
   pending?: boolean;
+  /** The server permanently refused this item's add. It is kept, not deleted
+   * (ADR 0013); the reason is shown and the crew can retry or discard. */
+  failed?: boolean;
+  failedReason?: string;
 };
 
 export type AddMaterialInput = {
@@ -79,9 +84,10 @@ type AddPayload = {
   total: number;
 };
 
-type QueueOp =
+type QueueOp = (
   | { op: "add"; payload: AddPayload }
-  | { op: "delete"; submissionId: string; jobUuid: string };
+  | { op: "delete"; submissionId: string; jobUuid: string }
+) & MaybeFailed;
 
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
@@ -192,9 +198,18 @@ export function renderedForJob(jobUuid: string): LiveMaterial[] {
   const pendingAdds: LiveMaterial[] = [];
   for (const op of queue) {
     if (op.op === "delete" && op.jobUuid === jobUuid) {
-      deleted.add(op.submissionId);
+      // A FAILED delete did not reach the server, so the item still exists there
+      // and must not be hidden - otherwise the crew think they deleted something
+      // that is still on the bill. Only a still-in-flight delete hides the item.
+      if (!op.failed_at) deleted.add(op.submissionId);
     } else if (op.op === "add" && op.payload.job_uuid === jobUuid) {
-      pendingAdds.push(...payloadToLiveMaterials(op.payload));
+      pendingAdds.push(
+        ...payloadToLiveMaterials(op.payload).map((m) => ({
+          ...m,
+          failed: !!op.failed_at,
+          failedReason: op.failed_reason || undefined,
+        })),
+      );
     }
   }
 
@@ -204,9 +219,29 @@ export function renderedForJob(jobUuid: string): LiveMaterial[] {
   return merged;
 }
 
-/** Count of queued ops (across all jobs) waiting to sync. */
+/** Retry a failed add or delete (clear the mark, re-drain). */
+export function retryFailedMaterial(submissionId: string): Promise<number> {
+  saveQueue(
+    loadQueue().map((o) =>
+      opSubmissionId(o) === submissionId ? { ...o, ...CLEARED_FAILURE } : o,
+    ),
+  );
+  return syncQueue();
+}
+
+/** Discard a failed op. The only path that drops it without reaching the server. */
+export function discardFailedMaterial(submissionId: string): void {
+  saveQueue(loadQueue().filter((o) => opSubmissionId(o) !== submissionId));
+}
+
+function opSubmissionId(o: QueueOp): string {
+  return o.op === "add" ? o.payload.id : o.submissionId;
+}
+
+/** Count of queued ops (across all jobs) still waiting to sync. Excludes failed
+ * ops, which are waiting on a person, not the network. */
 export function pendingOpCount(): number {
-  return loadQueue().length;
+  return loadQueue().filter((o) => !o.failed_at).length;
 }
 
 // ── Write ────────────────────────────────────────────────────────────────────
@@ -291,6 +326,7 @@ export async function syncQueue(): Promise<number> {
     const remaining: QueueOp[] = [];
     let synced = 0;
     for (const op of q) {
+      if (op.failed_at) { remaining.push(op); continue; } // waiting on a person
       try {
         if (op.op === "add") {
           await apiFetch("/api/materials", {
@@ -305,23 +341,11 @@ export async function syncQueue(): Promise<number> {
         }
         synced++;
       } catch (e) {
-        // 401/403 are excluded - an expired token is transient; dropping the
-        // op would silently lose a crew member's queued field work.
-        const isPermanent =
-          e instanceof ApiError &&
-          e.status >= 400 &&
-          e.status < 500 &&
-          e.status !== 408 &&
-          e.status !== 401 &&
-          e.status !== 403;
-        if (isPermanent) {
-          const label = op.op === "delete" ? `delete ${op.submissionId}` : `add ${op.payload.id}`;
-          console.warn(
-            `[materials] dropping poison-pill op (${label}): ${
-              e instanceof Error ? e.message : e
-            }`,
-          );
-          // Drop - do NOT push onto remaining
+        // Permanent 4xx: mark failed and KEEP (ADR 0013). Materials feed billing;
+        // dropping one silently loses a line item. Transient (network / 5xx /
+        // 408 / 401 / 403) stays queued for the next drain.
+        if (isPermanentRejection(e)) {
+          remaining.push({ ...op, ...failureMark(e) });
         } else {
           remaining.push(op);
         }

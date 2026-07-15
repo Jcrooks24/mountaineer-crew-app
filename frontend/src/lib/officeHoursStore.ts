@@ -13,7 +13,8 @@
  *   reliability bar as crew materials.
  */
 
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch } from "../api/client";
+import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,9 @@ export type OfficeHoursEntry = {
   updated_at: string;
   /** True while this entry is still in the local queue. */
   pending?: boolean;
+  /** The server permanently refused this entry; kept, not deleted (ADR 0013). */
+  failed?: boolean;
+  failedReason?: string;
 };
 
 export type OfficeHoursInput = {
@@ -42,9 +46,10 @@ export type OfficeHoursInput = {
   notes: string;
 };
 
-type QueueOp =
+type QueueOp = (
   | { op: "upsert"; payload: OfficeHoursInput; submitted_at: string; user_name: string }
-  | { op: "delete"; entry_uuid: string };
+  | { op: "delete"; entry_uuid: string }
+) & MaybeFailed;
 
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
@@ -163,8 +168,9 @@ export function rendered(): OfficeHoursEntry[] {
   const upsertMap = new Map<string, QueueOp & { op: "upsert" }>();
   for (const op of queue) {
     if (op.op === "delete") {
-      deleted.add(op.entry_uuid);
-      // a pending upsert for an entry we're about to delete is cancelled
+      // A failed delete never reached the server, so the entry still exists there
+      // and must not be hidden locally.
+      if (!op.failed_at) deleted.add(op.entry_uuid);
       upsertMap.delete(op.entry_uuid);
     } else {
       upsertMap.set(op.payload.entry_uuid, op);
@@ -191,6 +197,8 @@ export function rendered(): OfficeHoursEntry[] {
       created_at: op.submitted_at,
       updated_at: op.submitted_at,
       pending: true,
+      failed: !!op.failed_at,
+      failedReason: op.failed_reason || undefined,
     });
   }
 
@@ -205,7 +213,22 @@ export function rendered(): OfficeHoursEntry[] {
 }
 
 export function pendingOpCount(): number {
-  return loadQueue().length;
+  return loadQueue().filter((o) => !o.failed_at).length;
+}
+
+function opEntryUuid(o: QueueOp): string {
+  return o.op === "upsert" ? o.payload.entry_uuid : o.entry_uuid;
+}
+
+/** Retry a failed office-hours op (clear the mark, re-drain). */
+export function retryFailedOfficeHours(entryUuid: string): Promise<number> {
+  saveQueue(loadQueue().map((o) => (opEntryUuid(o) === entryUuid ? { ...o, ...CLEARED_FAILURE } : o)));
+  return syncQueue();
+}
+
+/** Discard a failed op. Only path that drops it without reaching the server. */
+export function discardFailedOfficeHours(entryUuid: string): void {
+  saveQueue(loadQueue().filter((o) => opEntryUuid(o) !== entryUuid));
 }
 
 // ── Write ────────────────────────────────────────────────────────────────────
@@ -256,6 +279,7 @@ export async function syncQueue(): Promise<number> {
     const remaining: QueueOp[] = [];
     let synced = 0;
     for (const op of q) {
+      if (op.failed_at) { remaining.push(op); continue; }
       try {
         if (op.op === "upsert") {
           await apiFetch("/api/office-hours", {
@@ -269,22 +293,10 @@ export async function syncQueue(): Promise<number> {
         }
         synced++;
       } catch (e) {
-        // 401/403 are excluded - an expired token is transient; dropping the
-        // op would silently lose the admin's queued hours entry.
-        const isPermanent =
-          e instanceof ApiError &&
-          e.status >= 400 &&
-          e.status < 500 &&
-          e.status !== 408 &&
-          e.status !== 401 &&
-          e.status !== 403;
-        if (isPermanent) {
-          const label = op.op === "delete" ? `delete ${op.entry_uuid}` : `upsert ${op.payload.entry_uuid}`;
-          console.warn(
-            `[office-hours] dropping poison-pill op (${label}): ${
-              e instanceof Error ? e.message : e
-            }`,
-          );
+        // Permanent 4xx: mark failed and KEEP (ADR 0013). Office hours feed
+        // payroll. Transient stays queued.
+        if (isPermanentRejection(e)) {
+          remaining.push({ ...op, ...failureMark(e) });
         } else {
           remaining.push(op);
         }

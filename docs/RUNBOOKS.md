@@ -270,41 +270,17 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    reinstall as a troubleshooting step** unless you have confirmed their queues are
    empty.
 
-2. **Queued work is silently dropped after 14 days**, and in most queues any 4xx
-   response (other than 401, 403, 408) drops the op with only a console warning. A
-   backend validation change can therefore silently delete queued field work from crew
-   devices. Tighten server validation carefully.
+2. **RESOLVED 2026-07-15: queued work is no longer dropped on a 4xx.** All ten offline
+   queues now mark a rejected op `failed` and keep it, per
+   [ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md). A backend
+   validation change can no longer silently delete queued field work. The `pruneStale`
+   14-day sweep in `estimatorQueue` / `jobInventoryQueue` now exempts failed entries too.
 
-   **Fixed for reimbursements (2026-07-13).** `reimbursementStore` now marks a rejected
-   submission `failed` and keeps it in the queue, with the reason and a Retry button on
-   the crew member's screen. It leaves the queue only when a person says so. This was
-   not theoretical: a real mileage submission was destroyed by a 422 on staging, which
-   is what prompted the fix.
-
-   **Fixed in four queues** (`reimbursementStore`, `incidentStore`, `offJobStore`,
-   `jobInventoryQueue`). **Still unfixed in six**, which all keep the original
-   drop-on-4xx behaviour and can each destroy field work the same way:
-
-   | Store | What a 4xx can destroy |
-   |---|---|
-   | `rodsStore` | DOT duty-status records. A compliance problem, not an annoyance. **Fix first.** |
-   | `materialsStore` | Materials logged against a job. Feeds billing. |
-   | `bolStore` | Bills of lading, including customer signatures. |
-   | `ldDayStore` | Long-distance day records. Feeds per-diem and drive-day pay. |
-   | `officeHoursStore` | Office hours entries. Feeds payroll. |
-   | `estimatorQueue` | Estimate line items. Feeds the customer's quote. |
-
-   The pattern to copy, and why deleting is the tempting wrong answer, is written up in
-   [ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md). The reference
-   implementations are `reimbursementStore.ts` (IndexedDB, with photo blobs) and
-   `incidentStore.ts` (localStorage, the simpler one to copy). The shared pieces are in
-   `lib/queueFailure.ts`. Delete this defect entry only when the last of the six is done.
-
-   **How this list went stale once already, so keep it honest:** the ADR was written on
-   2026-07-13, and the same release then shipped three *new* queues (incidents, off-job
-   hours, job inventory) that all had the banned drop-on-4xx behaviour, while this table
-   still said "five". A count that is not updated when a queue is added is worse than no
-   count, because it reads as an audit that was done. If you add a queue, add it here.
+   **Remaining follow-up (not data loss):** three queues keep and retry failed ops via
+   the store API but have no dedicated crew-facing screen yet - `rodsStore`, `ldDayStore`,
+   and `bolStore` ops. Their data is safe; they just need a list view with Retry/Discard
+   (the other queues surface it inline). Any *new* queue must honor ADR 0013 from the
+   start - the rule binds the queue you are about to write, not just the ones listed here.
 
    **Note the production gap:** the reimbursement fix was hotfixed to `main`
    (`724e3e1`), but the five above are unfixed on **both** branches, so this is losing
