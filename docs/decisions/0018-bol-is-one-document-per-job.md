@@ -51,10 +51,24 @@ items stream to the server as they are added.**
 
 ## Consequences
 
-- **Existing BOLs are not orphaned.** They carry old random ids, but `fetchRemoteBol`
-  finds them by `job_uuid` and adoption keeps the server's id. A device opening such a
-  job adopts the existing row and keeps upserting it. Only *new* BOLs get the
-  deterministic id. Nothing already signed is lost.
+- **Existing BOLs are not orphaned _when the second device opens the job online_.**
+  They carry old random ids, but `fetchRemoteBol` finds them by `job_uuid` and adoption
+  keeps the server's id, so an online device adopts the existing row and keeps upserting
+  it. Only *new* BOLs get the deterministic id. Nothing already signed is lost.
+
+  **The gap (found in the naive vet of this change):** if a device first opens a legacy
+  job's BOL while OFFLINE, `fetchRemoteBol` returns null, so it mints the DERIVED id and,
+  on reconnect, creates a *second* server row for that job (random + derived). Thereafter
+  `fetchRemoteBol` returns only the newest row, so two devices can flip-flop between them
+  and `listOpenBols` shows the job twice. This re-creates the two-rows-per-job split, but
+  ONLY for BOLs that already existed before this deploy AND are first reopened offline on
+  a second device. New BOLs converge even offline (same derived id on every device).
+
+  **At promotion**, decide based on the data: if there are no open (non-delivered) legacy
+  BOLs, the exposure is nil. If there are, back-fill their `bol_id` to
+  `bolIdForJob(job_uuid)` before promoting, or accept the narrow edge for those in-flight
+  documents. Do not auto-merge on the server: two genuinely-distinct offline BOLs for one
+  job must not be silently collapsed, since one carries signatures the other does not.
 - **Concurrent editing of the same BOL on two devices is not fully solved**, and this
   is deliberate. The union merge preserves additions from both sides but **cannot
   express a deletion**: an item deleted on device A while device B still holds it will

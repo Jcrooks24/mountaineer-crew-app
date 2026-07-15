@@ -554,9 +554,9 @@ def job_summary(
         .all()
     )
 
-    employee_hours = _json.loads(report.employee_hours_json or "[]") if report else []
-    if not isinstance(employee_hours, list):
-        employee_hours = []
+    # Tolerant decode: a corrupt JSON column must degrade to empty, not 500 the
+    # whole summary page (the point of this endpoint is to show a job WHOLE).
+    employee_hours = _decode_json_list(report.employee_hours_json) if report else []
 
     # Est-vs-actual hours. Same helpers the sheet export uses, so the page and the
     # spreadsheet can never disagree about a number admin is reading off both.
@@ -597,7 +597,7 @@ def job_summary(
                 "vehicle_number": d.vehicle_number,
                 "trailer_number": d.trailer_number,
                 "condition": d.condition,
-                "defects": _json.loads(d.defects_json) if d.defects_json else [],
+                "defects": _decode_json_list(d.defects_json),
                 "defect_notes": d.defect_notes,
                 "driver_name": d.driver_name,
                 "mechanic_name": d.mechanic_name,
@@ -611,7 +611,7 @@ def job_summary(
                 "id": m.submission_id,
                 "created_at": _iso(m.created_at),
                 "notes": m.notes or "",
-                "items": _json.loads(m.items_json or "[]"),
+                "items": _decode_json_list(m.items_json),
                 "total": float(m.total or 0),
             }
             for m in materials
@@ -708,7 +708,7 @@ def job_summary(
         "bol": None if not bol else {
             "bol_id": bol.bol_id,
             "status": bol.status,
-            "item_count": len(_json.loads(bol.items_json or "[]") or []),
+            "item_count": len(_decode_json_list(bol.items_json)),
             "inventory_verified": getattr(bol, "inventory_verified", None),
             "inventory_note": getattr(bol, "inventory_note", None),
             "signed_pdf_url": getattr(bol, "signed_pdf_url", None),
@@ -741,7 +741,7 @@ def job_summary(
         ],
         "bill": None if not bill else {
             "saved_by_name": bill.saved_by_name,
-            "items": _json.loads(bill.items_json or "[]"),
+            "items": _decode_json_list(bill.items_json),
             "global_discount": float(bill.global_discount or 0),
             "notes": bill.notes or "",
             "updated_at": _iso(bill.updated_at),

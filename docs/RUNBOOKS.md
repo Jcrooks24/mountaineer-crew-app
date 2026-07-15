@@ -276,11 +276,21 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    validation change can no longer silently delete queued field work. The `pruneStale`
    14-day sweep in `estimatorQueue` / `jobInventoryQueue` now exempts failed entries too.
 
-   **Remaining follow-up (not data loss):** three queues keep and retry failed ops via
-   the store API but have no dedicated crew-facing screen yet - `rodsStore`, `ldDayStore`,
-   and `bolStore` ops. Their data is safe; they just need a list view with Retry/Discard
-   (the other queues surface it inline). Any *new* queue must honor ADR 0013 from the
-   start - the rule binds the queue you are about to write, not just the ones listed here.
+   **Remaining follow-ups (surfacing only, no data loss). All failed work is KEPT and
+   retryable via each store's API; these are missing UI:**
+   - `rodsStore`, `ldDayStore`, and `bolStore` ops have no crew-facing failed-op screen
+     yet (the stores export `failedDays`/`retryFailedDay`/`discardFailedDay` etc.). Sharp
+     for BOL: a failed `submit` also blocks that BOL's `sign`/`pdf`, so a bad-payload
+     submit wedges signing with no in-app recovery until a screen exists.
+   - `estimatorQueue`: a permanently-failed item reappears on reload as a "Syncing…" row
+     (the on-mount merge doesn't mark failed ops), so it looks stuck rather than failed.
+     Delete-the-row is the discard; re-adding is the retry.
+   - `materialsStore` / `officeHoursStore`: a failed *delete* (uncommon - needs a 4xx on
+     DELETE) is not surfaced; it just stops hiding the item. Failed adds/upserts are
+     surfaced correctly.
+
+   Any *new* queue must honor ADR 0013 from the start - the rule binds the queue you are
+   about to write, not just the ones listed here.
 
    **Note the production gap:** the reimbursement fix was hotfixed to `main`
    (`724e3e1`), but the five above are unfixed on **both** branches, so this is losing

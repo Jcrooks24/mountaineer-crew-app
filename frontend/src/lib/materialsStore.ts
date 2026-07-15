@@ -310,11 +310,12 @@ export function enqueueDeleteOrCancel(submissionId: string, jobUuid: string): bo
 let syncing = false;
 
 /**
- * Drain the queue. Transient failures (network / 5xx / 408) are retried on
- * next drain - the op stays in the queue. Permanent rejections (4xx except
- * 408) are dropped so one malformed op can't wedge the queue behind it,
- * and a warning is logged so the problem isn't completely invisible.
- * Returns how many ops were confirmed this run.
+ * Drain the queue. Transient failures (network / 5xx / 408 / 401 / 403) are
+ * retried on the next drain - the op stays in the queue. A permanent 4xx is
+ * MARKED FAILED and KEPT, never dropped (ADR 0013): materials feed billing, and
+ * a dropped op silently loses a line item. Failed ops are skipped by the drain
+ * (so they can't wedge the queue) and surfaced with Retry/Discard in
+ * BillCalculator. Returns how many ops were confirmed this run.
  */
 export async function syncQueue(): Promise<number> {
   if (!navigator.onLine) return 0;

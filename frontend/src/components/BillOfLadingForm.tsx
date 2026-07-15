@@ -20,6 +20,7 @@ import {
   listOpenBols,
   loadDraft,
   loadForJob,
+  manualJobToJobUuid,
   newDraft,
   newUUID,
   pendingSubmitCount,
@@ -179,7 +180,11 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
   function startManual() {
     const name = manualName.trim();
     if (!name) return;
-    const job = { job_uuid: newUUID(), job_name: name, job_date: selDate };
+    // Derive job_uuid from the name+date the same way the Timeline and PODS do,
+    // NOT a per-device random id. Two crew typing the same manual job must land on
+    // the same job_uuid, or the derived bol_id can't converge and each device gets
+    // its own BOL for the one job (defeats ADR 0018 on the manual path).
+    const job = { job_uuid: manualJobToJobUuid(name, selDate), job_name: name, job_date: selDate };
     rememberJob(job);
     const draft = newDraft(job);
     saveDraft(draft);
