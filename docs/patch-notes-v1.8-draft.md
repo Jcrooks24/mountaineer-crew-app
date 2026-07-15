@@ -1,138 +1,114 @@
 TITLE:
-v1.8 - Skills, incidents, inventory, and a big reliability pass
+v1.8 - Skills, incidents, inventory, and more
 
 BODY (paste into Admin > Patch Notes; renders as plain text):
 
-This is our largest update yet. New tools for the field and the back office, a
-handful of workflow changes worth reading, quality-of-life polish, and a lot of
-under-the-hood reliability work so nothing you log gets lost.
+Our biggest update yet. A batch of brand-new tools for the field and the office,
+some upgrades to tools you already use, and a lot of behind-the-scenes work so
+nothing you log ever gets lost.
 
 ============================================================
-WORKFLOW CHANGES (read these - they change how you work)
+NEW - FOR THE CREW (in the field)
 ============================================================
 
-- Skill rating is now gatekept. Only Admins and people specifically designated as
-  a "Skill rater" (a per-person toggle on the Employees roster) can rate the crew.
-  The Crew lead role does NOT grant it on its own. Designate your raters before
-  you expect ratings to appear.
+- Incident reporting. Report damage or an incident right from the Photos tab.
+  Each one gets an automatic claim number, and you attach photos to it. Works
+  offline and syncs when you are back on signal.
 
-- Job type is collected by anyone on the crew. It is the job's basic descriptive
-  data, so it gets recorded whether or not a rater is on site.
+- Skill ratings on the Job Report. Rate each mover on the skills a job actually
+  called for, on a 1-to-5 star scale (1 = held the job up, 5 = seasoned-lead
+  level). Only Admins and people an admin designates as a "Skill rater" can fill
+  these in.
 
-- Employee hours must be picked from the roster. No more free-typed names, so a
-  person's hours reliably match them in the summary and payroll. If someone is not
-  on the roster, add them first.
+- Actual inventory (long-distance jobs). Log furniture and boxes with their pack
+  type (CP / PBO / N/A), search the shared catalogue as you type, set a pack type
+  on every box in one tap, and estimate "chow" (loose-item) volume.
 
-- Inventory logging is paused on LOCAL jobs for now. Item-by-item entry on a phone
-  was too slow to be worth it locally; it stays on long-distance jobs, where the
-  Bill of Lading needs it. A faster local capture flow is coming.
+- Off-job hours. Log hours for work not tied to a job - shop work, errands,
+  anything not billed to a move - from your Profile.
 
-- The nightly crew-feedback email now also includes the day's incident reports
-  with links to their photos.
+- Worked Hours. See your own logged hours by week on your Profile: regular,
+  overtime, and non-billable.
 
-============================================================
-NEW TOOLS - FOR THE CREW (in the field)
-============================================================
-
-- Incident reporting. Report damage or an incident from the Photos tab. Each one
-  gets an automatic claim number and you attach photos to it. Works offline.
-
-- Skill ratings. Designated raters rate each mover on the skills the job actually
-  called for, on the Job Report. A star scale with plain-language anchors (1 = held
-  the job up, 5 = seasoned-lead level).
-
-- Actual inventory (long-distance jobs). Log furniture and boxes with pack type
-  (CP / PBO / N/A), search the shared catalogue as you type, apply a pack type to
-  every box in one tap, and estimate "chow" (loose-item) volume.
-
-- Digital Bill of Lading. Build the BOL inventory, capture origin and destination
-  signatures, and generate the signed PDF on the device (works offline). It now
-  syncs across devices, so two crew on the same job build one shared BOL.
-
-- Off-job hours. Log hours for work not tied to a job (shop work, errands) from
-  your Profile.
-
-- Worked Hours. See your own logged hours by week (regular, overtime, non-billable)
-  on your Profile.
-
-- Return-trip tool. A drive-time estimate for the trip back, on the Job Report.
-
-- Wrap-up estimator. Projects your finish time and offers it as an end time in the
-  hours pickers.
-
-- Job type + truck fullness on the Job Report. Tag what kind of job it was; record
-  how full each truck ended up with sliders.
-
-- Estimate reference on the Job Report. When a job has a linked estimate, you see
-  its hours, its access and special-item notes, and estimated-vs-actual man-hours.
+- Wrap-up estimator + return trip. On the Job Report, get a projected finish time
+  (your remaining work plus the drive back to the yard) that you can pick as your
+  End time, and a drive-time estimate for the trip home.
 
 ============================================================
-NEW TOOLS - FOR ADMIN (back office)
+NEW - FOR ADMIN (back office)
 ============================================================
 
-- Job Summary tab. Every source for one job on a single page: timeline, materials,
-  employee hours with skill ratings, DVIRs, incidents (with photo links), inventory,
-  the linked estimate, the BOL, long-distance per-diem and drive days, reimbursements,
-  and the invoice builder.
+- Job Summary tab. Every source for one job on a single page: timeline,
+  materials, employee hours with skill ratings, DVIRs, incidents (with photo
+  links), inventory, the linked estimate, the BOL, long-distance per-diem and
+  drive days, reimbursements, and the invoice builder.
 
 - Skills registry. Define the skills, mark them core (rated on every job) or
   job-specific, choose which job types each one applies to, and keep a per-employee
-  skill matrix.
+  skill matrix. Designate who can rate skills with a toggle on the roster.
 
-- Job types. Admin-configurable job type tags.
+- Job types. Configure the job type tags the crew pick from on the Job Report.
 
-- Furniture catalogue. CSV import and export round-trip with item dimensions and
-  custom fields. One shared catalogue across the Estimator, actual inventory, and
-  the BOL item pickers.
+- Shared furniture catalogue. Import and export your catalogue as a CSV, with item
+  dimensions and custom fields. One catalogue now feeds the Estimator, actual
+  inventory, and the BOL item pickers.
 
 - Incident log. Review every incident with its claim number, estimated cost, and
-  resolution status.
+  whether it is resolved.
 
-- Sheet-sync System Check (Advanced Settings). Confirms the Google Sheet connection
-  and that every app-to-sheet sync has its worksheet, so you can spot a broken sync
-  before data goes missing.
-
-============================================================
-QUALITY-OF-LIFE (smaller UI polish)
-============================================================
-
-Crew:
-- Confetti when you submit a job report.
-- Autocorrect works again when typing item names on the inventory and BOL builders.
-- Skill ratings laid out cleanly on mobile (no more squished stars).
-- Estimated man-hours is clearly marked as a rough approximation, not a firm figure.
-- Faster load: the map script is deferred and a duplicate startup fetch was dropped.
-- A contacts pill for quick access.
-
-Admin:
-- Month schedule is now a rolling 30-day view instead of calendar month. Tap a day
-  to pin its row while you scroll sideways, and a small color chip shows a crew
-  member's availability on a scheduled day (replacing the hard-to-read outline).
-- Newly added estimator rooms sort to the top of the list, so you do not have to
-  scroll to find the room you just made.
-- Collapsible employee lists, furniture export, and clearer help text throughout.
+- Sheet-sync System Check (Settings > Advanced). Confirms the Google Sheet
+  connection and that every app-to-sheet sync is pointed at the right worksheet,
+  so you can catch a broken sync before data goes missing.
 
 ============================================================
-UNDER THE HOOD (reliability + performance)
+UPGRADES TO TOOLS YOU ALREADY USE
 ============================================================
 
-- Offline work is never destroyed by a server rejection. Anything the server
-  refuses is kept on your phone, marked "not sent" with the reason, and given a
-  Retry button, instead of silently vanishing. This now covers every offline
-  queue: job events, materials, incidents, off-job hours, inventory, BOL, RODS,
-  per-diem, office hours, estimate items, and reimbursements.
+Job Report:
+- It now also captures the job type and how full each truck ended up (fill sliders
+  per truck).
+- Employee hours are now chosen from the roster instead of typed by hand, so a
+  person's hours reliably match them in the summary. If someone is not on the
+  roster, add them first.
+- When a job has a linked estimate, you see the estimate's hours and access notes,
+  plus an estimated-vs-actual man-hours comparison (a rough guide, not a firm
+  number).
 
-- Photos are stored as their own data, not a fragile file reference. Fixes a bug
-  where a receipt or job photo could fail to send with a confusing "field required"
-  error, and prevents silent photo loss on some phones.
+Invoice builder:
+- Auto-fills a labor line for each crew member from their hours, a line per
+  personal vehicle billed as crew transport, and now a "Truck (per hour)" line for
+  each truck recorded in Truck fullness.
 
-- Your un-synced failed work is preserved when a different crew member logs in on a
-  shared phone, and restored when you log back in on that device.
+Digital Bill of Lading:
+- Now syncs across devices. Two crew on the same job build one shared BOL instead
+  of two separate ones, and items appear on the other device as they are added.
 
-- Bounded, indexed lookups. Worked Hours and the job timeline no longer scan the
-  whole history, so the app stays fast as data grows.
+Estimator:
+- Link an estimate to its real job, attach site photos with notes, and use the
+  richer shared furniture catalogue.
 
-- The Digital BOL is one document per job that syncs and merges across devices.
+Admin month schedule:
+- A rolling 30-day view (instead of the calendar month), tap a day to pin its row
+  while you scroll across employees, and a small color chip shows a crew member's
+  availability on a day they are already scheduled.
+- It is read-only by default now. Tap "Edit availability" to turn editing on, so a
+  stray tap while scanning can no longer change someone's schedule by accident.
 
-- Many Google Sheet export fixes so the admin sheet stays accurate: incident photo
-  links, estimate rows removed on delete, and no double-counted totals.
+============================================================
+BEHIND THE SCENES (reliability + speed)
+============================================================
+
+- Offline work is never lost to a server hiccup. If a submission is rejected, it
+  is kept on your phone, marked "not sent" with the reason, and given a Retry
+  button, instead of silently disappearing. This covers every offline queue.
+
+- Photos are stored more reliably, which prevents a rare case where a photo or
+  receipt could fail to send or go missing on some phones.
+
+- If a different crew member logs in on a shared phone, your un-synced failed work
+  is kept for you and restored when you log back in on that device.
+
+- The app stays fast as data grows - your hours and job history no longer reload
+  the entire past to show a screen.
+
+- Several fixes so the office Google Sheet stays accurate.

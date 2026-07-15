@@ -46,11 +46,32 @@ function getPosition(): Promise<GeolocationPosition> {
       reject(new Error("Location isn't available on this device."));
       return;
     }
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
-      enableHighAccuracy: true,
-      timeout: 10_000,
-      maximumAge: 0,
-    });
+    navigator.geolocation.getCurrentPosition(
+      resolve,
+      (err) => {
+        // Name the failure so the crew member knows whether to fix a setting or
+        // just type the drive time. calculate() appends "Enter the drive time by
+        // hand." so these stay short and don't repeat it.
+        const msg =
+          err.code === err.PERMISSION_DENIED
+            ? "Location permission is off for this site. Turn it on in your browser or phone settings."
+            : err.code === err.TIMEOUT
+              ? "Couldn't get a location fix in time."
+              : "Couldn't get your location.";
+        reject(new Error(msg));
+      },
+      {
+        // Low accuracy on purpose. A driving origin only needs rough position,
+        // and network location returns in ~1s where a fresh high-accuracy GPS
+        // fix on a phone routinely blows past the timeout. That is the reason
+        // this worked on desktop (instant Wi-Fi/IP fix) but timed out on mobile.
+        enableHighAccuracy: false,
+        timeout: 15_000,
+        // A fix up to a minute old is fine - the truck hasn't moved far - and it
+        // avoids waiting on a cold fix when a recent one is already cached.
+        maximumAge: 60_000,
+      },
+    );
   });
 }
 
