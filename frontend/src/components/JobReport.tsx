@@ -1553,60 +1553,63 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               return (
                 <div
                   key={i}
-                  className="row"
                   style={{
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 8,
                     padding: "8px 0",
                     borderBottom: "1px solid var(--border)",
                     opacity: emp.non_billable ? 0.7 : 1,
                     background: isEditing ? "rgba(106,167,255,0.06)" : undefined,
                   }}
                 >
-                  <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-                    <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
-                    </div>
-                    <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                      {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
-                      {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
-                    </div>
-                    <div className="small" style={{ marginTop: 2 }}>
-                      <strong style={{ color: "var(--text)" }}>
-                        {roundBillableQuarter(emp.hours).toFixed(2)}h
-                      </strong>
-                      <span style={{ color: "var(--muted)" }}>
-                        {" "}(actual {emp.hours.toFixed(2)}h)
-                      </span>
-                    </div>
-                    {canRate && (
-                      <div style={{ marginTop: 6 }}>
-                        <EmployeeSkillRatings
-                          skills={relevantSkills}
-                          ratings={emp.skill_ratings || {}}
-                          disabled={false}
-                          onRate={(skillName, r) => setEmployeeSkillTypeRating(i, skillName, r)}
-                        />
+                  {/* Name + hours on the left, Edit/Remove on the right. Skill
+                      ratings used to sit inside this left column, which the
+                      buttons squeeze on a phone, so long skill names wrapped and
+                      the stars got crushed. Ratings are now their own full-width
+                      block below this row (see further down). */}
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+                      <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
                       </div>
-                    )}
+                      <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                        {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
+                        {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
+                      </div>
+                      <div className="small" style={{ marginTop: 2 }}>
+                        <strong style={{ color: "var(--text)" }}>
+                          {roundBillableQuarter(emp.hours).toFixed(2)}h
+                        </strong>
+                        <span style={{ color: "var(--muted)" }}>
+                          {" "}(actual {emp.hours.toFixed(2)}h)
+                        </span>
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 6, flex: "0 0 auto" }}>
+                      <button
+                        type="button"
+                        onClick={() => editEmployee(i)}
+                        disabled={isEditing}
+                      >
+                        {isEditing ? "Editing…" : "Edit"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeEmployee(i)}
+                        style={{ color: "var(--danger)" }}
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </div>
-                  <div className="row" style={{ gap: 6, flex: "0 0 auto" }}>
-                    <button
-                      type="button"
-                      onClick={() => editEmployee(i)}
-                      disabled={isEditing}
-                    >
-                      {isEditing ? "Editing…" : "Edit"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeEmployee(i)}
-                      style={{ color: "var(--danger)" }}
-                    >
-                      Remove
-                    </button>
-                  </div>
+                  {canRate && (
+                    <div style={{ marginTop: 8 }}>
+                      <EmployeeSkillRatings
+                        skills={relevantSkills}
+                        ratings={emp.skill_ratings || {}}
+                        disabled={false}
+                        onRate={(skillName, r) => setEmployeeSkillTypeRating(i, skillName, r)}
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1636,28 +1639,36 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               </span>
             </div>
             {estHours && estHours.hours != null && (
-              <div
-                className="small"
-                style={{ color: "var(--muted)", marginTop: 6, display: "flex", justifyContent: "space-between" }}
-              >
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <BetaTag feature="estVsActualHours" style={{ marginTop: 0 }} />
-                  Estimated {estHours.hours.toFixed(2)}h{" "}
-                  <span style={{ opacity: 0.8 }}>
-                    ({estHours.source === "estimate" ? "from estimate" : "from schedule × crew"})
-                  </span>
-                </span>
-                {(() => {
-                  const delta = totalBillableHours - estHours.hours;
-                  const over = delta > 0.01;
-                  const under = delta < -0.01;
-                  return (
-                    <span style={{ color: over ? "var(--danger)" : under ? "var(--ok)" : "var(--muted)", fontWeight: 600 }}>
-                      {over ? "+" : ""}{delta.toFixed(2)}h {over ? "over" : under ? "under" : "on target"}
+              <>
+                <div
+                  className="small"
+                  style={{ color: "var(--muted)", marginTop: 6, display: "flex", justifyContent: "space-between" }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <BetaTag feature="estVsActualHours" style={{ marginTop: 0 }} />
+                    Approx. estimate {estHours.hours.toFixed(2)}h{" "}
+                    <span style={{ opacity: 0.8 }}>
+                      ({estHours.source === "estimate" ? "from estimate" : "from schedule × crew"})
                     </span>
-                  );
-                })()}
-              </div>
+                  </span>
+                  {(() => {
+                    const delta = totalBillableHours - estHours.hours;
+                    const over = delta > 0.01;
+                    const under = delta < -0.01;
+                    return (
+                      <span style={{ color: over ? "var(--danger)" : under ? "var(--ok)" : "var(--muted)", fontWeight: 600 }}>
+                        {over ? "+" : ""}{delta.toFixed(2)}h {over ? "over" : under ? "under" : "on target"}
+                      </span>
+                    );
+                  })()}
+                </div>
+                {/* Say plainly it is a rough number, not a quoted estimate. The
+                    crew and office should not treat this delta as authoritative
+                    yet - the baseline is a rough approximation for now. */}
+                <div className="small" style={{ color: "var(--muted)", opacity: 0.75, marginTop: 2, fontStyle: "italic" }}>
+                  Rough approximation, not a firm estimate - for reference only.
+                </div>
+              </>
             )}
           </div>
         )}
@@ -2272,16 +2283,18 @@ function SkillRatingRow({
     );
   }
   return (
-    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-      <span className="small" style={{ color: "var(--text)" }}>{skill.name}</span>
-      <div className="row" style={{ gap: 6, alignItems: "center" }}>
-        <div className="row" style={{ gap: 2, alignItems: "center", opacity: isNa ? 0.4 : 1 }}>
+    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      {/* Name can wrap; the stars must not shrink. minWidth:0 lets the label take
+          the remaining width and wrap instead of crushing the star buttons. */}
+      <span className="small" style={{ color: "var(--text)", flex: "1 1 120px", minWidth: 0 }}>{skill.name}</span>
+      <div className="row" style={{ gap: 6, alignItems: "center", flex: "0 0 auto" }}>
+        <div className="row" style={{ gap: 4, alignItems: "center", opacity: isNa ? 0.4 : 1 }}>
           {[1, 2, 3, 4, 5].map((n) => {
             const filled = !isNa && v != null && n <= v;
             return (
               <button key={n} type="button" aria-label={`${skill.name} ${n} of 5`} disabled={disabled}
                 onClick={() => onChange(v === n ? null : n)}
-                style={{ background: "transparent", border: "none", padding: 1, cursor: disabled ? "not-allowed" : "pointer", fontSize: 18, lineHeight: 1, color: filled ? "var(--brand)" : "var(--border)" }}>
+                style={{ background: "transparent", border: "none", padding: "2px 1px", cursor: disabled ? "not-allowed" : "pointer", fontSize: 20, lineHeight: 1, color: filled ? "var(--brand)" : "var(--border)" }}>
                 {filled ? "★" : "☆"}
               </button>
             );

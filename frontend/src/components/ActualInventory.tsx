@@ -361,16 +361,23 @@ export default function ActualInventory({
 
     setBulkBusy(true);
     setErr(null);
-    const before = rows;
+
+    // Each box's prior pack type, so a FAILED box can be reverted to its own
+    // value - not to some whole-list snapshot that would also undo the boxes that
+    // succeeded.
+    const priorById = new Map(boxRows.map((r) => [r.id, r.pack_type]));
+
     setRows((prev) => prev.map((r) => (r.is_box ? { ...r, pack_type: pt } : r)));
 
-    // Rewrite the queued payloads first: these never reach the PATCH endpoint.
+    // Pending rows never reach the PATCH endpoint: rewrite their queued payload so
+    // they SYNC with the new pack type. This is a localStorage write, it cannot
+    // fail, and it must not be reverted below - the box really does carry pt now.
     for (const r of boxRows) {
       if (r.pending && r.opId) setQueuedPackType(r.opId, pt);
     }
 
     const synced = boxRows.filter((r) => !r.pending);
-    const failed: string[] = [];
+    const failedIds = new Set<number>();
     for (const r of synced) {
       try {
         await apiFetch(`/api/job-inventory/${encodeURIComponent(jobUuid)}/items/${r.id}`, {
@@ -378,16 +385,20 @@ export default function ActualInventory({
           body: JSON.stringify({ pack_type: pt }),
         });
       } catch {
-        failed.push(r.name);
+        failedIds.add(r.id);
       }
     }
 
-    if (failed.length > 0) {
-      // Put the truth back on screen rather than showing a pack type the office
-      // will never see.
-      setRows(before);
+    if (failedIds.size > 0) {
+      // Revert ONLY the boxes whose PATCH failed, each to its own prior value.
+      // The ones that succeeded keep pt, matching the server and the sheet.
+      setRows((prev) =>
+        prev.map((r) =>
+          failedIds.has(r.id) ? { ...r, pack_type: priorById.get(r.id) ?? r.pack_type } : r,
+        ),
+      );
       setErr(
-        `Could not update ${failed.length} box${failed.length === 1 ? "" : "es"} - check connection and try again.`,
+        `Could not update ${failedIds.size} box${failedIds.size === 1 ? "" : "es"} - check connection and try again. The rest were updated.`,
       );
     }
     setBulkBusy(false);

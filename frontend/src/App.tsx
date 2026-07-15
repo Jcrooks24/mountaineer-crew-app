@@ -2701,12 +2701,24 @@ export default function App() {
                       key={p.id}
                       style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "rgba(255,255,255,0.02)" }}
                     >
-                      <img
-                        src={url}
-                        alt={p.caption || "job photo"}
-                        style={{ width: "100%", display: "block" }}
-                        onLoad={() => URL.revokeObjectURL(url)}
-                      />
+                      {/* Do NOT revoke onLoad: the URL is owned by the previewUrls
+                          effect, which revokes it when the photo set changes. Revoking
+                          here killed a URL still held as src, and nothing re-minted it,
+                          so the thumbnail broke permanently once iOS evicted the decoded
+                          image (backgrounded tab / memory pressure). url is undefined
+                          for a photo whose bytes are unreadable - show a placeholder
+                          rather than a broken-image icon. */}
+                      {url ? (
+                        <img
+                          src={url}
+                          alt={p.caption || "job photo"}
+                          style={{ width: "100%", display: "block" }}
+                        />
+                      ) : (
+                        <div className="small" style={{ padding: 16, color: "var(--muted)", textAlign: "center" }}>
+                          Preview unavailable on this device
+                        </div>
+                      )}
                       <div style={{ padding: 10 }}>
                         {editingNoteId === p.id ? (
                           <div className="col" style={{ gap: 6, marginBottom: 8 }}>

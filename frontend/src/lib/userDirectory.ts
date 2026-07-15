@@ -69,9 +69,19 @@ export function ensureDirectory(): Promise<DirectoryEntry[]> {
   return inflight;
 }
 
-/** Force a refresh (e.g. after the current user edits their own photo). */
+/**
+ * Force a re-fetch (e.g. after the current user edits their own photo).
+ *
+ * Does NOT clear `cached`. It used to, and that was a lockout waiting to happen:
+ * the employee-hours form now REQUIRES a roster pick, so a crew member with no
+ * roster cannot log hours at all. This is called from the Profile screen, on
+ * field signal, right after a photo change - exactly when the follow-up fetch is
+ * most likely to fail. Nulling `cached` and then failing left the roster empty
+ * for the rest of the session. So keep the old roster live and just re-fetch over
+ * it; fetchDirectory already refuses to overwrite a good roster with an empty
+ * response.
+ */
 export function refreshDirectory(): Promise<DirectoryEntry[]> {
-  cached = null;
   inflight = null;
   return ensureDirectory();
 }

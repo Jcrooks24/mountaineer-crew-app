@@ -6787,6 +6787,10 @@ function JobSummaryTab() {
               office is judged on lived only in a spreadsheet column. */}
           <div className="card">
             <div className="sectionTitle">Hours: estimated vs actual</div>
+            <div className="small" style={{ color: "var(--muted)", opacity: 0.8, marginBottom: 8, fontStyle: "italic" }}>
+              The estimate is a rough approximation for now, not a firm quoted figure. Treat
+              the delta as a rough signal, not an exact over/under.
+            </div>
             {summary.hours.estimated_hours == null ? (
               <div className="small" style={{ color: "var(--muted)" }}>
                 No estimate linked and no scheduled duration, so there is no baseline to
