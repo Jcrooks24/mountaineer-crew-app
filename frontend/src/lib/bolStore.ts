@@ -612,11 +612,30 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
 
 /** Queue the current draft as an upsert. A re-save replaces any queued SUBMIT
  * for the same bol_id (upsert - no point sending stale intermediate states);
- * queued sign/pdf ops are preserved. */
+ * queued sign/pdf ops are preserved.
+ *
+ * ORDER IS LOAD-BEARING. The submit must stay AHEAD of any sign/pdf for the same
+ * bol_id, because the drain creates the row on submit and a sign/pdf against a
+ * not-yet-created row 404s - which the ADR 0013 drain treats as a permanent
+ * failure, marks the sign failed, and blocks the submit behind it: the signature
+ * then never syncs. So a re-enqueue (from autosync or a photo backfill after the
+ * BOL was already signed) must NOT push the submit to the back of the queue.
+ * Replace it in place if one exists; otherwise insert it before the first
+ * sign/pdf for this bol_id. */
 export function enqueueSubmit(d: BOLDraft): void {
   const payload = draftToPayload(d);
-  const q = loadQueue().filter((x) => !(x.op === "submit" && x.bol_id === d.bol_id));
-  q.push({ op: "submit", bol_id: d.bol_id, payload });
+  const q = loadQueue();
+  const newOp: QueueOp = { op: "submit", bol_id: d.bol_id, payload };
+  const at = q.findIndex((x) => x.op === "submit" && x.bol_id === d.bol_id);
+  if (at >= 0) {
+    q[at] = newOp; // in place: keeps its position ahead of this BOL's sign/pdf
+  } else {
+    const firstDep = q.findIndex(
+      (x) => x.bol_id === d.bol_id && (x.op === "sign" || x.op === "pdf"),
+    );
+    if (firstDep >= 0) q.splice(firstDep, 0, newOp);
+    else q.push(newOp);
+  }
   saveQueue(q);
 }
 
