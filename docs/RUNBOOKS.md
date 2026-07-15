@@ -278,10 +278,9 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
 
    **Remaining follow-ups (surfacing only, no data loss). All failed work is KEPT and
    retryable via each store's API; these are missing UI:**
-   - `rodsStore`, `ldDayStore`, and `bolStore` ops have no crew-facing failed-op screen
-     yet (the stores export `failedDays`/`retryFailedDay`/`discardFailedDay` etc.). Sharp
-     for BOL: a failed `submit` also blocks that BOL's `sign`/`pdf`, so a bad-payload
-     submit wedges signing with no in-app recovery until a screen exists.
+   - `rodsStore` and `ldDayStore` ops have no crew-facing failed-op screen yet (the
+     stores export `failedDays`/`retryFailedDay`/`discardFailedDay` etc.). `bolStore`
+     now HAS one (the failed-BOL banner in `BillOfLadingForm`).
    - `estimatorQueue`: a permanently-failed item reappears on reload as a "Syncing…" row
      (the on-mount merge doesn't mark failed ops), so it looks stuck rather than failed.
      Delete-the-row is the discard; re-adding is the retry.
@@ -289,8 +288,20 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
      DELETE) is not surfaced; it just stops hiding the item. Failed adds/upserts are
      surfaced correctly.
 
+   **User-switch preservation (added 2026-07-15):** a shared-phone user switch wipes the
+   departing user's queues (`clearCrewState`), which would delete their FAILED work - the
+   very work ADR 0013 keeps for a human to retry. `auth/preserveFailedWork.ts` now
+   snapshots the departing user's failed localStorage-queue entries under a wipe-proof
+   `keepfailed_v1:<id>` key and restores them when that user next logs in on the device.
+   Pending (not-failed) work is intentionally NOT preserved - it drains normally, and
+   preserving it would risk syncing it under the new user. **Gap:** the IndexedDB queues
+   (reimbursements with photo blobs) are still wiped on a switch without preservation;
+   preserving those across the wholesale `deleteDatabase` is a larger change.
+
    Any *new* queue must honor ADR 0013 from the start - the rule binds the queue you are
-   about to write, not just the ones listed here.
+   about to write, not just the ones listed here. **A new localStorage queue must also be
+   added to `QUEUE_KEYS` in `preserveFailedWork.ts`** or its failed work is lost on a
+   user switch.
 
    **Note the production gap:** the reimbursement fix was hotfixed to `main`
    (`724e3e1`), but the five above are unfixed on **both** branches, so this is losing

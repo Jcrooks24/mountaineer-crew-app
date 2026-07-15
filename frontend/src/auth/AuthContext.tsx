@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { apiFetch, ApiError } from "../api/client";
 import { clearToken, getToken, setToken } from "./token";
 import { clearCrewState } from "./clearCrewState";
+import { backupFailedWork, restoreFailedWork } from "./preserveFailedWork";
 
 export type User = {
   id: number;
@@ -145,9 +146,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // over and be submitted under crew B's identity.
       const previous = loadCachedUser();
       if (previous && previous.id !== me.id) {
+        // Preserve the departing user's FAILED work before the wipe destroys it
+        // (ADR 0013 / non-naive integration vet). Pending work is left to drain
+        // normally; only failed entries - which never auto-drain - are at risk.
+        backupFailedWork(previous.id);
         clearCrewState();
       }
       setUser(me);
+      // Restore any failed work this user left on THIS device previously.
+      restoreFailedWork(me.id);
     } catch (err) {
       // Only clear on a genuine auth rejection. Network errors (TypeError,
       // "Failed to fetch") preserve whatever's already in state, including
@@ -184,6 +191,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   function logout() {
     clearToken();
+    // Preserve this user's failed work before wiping, so it is waiting for them
+    // if they log back in on this device (ADR 0013).
+    backupFailedWork(user?.id);
     // Wipe per-user storage so the next crew member to log in on this
     // device starts clean: no leftover queues, drafts, or dismiss flags.
     clearCrewState();

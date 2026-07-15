@@ -24,6 +24,9 @@ import {
   newDraft,
   newUUID,
   pendingSubmitCount,
+  failedBolOps,
+  retryFailedBol,
+  discardFailedBol,
   rememberJob,
   resolveJobUuid,
   retryPendingPhotos,
@@ -310,6 +313,17 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   const [itemQty, setItemQty] = useState(1);
   const [err, setErr] = useState<string | null>(null);
 
+  // Failed queue ops for THIS BOL. A permanent 4xx (e.g. a submit the server
+  // refuses) is kept, not deleted (ADR 0013), and blocks this BOL's sign/pdf
+  // behind it - so without a retry surface a signed-on-device BOL could get
+  // stuck with its signature never reaching the server. This banner is that
+  // surface. Refreshed after every drain.
+  const [failedOps, setFailedOps] = useState(() =>
+    failedBolOps().filter((o) => o.bol_id === initialDraft.bol_id),
+  );
+  const refreshFailed = () =>
+    setFailedOps(failedBolOps().filter((o) => o.bol_id === draft.bol_id));
+
   // Session-only preview URLs for freshly-captured photos (photoId -> objectURL).
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [savedNote, setSavedNote] = useState<string | null>(null);
@@ -370,9 +384,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       const after = await retryPendingPhotos(draft);
       if (!cancelled && after !== draft) setDraft(after);
       await syncQueue();
+      if (!cancelled) refreshFailed();
     })();
     const onOnline = () => {
-      syncQueue();
+      syncQueue().then(() => { if (!cancelled) refreshFailed(); });
       retryPendingPhotos(draft).then((u) => { if (!cancelled && u !== draft) setDraft(u); });
     };
     window.addEventListener("online", onOnline);
@@ -542,6 +557,49 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         </div>
         <button onClick={onBack} style={backBtnStyle}>← BOLs</button>
       </div>
+
+      {/* Failed-sync banner: this BOL was refused by the server and is stuck on
+          this phone (ADR 0013 keeps it rather than deleting it). Retry re-drains
+          the whole submit->sign->pdf sequence; Discard is confirm-gated because
+          it can drop a captured signature. */}
+      {failedOps.length > 0 && (
+        <div className="card" style={{ borderColor: "var(--danger)" }}>
+          <div style={{ fontWeight: 800, color: "var(--danger)" }}>This BOL could not be sent</div>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+            {failedOps[0].failed_reason || "The server rejected it."}
+          </div>
+          <div className="small" style={{ marginTop: 4 }}>
+            It is still saved on this phone. Nothing has been lost.
+            {draft.status !== "draft" ? " The signature is safe and will send once this clears." : ""}
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+            <button
+              className="btnPrimary"
+              style={{ padding: "8px 14px", fontSize: 13, minHeight: 40 }}
+              onClick={async () => {
+                setErr(null);
+                await retryFailedBol(draft.bol_id);
+                refreshFailed();
+              }}
+            >
+              Retry
+            </button>
+            <button
+              style={{ padding: "8px 14px", fontSize: 13, minHeight: 40, borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)" }}
+              onClick={() => {
+                const ok = window.confirm(
+                  "Discard this BOL's unsent changes?\n\nIt was never received by the office. If it was signed, that signature will be lost.",
+                );
+                if (!ok) return;
+                discardFailedBol(draft.bol_id);
+                refreshFailed();
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Job (selected in the chooser) + crew rep */}
       <div className="card">
