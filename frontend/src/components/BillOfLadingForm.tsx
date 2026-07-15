@@ -12,6 +12,7 @@ import {
   type CalEvent,
   type OpenBol,
   type SignInput,
+  autosyncDraft,
   captureItemPhoto,
   enqueueSubmit,
   fetchCalendarDay,
@@ -342,6 +343,18 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   useEffect(() => {
     saveDraft(draft);
   }, [draft]);
+
+  // Push item + verification changes to the SERVER (debounced) so a second device
+  // sees them without waiting for a gated Save. Skips the first run so adopting
+  // the server copy on open does not echo straight back. Signatures are not
+  // autosynced - they go through the explicit sign flow. Deps are the item array
+  // reference (changes only on an item edit) and the two inventory scalars.
+  const didFirstAutosync = useRef(false);
+  useEffect(() => {
+    if (!didFirstAutosync.current) { didFirstAutosync.current = true; return; }
+    autosyncDraft(draft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.items, draft.inventory_verified, draft.inventory_note]);
 
   // On mount + reconnect: finish any offline photo uploads and drain the queue
   // so queued BOLs, signatures, and PDFs reach the server. (The server copy was

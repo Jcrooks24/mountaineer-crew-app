@@ -206,9 +206,37 @@ export function saveDraft(d: BOLDraft): void {
   }
 }
 
+/**
+ * The BOL id for a job, derived DETERMINISTICALLY from job_uuid.
+ *
+ * It used to be `newUUID()` - a fresh random id per device. Two crew opening the
+ * BOL for the same job therefore minted two different ids and produced two server
+ * rows that never merged, so neither saw the other's items. That is the root of
+ * "BOL does not sync across devices". Deriving the id from job_uuid means both
+ * devices compute the SAME id and upsert the SAME row - one document per job,
+ * exactly as job identity already works everywhere else (calEventToJobUuid).
+ *
+ * A truly job-less BOL (no job_uuid) falls back to random: there is nothing to
+ * converge on, so per-device is the best available.
+ */
+export function bolIdForJob(job_uuid: string): string {
+  const j = (job_uuid || "").trim();
+  if (!j) return newUUID();
+  const fnv = (s: string): number => {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  };
+  const parts = [fnv(j), fnv(j + "\x01"), fnv(j + "\x02"), fnv(j + "\x03")];
+  return "bol-" + parts.map((n) => n.toString(16).padStart(8, "0")).join("");
+}
+
 export function newDraft(job: { job_uuid: string; job_name: string; job_date: string }): BOLDraft {
   return {
-    bol_id: newUUID(),
+    bol_id: bolIdForJob(job.job_uuid),
     job_uuid: job.job_uuid || "",
     job_name: job.job_name || "",
     job_date: job.job_date || "",
@@ -452,16 +480,76 @@ function queueHasOpsForBol(bolId: string): boolean {
 export async function loadForJob(job: { job_uuid: string; job_name: string; job_date: string }): Promise<BOLDraft> {
   const local = loadDraft(job.job_uuid);
   const pendingLocal = local ? queueHasOpsForBol(local.bol_id) : false;
-  const server = pendingLocal ? null : await fetchRemoteBol(job.job_uuid);
-  if (server) {
-    const serverAheadOrEqual = !local || String(server.updated_at || "") >= String(local.updated_at || "");
-    if (serverAheadOrEqual) {
-      const draft = draftFromServer(server, job, local?.crew_rep);
-      saveDraft(draft);
-      return draft;
-    }
+  const server = await fetchRemoteBol(job.job_uuid);
+
+  if (!server) return local || newDraft(job);
+  const serverDraft = draftFromServer(server, job, local?.crew_rep);
+
+  // No un-synced local edits: the local draft is fully synced, so the SERVER is
+  // authoritative and is adopted unconditionally. This replaces a string compare
+  // of `updated_at` that let a device's own edits permanently block adoption -
+  // the reason a second device never saw the first's items.
+  if (!local || !pendingLocal) {
+    saveDraft(serverDraft);
+    return serverDraft;
   }
-  return local || newDraft(job);
+
+  // Un-synced local edits exist AND the server has a copy. Because the id is now
+  // derived from job_uuid, both refer to the same document, so union the item
+  // lists by item id rather than pick a winner - a second device building the
+  // same BOL must not drop the first device's items. Local wins a per-item
+  // conflict (it holds the edit that hasn't been pushed yet). Signatures/status
+  // stay local while a signing op is queued, else take the server's.
+  const merged = mergeBolDrafts(local, serverDraft);
+  saveDraft(merged);
+  return merged;
+}
+
+/** Union two drafts' items by item id (local wins per-item), preserving both
+ * devices' additions. NOT a deletion-aware merge: an item deleted on one device
+ * while the other still holds it will reappear. Concurrent editing of the SAME
+ * BOL on two devices is rare and this is the safe-for-data direction (keep, don't
+ * lose); a true delete is honored once there are no competing local edits and the
+ * server copy is adopted wholesale above. */
+function mergeBolDrafts(local: BOLDraft, server: BOLDraft): BOLDraft {
+  const byId = new Map<string, BOLItem>();
+  for (const it of server.items) byId.set(it.id, it);
+  for (const it of local.items) byId.set(it.id, it); // local wins
+  const items = [...byId.values()].sort((a, b) => a.item_no - b.item_no);
+  // Renumber item_no so the merged list is contiguous (two devices can both have
+  // assigned e.g. item_no 3).
+  items.forEach((it, i) => { it.item_no = i + 1; });
+
+  const signingQueued = loadQueue().some((o) => o.op === "sign" && o.bol_id === local.bol_id);
+  const sigSource = signingQueued ? local : server;
+  return {
+    ...server,
+    ...local,          // local scalar fields win (notes, verified, etc.)
+    items,
+    // Signature fields come as a set from whichever side owns the pending sign.
+    origin_shipper_sig: sigSource.origin_shipper_sig,
+    origin_carrier_sig: sigSource.origin_carrier_sig,
+    origin_signed_at: sigSource.origin_signed_at,
+    dest_shipper_sig: sigSource.dest_shipper_sig,
+    dest_carrier_sig: sigSource.dest_carrier_sig,
+    dest_signed_at: sigSource.dest_signed_at,
+    status: sigSource.status,
+    signed_pdf_url: sigSource.signed_pdf_url,
+  };
+}
+
+// Debounced background push of the current draft's items to the server.
+//
+// Unlike save(), this does NOT require the completeness attestation - it just
+// gets the item list to the server so a second device sees items as they are
+// added, which is what "sync across devices" means to the crew. Signing stays a
+// deliberate, gated step. The server upsert replaces items_json wholesale and the
+// sheet export is replace-style, so a removed or edited item is reflected too.
+let _autosyncTimer: ReturnType<typeof setTimeout> | null = null;
+export function autosyncDraft(d: BOLDraft): void {
+  enqueueSubmit(d); // persist the intent immediately (survives reload)
+  if (_autosyncTimer) clearTimeout(_autosyncTimer);
+  _autosyncTimer = setTimeout(() => { void syncQueue(); }, 1000);
 }
 
 // ── Submit queue (idempotent upsert by bol_id) ────────────────────────────────

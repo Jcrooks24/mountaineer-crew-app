@@ -3,6 +3,7 @@ import { useMergedCatalog } from "../lib/furnitureCatalogStore";
 import {
   type BOLDraft,
   type BOLItem,
+  autosyncDraft,
   enqueueSubmit,
   itemIsBox,
   loadForJob,
@@ -83,6 +84,15 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
     if (draft) saveDraft(draft);
   }, [draft]);
 
+  // A local EDIT: persist it and push it to the server (debounced) so a second
+  // device on the same job sees the item without waiting for a gated Save. Server
+  // adoption in loadForJob uses plain setDraft, not this, so adopting does not
+  // echo back to the server.
+  function commit(next: BOLDraft) {
+    setDraft(next);
+    autosyncDraft(next);
+  }
+
   function nextItemNo(items: BOLItem[]): number {
     return items.reduce((m, it) => Math.max(m, it.item_no), 0) + 1;
   }
@@ -102,14 +112,14 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
       packed_by: "",
       photos: [],
     };
-    setDraft({ ...draft, items: [...draft.items, item], updated_at: new Date().toISOString() });
+    commit({ ...draft, items: [...draft.items, item], updated_at: new Date().toISOString() });
     setItemName("");
     setItemQty(1);
   }
 
   function updateItem(item_no: number, patch: Partial<BOLItem>) {
     if (!draft) return;
-    setDraft({
+    commit({
       ...draft,
       items: draft.items.map((it) => (it.item_no === item_no ? { ...it, ...patch } : it)),
       updated_at: new Date().toISOString(),
@@ -118,7 +128,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   function removeItem(item_no: number) {
     if (!draft) return;
-    setDraft({
+    commit({
       ...draft,
       items: draft.items.filter((it) => it.item_no !== item_no),
       updated_at: new Date().toISOString(),
@@ -127,7 +137,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   function setVerified(v: boolean) {
     if (!draft) return;
-    setDraft({
+    commit({
       ...draft,
       inventory_verified: v,
       inventory_note: v ? "" : (draft.inventory_note || ""),
@@ -137,7 +147,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   function setIncompleteReason(text: string) {
     if (!draft) return;
-    setDraft({ ...draft, inventory_note: text, updated_at: new Date().toISOString() });
+    commit({ ...draft, inventory_note: text, updated_at: new Date().toISOString() });
   }
 
   async function save() {
