@@ -1490,6 +1490,14 @@ function MonthScheduleView({
   }, [highContrast]);
   const statusPalette = highContrast ? HC_MONTH_STATUS_COLORS : MONTH_STATUS_COLORS;
   const scheduledPalette = highContrast ? HC_SCHEDULED_COLORS : SCHEDULED_COLORS;
+
+  // Edit mode is OFF by default: this is a wide, scroll-heavy grid, and tapping a
+  // cell CHANGES a crew member's availability. Read-only by default means a stray
+  // tap while scanning can't silently overwrite someone's schedule; the admin
+  // turns editing on deliberately when they mean to change something. Not
+  // persisted - it resets to read-only every time the view opens, so editing is
+  // always an explicit choice.
+  const [editMode, setEditMode] = useState(false);
   const [reminderCopied, setReminderCopied] = useState(false);
   const AVAILABILITY_REMINDER =
     "Hi! Please update your crew availability in the app for the next two weeks. Open the Mountaineer app, go to Availability, and mark each day (available, unavailable, or conditional). This helps us schedule jobs around you. Thanks!";
@@ -1536,6 +1544,9 @@ function MonthScheduleView({
   // opening each employee's page. Optimistic; reverts on error.
   const [cellBusy, setCellBusy] = useState<string | null>(null);
   async function cycleCell(userId: number, dIso: string, record: AvailabilityRangeRow | null | undefined) {
+    // Read-only unless the admin has explicitly turned editing on. Guards against
+    // an accidental tap changing someone's availability while scrolling the grid.
+    if (!editMode) return;
     const order = ["available", "unavailable", "conditional"] as const;
     const cur = record?.status as (typeof order)[number] | undefined;
     const next = cur == null ? "available" : order[(order.indexOf(cur) + 1) % order.length];
@@ -1672,6 +1683,24 @@ function MonthScheduleView({
           />
           <span>High contrast (saturated fills)</span>
         </label>
+        {/* Edit toggle. Off by default so tapping a cell does nothing until the
+            admin opts in; on, it is clearly flagged so it is obvious the grid is
+            now live. */}
+        <button
+          type="button"
+          onClick={() => setEditMode((v) => !v)}
+          aria-pressed={editMode}
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "6px 14px", fontSize: 13, fontWeight: 700, borderRadius: 8,
+            cursor: "pointer",
+            border: editMode ? "2px solid var(--warn)" : "1px solid var(--border)",
+            background: editMode ? "var(--warn-bg)" : "transparent",
+            color: editMode ? "var(--warn)" : "var(--text)",
+          }}
+        >
+          {editMode ? "Editing on - tap a day to change it" : "Edit availability"}
+        </button>
       </div>
 
       {err && (
@@ -1918,7 +1947,7 @@ function MonthScheduleView({
                       return (
                         <td
                           key={u.id}
-                          title={`${title} - tap to change`}
+                          title={editMode ? `${title} - tap to change` : title}
                           onClick={() => cycleCell(u.id, dIso, record)}
                           style={{
                             borderBottom: "1px solid var(--border)",
@@ -1926,7 +1955,9 @@ function MonthScheduleView({
                             padding: isScheduled ? "4px 6px" : 0,
                             minHeight: 26,
                             background: cellBg,
-                            cursor: cellBusy === `${u.id}:${dIso}` ? "wait" : "pointer",
+                            cursor: cellBusy === `${u.id}:${dIso}`
+                              ? "wait"
+                              : editMode ? "pointer" : "default",
                             verticalAlign: "top",
                           }}
                         >
