@@ -25,7 +25,7 @@ Two root causes, compounding:
    single-row case would not converge.
 
 3. **Items only reached the server on a completeness-gated Save.** While the crew
-   were building the list — the exact window they care about — the server had
+   were building the list - the exact window they care about - the server had
    nothing, so a second device saw nothing.
 
 ## Decision
@@ -33,13 +33,13 @@ Two root causes, compounding:
 **One BOL per job, identified deterministically; server-authoritative adoption;
 items stream to the server as they are added.**
 
-1. **`bol_id = bolIdForJob(job_uuid)`** — an FNV hash of `job_uuid`, so every device
+1. **`bol_id = bolIdForJob(job_uuid)`** - an FNV hash of `job_uuid`, so every device
    computes the same id and upserts the same row. A truly job-less BOL falls back to
    random (nothing to converge on).
 
 2. **`loadForJob` adopts the server copy whenever there are no un-synced local ops.**
    A fully-synced local draft has nothing to protect, so the server is the authority,
-   full stop — the `updated_at` race is gone. When un-synced local edits exist, the
+   full stop - the `updated_at` race is gone. When un-synced local edits exist, the
    two drafts are the *same document* (same id), so their item lists are **unioned by
    item id** (local wins a per-item conflict) rather than one clobbering the other.
 
