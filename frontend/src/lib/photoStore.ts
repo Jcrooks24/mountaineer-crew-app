@@ -105,6 +105,17 @@ export async function listPhotosForJob(jobUuid: string): Promise<StoredPhoto[]> 
   return results;
 }
 
+/** Read ONE photo (including its bytes) by id. Lets a drain read photos one at a
+ * time instead of pulling a whole job's bytes into memory via listPhotosForJob. */
+export async function getPhoto(id: string): Promise<StoredPhoto | null> {
+  const db = await openDb();
+  const tx = db.transaction(STORE_PHOTOS, "readonly");
+  const store = tx.objectStore(STORE_PHOTOS);
+  const row = await txPromise<StoredPhoto | undefined>(store.get(id));
+  db.close();
+  return row ?? null;
+}
+
 export async function updatePhoto(id: string, updates: Partial<Omit<StoredPhoto, "id">>): Promise<void> {
   const db = await openDb();
   const tx = db.transaction(STORE_PHOTOS, "readwrite");

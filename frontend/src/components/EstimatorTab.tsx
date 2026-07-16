@@ -14,6 +14,8 @@ import {
   removeOp as removeEstimatorOp,
 } from "../lib/estimatorQueue";
 import { mountainDateYYYYMMDD } from "../lib/time";
+import { addPhoto, listPhotosForJob, getPhoto, updatePhoto, deletePhoto } from "../lib/photoStore";
+import { toQueuedPhoto, slotToBlob, slotToPreviewBlob } from "../lib/queuedPhoto";
 import { BetaTag } from "./BetaTag";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -1541,12 +1543,23 @@ function EstimatePhotos({
   const [photos, setPhotos] = useState<ServerPhoto[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // Pending batch: take several shots and/or multi-select from the library,
-  // each with its own note, then upload them together.
-  const [pending, setPending] = useState<{ id: string; file: File; caption: string }[]>([]);
+  // Pending batch: take several shots and/or multi-select from the library, each
+  // with its own note, then upload them together. The IMAGE BYTES live in
+  // IndexedDB (photoStore), keyed by estimateUuid, so a failed upload or a reload
+  // no longer loses a picked photo; this in-memory list is only the UI view
+  // (id + caption + a preview objectURL). Mirrors the crew and BOL photo paths
+  // (ADR 0017: store bytes, never a File handle).
+  const [pending, setPending] = useState<{ id: string; caption: string; previewUrl: string }[]>([]);
   // Saved-grid note editor: which photo's note is open + its draft.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
+
+  // Always-current pending, so the unmount cleanup revokes the live preview URLs.
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  useEffect(() => {
+    return () => { pendingRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl)); };
+  }, []);
 
   async function refresh() {
     try {
@@ -1557,22 +1570,56 @@ function EstimatePhotos({
     } catch { /* offline */ }
   }
 
-  useEffect(() => { refresh(); }, [estimateUuid]);
+  useEffect(() => {
+    refresh();
+    // Recover any pending estimator photos persisted on this device (they survive
+    // a reload / app kill because the bytes are in IndexedDB, not a File handle).
+    (async () => {
+      try {
+        const stored = await listPhotosForJob(estimateUuid);
+        const items: { id: string; caption: string; previewUrl: string }[] = [];
+        for (const s of stored) {
+          if (s.drive_status === "uploaded") continue;
+          const b = await slotToPreviewBlob(s.blob); // one at a time, bounded memory
+          items.push({ id: s.id, caption: s.caption || "", previewUrl: b ? URL.createObjectURL(b) : "" });
+        }
+        if (items.length) setPending(items);
+      } catch { /* IndexedDB unavailable */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estimateUuid]);
 
-  function addFiles(files: FileList | null) {
+  // Persist each picked file's BYTES to IndexedDB immediately (resized first, so a
+  // huge library photo can't blow memory - resizeImage caps at 1920px). Sequential
+  // so only one image is decoded at a time regardless of how many are selected.
+  async function addFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setErr(null);
-    setPending((prev) => [
-      ...prev,
-      ...Array.from(files).map((file) => ({ id: newUUID(), file, caption: "" })),
-    ]);
+    for (const file of Array.from(files)) {
+      try {
+        const id = newUUID();
+        const resized = await resizeImage(file);
+        await addPhoto({
+          id,
+          job_uuid: estimateUuid,
+          created_at: new Date().toISOString(),
+          mime: "image/jpeg",
+          caption: "",
+          blob: await toQueuedPhoto(resized),
+          drive_status: "pending",
+        });
+        const previewUrl = URL.createObjectURL(resized);
+        setPending((prev) => [...prev, { id, caption: "", previewUrl }]);
+      } catch {
+        setErr("Could not add a photo on this device. Try again.");
+      }
+    }
   }
 
-  async function uploadOne(file: File, caption: string) {
+  async function uploadOne(photoId: string, blob: Blob, caption: string) {
     const form = new FormData();
-    const resized = await resizeImage(file);
-    form.append("file", resized, (file.name || "estimate.jpg").replace(/.[^.]+$/, ".jpg"));
-    form.append("photo_id", newUUID());
+    form.append("file", blob, "estimate.jpg");
+    form.append("photo_id", photoId);
     form.append("job_uuid", estimateUuid);
     form.append("job_name", `Estimate - ${customerName}`);
     form.append("job_date", moveDate || mountainDateYYYYMMDD());
@@ -1587,7 +1634,7 @@ function EstimatePhotos({
       headers: { Authorization: `Bearer ${token}` },
       body: form,
     });
-    const json = await res.json();
+    const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json?.error || `HTTP ${res.status}`);
   }
 
@@ -1596,17 +1643,46 @@ function EstimatePhotos({
     setBusy(true);
     setErr(null);
     let lastErr = "";
+    const succeeded = new Set<string>();
     for (const p of pending) {
       try {
-        await uploadOne(p.file, p.caption);
+        // Read this one photo's bytes now (not the whole job's at once), so peak
+        // memory stays at a single image regardless of how many are queued.
+        const stored = await getPhoto(p.id);
+        const blob = stored ? await slotToBlob(stored.blob) : null;
+        if (!blob) throw new Error("A photo could not be read from this device. Re-add it.");
+        await uploadOne(p.id, blob, p.caption);
+        await deletePhoto(p.id); // now on the server; the grid shows it via refresh()
+        URL.revokeObjectURL(p.previewUrl);
+        succeeded.add(p.id);
       } catch (e: any) {
         lastErr = e?.message ?? "Upload failed";
+        // Persist the latest caption so a retry keeps it; the bytes stay in
+        // IndexedDB (drive_status pending), so the photo is NOT lost.
+        try { await updatePhoto(p.id, { caption: p.caption }); } catch { /* ignore */ }
       }
     }
-    setPending([]);
+    // Keep the ones that FAILED (was setPending([]) - which dropped failed
+    // photos). Successful uploads are removed; failures stay for a retry.
+    setPending((prev) => prev.filter((x) => !succeeded.has(x.id)));
     if (lastErr) setErr(lastErr);
     await refresh();
     setBusy(false);
+  }
+
+  async function discardPending(id: string) {
+    const p = pendingRef.current.find((x) => x.id === id);
+    if (p) URL.revokeObjectURL(p.previewUrl);
+    try { await deletePhoto(id); } catch { /* ignore */ }
+    setPending((prev) => prev.filter((x) => x.id !== id));
+  }
+
+  async function discardAllPending() {
+    for (const p of pendingRef.current) {
+      URL.revokeObjectURL(p.previewUrl);
+      try { await deletePhoto(p.id); } catch { /* ignore */ }
+    }
+    setPending([]);
   }
 
   async function saveNote(photoId: string, caption: string) {
@@ -1671,10 +1747,9 @@ function EstimatePhotos({
         <div className="col" style={{ gap: 10, marginTop: 12 }}>
           <div className="small" style={{ fontWeight: 700 }}>Ready to upload ({pending.length})</div>
           {pending.map((p) => {
-            const url = URL.createObjectURL(p.file);
             return (
               <div key={p.id} className="col" style={{ gap: 6, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-                <img src={url} alt="preview" style={{ width: "100%", maxHeight: 220, objectFit: "cover" }} onLoad={() => URL.revokeObjectURL(url)} />
+                {p.previewUrl && <img src={p.previewUrl} alt="preview" style={{ width: "100%", maxHeight: 220, objectFit: "cover" }} />}
                 <div className="col" style={{ gap: 6, padding: 8 }}>
                   <textarea
                     rows={2}
@@ -1682,7 +1757,7 @@ function EstimatePhotos({
                     onChange={(e) => setPending((prev) => prev.map((x) => x.id === p.id ? { ...x, caption: e.target.value } : x))}
                     placeholder="Note (optional)…"
                   />
-                  <button type="button" onClick={() => setPending((prev) => prev.filter((x) => x.id !== p.id))} disabled={busy}
+                  <button type="button" onClick={() => discardPending(p.id)} disabled={busy}
                     style={{ alignSelf: "flex-start", fontSize: 12, padding: "4px 10px" }}>
                     Remove
                   </button>
@@ -1694,7 +1769,7 @@ function EstimatePhotos({
             <button type="button" className="btnPrimary" onClick={uploadAll} disabled={busy} style={{ flex: 1 }}>
               {busy ? "Uploading…" : (pending.length === 1 ? "Upload photo" : `Upload all (${pending.length})`)}
             </button>
-            <button type="button" onClick={() => setPending([])} disabled={busy}>Clear</button>
+            <button type="button" onClick={discardAllPending} disabled={busy}>Clear</button>
           </div>
         </div>
       )}
