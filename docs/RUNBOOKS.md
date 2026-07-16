@@ -307,7 +307,19 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    (`724e3e1`), but the five above are unfixed on **both** branches, so this is losing
    crew data in production today, not just in staging.
 
-3. **Estimates created before 2026-07-13 may carry inflated totals. This is known and
+3. **Coalescer workers can leak an in-flight key if `record_sheet_sync` raises (low risk).**
+   The incident / availability / BOL sheet-export workers in
+   `backend/app/integrations/sheets_export.py` call `record_sheet_sync(...)` in their
+   `except` block without a guard. If *that* call raised (e.g. the DB session is in a
+   failed-transaction state), the exception escapes before the `with _*_export_lock`
+   cleanup runs, so the entity's key stays in `_*_export_in_flight` forever and every
+   later `schedule_*_export` for it no-ops (adds to rerun, never runs). Low probability
+   in practice: the common failure is a Sheets 429, which happens *after* the export's
+   internal commit, on a clean session. Fix when convenient: wrap the whole worker body
+   (export + both record_sheet_sync calls) so the in-flight/rerun cleanup always runs in
+   a `finally`. Applies to all three coalescers.
+
+4. **Estimates created before 2026-07-13 may carry inflated totals. This is known and
    accepted; do not "discover" it and panic.**
 
    Item adds used to double-count the newly added item into the estimate's rolled-up
