@@ -264,7 +264,45 @@ Live bugs that are known and not yet fixed. If you hit one of these, you have fo
 a real issue, not a misunderstanding. Keep this list honest: delete an entry when it
 is fixed, and add one when a `/vet` pass finds something you cannot fix that day.
 
-1. **Logging out destroys unsynced photos and reimbursements.** `clearCrewState()`
+1. **Staging PWA serves STALE code: fixes look "not deployed" when they are.**
+   The staging frontend is a Vercel **branch-preview** deployment
+   (`mountaineer-crew-app-git-staging-*.vercel.app`), and that host has **Vercel
+   Deployment Protection (Vercel Authentication)** on. Every request to it, including
+   `/sw.js`, gets a **302 redirect to Vercel SSO** (confirm:
+   `curl -I https://<staging-host>/sw.js` → `302` + `Location: vercel.com/sso-api`).
+   The service-worker spec forbids the SW script being behind a redirect, so the
+   browser's SW **update check fails** ("The script resource is behind a redirect,
+   which is disallowed"). The already-installed SW then keeps serving the **precached
+   old bundle**, and because `registerType` is `"prompt"`, the update banner never
+   appears and even Profile → **Update app** (`reg.update()`) fails the same way.
+
+   **Symptom this causes:** a fix is committed and live on Vercel, but on-device it
+   looks unchanged across multiple "fixes." This is what made *truck-fullness → invoice
+   auto-populate* look broken three times when the code (commit `559108f`) was correct
+   and deployed the whole time (backend decode + frontend effect both verified
+   2026-07-16).
+
+   **Why we can't just fix it:** the account's Vercel tier does not allow turning
+   Deployment Protection off, and there is no per-path exemption for `/sw.js` in
+   `vercel.json` (Deployment Protection is an edge auth gate that precedes routing).
+   A no-SW build can't reach already-trapped devices either, because the broken update
+   check won't fetch it.
+
+   **Unblock a device NOW (one-time, per stale episode):** load the staging URL in a
+   private/incognito window (no SW there), **or** DevTools → Application → Service
+   Workers → **Unregister** then reload, **or** clear site data for the host. After
+   that the current bundle loads.
+
+   **Permanent fix (no tier upgrade needed):** serve staging from an **unprotected
+   production domain** instead of the protected preview URL. Create a second Vercel
+   project from the same repo with **Production Branch = `staging`** and the staging
+   env vars (`VITE_API_URL` → staging backend); its production URL is public under
+   Standard Protection, so the SW updates normally and offline testing works again.
+   Until then, treat "it didn't change on staging" as *stale SW first, code bug second*
+   - verify against the committed source or an incognito load before assuming the fix
+   didn't land.
+
+2. **Logging out destroys unsynced photos and reimbursements.** `clearCrewState()`
    deletes the entire IndexedDB database. A crew member who logs out with a pending
    receipt photo loses it permanently. **Never tell a crew member to log out or
    reinstall as a troubleshooting step** unless you have confirmed their queues are
