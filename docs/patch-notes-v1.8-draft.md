@@ -79,9 +79,16 @@ Invoice builder:
 Digital Bill of Lading:
 - Now syncs across devices. Two crew on the same job build one shared BOL instead
   of two separate ones, and items appear on the other device as they are added.
+- A signed BOL now always reaches the office. If you sign offline, hand the phone
+  off before it syncs, or the send hits a snag, the BOL and its signatures are kept
+  and delivered when they can be. It can no longer say "sent" without actually
+  landing in the office sheet and the signed-PDF folder, and a background check
+  re-sends anything that slipped through.
 
 Estimator:
 - Attach site photos with notes, and use the richer shared furniture catalogue.
+  Site photos are now held safely on your device until they upload, so a failed
+  send or a reload no longer loses one.
 
 Admin month schedule:
 - A rolling 30-day view (instead of the calendar month), tap a day to pin its row
@@ -96,15 +103,22 @@ BEHIND THE SCENES (reliability + speed)
 
 - Offline work is never lost to a server hiccup. If a submission is rejected, it
   is kept on your phone, marked "not sent" with the reason, and given a Retry
-  button, instead of silently disappearing. This covers every offline queue.
+  button, instead of silently disappearing. This covers every offline queue, and
+  a "saved" or "synced" message only shows once the work has actually landed - not
+  before.
 
-- Photos are stored more reliably, which prevents a rare case where a photo or
-  receipt could fail to send or go missing on some phones.
+- Photos are stored more reliably. Job photos, incident photos, BOL item photos,
+  and estimator site photos are all held as real image data on your device, so a
+  failed upload or a reload no longer loses one and they finish sending on their
+  own when signal returns.
 
-- If a different crew member logs in on a shared phone, your un-synced failed work
-  is kept for you and restored when you log back in on that device.
+- If a different crew member logs in on a shared phone, your un-synced work is kept
+  for you and restored when you log back in on that device - now including a signed
+  BOL you had not finished sending.
 
-- The app stays fast as data grows - your hours and job history no longer reload
-  the entire past to show a screen.
+- The app stays fast and steady as data grows. Screens no longer reload the entire
+  past to show, and the office server was hardened so a heavy day no longer risks
+  slowing it down or restarting it.
 
-- Several fixes so the office Google Sheet stays accurate.
+- The office Google Sheet stays accurate, and a background check now catches and
+  re-sends anything that did not make it to the sheet, including signed BOLs.
