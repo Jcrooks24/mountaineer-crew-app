@@ -326,14 +326,23 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    status codes, a durable BOL reconciler (auto + `POST /api/admin/sheets/reconcile-bols`
    + `POST /api/admin/bol/{bol_id}/reexport`), write-first-then-delete-stale export
    ordering, `DRIVE_BOL_FOLDER_ID` per environment, pending-BOL preservation on logout,
-   draft cleanup, and quota-failure surfacing. **Remaining, both low-severity:**
-   (a) the export reconciler detects a MISSING summary row but not a summary-present /
-   items-missing row - item-level reconciliation is a follow-up; (b) a process death in
-   the ~10 ms between the summary write and its dedupe commit can leave a same-timestamp
-   duplicate summary row that only self-heals on the next real change to that BOL.
-   **Action still required by a human:** set `DRIVE_BOL_FOLDER_ID` on BOTH Render
-   services (staging + prod, different folder ids) - until then staging shares prod's
-   signed-BOL folder. See CREDENTIALS.md.
+   draft cleanup, and quota-failure surfacing. A vet pass then hardened it further:
+   the exporter now marks the `bol`/`bol_item` dedupe keys only AFTER both tabs are
+   written (a crash mid-export leaves no dedupe row, so the reconciler re-ships it -
+   the earlier "summary present, items missing" gap is closed), the reconciler uses
+   keyset pagination so failing low-id BOLs can't starve others, `discardFailedBol`
+   drops the whole bol_id sequence, and `syncQueue` won't resurrect the queue after a
+   logout. **Remaining accepted low-severity items:** (a) a same-timestamp re-export
+   (rare) can leave a duplicate summary row that only clears on the next real change;
+   (b) a Drive upload that succeeds but whose DB commit then fails orphans a duplicate
+   PDF in the signed-BOL folder on the retry (clutter, latest link still recorded);
+   (c) the `LIKE bol_id||':%'` reconcile/export scoping does not escape LIKE
+   metachars - harmless for UUID/hash bol_ids, defensive-only; (d) the BOL reconnect
+   photo-retry still has a narrow window where an item added DURING the reconnect
+   upload could be dropped (the mount-time staleness is fixed; this residual is one
+   async tick wide). **Action still required by a human:** set `DRIVE_BOL_FOLDER_ID`
+   on BOTH Render services (staging + prod, different folder ids) - until then staging
+   shares prod's signed-BOL folder. See CREDENTIALS.md.
 
 2. **RESOLVED 2026-07-15: queued work is no longer dropped on a 4xx.** All ten offline
    queues now mark a rejected op `failed` and keep it, per
