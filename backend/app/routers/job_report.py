@@ -115,6 +115,7 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
     inv_items = (
         db.query(JobInventoryItem)
         .filter(JobInventoryItem.job_uuid == report.job_uuid)
+        .limit(5000)  # bound the per-job scan; real inventories are far smaller
         .all()
     )
     if inv_items:

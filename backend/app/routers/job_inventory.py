@@ -29,10 +29,14 @@ def _normalize_pack_type(raw: str | None) -> str | None:
 
 
 def _items_for(db: Session, job_uuid: str) -> list[JobInventoryItem]:
+    # Cap the per-job read: even a huge long-distance inventory is well under
+    # this, so the limit only fires on a runaway/buggy client and keeps an
+    # unbounded row set off the 512 MB worker.
     return (
         db.query(JobInventoryItem)
         .filter(JobInventoryItem.job_uuid == job_uuid)
         .order_by(JobInventoryItem.id.asc())
+        .limit(5000)
         .all()
     )
 

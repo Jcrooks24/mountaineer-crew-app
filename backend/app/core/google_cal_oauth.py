@@ -173,6 +173,13 @@ def invalidate_cache() -> None:
         # Defensive: never let cache cleanup break the admin token-rotation
         # endpoint. The next sheet export's first call will rebuild anyway.
         pass
+    # Same cascade for the per-thread Drive service, which also holds a
+    # reference to the previous creds.
+    try:
+        from app.integrations.drive_upload import invalidate_drive_svc_cache
+        invalidate_drive_svc_cache()
+    except Exception:
+        pass
 
 
 def get_calendar_service(db=None):

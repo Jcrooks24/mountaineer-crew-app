@@ -74,10 +74,14 @@ def get_bill_seed(
     """Return auto-populated line-item seed data from logged events and materials."""
 
     # ── Hours from start/finish events ────────────────────────────────────────
+    # Cap the per-job scan: only the earliest start + latest finish per person
+    # matter, so a runaway event count (retry storms, a buggy client) can't pull
+    # an unbounded set into the 512 MB worker. 2000 is far above any real job.
     events = (
         db.query(Event)
         .filter(Event.job_uuid == job_uuid)
         .order_by(Event.timestamp)
+        .limit(2000)
         .all()
     )
 

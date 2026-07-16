@@ -87,6 +87,10 @@ _availability_export_in_flight: Set[str] = set()
 _availability_export_rerun: Set[str] = set()
 _availability_export_lock = threading.Lock()
 
+_bol_export_in_flight: Set[str] = set()
+_bol_export_rerun: Set[str] = set()
+_bol_export_lock = threading.Lock()
+
 # Serialize note-cell updates per event_id so rapid edits on the same event
 # (or client retries) can't stack multiple in-memory googleapiclient instances
 # in the pool queue. Bounded so the dict can't grow forever as new event_ids
@@ -2296,6 +2300,96 @@ def schedule_incident_export(incident_uuid: str) -> None:
     _EXPORT_POOL.submit(_incident_export_worker, incident_uuid)
 
 
+def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
+    """Re-read one BOL from the DB into the export shape export_bol_to_sheets
+    expects. The worker calls this when it runs, so a coalesced export always
+    writes the latest committed state. Signature blobs are deliberately NOT read
+    - the sheet export never uses them, so keeping them out of the payload avoids
+    pulling several base64 PNGs into memory per export."""
+    from app.db.models.bol import DigitalBOL  # local import to avoid cycles
+
+    row = db.query(DigitalBOL).filter(DigitalBOL.bol_id == bol_id).first()
+    if row is None:
+        return None
+    try:
+        items = json.loads(row.items_json or "[]")
+    except (ValueError, TypeError):
+        items = []
+    return {
+        "bol_id": row.bol_id,
+        "created_by": row.created_by or "",
+        "job_uuid": row.job_uuid or "",
+        "job_name": row.job_name or "",
+        "job_date": row.job_date or "",
+        "status": row.status or "",
+        "items": items,
+        "inventory_verified": (
+            True if row.inventory_verified == 1
+            else False if row.inventory_verified == 0
+            else None
+        ),
+        "inventory_note": row.inventory_note or "",
+        "origin_signed_at": row.origin_signed_at,
+        "dest_signed_at": row.dest_signed_at,
+        "final_charges": (
+            float(row.final_charges) if row.final_charges is not None else None
+        ),
+        "walkthrough_notes": row.walkthrough_notes or "",
+        "signed_pdf_url": row.signed_pdf_url or "",
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _bol_export_worker(bol_id: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_bol_payload(db, bol_id)
+            if payload is not None:
+                export_bol_to_sheets(db, payload)
+            record_sheet_sync(db, "export_bol_to_sheets", True)
+        except Exception as exc:
+            print(f"[sheets] bol export failed ({bol_id}): {exc}")
+            record_sheet_sync(db, "export_bol_to_sheets", False, str(exc))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _bol_export_lock:
+            if bol_id in _bol_export_rerun:
+                _bol_export_rerun.discard(bol_id)
+                continue
+            _bol_export_in_flight.discard(bol_id)
+            return
+
+
+def schedule_bol_export(bol_id: str) -> None:
+    """Coalesce repeated exports for the same BOL into one in-flight worker with
+    at most one pending rerun.
+
+    Use this instead of firing export_bol_to_sheets directly. The export is
+    replace-style (delete every row for this bol_id across both tabs, then write
+    fresh), and a single BOL is written repeatedly: the initial save, again per
+    per-item photo link as it finishes uploading, again at origin signing, again
+    at destination signing, again on PDF upload - and two crew share one BOL
+    across devices. Firing an uncoalesced background export each time both lets
+    two workers interleave delete/append into duplicate rows AND piles unbounded
+    tasks onto the 2-worker pool. Coalescing collapses each burst into one write
+    of the final state (same fix applied to incidents/inventory/availability)."""
+    if not bol_id:
+        return
+    with _bol_export_lock:
+        if bol_id in _bol_export_in_flight:
+            _bol_export_rerun.add(bol_id)
+            return
+        _bol_export_in_flight.add(bol_id)
+    _EXPORT_POOL.submit(_bol_export_worker, bol_id)
+
+
 # ── Admin entry-status sweep ─────────────────────────────────────────────────
 # When admin saves their initials + date on the Job Summary view, every row
 # already exported for that job needs its trailing entered_by / entered_on
@@ -2649,21 +2743,32 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
         user_col = win_col = None  # Tab malformed - skip delete, just append.
 
     if user_col is not None and win_col is not None:
+        # Read ONLY the two key columns, not the whole tab. This tab grows one row
+        # per (user, window) forever, and it used to read A:Z (all 26 columns x
+        # every row) into memory on every export - a memory cost that grew without
+        # bound. user_name/window_start are the only columns needed to find rows to
+        # delete; reading just their span (A:B in practice) is ~13x lighter and the
+        # absolute row indices are unchanged, so the delete stays correct.
+        lo, hi = min(user_col, win_col), max(user_col, win_col)
         result = _ssl_retry(
             lambda: svc.spreadsheets()
             .values()
-            .get(spreadsheetId=spreadsheet_id, range=f"{tab}!A:Z")
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}",
+            )
             .execute()
         )
         values = result.get("values", []) or []
+        u_at, w_at = user_col - lo, win_col - lo
         rows_to_delete: List[int] = []
         for idx, existing_row in enumerate(values):
             if idx == 0:
                 continue  # header row
             if (
-                len(existing_row) > max(user_col, win_col)
-                and existing_row[user_col] == user_name
-                and existing_row[win_col] == window_start
+                len(existing_row) > max(u_at, w_at)
+                and existing_row[u_at] == user_name
+                and existing_row[w_at] == window_start
             ):
                 rows_to_delete.append(idx)
         if rows_to_delete:

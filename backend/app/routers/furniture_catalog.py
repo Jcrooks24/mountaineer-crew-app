@@ -128,13 +128,14 @@ async def import_furniture_csv(
     the columns they care about and leave the rest blank without wiping data.
     When length/width/height are all present, cubic_ft is derived (L*W*H/1728)
     and takes precedence over an explicit cubic_ft cell. Returns a summary."""
-    raw = await file.read()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1", errors="replace")
-
-    reader = csv.DictReader(io.StringIO(text))
+    # Stream-decode straight off the upload's spooled file instead of reading the
+    # whole body into a bytes buffer, decoding it into a second str copy, and
+    # wrapping that in a StringIO (a third copy) - which triple-buffered a CSV
+    # that can be up to the 100 MB body cap. TextIOWrapper decodes incrementally
+    # as csv.DictReader pulls lines. errors="replace" keeps a stray non-UTF-8
+    # byte from aborting the whole import (utf-8-sig also strips a leading BOM).
+    text_stream = io.TextIOWrapper(file.file, encoding="utf-8-sig", errors="replace")
+    reader = csv.DictReader(text_stream)
     if not reader.fieldnames:
         raise HTTPException(status_code=400, detail="CSV has no header row")
 

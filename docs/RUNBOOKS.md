@@ -335,3 +335,29 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
 - `alembic revision --autogenerate` emitting spurious `DROP TABLE`. Fixed 2026-07-13:
   the seven missing model imports were added to `alembic/env.py`. Still worth reading
   any generated migration before applying it.
+- OOM-hardening pass, 2026-07-16 (staging). After the availability-export coalescing
+  fix (`ca206ef`), a full audit closed the rest of the grows-with-data and per-request
+  memory vectors on the 512 MB worker:
+  - Availability sheet export read the entire tab (`A:Z`, all 26 columns x every row)
+    each run; now reads only the two dedup key columns.
+  - `GET /api/availability/all` and the per-user state read scanned the forever-growing
+    `availability_days` table unbounded; both are floored to recent history and the
+    audit scan is hard-capped. `admin/.../range` now rejects spans over 92 days.
+  - BOL sheet export is now coalesced (`schedule_bol_export`) like incidents/inventory,
+    so a shared-device signing burst can't interleave into duplicate rows or pile
+    unbounded tasks on the 2-worker pool.
+  - `GET /api/dvir` list deferred/blanked the base64 driver+mechanic signatures (up to
+    ~30 MB across a 1000-row page); single-DVIR GET still returns them.
+  - Furniture CSV import streams the upload through a `TextIOWrapper` instead of
+    triple-buffering the whole body.
+  - Per-job scans in bill-seed / job-inventory / job-report are capped.
+  - `drive_upload` now builds the Drive service per-thread (it was one process-wide
+    httplib2 service shared across concurrent upload threads - the same
+    OpenSSL-not-thread-safe crash the sheets service already avoids).
+
+  **Accepted, not fixed (low priority):** every replace-style sheet export still does
+  two full-spreadsheet metadata `get`s plus a full single-column read in
+  `_delete_sheet_rows_by_value`, so per-export cost grows slowly with each tab. And
+  `GET /api/users/directory` still returns `profile_photo` data URLs (bounded to 200,
+  client-cached) because the crew avatar feature depends on them; dropping the field
+  would need a separate per-photo fetch endpoint first.

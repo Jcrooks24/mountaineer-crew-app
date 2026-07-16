@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.core.deps import get_current_user, get_db, require_admin
 from app.core.mailer import send_email
@@ -38,8 +38,15 @@ def _needs_mechanic_review(d: DVIR) -> bool:
     return len(defects) > 0
 
 
-def _to_response(d: DVIR) -> DVIRResponse:
+def _to_response(d: DVIR, include_signatures: bool = True) -> DVIRResponse:
+    # include_signatures=False is for list responses: the two signature columns
+    # are base64 PNG data URLs (tens of KB each) and a list of up to 1000 DVIRs
+    # would otherwise serialize ~30 MB of signatures nobody renders in a list.
+    # The list query also defers loading these columns, so d.*_signature is not
+    # even touched here when this is False.
     defects = json.loads(d.defects_json) if d.defects_json else []
+    driver_signature = d.driver_signature if include_signatures else ""
+    mechanic_signature = d.mechanic_signature if include_signatures else None
     return DVIRResponse(
         id=d.id,
         dvir_id=d.dvir_id,
@@ -57,11 +64,11 @@ def _to_response(d: DVIR) -> DVIRResponse:
         overnight_hold=d.overnight_hold,
         driver_id=d.driver_id,
         driver_name=d.driver_name,
-        driver_signature=d.driver_signature,
+        driver_signature=driver_signature,
         driver_signed_at=d.driver_signed_at,
         mechanic_id=d.mechanic_id,
         mechanic_name=d.mechanic_name,
-        mechanic_signature=d.mechanic_signature,
+        mechanic_signature=mechanic_signature,
         mechanic_signed_at=d.mechanic_signed_at,
         repairs_made=d.repairs_made,
         mechanic_notes=d.mechanic_notes,
@@ -191,7 +198,15 @@ def list_dvirs(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    q = db.query(DVIR)
+    # Defer the base64 signature columns so a list of up to 1000 rows doesn't
+    # pull ~30 MB of signature data URLs into the 512 MB worker's memory. The
+    # pending_only filter still uses mechanic_signature IS NULL in SQL (a null
+    # check needs no row data), and the single-DVIR GET below still returns the
+    # full signatures for printing.
+    q = db.query(DVIR).options(
+        defer(DVIR.driver_signature),
+        defer(DVIR.mechanic_signature),
+    )
     if pending_only:
         # Only DVIRs with defects need mechanic review. Satisfactory/no-defect
         # inspections auto-clear and are excluded from the pending queue.
@@ -205,7 +220,7 @@ def list_dvirs(
         .limit(limit)
         .all()
     )
-    return [_to_response(d) for d in rows]
+    return [_to_response(d, include_signatures=False) for d in rows]
 
 
 # ── Get single ────────────────────────────────────────────────────────────────

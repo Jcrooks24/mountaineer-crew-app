@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models.bol import DigitalBOL
-from app.integrations.sheets_export import export_bol_to_sheets, run_export_in_background
+from app.integrations.sheets_export import schedule_bol_export
 from app.integrations.drive_upload import upload_bol_pdf_to_drive
 from app.core.deps import get_current_user
 from app.db.models.user import User
@@ -176,7 +176,7 @@ def submit_bol(
         return {"ok": False, "error": "Failed to save BOL"}
 
     bol_dict = _to_dict(row)
-    run_export_in_background(export_bol_to_sheets, bol_dict)
+    schedule_bol_export(row.bol_id)
     print(
         f"[bol] saved bol_id={row.bol_id} job_uuid={row.job_uuid} "
         f"status={row.status} items={len(bol_dict['items'])}"
@@ -291,7 +291,7 @@ def sign_bol(
         raise HTTPException(status_code=500, detail="Failed to save signatures")
 
     bol_dict = _to_dict(row)
-    run_export_in_background(export_bol_to_sheets, bol_dict)
+    schedule_bol_export(row.bol_id)
     print(f"[bol] signed bol_id={row.bol_id} phase={payload.phase} status={row.status}")
     return {"ok": True, "bol": bol_dict}
 
@@ -333,6 +333,6 @@ def upload_bol_pdf(
         db.rollback()
         return {"ok": False, "error": "Failed to save PDF link"}
 
-    run_export_in_background(export_bol_to_sheets, _to_dict(row))
+    schedule_bol_export(row.bol_id)
     print(f"[bol] pdf uploaded bol_id={row.bol_id} url={row.signed_pdf_url}")
     return {"ok": True, "drive_url": result["url"]}
