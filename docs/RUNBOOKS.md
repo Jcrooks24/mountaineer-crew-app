@@ -282,25 +282,33 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    and deployed the whole time (backend decode + frontend effect both verified
    2026-07-16).
 
-   **Why we can't just fix it:** the account's Vercel tier does not allow turning
-   Deployment Protection off, and there is no per-path exemption for `/sw.js` in
-   `vercel.json` (Deployment Protection is an edge auth gate that precedes routing).
-   A no-SW build can't reach already-trapped devices either, because the broken update
-   check won't fetch it.
+   **Why now, not before (root cause):** the service worker is not new (added in
+   `3d4df71`, config stable since). It worked for months because `/sw.js` used to serve
+   `200` - the SW updated on every deploy. Vercel later enabled Deployment Protection on
+   the preview host (a platform default flip on lower tiers; it cannot be turned off on
+   this account's tier), so `/sw.js` began returning the SSO 302. That **froze the SW
+   that had installed back when the path served 200** - it now replays its pre-protection
+   precache. Nobody changed the app; the hosting gate changed.
 
-   **Unblock a device NOW (one-time, per stale episode):** load the staging URL in a
-   private/incognito window (no SW there), **or** DevTools → Application → Service
-   Workers → **Unregister** then reload, **or** clear site data for the host. After
-   that the current bundle loads.
+   **The fix is one-time, and needs no second project or code change.** Because
+   protection now also blocks a *new* SW from installing (its registration fetch hits the
+   same 302 and fails), once you remove the stale worker nothing re-traps it:
+   - **Unregister the stale SW once:** DevTools → Application → Service Workers →
+     **Unregister**, then reload (or "Clear site data" for the host; incognito also
+     bypasses it for a quick check).
+   - After that, **no SW can install while protection is on**, so staging serves fresh
+     from the network on every load. You do not have to repeat this per deploy. The only
+     loss is offline capability *on the staging URL* (real offline-first still ships on
+     production).
 
-   **Permanent fix (no tier upgrade needed):** serve staging from an **unprotected
-   production domain** instead of the protected preview URL. Create a second Vercel
-   project from the same repo with **Production Branch = `staging`** and the staging
-   env vars (`VITE_API_URL` → staging backend); its production URL is public under
-   Standard Protection, so the SW updates normally and offline testing works again.
-   Until then, treat "it didn't change on staging" as *stale SW first, code bug second*
-   - verify against the committed source or an incognito load before assuming the fix
-   didn't land.
+   **If you ever want the SW / offline behavior back on staging** (no tier upgrade):
+   serve staging from an unprotected **production domain** - a second Vercel project with
+   Production Branch = `staging` and the staging env vars; its production URL is public
+   under Standard Protection. Not required just to see deploys.
+
+   Either way, treat "it didn't change on staging" as *stale SW first, code bug second* -
+   verify against the committed source or an incognito load before assuming a fix did not
+   land.
 
 2. **Logging out destroys unsynced photos and reimbursements.** `clearCrewState()`
    deletes the entire IndexedDB database. A crew member who logs out with a pending
