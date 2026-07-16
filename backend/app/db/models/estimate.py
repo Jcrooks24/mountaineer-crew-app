@@ -36,15 +36,15 @@ class Estimate(Base):
     special_items_notes = Column(Text, nullable=True)  # pianos, safes, art
     general_notes = Column(Text, nullable=True)
 
-    # Estimated crew-hours for the move (admin-entered). The estimated side of
-    # the Phase 4 est-vs-actual hours comparison. Nullable - blank until set.
+    # Estimated crew-hours for the move (admin-entered). Nullable - blank until set.
     estimated_hours = Column(Float, nullable=True)
 
-    # Link to the real job this estimate becomes: the canonical job_uuid the
-    # crew uses (bound via the calendar job picker / resolveJobUuid). Lets the
-    # crew app fetch this estimate's inventory + access notes for a job
-    # (GET /api/estimates/by-job/{job_uuid}) - the basis for the Phase 5
-    # overage comparison. Nullable + indexed; unlinked until an admin binds it.
+    # DORMANT: an estimate does not link to a crew-app job. In practice a PWA
+    # estimate flows into SmartMoving, the client signs, and the booked job comes
+    # back as a Google Calendar event copied onto the Job calendar - so there is
+    # no reliable estimate-to-job correspondence to store here. The manual
+    # link picker + est-vs-actual comparison that used this column were removed;
+    # the column is kept (unused, always NULL) to avoid a destructive migration.
     job_uuid = Column(String, nullable=True, index=True)
 
     # Rolled-up totals (recomputed on item add/remove)

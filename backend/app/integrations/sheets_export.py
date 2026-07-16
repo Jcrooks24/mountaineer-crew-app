@@ -877,7 +877,7 @@ JOB_REPORT_HEADERS = [
     "employee_hours", "has_non_billable_hours", "per_diem_total",
     "job_type_tags", "truck_fullness",
     "furniture_count", "box_count",
-    "estimated_hours", "estimated_hours_source", "actual_man_hours", "hours_delta",
+    "actual_man_hours",
     "overage_note",
     "created_at", "updated_at",
     "entered_by", "entered_on",
@@ -899,43 +899,6 @@ def _billable_man_hours(entries: Optional[list]) -> float:
         except (TypeError, ValueError):
             continue
     return _round_billable_quarter(total)
-
-
-def estimated_hours_for(db: Session, job_uuid: str) -> tuple[Optional[float], str]:
-    """Estimated crew-hours baseline for a job, with its source label.
-
-    Priority: the linked estimate's admin-entered estimated_hours ("estimate"),
-    else the calendar scheduled duration cached on calendar_jobs ("schedule"),
-    else (None, "") when neither is available. SmartMoving would slot in above
-    'schedule' once its client lands (Phase 4 full)."""
-    from app.db.models.estimate import Estimate  # local import to avoid cycles
-    from app.db.models.calendar_job import CalendarJob
-
-    est = (
-        db.query(Estimate)
-        .filter(Estimate.job_uuid == job_uuid, Estimate.estimated_hours.isnot(None))
-        .order_by(Estimate.updated_at.desc())
-        .first()
-    )
-    if est is not None and est.estimated_hours is not None:
-        return float(est.estimated_hours), "estimate"
-
-    cj = db.query(CalendarJob).filter(CalendarJob.job_uuid == job_uuid).first()
-    if cj is not None and cj.scheduled_start and cj.scheduled_end:
-        try:
-            start = datetime.fromisoformat(cj.scheduled_start)
-            end = datetime.fromisoformat(cj.scheduled_end)
-            hours = (end - start).total_seconds() / 3600.0
-            if hours > 0:
-                # Express estimated MAN-hours so it compares like-for-like with
-                # the actual (summed across crew): duration x invited crew. When
-                # the invitee count is unknown (older rows) fall back to 1 so the
-                # value is at worst the old wall-clock duration, never inflated.
-                crew = cj.invitee_count if (cj.invitee_count and cj.invitee_count > 0) else 1
-                return round(hours * crew, 2), "schedule"
-        except (ValueError, TypeError):
-            pass
-    return None, ""
 
 
 def _yes_no_blank(value: Any) -> str:
@@ -1122,7 +1085,6 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         return 0
 
     entered_by, entered_on = _entry_status_for(db, job_uuid)
-    _est_hours, _est_source = estimated_hours_for(db, job_uuid)
     _actual_man_hours = _billable_man_hours(report.get("employee_hours"))
     row = {
         "job_uuid": job_uuid,
@@ -1148,12 +1110,8 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         # Derived from the actual inventory (blank when none collected).
         "furniture_count": report.get("furniture_count", ""),
         "box_count": report.get("box_count", ""),
-        # Est-vs-actual hours: estimated baseline (linked estimate hours, else
-        # calendar scheduled duration) vs the report's billable man-hours.
-        "estimated_hours": ("" if _est_hours is None else _est_hours),
-        "estimated_hours_source": _est_source,
+        # Total billable man-hours for the job (standalone metric).
         "actual_man_hours": _actual_man_hours,
-        "hours_delta": ("" if _est_hours is None else round(_actual_man_hours - _est_hours, 2)),
         "overage_note": report.get("overage_note", "") or "",
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),

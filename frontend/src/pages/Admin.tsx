@@ -6083,12 +6083,6 @@ type JobSummary = {
     }>;
     updated_at: string | null;
   } | null;
-  hours: {
-    estimated_hours: number | null;
-    estimated_hours_source: string;
-    actual_man_hours: number;
-    hours_delta: number | null;
-  };
   inventory: {
     furniture_count: number;
     box_count: number;
@@ -6117,17 +6111,6 @@ type JobSummary = {
     photo_urls: string[];
     created_at: string | null;
   }>;
-  estimate: {
-    estimate_uuid: string;
-    customer_name: string;
-    estimated_hours: number | null;
-    estimated_weight_lbs: number;
-    estimated_cubic_ft: number;
-    origin_access_notes: string | null;
-    destination_access_notes: string | null;
-    special_items_notes: string | null;
-    item_count: number;
-  } | null;
   bol: {
     bol_id: string;
     status: string;
@@ -6174,16 +6157,6 @@ type JobCandidate = {
   material_count: number;
   entered: boolean;
 };
-
-/** Small labelled number, for the summary's comparison rows. */
-function SummaryTile({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  return (
-    <div style={{ flex: "1 1 120px", minWidth: 110, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
-      <div className="small" style={{ color: "var(--muted)" }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, color: accent || "var(--text)" }}>{value}</div>
-    </div>
-  );
-}
 
 function JobSummaryTab() {
   const [date, setDate] = useState("");
@@ -6827,11 +6800,6 @@ function JobSummaryTab() {
                       .join(" · ")}
                   </div>
                 )}
-                {summary.job_report.overage_note && (
-                  <div className="small" style={{ marginTop: 4 }}>
-                    <strong>Different from estimate:</strong> {summary.job_report.overage_note}
-                  </div>
-                )}
                 {summary.job_report.crew_feedback && (
                   <div
                     className="small"
@@ -6845,49 +6813,6 @@ function JobSummaryTab() {
                     <strong>Crew feedback:</strong> {summary.job_report.crew_feedback}
                   </div>
                 )}
-              </div>
-            )}
-          </div>
-
-          {/* ── Est vs actual hours ──
-              The reason estimated hours are collected at all. It was computed and
-              written to the sheet and never shown here, so the one number the
-              office is judged on lived only in a spreadsheet column. */}
-          <div className="card">
-            <div className="sectionTitle">Hours: estimated vs actual</div>
-            <div className="small" style={{ color: "var(--muted)", opacity: 0.8, marginBottom: 8, fontStyle: "italic" }}>
-              The estimate is a rough approximation for now, not a firm quoted figure. Treat
-              the delta as a rough signal, not an exact over/under.
-            </div>
-            {summary.hours.estimated_hours == null ? (
-              <div className="small" style={{ color: "var(--muted)" }}>
-                No estimate linked and no scheduled duration, so there is no baseline to
-                compare against. Actual man-hours: <strong>{summary.hours.actual_man_hours.toFixed(2)}h</strong>.
-              </div>
-            ) : (
-              <div className="row wrap" style={{ gap: 10, alignItems: "center" }}>
-                <SummaryTile
-                  label={`Estimated (${summary.hours.estimated_hours_source || "unknown"})`}
-                  value={`${summary.hours.estimated_hours.toFixed(2)}h`}
-                />
-                <SummaryTile label="Actual man-hours" value={`${summary.hours.actual_man_hours.toFixed(2)}h`} />
-                <SummaryTile
-                  label={
-                    (summary.hours.hours_delta ?? 0) > 0.01
-                      ? "Over"
-                      : (summary.hours.hours_delta ?? 0) < -0.01
-                        ? "Under"
-                        : "On target"
-                  }
-                  value={`${(summary.hours.hours_delta ?? 0) > 0 ? "+" : ""}${(summary.hours.hours_delta ?? 0).toFixed(2)}h`}
-                  accent={
-                    (summary.hours.hours_delta ?? 0) > 0.01
-                      ? "var(--danger)"
-                      : (summary.hours.hours_delta ?? 0) < -0.01
-                        ? "var(--ok)"
-                        : undefined
-                  }
-                />
               </div>
             )}
           </div>
@@ -6938,39 +6863,6 @@ function JobSummaryTab() {
                     )}
                   </div>
                 ))}
-              </div>
-            )}
-          </div>
-
-          {/* ── Estimate ── */}
-          <div className="card">
-            <div className="sectionTitle">Estimate</div>
-            {!summary.estimate ? (
-              <div className="small" style={{ color: "var(--muted)" }}>No estimate linked to this job.</div>
-            ) : (
-              <div className="col" style={{ gap: 4 }}>
-                <div className="small"><strong>Customer:</strong> {summary.estimate.customer_name}</div>
-                <div className="row wrap" style={{ gap: 10, marginTop: 4, marginBottom: 4 }}>
-                  {summary.estimate.estimated_hours != null && (
-                    <SummaryTile label="Est. hours" value={`${summary.estimate.estimated_hours.toFixed(1)}h`} />
-                  )}
-                  <SummaryTile label="Items" value={String(summary.estimate.item_count)} />
-                  {summary.estimate.estimated_weight_lbs > 0 && (
-                    <SummaryTile label="Weight" value={`${summary.estimate.estimated_weight_lbs.toLocaleString()} lb`} />
-                  )}
-                  {summary.estimate.estimated_cubic_ft > 0 && (
-                    <SummaryTile label="Volume" value={`${summary.estimate.estimated_cubic_ft.toLocaleString()} cu ft`} />
-                  )}
-                </div>
-                {summary.estimate.origin_access_notes && (
-                  <div className="small"><strong>Origin access:</strong> {summary.estimate.origin_access_notes}</div>
-                )}
-                {summary.estimate.destination_access_notes && (
-                  <div className="small"><strong>Destination access:</strong> {summary.estimate.destination_access_notes}</div>
-                )}
-                {summary.estimate.special_items_notes && (
-                  <div className="small"><strong>Special items:</strong> {summary.estimate.special_items_notes}</div>
-                )}
               </div>
             )}
           </div>

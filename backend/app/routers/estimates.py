@@ -14,12 +14,10 @@ from app.integrations.sheets_export import schedule_estimate_export
 from app.schemas.estimate import (
     CatalogItemIn,
     CatalogItemOut,
-    EstimateByJobResponse,
     EstimateCreate,
     EstimateItemIn,
     EstimateItemOut,
     EstimateItemPatch,
-    EstimateItemSummary,
     EstimateResponse,
     EstimateUpdate,
 )
@@ -103,39 +101,6 @@ def remove_catalog(
         raise HTTPException(status_code=404, detail="Catalog item not found")
     db.delete(row)
     db.commit()
-
-
-# ── Crew-safe lookup by job.
-# Declared before the `/{estimate_uuid}` routes so "by-job" isn't parsed as a
-# UUID. Crew-accessible (not admin-gated): the crew Job Report / overage prompt
-# reads it, but the projection omits customer PII + addresses.
-
-@router.get("/by-job/{job_uuid}", response_model=EstimateByJobResponse)
-def get_estimate_by_job(
-    job_uuid: str,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    e = (
-        db.query(Estimate)
-        .filter(Estimate.job_uuid == job_uuid)
-        .order_by(Estimate.updated_at.desc())
-        .first()
-    )
-    if not e:
-        raise HTTPException(status_code=404, detail="No estimate linked to this job")
-    return EstimateByJobResponse(
-        job_uuid=job_uuid,
-        estimate_uuid=e.estimate_uuid,
-        estimated_hours=e.estimated_hours,
-        origin_access_notes=e.origin_access_notes,
-        destination_access_notes=e.destination_access_notes,
-        special_items_notes=e.special_items_notes,
-        general_notes=e.general_notes,
-        estimated_weight_lbs=e.estimated_weight_lbs,
-        estimated_cubic_ft=e.estimated_cubic_ft,
-        items=[EstimateItemSummary.model_validate(it) for it in e.items],
-    )
 
 
 # ── Estimate CRUD
@@ -234,11 +199,6 @@ def update_estimate(
     # Estimated hours (float, not a string field). None = leave as-is.
     if body.estimated_hours is not None:
         e.estimated_hours = max(0.0, float(body.estimated_hours))
-
-    # Job link. None = leave as-is; "" = explicit unlink → NULL; otherwise bind
-    # to the canonical job_uuid the crew resolved via the calendar picker.
-    if body.job_uuid is not None:
-        e.job_uuid = body.job_uuid.strip() or None
 
     _touch(e)
     db.commit()

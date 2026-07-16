@@ -40,8 +40,8 @@ NEW - FOR ADMIN (back office)
 
 - Job Summary tab. Every source for one job on a single page: timeline,
   materials, employee hours with skill ratings, DVIRs, incidents (with photo
-  links), inventory, the linked estimate, the BOL, long-distance per-diem and
-  drive days, reimbursements, and the invoice builder.
+  links), inventory, the BOL, long-distance per-diem and drive days,
+  reimbursements, and the invoice builder.
 
 - Skills registry. Define the skills, mark them core (rated on every job) or
   job-specific, choose which job types each one applies to, and keep a per-employee
@@ -70,9 +70,6 @@ Job Report:
 - Employee hours are now chosen from the roster instead of typed by hand, so a
   person's hours reliably match them in the summary. If someone is not on the
   roster, add them first.
-- When a job has a linked estimate, you see the estimate's hours and access notes,
-  plus an estimated-vs-actual man-hours comparison (a rough guide, not a firm
-  number).
 
 Invoice builder:
 - Auto-fills a labor line for each crew member from their hours, a line per
@@ -84,8 +81,7 @@ Digital Bill of Lading:
   of two separate ones, and items appear on the other device as they are added.
 
 Estimator:
-- Link an estimate to its real job, attach site photos with notes, and use the
-  richer shared furniture catalogue.
+- Attach site photos with notes, and use the richer shared furniture catalogue.
 
 Admin month schedule:
 - A rolling 30-day view (instead of the calendar month), tap a day to pin its row

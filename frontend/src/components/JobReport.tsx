@@ -105,7 +105,6 @@ import {
 } from "../lib/jobTypes";
 import { useJobTypes } from "../lib/jobTypesStore";
 import { useSkills, skillsForJobTypes, type Skill } from "../lib/skillsStore";
-import { isBoxItem } from "../lib/inventory";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
 // dropdowns without leaking the rest of App.tsx's offline state into
@@ -1032,21 +1031,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     [totalActualHours],
   );
 
-  // Estimated-hours baseline (linked estimate hours, else calendar scheduled
-  // duration) for the est-vs-actual comparison. Fetched read-only; the actual
-  // side is the live billable man-hours above. Quiet on error.
-  const [estHours, setEstHours] = useState<{ hours: number | null; source: string } | null>(null);
-  useEffect(() => {
-    if (!jobUuid) { setEstHours(null); return; }
-    let cancelled = false;
-    apiFetch<{ estimated_hours: number | null; source: string }>(
-      `/api/job-report/estimated-hours?job_uuid=${encodeURIComponent(jobUuid)}`,
-    )
-      .then((r) => { if (!cancelled) setEstHours({ hours: r.estimated_hours, source: r.source }); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [jobUuid]);
-
   async function doSave() {
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
@@ -1300,13 +1284,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           driving is paid at a fixed rate. Do not enter drive time as billable/hourly pay.
         </div>
       )}
-
-      {/* Estimate reference - self-hides unless this job has a linked estimate. */}
-      <OverageCheck
-        jobUuid={jobUuid}
-        value={data.overage_note}
-        onChange={(v) => { set("overage_note", v); setSaved(false); }}
-      />
 
       {/* ── Job data (employee hours + M1 equipment + personal vehicles) ──
           Employee hours drive one auto-populated $80/hr labor line per
@@ -1643,38 +1620,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 </span>
               </span>
             </div>
-            {estHours && estHours.hours != null && (
-              <>
-                <div
-                  className="small"
-                  style={{ color: "var(--muted)", marginTop: 6, display: "flex", justifyContent: "space-between" }}
-                >
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <BetaTag feature="estVsActualHours" style={{ marginTop: 0 }} />
-                    Approx. estimate {estHours.hours.toFixed(2)}h{" "}
-                    <span style={{ opacity: 0.8 }}>
-                      ({estHours.source === "estimate" ? "from estimate" : "from schedule × crew"})
-                    </span>
-                  </span>
-                  {(() => {
-                    const delta = totalBillableHours - estHours.hours;
-                    const over = delta > 0.01;
-                    const under = delta < -0.01;
-                    return (
-                      <span style={{ color: over ? "var(--danger)" : under ? "var(--ok)" : "var(--muted)", fontWeight: 600 }}>
-                        {over ? "+" : ""}{delta.toFixed(2)}h {over ? "over" : under ? "under" : "on target"}
-                      </span>
-                    );
-                  })()}
-                </div>
-                {/* Say plainly it is a rough number, not a quoted estimate. The
-                    crew and office should not treat this delta as authoritative
-                    yet - the baseline is a rough approximation for now. */}
-                <div className="small" style={{ color: "var(--muted)", opacity: 0.75, marginTop: 2, fontStyle: "italic" }}>
-                  Rough approximation, not a firm estimate - for reference only.
-                </div>
-              </>
-            )}
           </div>
         )}
 
@@ -2488,133 +2433,6 @@ function InventoryCountsSummary({ jobUuid }: { jobUuid: string }) {
       ) : (
         <>none logged yet - add it on the <strong>Inventory</strong> tab</>
       )}
-    </div>
-  );
-}
-
-// What the office estimated for this job, shown to the crew for reference.
-//
-// This used to compare the estimate's item counts against the actual inventory
-// the crew logged and flag an overage. That comparison is gone: the item lists
-// on the estimate side come from SmartMoving, where inventory is not reliably
-// entered, so "actual vs estimated items" was measuring the estimator's data
-// entry rather than the job. The comparison that does hold up is estimated vs
-// actual man-hours, and that already lives under Total man-hours below - it is
-// deliberately not duplicated here.
-//
-// So this card is now informational: the estimate's numbers, its access and
-// special-item notes (the part crew actually act on), and a free-text note for
-// anything that came in different. The note still lands in the `overage_note`
-// column of the JobReports sheet.
-//
-// Self-hides when there is no linked estimate (by-job 404) or on any fetch
-// error, so it never blocks the report.
-type ByJobEstimate = {
-  estimate_uuid: string;
-  estimated_hours: number | null;
-  origin_access_notes: string | null;
-  destination_access_notes: string | null;
-  special_items_notes: string | null;
-  general_notes: string | null;
-  estimated_weight_lbs: number;
-  estimated_cubic_ft: number;
-  items: { name: string; qty: number; room?: string | null; subcategory?: string | null }[];
-};
-
-function OverageCheck({
-  jobUuid,
-  value,
-  onChange,
-}: {
-  jobUuid: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const { settings } = useTheme();
-  const ht = settings.helpTexts;
-  const [est, setEst] = useState<ByJobEstimate | "none" | null>(null);
-
-  useEffect(() => {
-    if (!jobUuid) { setEst("none"); return; }
-    let cancelled = false;
-    setEst(null);
-    apiFetch<ByJobEstimate>(`/api/estimates/by-job/${encodeURIComponent(jobUuid)}`)
-      .then((e) => { if (!cancelled) setEst(e); })
-      .catch(() => { if (!cancelled) setEst("none"); }); // 404 / error = no linked estimate → hide
-    return () => { cancelled = true; };
-  }, [jobUuid]);
-
-  if (est === null || est === "none") return null; // loading or no linked estimate
-
-  const estFurniture = est.items.filter((i) => !isBoxItem(i.name)).reduce((s, i) => s + (i.qty || 0), 0);
-  const estBoxes = est.items.filter((i) => isBoxItem(i.name)).reduce((s, i) => s + (i.qty || 0), 0);
-  const hasItems = estFurniture + estBoxes > 0;
-  const hasAccess = est.origin_access_notes || est.destination_access_notes || est.special_items_notes;
-
-  return (
-    <div className="card">
-      <div className="row" style={{ alignItems: "center", gap: 8 }}>
-        <div className="sectionTitle" style={{ marginBottom: 0 }}>Estimate</div>
-        <BetaTag feature="overagePrompt" style={{ marginTop: 0 }} />
-      </div>
-      <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-        What the office estimated for this job. Read the access notes before you get there,
-        and flag anything that came in different at the bottom.
-      </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
-        {est.estimated_hours != null && (
-          <EstTile label="Hours" value={`${est.estimated_hours.toFixed(1)}h`} />
-        )}
-        {hasItems && <EstTile label="Furniture" value={String(estFurniture)} />}
-        {hasItems && <EstTile label="Boxes" value={String(estBoxes)} />}
-        {est.estimated_weight_lbs > 0 && (
-          <EstTile label="Weight" value={`${est.estimated_weight_lbs.toLocaleString()} lb`} />
-        )}
-        {est.estimated_cubic_ft > 0 && (
-          <EstTile label="Volume" value={`${est.estimated_cubic_ft.toLocaleString()} cu ft`} />
-        )}
-      </div>
-
-      {hasItems && (
-        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-          Item counts are what the estimator entered, not a target to hit. The comparison that
-          matters is estimated vs actual man-hours, shown with the hours below.
-        </div>
-      )}
-
-      {hasAccess && (
-        <div className="small" style={{ marginBottom: 8, lineHeight: 1.5 }}>
-          {est.origin_access_notes && <div><strong>Origin access:</strong> {est.origin_access_notes}</div>}
-          {est.destination_access_notes && <div><strong>Destination access:</strong> {est.destination_access_notes}</div>}
-          {est.special_items_notes && <div><strong>Special items:</strong> {est.special_items_notes}</div>}
-        </div>
-      )}
-
-      <div style={{ marginTop: 6 }}>
-        <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>
-          Anything different from the estimate?
-        </div>
-        {ht.overageHint && (
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>{ht.overageHint}</div>
-        )}
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={3}
-          placeholder="Extra items, packing not expected, different access, added stairs/parking…"
-          style={textareaStyle}
-        />
-      </div>
-    </div>
-  );
-}
-
-function EstTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ flex: "1 1 30%", minWidth: 90, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px" }}>
-      <div className="small" style={{ color: "var(--muted)" }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 700 }}>{value}</div>
     </div>
   );
 }

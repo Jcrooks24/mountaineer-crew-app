@@ -22,7 +22,6 @@ from app.db.models.admin_entry_status import AdminEntryStatus
 from app.db.models.admin_note import AdminNote
 from app.db.models.bol import DigitalBOL
 from app.db.models.dvir import DVIR
-from app.db.models.estimate import Estimate
 from app.db.models.event import Event
 from app.db.models.incident import Incident
 from app.db.models.job_bill import JobBill
@@ -38,9 +37,7 @@ from app.db.models.user import User
 from app.db.models.user_email_alias import UserEmailAlias
 from app.db.session import get_db
 from app.integrations.sheets_export import (
-    _billable_man_hours,
     _incident_photo_urls,
-    estimated_hours_for,
     update_entry_status_in_sheets,
 )
 
@@ -527,12 +524,6 @@ def job_summary(
         .limit(JOB_SUMMARY_CAP)
         .all()
     )
-    estimate = (
-        db.query(Estimate)
-        .filter(Estimate.job_uuid == job_uuid)
-        .order_by(Estimate.updated_at.desc())
-        .first()
-    )
     bol = (
         db.query(DigitalBOL)
         .filter(DigitalBOL.job_uuid == job_uuid)
@@ -557,11 +548,6 @@ def job_summary(
     # Tolerant decode: a corrupt JSON column must degrade to empty, not 500 the
     # whole summary page (the point of this endpoint is to show a job WHOLE).
     employee_hours = _decode_json_list(report.employee_hours_json) if report else []
-
-    # Est-vs-actual hours. Same helpers the sheet export uses, so the page and the
-    # spreadsheet can never disagree about a number admin is reading off both.
-    est_hours, est_hours_source = estimated_hours_for(db, job_uuid)
-    actual_man_hours = _billable_man_hours(employee_hours)
 
     # Pick the most-common job_name from events/materials so the header reads cleanly.
     name_candidates: List[str] = []
@@ -641,17 +627,6 @@ def job_summary(
             "created_at": _iso(report.created_at),
             "updated_at": _iso(report.updated_at),
         },
-        # Est vs actual is the whole point of collecting estimated hours, and it
-        # was visible only in the spreadsheet. Null estimate = no baseline, which
-        # the UI renders as "no estimate linked" rather than as a zero.
-        "hours": {
-            "estimated_hours": est_hours,
-            "estimated_hours_source": est_hours_source,
-            "actual_man_hours": actual_man_hours,
-            "hours_delta": (
-                None if est_hours is None else round(actual_man_hours - est_hours, 2)
-            ),
-        },
         "inventory": {
             "furniture_count": sum(
                 (it.qty or 0) for it in inventory_items if not it.is_box
@@ -694,17 +669,6 @@ def job_summary(
             }
             for i in incidents
         ],
-        "estimate": None if not estimate else {
-            "estimate_uuid": estimate.estimate_uuid,
-            "customer_name": estimate.customer_name,
-            "estimated_hours": estimate.estimated_hours,
-            "estimated_weight_lbs": estimate.estimated_weight_lbs,
-            "estimated_cubic_ft": estimate.estimated_cubic_ft,
-            "origin_access_notes": estimate.origin_access_notes,
-            "destination_access_notes": estimate.destination_access_notes,
-            "special_items_notes": estimate.special_items_notes,
-            "item_count": len(estimate.items or []),
-        },
         "bol": None if not bol else {
             "bol_id": bol.bol_id,
             "status": bol.status,

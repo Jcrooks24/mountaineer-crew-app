@@ -14,7 +14,6 @@ import {
   removeOp as removeEstimatorOp,
 } from "../lib/estimatorQueue";
 import { mountainDateYYYYMMDD } from "../lib/time";
-import { fetchCalendarDay, resolveJobUuid, type CalEvent } from "../lib/bolStore";
 import { BetaTag } from "./BetaTag";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -48,7 +47,6 @@ type Estimate = {
   special_items_notes: string | null;
   general_notes: string | null;
   estimated_hours: number | null;
-  job_uuid: string | null;
   estimated_weight_lbs: number;
   estimated_cubic_ft: number;
   created_at: string;
@@ -257,12 +255,6 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [err, setErr] = useState<string | null>(null);
 
-  // Job-link picker state (bind this estimate to the real calendar job).
-  const [linkOpen, setLinkOpen] = useState(false);
-  const [linkDate, setLinkDate] = useState<string>("");
-  const [linkEvents, setLinkEvents] = useState<CalEvent[] | null>(null);
-  const [linkBusy, setLinkBusy] = useState(false);
-
   // Always-current ref so the unmount flush reads the latest field values.
   const localRef = useRef<Estimate>(local);
   useEffect(() => { localRef.current = local; }, [local]);
@@ -426,61 +418,6 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
       setLocal((prev) => ({ ...prev, items: fresh.items }));
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Reload failed");
-    }
-  }
-
-  // ── Job link ──────────────────────────────────────────────────────────────
-  function openLinkPicker() {
-    setLinkOpen(true);
-    setLinkEvents(null);
-    // Default the date to the estimate's target move date, else today.
-    setLinkDate(local.move_date || mountainDateYYYYMMDD());
-  }
-
-  async function loadLinkDay(date: string) {
-    if (!date) return;
-    setLinkBusy(true);
-    setErr(null);
-    try {
-      setLinkEvents(await fetchCalendarDay(date));
-    } catch (e: any) {
-      setErr(e instanceof ApiError ? e.message : "Could not load calendar jobs");
-      setLinkEvents([]);
-    } finally {
-      setLinkBusy(false);
-    }
-  }
-
-  async function patchJobLink(jobUuid: string) {
-    // Empty string = explicit unlink on the backend.
-    const updated = await apiFetch<Estimate>(`/api/estimates/${local.estimate_uuid}`, {
-      method: "PATCH",
-      body: JSON.stringify({ job_uuid: jobUuid }),
-    });
-    onChange(updated);
-    setLocal(updated);
-  }
-
-  async function linkToEvent(ev: CalEvent) {
-    setLinkBusy(true);
-    setErr(null);
-    try {
-      const jobUuid = await resolveJobUuid(ev.id, ev.start, ev.end);
-      await patchJobLink(jobUuid);
-      setLinkOpen(false);
-    } catch (e: any) {
-      setErr(e instanceof ApiError ? e.message : "Could not link this job");
-    } finally {
-      setLinkBusy(false);
-    }
-  }
-
-  async function unlinkJob() {
-    setErr(null);
-    try {
-      await patchJobLink("");
-    } catch (e: any) {
-      setErr(e instanceof ApiError ? e.message : "Could not unlink");
     }
   }
 
@@ -709,47 +646,6 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
             </button>
           </div>
         </div>
-      </div>
-
-      {/* Job link */}
-      <div className="card">
-        <div className="row" style={{ alignItems: "center", gap: 8 }}>
-          <div className="sectionTitle" style={{ marginBottom: 0 }}>Linked Job</div>
-          <BetaTag feature="estimateJobLink" style={{ marginTop: 0 }} />
-        </div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-          Bind this estimate to the scheduled job so the crew sees it at the job (powers the overage check).
-        </div>
-        {local.job_uuid ? (
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <div className="small">
-              Linked ✓ <span style={{ color: "var(--muted)" }}>({local.job_uuid.slice(0, 8)}…)</span>
-            </div>
-            <button type="button" onClick={unlinkJob} style={{ color: "var(--danger)" }}>Unlink</button>
-          </div>
-        ) : !linkOpen ? (
-          <button type="button" onClick={openLinkPicker}>Link to a job…</button>
-        ) : (
-          <div className="col" style={{ gap: 10 }}>
-            <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
-              <Field label="Job date" flex>
-                <input type="date" value={linkDate} onChange={(e) => setLinkDate(e.target.value)} />
-              </Field>
-              <button type="button" onClick={() => loadLinkDay(linkDate)} disabled={linkBusy || !linkDate}>
-                {linkBusy ? "Loading…" : "Load jobs"}
-              </button>
-            </div>
-            {linkEvents && linkEvents.length === 0 && (
-              <div className="small" style={{ color: "var(--muted)" }}>No calendar jobs on this date.</div>
-            )}
-            {linkEvents && linkEvents.map((ev) => (
-              <button key={ev.id} type="button" onClick={() => linkToEvent(ev)} disabled={linkBusy} style={{ textAlign: "left" }}>
-                {ev.summary}
-              </button>
-            ))}
-            <button type="button" onClick={() => setLinkOpen(false)} style={{ color: "var(--muted)" }}>Cancel</button>
-          </div>
-        )}
       </div>
 
       {/* Inventory - rooms */}

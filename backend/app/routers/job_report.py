@@ -14,7 +14,6 @@ from app.db.models.job_report import JobReport
 from app.db.models.user import User
 from app.routers.job_inventory import counts_for
 from app.integrations.sheets_export import (
-    estimated_hours_for,
     export_job_report_to_sheets,
     run_export_in_background,
 )
@@ -291,16 +290,3 @@ def get_job_report(
     if not report:
         raise HTTPException(status_code=404, detail="No report for this job yet")
     return _to_response(report)
-
-
-@router.get("/estimated-hours")
-def get_estimated_hours(
-    job_uuid: str,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    """Estimated crew-hours baseline for a job + its source ("estimate" |
-    "schedule" | ""). Powers the Report tab's est-vs-actual line; the crew
-    computes the actual side from the live employee-hours in the form."""
-    hours, source = estimated_hours_for(db, job_uuid)
-    return {"job_uuid": job_uuid, "estimated_hours": hours, "source": source}
