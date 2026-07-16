@@ -304,6 +304,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   // Crew rep - carries over from the BOL if set, otherwise the logged-in user.
   const [crewRep, setCrewRep] = useState(initialDraft.crew_rep || user?.name || user?.email || "");
   const [draft, setDraft] = useState<BOLDraft>(initialDraft);
+  // Always-current draft for the reconnect handler below, which has an empty dep
+  // array. Without this it would close over the MOUNT-TIME draft and, on
+  // reconnect, rebuild + persist from that stale item list - dropping any item
+  // the crew added after mount (state, localStorage, AND the queue). See vet H1.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
   // Shared catalogue (server rows + built-in, cached offline) so the BOL item
   // picker matches Actual Inventory and the Estimator.
@@ -327,6 +333,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
   // Session-only preview URLs for freshly-captured photos (photoId -> objectURL).
   const [previews, setPreviews] = useState<Record<string, string>>({});
+  // Revoke the preview object URLs on unmount so they don't leak for the session.
+  const previewsRef = useRef(previews);
+  previewsRef.current = previews;
+  useEffect(() => {
+    return () => { Object.values(previewsRef.current).forEach((u) => URL.revokeObjectURL(u)); };
+  }, []);
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [busyPhotoItem, setBusyPhotoItem] = useState<number | null>(null);
 
@@ -389,7 +401,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     })();
     const onOnline = () => {
       syncQueue().then(() => { if (!cancelled) refreshFailed(); });
-      retryPendingPhotos(draft).then((u) => { if (!cancelled && u !== draft) setDraft(u); });
+      // Read the LATEST draft via the ref, not the stale mount-time closure, so a
+      // reconnect never rebuilds from an outdated item list (vet H1).
+      const cur = draftRef.current;
+      retryPendingPhotos(cur).then((u) => { if (!cancelled && u !== cur) setDraft(u); });
     };
     window.addEventListener("online", onOnline);
     return () => { cancelled = true; window.removeEventListener("online", onOnline); };

@@ -728,6 +728,10 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
 
       {/* Photos */}
       <EstimatePhotos
+        // Key by estimate so switching estimates in place remounts the component,
+        // resetting `pending` + preview URLs. Otherwise a stale pending photo from
+        // a prior estimate could upload to the wrong one (vet M1).
+        key={local.estimate_uuid}
         estimateUuid={local.estimate_uuid}
         customerName={local.customer_name}
         moveDate={local.move_date ?? ""}

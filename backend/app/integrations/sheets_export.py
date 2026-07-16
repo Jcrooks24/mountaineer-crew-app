@@ -1857,17 +1857,32 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
     # WRITE FIRST, delete stale after (bug 4 / ADR 0020). The old ordering deleted
     # every row for this bol_id BEFORE writing, so an exception in between left
     # the sheet with NO row for a signed BOL that previously had one. Writing
-    # first means a mid-export crash leaves at worst a transient DUPLICATE
-    # (visible, and cleaned up by the reconciler or the next real change), never a
-    # gap in a signed legal document's record.
+    # first means a mid-export crash leaves at worst a DUPLICATE (visible, never a
+    # gap in a signed legal document's record). A different-timestamp duplicate is
+    # removed by _delete_bol_stale_rows below; a same-timestamp duplicate (a rare
+    # re-export of an unchanged state) is only cleared by the next real change to
+    # the BOL, which is acceptable - a visible duplicate, not a loss.
+    #
+    # CRUCIAL: write the summary AND the item rows to the sheet BEFORE marking the
+    # `bol` dedupe key. The item rows are the BOL's declared inventory (the legally
+    # meaningful contents), and the item write is the slow multi-call that a worker
+    # recycle / OOM is most likely to interrupt. If we marked `bol` first (as an
+    # earlier version did) and then died before the item write, the reconciler, the
+    # drift check, and the idempotency skip ALL key on the `bol` dedupe row - so a
+    # summary-present / items-missing BOL would be silently un-recoverable. Marking
+    # only after both writes means a crash there leaves NO dedupe row, so the
+    # reconciler re-selects and re-ships the BOL (a recoverable duplicate, not a
+    # silent item loss).
     _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, actual_summary_headers)])
-    _generic_mark_exported(db, "bol", [export_key])
     total_written = 1
     if item_rows and actual_item_headers is not None:
         item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
         _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
-        _generic_mark_exported(db, "bol_item", item_keys)
         total_written += len(item_rows)
+    # Both tabs are now written; record the dedupe keys together.
+    _generic_mark_exported(db, "bol", [export_key])
+    if item_keys:
+        _generic_mark_exported(db, "bol_item", item_keys)
 
     # Now remove the STALE rows for this bol_id: any row whose timestamp differs
     # from the fresh write. The just-written rows carry `updated_at` and survive.

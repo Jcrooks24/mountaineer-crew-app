@@ -713,10 +713,14 @@ export function retryFailedBol(bolId: string): Promise<number> {
   return syncQueue();
 }
 
-/** Discard every failed op for this BOL. The only path that drops them without
- * reaching the server. A BOL carries signatures, so confirm before calling. */
+/** Discard the WHOLE op sequence for this BOL, not just the failed op. The ops
+ * are order-coupled (submit->sign->pdf) and a failed submit holds its sign/pdf
+ * behind it with no failed_at of their own; dropping only the failed op would
+ * leave those siblings to run against a row that was never created, 404, and
+ * resurrect the failed banner. So a discard removes every op for the bol_id. The
+ * only path that drops signed work without reaching the server - confirm first. */
 export function discardFailedBol(bolId: string): void {
-  saveQueue(loadQueue().filter((o) => !(o.bol_id === bolId && o.failed_at)));
+  saveQueue(loadQueue().filter((o) => o.bol_id !== bolId));
 }
 
 /** Reject a `{ok:false}` body as a transient failure (status 0, so
@@ -761,6 +765,12 @@ let syncing = false;
 export async function syncQueue(): Promise<number> {
   if (!navigator.onLine || syncing) return 0;
   syncing = true;
+  // The session we started under. A logout / user switch can run synchronously
+  // while this drain is awaiting the network; it wipes the queue (clearCrewState).
+  // Writing our post-drain `remaining` back after that would RESURRECT the departed
+  // user's ops for the next crew member on this device (wrong attribution). So we
+  // persist only if the session is unchanged when we finish.
+  const tokenAtStart = getToken();
   try {
     const q = loadQueue();
     if (q.length === 0) return 0;
@@ -826,6 +836,10 @@ export async function syncQueue(): Promise<number> {
         blocked.add(op.bol_id);
       }
     }
+    // Skip the write-back (and draft cleanup) if the session changed while we
+    // were draining - a logout wiped the queue and we must not re-create it for
+    // the next user (vet M1).
+    if (getToken() !== tokenAtStart) return synced;
     saveQueue(remaining);
 
     // Draft cleanup (bug 5): once a BOL's pdf op has drained and NOTHING remains

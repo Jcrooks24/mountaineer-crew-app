@@ -23,7 +23,7 @@ Used by:
 from __future__ import annotations
 
 import time as _time
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -35,8 +35,8 @@ from app.integrations.sheets_export import _build_bol_payload, export_bol_to_she
 # its bol_id prefix - i.e. it was never successfully exported. NOT EXISTS lets the
 # planner use the dedupe index; ORDER BY id ASC makes consecutive runs progress.
 _UNEXPORTED_QUERY = text(
-    "SELECT bol_id FROM digital_bols b "
-    "WHERE NOT EXISTS ("
+    "SELECT b.id, b.bol_id FROM digital_bols b "
+    "WHERE b.id > :after AND NOT EXISTS ("
     "    SELECT 1 FROM sheet_generic_exports s "
     "    WHERE s.kind = 'bol' AND s.export_key LIKE b.bol_id || ':%'"
     ") "
@@ -78,20 +78,27 @@ def reconcile_bols(
     found = 0
     exported = 0
     errors = 0
-    seen: set[str] = set()
+    # Keyset cursor by primary-key id. A BOL that FAILS to export keeps no dedupe
+    # row, so a plain LIMIT query would re-select the same low-id failures every
+    # batch and starve healthy higher-id BOLs. Advancing `after` past every row we
+    # look at (success OR failure) guarantees the run sweeps forward exactly once;
+    # a failed BOL is retried on the NEXT cycle (which starts at after=0), not
+    # spun on within this one.
+    after = 0
     started = _time.monotonic()
 
     while exported + errors < max_bols:
         remaining = max_bols - exported - errors
         take = min(batch_size, remaining)
-        rows = db.execute(_UNEXPORTED_QUERY, {"limit": take}).fetchall()
-        bol_ids: List[str] = [r[0] for r in rows if r[0] and r[0] not in seen]
-        if not bol_ids:
+        rows = db.execute(_UNEXPORTED_QUERY, {"limit": take, "after": after}).fetchall()
+        if not rows:
             break
-        found += len(bol_ids)
+        found += len(rows)
 
-        for bol_id in bol_ids:
-            seen.add(bol_id)
+        for row_id, bol_id in rows:
+            after = max(after, row_id)  # advance the cursor regardless of outcome
+            if not bol_id:
+                continue
             try:
                 payload = _build_bol_payload(db, bol_id)
                 if payload is None:
