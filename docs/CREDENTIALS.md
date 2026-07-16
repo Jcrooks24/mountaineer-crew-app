@@ -77,7 +77,8 @@ Check it after any deploy that adds a new tab.
 | `DRIVE_ESTIMATOR_PARENT_FOLDER_ID` | Estimator photos fall back into the crew-photos parent. Functional, just messier. |
 | `DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID` | Same, for receipt and odometer photos. |
 | `DRIVE_DOCUMENTS_FOLDER_NAME` | Defaults to "Mountaineer Crew Documents". |
-| `DRIVE_BOL_FOLDER_NAME` | Has a code default. |
+| `DRIVE_BOL_FOLDER_ID` | **Set this per environment (staging and prod each their own folder ID).** Signed BOL PDFs land here. If unset, the code falls back to resolving the folder BY NAME (`DRIVE_BOL_FOLDER_NAME`, default "Signed Bills of Lading") - and staging + prod, sharing that name, resolve the SAME real folder, so staging can overwrite production's signed legal documents in place. Use the folder ID (the segment after `/folders/` in the Drive URL). See [ADR 0020](decisions/0020-bol-durability-and-honest-failures.md). |
+| `DRIVE_BOL_FOLDER_NAME` | Legacy name-based fallback, used only when `DRIVE_BOL_FOLDER_ID` is unset. Has a code default; do not rely on it across environments. |
 
 ## Frontend build variables (Vercel, per project)
 

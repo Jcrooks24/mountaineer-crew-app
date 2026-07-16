@@ -146,9 +146,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // over and be submitted under crew B's identity.
       const previous = loadCachedUser();
       if (previous && previous.id !== me.id) {
-        // Preserve the departing user's FAILED work before the wipe destroys it
-        // (ADR 0013 / non-naive integration vet). Pending work is left to drain
-        // normally; only failed entries - which never auto-drain - are at risk.
+        // Preserve the departing user's at-risk work before the wipe destroys it:
+        // FAILED entries across every queue (ADR 0013), PLUS all PENDING Digital
+        // BOL ops + their signature drafts (ADR 0021), because a signed BOL handed
+        // off mid-job has pending ops the wipe would otherwise lose. User-scoped,
+        // so it only ever restores to this same crew member.
         backupFailedWork(previous.id);
         clearCrewState();
       }
@@ -191,8 +193,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   function logout() {
     clearToken();
-    // Preserve this user's failed work before wiping, so it is waiting for them
-    // if they log back in on this device (ADR 0013).
+    // Preserve this user's failed work AND pending BOL work before wiping, so it
+    // is waiting for them if they log back in on this device (ADR 0013 / 0021).
     backupFailedWork(user?.id);
     // Wipe per-user storage so the next crew member to log in on this
     // device starts clean: no leftover queues, drafts, or dismiss flags.

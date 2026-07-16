@@ -394,12 +394,28 @@ def upload_file_to_drive(
 # ── Signed Bill of Lading PDF uploader ───────────────────────────────────────
 
 BOL_FOLDER_KEY = "drive_bol_folder_id"
+# Preferred: a Drive folder ID (matches DRIVE_ESTIMATOR_PARENT_FOLDER_ID /
+# DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID). An ID points staging and production at
+# DIFFERENT physical folders, so staging can never write into - or overwrite in
+# place - the real signed-BOL documents. Grab it from the folder URL (the segment
+# after /folders/). See docs/CREDENTIALS.md and .env.staging.example.
+BOL_FOLDER_ID_ENV_VAR = "DRIVE_BOL_FOLDER_ID"
 DEFAULT_BOL_FOLDER_NAME = "Signed Bills of Lading"
 
 
 def _get_bol_folder_id(svc, db: Optional[Session]) -> str:
-    """Resolve (and cache) the dedicated top-level folder for signed BOL PDFs.
-    Overridable via DRIVE_BOL_FOLDER_NAME."""
+    """Resolve the dedicated top-level folder for signed BOL PDFs.
+
+    Prefer DRIVE_BOL_FOLDER_ID (an explicit folder ID) - the reliable way to keep
+    staging and prod on separate folders. Fall back to the LEGACY name-based
+    lookup (DRIVE_BOL_FOLDER_NAME / the default) only when the ID is unset, kept
+    for backward compatibility. The name-based path resolves by folder NAME, so
+    two environments with the same folder name resolve the SAME real folder -
+    which let staging overwrite production BOLs. Always set the ID."""
+    folder_id_env = os.getenv(BOL_FOLDER_ID_ENV_VAR, "").strip()
+    if folder_id_env:
+        return folder_id_env
+
     folder_name = os.getenv("DRIVE_BOL_FOLDER_NAME", DEFAULT_BOL_FOLDER_NAME).strip() or DEFAULT_BOL_FOLDER_NAME
 
     if db:

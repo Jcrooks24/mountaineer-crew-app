@@ -314,7 +314,26 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    deletes the entire IndexedDB database. A crew member who logs out with a pending
    receipt photo loses it permanently. **Never tell a crew member to log out or
    reinstall as a troubleshooting step** unless you have confirmed their queues are
-   empty.
+   empty. (The localStorage BOL queue + drafts ARE now preserved across a logout per
+   [ADR 0021](decisions/0021-preserve-pending-bol-work-on-logout.md); the IndexedDB
+   photo/reimbursement blobs still are NOT - preserving those across `deleteDatabase`
+   is the remaining piece.)
+
+2. **BOL durability - fixed 2026-07-16, with two narrow follow-ups.** A signed BOL that
+   reached neither the sheet nor Drive drove a lifecycle trace and a batch of fixes
+   ([ADR 0020](decisions/0020-bol-durability-and-honest-failures.md) /
+   [ADR 0021](decisions/0021-preserve-pending-bol-work-on-logout.md)): honest 5xx
+   status codes, a durable BOL reconciler (auto + `POST /api/admin/sheets/reconcile-bols`
+   + `POST /api/admin/bol/{bol_id}/reexport`), write-first-then-delete-stale export
+   ordering, `DRIVE_BOL_FOLDER_ID` per environment, pending-BOL preservation on logout,
+   draft cleanup, and quota-failure surfacing. **Remaining, both low-severity:**
+   (a) the export reconciler detects a MISSING summary row but not a summary-present /
+   items-missing row - item-level reconciliation is a follow-up; (b) a process death in
+   the ~10 ms between the summary write and its dedupe commit can leave a same-timestamp
+   duplicate summary row that only self-heals on the next real change to that BOL.
+   **Action still required by a human:** set `DRIVE_BOL_FOLDER_ID` on BOTH Render
+   services (staging + prod, different folder ids) - until then staging shares prod's
+   signed-BOL folder. See CREDENTIALS.md.
 
 2. **RESOLVED 2026-07-15: queued work is no longer dropped on a 4xx.** All ten offline
    queues now mark a rejected op `failed` and keep it, per

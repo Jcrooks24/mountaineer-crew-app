@@ -32,6 +32,7 @@ import {
   retryPendingPhotos,
   saveDraft,
   syncQueue,
+  BolStorageFullError,
 } from "../lib/bolStore";
 import { BOL_CONTRACT_SECTIONS } from "../lib/bolContract";
 import SuggestInput from "./SuggestInput";
@@ -460,10 +461,14 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     setErr(null);
     if (draft.items.length === 0) return setErr("Add at least one item before saving.");
     const snapshot: BOLDraft = { ...draft, updated_at: new Date().toISOString() };
-    saveDraft(snapshot);
+    // Surface a storage-full failure instead of a false "Saved" (bug 5): if the
+    // draft or the queued submit can't be persisted, nothing was saved.
+    if (!saveDraft(snapshot) || !enqueueSubmit(snapshot)) {
+      return setErr("This device's storage is full, so the BOL could not be saved. Free up space and try again.");
+    }
     setDraft(snapshot);
-    enqueueSubmit(snapshot);
     const synced = await syncQueue();
+    refreshFailed(); // surface a rejected op now, not on the next remount (bug 6)
     const queued = pendingSubmitCount();
     setSavedNote(
       synced > 0 && queued === 0
@@ -519,14 +524,22 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
       // Push to the server (or leave queued if offline).
       const synced = await syncQueue();
+      refreshFailed(); // surface a rejected sign/pdf op now, not on remount (bug 6)
       setSavedNote(
         synced > 0 && pendingSubmitCount() === 0
           ? `${phase === "origin" ? "Origin" : "Delivery"} signing complete - copy delivered and synced.`
           : `${phase === "origin" ? "Origin" : "Delivery"} signing saved - copy delivered; will sync when back online.`,
       );
       window.setTimeout(() => setSavedNote(null), 5000);
-    } catch {
-      setSignErr("Could not complete signing. Your data is saved - try again.");
+    } catch (e) {
+      // A storage-full error means the signature was NOT saved - do not tell the
+      // crew "your data is saved" (bug 5). Every other failure happens after the
+      // draft + queue ops are persisted, so retry is safe there.
+      setSignErr(
+        e instanceof BolStorageFullError
+          ? e.message
+          : "Could not complete signing. Your data is saved - try again.",
+      );
     } finally {
       setSignBusy(false);
     }

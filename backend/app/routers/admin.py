@@ -916,6 +916,37 @@ def reconcile_events_endpoint(
     return {"ok": True, **result}
 
 
+@router.post("/sheets/reconcile-bols")
+def reconcile_bols_endpoint(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Ship any BOLs that are in Postgres but missing from the BOLs sheet tab
+    (a scheduled export whose pool thread died). Idempotent. See ADR 0020."""
+    from app.integrations.bol_reconcile import reconcile_bols
+
+    result = reconcile_bols(db)
+    return {"ok": True, **result}
+
+
+@router.post("/bol/{bol_id}/reexport")
+def force_reexport_bol_endpoint(
+    bol_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Force a fresh sheet + Drive-link export of one BOL by id, even if it is
+    already exported or its row is stale/blank. Recovery tool for a specific
+    document; there was previously no way to force a re-export short of a real
+    save. See ADR 0020."""
+    from app.integrations.bol_reconcile import force_reexport_bol
+
+    result = force_reexport_bol(db, bol_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error", "BOL not found"))
+    return result
+
+
 # ---------------------------
 # App Health - snapshot of critical functions for the Settings tab. Each
 # check is independently try/excepted so one failing probe doesn't blank
@@ -1007,6 +1038,26 @@ def _check_event_drift(db: Session) -> Dict[str, str]:
         return {"name": "Sheet drift - events", "status": "fail", "detail": f"{ex}"}
 
 
+def _check_bol_drift(db: Session) -> Dict[str, str]:
+    try:
+        from app.integrations.bol_reconcile import count_unexported_bols
+        n = count_unexported_bols(db)
+        if n == 0:
+            return {"name": "Sheet drift - BOLs", "status": "ok", "detail": "0 missing"}
+        # BOLs are signed legal documents and low-volume - ANY missing one is
+        # worth surfacing, so this warns from 1 (the auto-reconciler clears them
+        # every cycle; a persistent count means something is wrong).
+        return {
+            "name": "Sheet drift - BOLs",
+            "status": "warn",
+            "detail": f"{n} BOLs in the database but missing from the sheet - the "
+                      f"auto-reconciler clears these each cycle; a persistent count means "
+                      f"something is wrong (POST /api/admin/sheets/reconcile-bols to force)",
+        }
+    except Exception as ex:
+        return {"name": "Sheet drift - BOLs", "status": "fail", "detail": f"{ex}"}
+
+
 def _check_event_freshness(db: Session) -> Dict[str, str]:
     try:
         latest = db.query(func.max(Event.timestamp)).scalar()
@@ -1061,6 +1112,7 @@ def app_health(
         _check_sheets_api(db),
         _check_drive_api(db),
         _check_event_drift(db),
+        _check_bol_drift(db),
         _check_event_freshness(db),
     ]
     worst = "ok"

@@ -173,7 +173,12 @@ def submit_bol(
         db.refresh(row)
     except SQLAlchemyError:
         db.rollback()
-        return {"ok": False, "error": "Failed to save BOL"}
+        # MUST be a real 5xx, not 200-with-ok:false. The offline queue's drain
+        # only inspects the HTTP status (apiFetch throws on !res.ok); a 200 here
+        # was read as success and the queued BOL - signatures and all - was
+        # silently dropped. A 500 is transient (isPermanentRejection retries it),
+        # so the op is kept and re-sent. See ADR 0020.
+        raise HTTPException(status_code=500, detail="Failed to save BOL")
 
     bol_dict = _to_dict(row)
     schedule_bol_export(row.bol_id)
@@ -321,7 +326,12 @@ def upload_bol_pdf(
         )
     except Exception as e:
         traceback.print_exc()
-        return {"ok": False, "error": str(e)}
+        # 502, not 200-with-ok:false. A Drive failure is upstream and usually
+        # fixable (bad folder id, expired creds, transient outage), so it must be
+        # RETRYABLE, not silently acked. Returning 200 here made the drain treat
+        # a broken Drive config as "done" for a submit, or retry-forever-without-
+        # surfacing for the pdf op. A 5xx keeps the op queued for a real retry.
+        raise HTTPException(status_code=502, detail=f"Drive upload failed: {e}")
 
     row.signed_pdf_drive_id = result["file_id"]
     row.signed_pdf_url = result["url"]
@@ -331,7 +341,7 @@ def upload_bol_pdf(
         db.refresh(row)
     except SQLAlchemyError:
         db.rollback()
-        return {"ok": False, "error": "Failed to save PDF link"}
+        raise HTTPException(status_code=500, detail="Failed to save PDF link")
 
     schedule_bol_export(row.bol_id)
     print(f"[bol] pdf uploaded bol_id={row.bol_id} url={row.signed_pdf_url}")

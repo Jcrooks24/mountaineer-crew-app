@@ -18,11 +18,27 @@
  * Scope: the localStorage queues. The IndexedDB queues (reimbursements, photos)
  * hold blobs and are wiped via `deleteDatabase`; preserving those across a
  * wholesale DB delete is a larger change and is not covered here (see RUNBOOKS).
+ *
+ * BOL EXCEPTION (ADR 0021): the "pending drains normally" assumption is FALSE for
+ * the Digital BOL. Crew routinely hand a shared phone off (or log out) mid-job,
+ * offline, right after signing - so the pending submit/sign/pdf ops have no
+ * `failed_at` yet, and the wipe destroyed the only copy of a signed legal
+ * document. So for `crew_bol_queue_v1` we preserve ALL pending ops, not just
+ * failed ones, plus the `crew_bol_draft_v1:*` drafts that hold the signature PNGs
+ * the pdf op regenerates from. Still user-scoped, so it only ever restores to the
+ * same crew member - no cross-user mis-attribution.
  */
 
 // The wipe clears `crew_` and `mm_`. The backup key must avoid BOTH so it
 // survives, and be scoped to the outgoing user so two users' backups don't mix.
 const BACKUP_PREFIX = "keepfailed_v1:";
+
+// The BOL queue whose PENDING (not just failed) work we preserve, plus the
+// prefix of its signature-bearing drafts. A reserved backup section holds the
+// drafts (which are not part of QUEUE_KEYS - they are keyed by job_uuid).
+const BOL_QUEUE_KEY = "crew_bol_queue_v1";
+const BOL_DRAFT_PREFIX = "crew_bol_draft_v1:";
+const BOL_DRAFTS_SECTION = "__bol_drafts__";
 
 // Every localStorage queue that carries a `failed_at` mark (ADR 0013). If a new
 // queue is added, add its key here or its failed work is lost on a user switch.
@@ -64,18 +80,46 @@ export function backupFailedWork(userId: number | string | undefined | null): vo
     const backup: FailedBackup = {};
     let any = false;
     for (const key of QUEUE_KEYS) {
-      const failed = loadArray(key).filter(
-        (o) => o && typeof o === "object" && (o as { failed_at?: unknown }).failed_at,
-      );
-      if (failed.length > 0) {
-        backup[key] = failed;
+      // BOL: preserve ALL pending + failed ops (see the BOL EXCEPTION above).
+      // Every other queue: only failed entries, which never auto-drain.
+      const entries =
+        key === BOL_QUEUE_KEY
+          ? loadArray(key)
+          : loadArray(key).filter(
+              (o) => o && typeof o === "object" && (o as { failed_at?: unknown }).failed_at,
+            );
+      if (entries.length > 0) {
+        backup[key] = entries;
         any = true;
       }
+    }
+    // Preserve the BOL drafts too - the pdf op regenerates the signed PDF from
+    // the draft, so a restored pdf op with no draft would have nothing to build.
+    const drafts = collectBolDrafts();
+    if (drafts.length > 0) {
+      backup[BOL_DRAFTS_SECTION] = drafts;
+      any = true;
     }
     if (any) localStorage.setItem(backupKey(userId), JSON.stringify(backup));
   } catch {
     /* storage unavailable - nothing to preserve */
   }
+}
+
+/** Snapshot every `crew_bol_draft_v1:*` entry as [{k, v}] pairs. */
+function collectBolDrafts(): Array<{ k: string; v: string }> {
+  const out: Array<{ k: string; v: string }> = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(BOL_DRAFT_PREFIX)) continue;
+      const v = localStorage.getItem(k);
+      if (v != null) out.push({ k, v });
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  return out;
 }
 
 /**
@@ -108,6 +152,16 @@ export function restoreFailedWork(userId: number | string | undefined | null): n
         }
       }
       localStorage.setItem(key, JSON.stringify(merged));
+    }
+    // Restore BOL drafts. Only write a draft key that is not already present, so
+    // a live draft the returning user has since started is never clobbered.
+    const drafts = Array.isArray((backup as Record<string, unknown[]>)[BOL_DRAFTS_SECTION])
+      ? ((backup as Record<string, unknown[]>)[BOL_DRAFTS_SECTION] as Array<{ k?: string; v?: string }>)
+      : [];
+    for (const d of drafts) {
+      if (d && typeof d.k === "string" && typeof d.v === "string" && d.k.startsWith(BOL_DRAFT_PREFIX)) {
+        if (localStorage.getItem(d.k) == null) localStorage.setItem(d.k, d.v);
+      }
     }
     localStorage.removeItem(backupKey(userId));
     return restored;

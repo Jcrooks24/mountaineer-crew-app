@@ -1589,6 +1589,68 @@ def _delete_sheet_rows_by_value(
     return len(target_indices)
 
 
+def _delete_bol_stale_rows(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    id_col: str,
+    id_val: str,
+    ts_col: str,
+    keep_ts: str,
+) -> int:
+    """Delete rows in `tab` where `id_col` == `id_val` AND `ts_col` != `keep_ts`.
+
+    Backs the BOL export's write-first-then-delete-stale ordering (bug 4 / ADR
+    0020): the freshly-written rows carry `keep_ts` and are preserved; older rows
+    for the same bol_id are removed. Reading only the two key columns keeps this
+    off the whole-tab read path. No-op if the tab / columns are absent."""
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
+    if tab not in sheet_ids:
+        return 0
+    sheet_numeric_id = sheet_ids[tab]
+
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0]
+    if id_col not in headers_row or ts_col not in headers_row:
+        return 0
+    id_idx = headers_row.index(id_col)
+    ts_idx = headers_row.index(ts_col)
+    lo, hi = min(id_idx, ts_idx), max(id_idx, ts_idx)
+    res = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}"
+    ).execute())
+    values = res.get("values") or []
+    id_at, ts_at = id_idx - lo, ts_idx - lo
+
+    stale: List[int] = []
+    for i, row in enumerate(values):
+        if i == 0:
+            continue  # header
+        rid = row[id_at] if len(row) > id_at else ""
+        rts = row[ts_at] if len(row) > ts_at else ""
+        if rid == id_val and rts != keep_ts:
+            stale.append(i)
+    if not stale:
+        return 0
+
+    requests = [
+        {"deleteDimension": {"range": {
+            "sheetId": sheet_numeric_id,
+            "dimension": "ROWS",
+            "startIndex": idx,
+            "endIndex": idx + 1,
+        }}}
+        for idx in sorted(stale, reverse=True)
+    ]
+    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id, body={"requests": requests}
+    ).execute())
+    return len(stale)
+
+
 def _delete_estimate_sheet_rows(
     svc: Any,
     spreadsheet_id: str,
@@ -1716,25 +1778,21 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
     if not bol_id:
         return 0
     updated_at = _iso(bol.get("updated_at"))
+    export_key = f"{bol_id}:{updated_at}"
+
+    # Idempotency: if this exact (bol_id, updated_at) is already recorded as
+    # exported, this is a duplicate delivery (a coalescer re-run or the reconciler
+    # on an unchanged BOL). Do nothing - the write-first ordering below only
+    # deletes rows with a DIFFERENT timestamp, so re-writing an unchanged state
+    # would stack a second copy.
+    already = db.execute(
+        text("SELECT 1 FROM sheet_generic_exports WHERE kind = 'bol' AND export_key = :k LIMIT 1"),
+        {"k": export_key},
+    ).first()
+    if already is not None:
+        return 0
 
     svc = _get_sheets_svc(db)
-
-    # Delete existing rows for this bol_id from both tabs so we end with exactly
-    # one summary row and one row per current item.
-    for tab in (summary_tab, items_tab):
-        _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "bol_id", bol_id)
-
-    # Clear dedup entries so the fresh rows are accepted.
-    db.execute(
-        text(
-            "DELETE FROM sheet_generic_exports "
-            "WHERE kind IN ('bol', 'bol_item') AND export_key LIKE :prefix"
-        ),
-        {"prefix": f"{bol_id}:%"},
-    )
-    db.commit()
-
-    total_written = 0
     items = bol.get("items") or []
 
     # Summary row
@@ -1761,16 +1819,14 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
         "updated_at": updated_at,
     }
     actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, BOL_HEADERS))
-    _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, actual_summary_headers)])
-    _generic_mark_exported(db, "bol", [f"{bol_id}:{updated_at}"])
-    total_written += 1
 
-    # Item rows - one per current item
+    # Build item rows up front so all writes happen together, before any delete.
+    item_rows: List[Dict[str, Any]] = []
+    item_keys: List[str] = []
+    actual_item_headers: Optional[List[str]] = None
     if items:
         job_name = bol.get("job_name", "") or ""
         job_date = bol.get("job_date", "") or ""
-        item_rows: List[Dict[str, Any]] = []
-        item_keys: List[str] = []
         for it in items:
             item_id = it.get("id", "")
             photos = it.get("photos") or []
@@ -1796,12 +1852,38 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
                 "exported_at": updated_at,
             })
             item_keys.append(f"{bol_id}:{item_id}:{updated_at}")
-
         actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, BOL_ITEM_HEADERS))
+
+    # WRITE FIRST, delete stale after (bug 4 / ADR 0020). The old ordering deleted
+    # every row for this bol_id BEFORE writing, so an exception in between left
+    # the sheet with NO row for a signed BOL that previously had one. Writing
+    # first means a mid-export crash leaves at worst a transient DUPLICATE
+    # (visible, and cleaned up by the reconciler or the next real change), never a
+    # gap in a signed legal document's record.
+    _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, actual_summary_headers)])
+    _generic_mark_exported(db, "bol", [export_key])
+    total_written = 1
+    if item_rows and actual_item_headers is not None:
         item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
         _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
         _generic_mark_exported(db, "bol_item", item_keys)
         total_written += len(item_rows)
+
+    # Now remove the STALE rows for this bol_id: any row whose timestamp differs
+    # from the fresh write. The just-written rows carry `updated_at` and survive.
+    _delete_bol_stale_rows(svc, spreadsheet_id, summary_tab, "bol_id", bol_id, "updated_at", updated_at)
+    _delete_bol_stale_rows(svc, spreadsheet_id, items_tab, "bol_id", bol_id, "exported_at", updated_at)
+    # Drop stale dedup entries for this bol_id, keeping the current-timestamp keys
+    # (both `bol_id:updated_at` and `bol_id:item_id:updated_at` end with the ts).
+    db.execute(
+        text(
+            "DELETE FROM sheet_generic_exports "
+            "WHERE kind IN ('bol', 'bol_item') "
+            "AND export_key LIKE :prefix AND export_key NOT LIKE :cur"
+        ),
+        {"prefix": f"{bol_id}:%", "cur": f"%:{updated_at}"},
+    )
+    db.commit()
 
     return total_written
 
