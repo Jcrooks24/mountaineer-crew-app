@@ -51,6 +51,24 @@ Rules:
   grep changed backend files for `breakpoint(`. NOTE: the backend uses tagged
   `print("[bol] ...")` / `[drive]` / `[rods]` lines as intentional operational
   logging - those are fine; only flag stray/accidental debug prints.
+- **Earned-success grep (unconditional - run on EVERY diff):** the cheap half of
+  the durability vet, run always because a lying success is silent and catastrophic
+  and the grep is free. Two sweeps:
+  ```
+  # A write endpoint that signals failure in the BODY but returns HTTP 200.
+  # apiFetch throws only on !res.ok, so a 200-with-ok:false is read as success
+  # and the queued op is DROPPED. Each hit must be a real raise HTTPException.
+  grep -rn '"ok": *[Ff]alse\|return.*ok=False' backend/app/routers
+
+  # A swallowed write on the client. An empty catch or a swallowed quota error on
+  # a localStorage/IndexedDB write reports success while dropping the data.
+  grep -rn 'catch *{ *}\|catch (_*e*) *{ *}' frontend/src/lib frontend/src/auth
+  ```
+  A backend hit is a finding unless the endpoint ALSO returns a non-2xx status
+  (5xx for a DB/upstream failure = retryable; 4xx for a bad payload = surfaced).
+  A frontend hit is a finding if the swallowed path is a WRITE (a read/best-effort
+  swallow is fine - say which it is). See the Durability vet at the end of this
+  doc for the full failure-seam pass when the change touches irreplaceable data.
 - **Idempotency replay:** call a retryable mutation twice with the same device
   UUID (`event_id`, `submission_id`, `bol_id`, `rods_id` per-day, `day_id`);
   expect one row and the existing record back, never a duplicate or a 500.
