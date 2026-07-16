@@ -174,7 +174,10 @@ All of it is in-process threads. No Celery, no cron, no queue service.
 - **Sheets export pool**, 2 threads. Every domain write fires its export here and
   returns immediately. The HTTP request never waits on Google.
 - **Auto-reconciler**, every 300 seconds. Finds events in Postgres with no export
-  record and pushes them. Holds a Postgres advisory lock so only one worker does it.
+  record and pushes them, then does the same sweep for signed BOLs
+  (`bol_reconcile.py`) - a scheduled BOL export whose pool thread died leaves the
+  BOL in Postgres but not the sheet (ADR 0020). Holds a Postgres advisory lock so
+  only one worker does it.
 - **Crew-resources loop**, hourly, **off unless `CREW_RESOURCES_ENABLED=true`**.
   Maintains a daily availability summary event on Google Calendar.
 
