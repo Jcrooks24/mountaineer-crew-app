@@ -5013,7 +5013,14 @@ function DVIRTab() {
         dvir={selected}
         onBack={() => setSelected(null)}
         onSigned={(updated) => {
-          setDvirs((prev) => prev.map((d) => (d.dvir_id === updated.dvir_id ? updated : d)));
+          // Once signed, the DVIR no longer belongs in the pending-review list,
+          // so drop it there; in the full list keep it and refresh its row so the
+          // "Mech. Signed" chip updates.
+          setDvirs((prev) =>
+            pendingOnly
+              ? prev.filter((d) => d.dvir_id !== updated.dvir_id)
+              : prev.map((d) => (d.dvir_id === updated.dvir_id ? updated : d)),
+          );
           setSelected(null);
         }}
       />
@@ -5311,11 +5318,17 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
 
         <div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver: {full.driver_name}</div>
-          <img
-            src={full.driver_signature}
-            alt="Driver signature"
-            style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
-          />
+          {full.driver_signature ? (
+            <img
+              src={full.driver_signature}
+              alt="Driver signature"
+              style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
+            />
+          ) : (
+            <div className="small" style={{ color: "var(--muted)", fontStyle: "italic" }}>
+              Loading signature…
+            </div>
+          )}
         </div>
       </div>
 
@@ -5332,11 +5345,17 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             Repairs made: {full.repairs_made ? "Yes" : "No - no repair needed"}
           </div>
           {full.mechanic_notes && <div style={{ fontSize: 13, marginBottom: 8 }}>{full.mechanic_notes}</div>}
-          <img
-            src={full.mechanic_signature!}
-            alt="Mechanic signature"
-            style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
-          />
+          {full.mechanic_signature ? (
+            <img
+              src={full.mechanic_signature}
+              alt="Mechanic signature"
+              style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
+            />
+          ) : (
+            <div className="small" style={{ color: "var(--muted)", fontStyle: "italic" }}>
+              Loading signature…
+            </div>
+          )}
         </div>
       ) : !dvir.needs_mechanic_review ? (
         <div className="card">
