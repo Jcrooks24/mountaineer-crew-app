@@ -20,6 +20,12 @@ Rules:
 - Separate **Passed (verified)** from **Findings**. Don't pad; a clean check is a result.
 - Distinguish promotion blockers (Critical/High) from follow-ups (Med/Low).
 - Offer to fix; apply only small, safe, high-confidence fixes unless told otherwise.
+- **If the change touches a one-copy, irreplaceable data path** (a signed
+  document, a photo, a receipt), the happy-path checks below are not enough - also
+  run the **Durability vet for irreplaceable data** at the end of this doc. It
+  injects failure at the seams (server error, worker death, logout mid-sync,
+  staging-vs-prod) that normal testing never reaches, and is where the BOL
+  data-loss batch would have been caught.
 - **Staging only.** All changes go to `staging`, never `main`, unless the user
   says "promote" (see `CLAUDE.md`). Confirm `git branch --show-current` is `staging`.
 
@@ -348,3 +354,108 @@ Catches the failure modes that slip past the behavior checks. Cite evidence
   `setInterval` and confirm a matching cleanup.
 - **Cross-device scan:** for a changed store, confirm a server-hydrate path runs
   on mount (Behavior 2), not local-only reads.
+
+---
+
+## Durability vet for irreplaceable data (the failure-seam pass)
+
+**Run this whenever a change touches a one-copy, irreplaceable data path** - a
+signed legal document (BOL, DVIR), a photo or receipt, anything with no second
+copy if this one is lost. It is a DIFFERENT axis from every check above. The rest
+of this protocol tests "does the happy path work and survive reload / offline."
+This class of bug does not fail on that axis: in a test environment the server
+does not error, the worker is not recycled mid-task, nobody logs out during a
+sync, and staging and prod look identical. The bugs live at the FAILURE SEAMS,
+and the only way to catch them is to inject failure there on purpose.
+
+This pass exists because a batch of them shipped anyway - a signed BOL that
+reached neither the sheet nor Drive (see [ADR 0020](decisions/0020-bol-durability-and-honest-failures.md)
+/ [ADR 0021](decisions/0021-preserve-pending-bol-work-on-logout.md)). Each check
+below is named with the failure it would have caught.
+
+**The rule that unifies it:** for irreplaceable data, every success the UI
+reports must be EARNED, and every failure must be surfaced or retried, never
+swallowed.
+
+**Triage first (scopes the whole pass).** Classify each data path the change
+touches by "what happens if this is lost." One-copy / irreplaceable = every audit
+below is mandatory. A cache or a re-derivable value = skip it. This tells you
+where to spend the failure-injection budget.
+
+### 1. Earned-success audit (a success signal must be backed by a durable fact)
+
+Trace every "Saved" / "Synced" / "Complete" the UI shows back to what guarantees
+it. A success is legitimate only when the server returned a real 2xx AND the
+local write actually persisted.
+
+- **Grep the server for a lying 200.** Any write endpoint that returns
+  `{"ok": false}` (or an error body) without ALSO returning a non-2xx status is a
+  lie the client reads as success. `apiFetch` throws only on `!res.ok`, so a
+  200-with-`ok:false` is acked and the queued op is DROPPED.
+  ```
+  grep -rn '"ok": *[Ff]alse\|ok=False' backend/app/routers
+  ```
+  Every hit on a write path must be a real `raise HTTPException(5xx/4xx)` instead.
+  A DB error is a 5xx (retryable); an upstream (Drive) failure is a 502
+  (retryable); a bad payload is a 4xx (permanent, surfaced). *Caught bug 1.*
+- **Grep for swallowed writes.** An empty `catch {}` or a swallowed
+  `QuotaExceededError` on a write path is a silent drop behind a success message.
+  ```
+  grep -rn 'catch {}\|catch (_*) {}' frontend/src/lib frontend/src/auth
+  ```
+  A localStorage/IndexedDB write on a critical path must return success/failure
+  and the caller must surface a failure, not report "saved". *Caught bug 5.*
+- **Follow each success toast to its gate.** Is it gated on the drain's RESULT,
+  or optimistic? Is the failed-op banner refreshed after the write, or only on
+  remount? *Caught bug 6.*
+
+### 2. Kill-test (crash between the DB commit and the external write)
+
+For any write with a "Postgres first, external system (Sheets / Drive) second"
+shape, reason through `kill -9` after each line between the DB commit and the
+external write. The kill is not hypothetical: Render recycles the worker every
+`--limit-max-requests` (1000) and has OOM history, so "the worker dies mid-task"
+is guaranteed to happen.
+
+- **If the process dies before the external write runs, what recovers it?** If
+  the answer is "nothing," a reconciler is required. The events and BOL
+  reconcilers (`sheets_reconcile.py` / `bol_reconcile.py`) are the pattern: find
+  rows in Postgres with no export record and re-ship them, idempotently, from the
+  advisory-locked auto-reconciler, surfaced as a "Sheet drift" health check.
+  A new synced entity on a background pool needs its own reconciler entry, or it
+  is one worker recycle away from permanent loss. *Caught bug 2.*
+- **Is the external write ordered so a crash cannot destroy an existing record?**
+  Delete-before-write fails this (a crash in between leaves a gap);
+  write-first-then-delete-stale passes it (a crash leaves a recoverable, visible
+  duplicate). *Caught bug 4.*
+
+### 3. Lifecycle-interruption audit (an event fires mid-operation)
+
+For every offline store the change touches, enumerate the events that fire while
+work is un-synced: logout, shared-phone user switch, app kill / background, token
+expiry, tab close. For each, ask "what un-synced data exists at that instant, and
+does this event destroy it?"
+
+- The specific trap is the wipe (`clearCrewState`): it must distinguish SAFE TO
+  LOSE (a cache) from ONE COPY, IRREPLACEABLE (a signed BOL). ADR 0013 keeps
+  rejected work; ADR 0021 extends that to PENDING work for one-copy artifacts,
+  because "pending drains before the interruption" is false when crew hand a
+  phone off mid-job offline.
+- **Verify:** DevTools offline, create the artifact, do NOT reconnect, trigger the
+  interruption (log out / switch user), then log the original user back in - the
+  work is still there. *Caught bug 3.*
+
+### 4. Environment-isolation-by-ID audit (staging must not touch prod)
+
+For every external resource the change reads or writes - a Sheet tab, a Drive
+folder, a bucket, a queue - confirm staging and prod resolve to DIFFERENT physical
+resources, and that resolution is by a stable **ID**, not a **name** that can
+collide.
+
+- **Grep for name-based resource resolution.** A folder/tab resolved by name with
+  a shared default means staging and prod resolve the SAME real resource - and an
+  in-place update (e.g. Drive `files().update` by id) lets staging overwrite a
+  prod document. Prefer an ID env var per environment (`DRIVE_*_FOLDER_ID`,
+  `SHEETS_*_TAB`), listed in `.env.staging.example` + `docs/CREDENTIALS.md`, and
+  flagged as load-bearing if unset silently falls back to the prod resource.
+  *Caught the shared signed-BOL Drive folder.*
