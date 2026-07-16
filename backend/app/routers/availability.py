@@ -29,8 +29,7 @@ from app.db.models.availability import AVAILABILITY_STATUSES, AvailabilityDay
 from app.db.models.availability_unlock import AvailabilityUnlock
 from app.db.models.user import User
 from app.integrations.sheets_export import (
-    export_availability_window_to_sheets,
-    run_export_in_background,
+    schedule_availability_export,
 )
 from app.schemas.availability import (
     AvailabilityBatchIn,
@@ -129,38 +128,19 @@ def _queue_window_export(
     user_email: str,
     window_start: str,
 ) -> None:
-    """Refresh the sheet row for one (user, window) by reading the current
-    state out of the DB and pushing it to AvailabilityStaging. Kept here so
-    the export captures the post-commit state - the background thread only
-    needs the prepared payload, not a live db handle.
+    """Schedule a COALESCED sheet refresh for one (user, window).
+
+    This used to read the DB and fire an uncoalesced background export per call.
+    An admin editing a run of days on the month grid then fired one export per
+    edit, each doing ~4 Google Sheets reads, which blew the 60-reads/min quota
+    (429s) and piled unbounded tasks onto the 2-worker export pool - a rate-limit
+    and memory problem at once. schedule_availability_export coalesces a burst for
+    the same (user, window) into one write of the final state, and its worker
+    re-reads the DB itself (name/email included), so the read here is no longer
+    needed. user_name/user_email are kept in the signature for the callers but are
+    now looked up in the worker.
     """
-    rows = (
-        db.query(AvailabilityDay)
-        .filter(
-            AvailabilityDay.user_id == user_id,
-            AvailabilityDay.window_start == window_start,
-        )
-        .order_by(AvailabilityDay.day.asc())
-        .all()
-    )
-    if not rows:
-        return
-    payload = {
-        "user_id": user_id,
-        "user_name": user_name,
-        "user_email": user_email,
-        "window_start": window_start,
-        "days": [
-            {
-                "day": r.day,
-                "status": r.status,
-                "note": r.note or "",
-                "updated_at": r.updated_at,
-            }
-            for r in rows
-        ],
-    }
-    run_export_in_background(export_availability_window_to_sheets, payload)
+    schedule_availability_export(user_id, window_start)
 
 
 @router.get("", response_model=AvailabilityState)

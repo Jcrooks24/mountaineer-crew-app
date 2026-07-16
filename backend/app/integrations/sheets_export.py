@@ -83,6 +83,10 @@ _incident_export_in_flight: Set[str] = set()
 _incident_export_rerun: Set[str] = set()
 _incident_export_lock = threading.Lock()
 
+_availability_export_in_flight: Set[str] = set()
+_availability_export_rerun: Set[str] = set()
+_availability_export_lock = threading.Lock()
+
 # Serialize note-cell updates per event_id so rapid edits on the same event
 # (or client retries) can't stack multiple in-memory googleapiclient instances
 # in the pool queue. Bounded so the dict can't grow forever as new event_ids
@@ -2701,6 +2705,89 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
 
     _ssl_retry(_append_avail)
     return 1
+
+
+def _build_availability_payload(db: Session, user_id: int, window_start: str):
+    """Re-read one (user, window)'s availability from the DB into the export
+    shape. The coalescing worker calls this when it runs, so a burst of edits
+    collapses to a single write of the final committed state."""
+    from app.db.models.availability import AvailabilityDay  # local import: avoid cycle
+    from app.db.models.user import User
+
+    rows = (
+        db.query(AvailabilityDay)
+        .filter(
+            AvailabilityDay.user_id == user_id,
+            AvailabilityDay.window_start == window_start,
+        )
+        .order_by(AvailabilityDay.day.asc())
+        .all()
+    )
+    if not rows:
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    name = (user.name if user else None) or (user.email if user else None) or ""
+    return {
+        "user_id": user_id,
+        "user_name": name,
+        "user_email": (user.email if user else "") or "",
+        "window_start": window_start,
+        "days": [
+            {"day": r.day, "status": r.status, "note": r.note or "", "updated_at": r.updated_at}
+            for r in rows
+        ],
+    }
+
+
+def _availability_export_worker(key: str, user_id: int, window_start: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_availability_payload(db, user_id, window_start)
+            if payload is not None:
+                export_availability_window_to_sheets(db, payload)
+            record_sheet_sync(db, "export_availability_window_to_sheets", True)
+        except Exception as exc:
+            print(f"[sheets] availability export failed ({key}): {exc}")
+            record_sheet_sync(db, "export_availability_window_to_sheets", False, str(exc))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _availability_export_lock:
+            if key in _availability_export_rerun:
+                _availability_export_rerun.discard(key)
+                continue
+            _availability_export_in_flight.discard(key)
+            return
+
+
+def schedule_availability_export(user_id: int, window_start: str) -> None:
+    """Coalesce repeated availability exports for one (user, window) into a single
+    in-flight worker with at most one pending rerun.
+
+    This MUST be used instead of firing export_availability_window_to_sheets
+    directly. The export is replace-style, and EACH does ~4 Google Sheets READ
+    calls (two full-spreadsheet metadata gets, a header read, and a full-column
+    read of a tab that grows forever). An admin editing a run of days fired one
+    uncoalesced export per edit, which blew the 60-reads/min Sheets quota (429s),
+    starved every other export, and piled unbounded tasks onto the 2-worker pool -
+    a memory and rate-limit problem at once. Coalescing collapses a burst for one
+    (user, window) into a single write of the final state. The other high-frequency
+    exports (incidents, inventory, estimates) were already coalesced; this one was
+    the gap."""
+    if user_id is None or not window_start:
+        return
+    key = f"{user_id}::{window_start}"
+    with _availability_export_lock:
+        if key in _availability_export_in_flight:
+            _availability_export_rerun.add(key)
+            return
+        _availability_export_in_flight.add(key)
+    _EXPORT_POOL.submit(_availability_export_worker, key, user_id, window_start)
 
 
 # ── Sheets sync health check ─────────────────────────────────────────────────
