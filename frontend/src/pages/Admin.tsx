@@ -4874,6 +4874,11 @@ type DVIRRecord = {
   mechanic_signature_requested_email: string | null;
   created_at: string;
   needs_mechanic_review: boolean;
+  // Signed-ness flags always present. The list response ships these instead of
+  // the heavy base64 signatures (which it blanks); the detail view refetches the
+  // single DVIR to get the real signature images.
+  driver_signed: boolean;
+  mechanic_signed: boolean;
 };
 
 // ─────────────────────────────────────────
@@ -5067,7 +5072,7 @@ function DVIRTab() {
                   {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} Defect${d.defects.length !== 1 ? "s" : ""}`}
                 </span>
                 {(() => {
-                  const signed = !!d.mechanic_signature;
+                  const signed = d.mechanic_signed;
                   const awaiting = !signed && d.needs_mechanic_review;
                   const label = signed
                     ? "Mech. Signed"
@@ -5182,6 +5187,19 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
     !!dvir.mechanic_signature_requested_at,
   );
 
+  // The list `dvir` arrives with its signature images blanked (the list ships
+  // only signed-ness booleans to stay light). Refetch the single DVIR so the
+  // detail view renders the real driver + mechanic signature images and the
+  // correct signed state. Falls back to the list object on failure.
+  const [full, setFull] = useState<DVIRRecord>(dvir);
+  useEffect(() => {
+    let alive = true;
+    apiFetch<DVIRRecord>(`/api/dvir/${dvir.dvir_id}`)
+      .then((d) => { if (alive) setFull(d); })
+      .catch(() => { /* keep the list object; status booleans are still right */ });
+    return () => { alive = false; };
+  }, [dvir.dvir_id]);
+
   async function handleSendRequest(e: React.FormEvent) {
     e.preventDefault();
     setReqErr(null);
@@ -5237,7 +5255,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
     }
   }
 
-  const isSigned = !!dvir.mechanic_signature;
+  const isSigned = full.mechanic_signed || !!full.mechanic_signature;
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -5292,9 +5310,9 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
         )}
 
         <div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver: {dvir.driver_name}</div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver: {full.driver_name}</div>
           <img
-            src={dvir.driver_signature}
+            src={full.driver_signature}
             alt="Driver signature"
             style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
           />
@@ -5308,14 +5326,14 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             ✓ Mechanic Approved
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
-            Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? formatMountainDateTime(dvir.mechanic_signed_at) : ""}
+            Signed by: {full.mechanic_name} · {full.mechanic_signed_at ? formatMountainDateTime(full.mechanic_signed_at) : ""}
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-            Repairs made: {dvir.repairs_made ? "Yes" : "No - no repair needed"}
+            Repairs made: {full.repairs_made ? "Yes" : "No - no repair needed"}
           </div>
-          {dvir.mechanic_notes && <div style={{ fontSize: 13, marginBottom: 8 }}>{dvir.mechanic_notes}</div>}
+          {full.mechanic_notes && <div style={{ fontSize: 13, marginBottom: 8 }}>{full.mechanic_notes}</div>}
           <img
-            src={dvir.mechanic_signature!}
+            src={full.mechanic_signature!}
             alt="Mechanic signature"
             style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
           />

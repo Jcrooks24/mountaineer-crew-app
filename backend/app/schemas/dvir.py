@@ -86,6 +86,11 @@ class DVIRResponse(BaseModel):
     mechanic_signature_requested_email: Optional[str] = None
     created_at: datetime
     needs_mechanic_review: bool = False
+    # Signed-ness booleans so a list response can show status without shipping
+    # the heavy base64 signature data URLs. The list endpoint blanks the raw
+    # signatures; these stay accurate. Single-DVIR GET carries both.
+    driver_signed: bool = False
+    mechanic_signed: bool = False
 
     class Config:
         from_attributes = True
