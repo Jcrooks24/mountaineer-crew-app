@@ -1,9 +1,35 @@
 import { apiFetch } from "../api/client";
 import type { DirectoryEntry } from "../auth/AuthContext";
 
-let cached: DirectoryEntry[] | null = null;
+// The roster is now a REQUIRED match key, not just a suggestion list: employee
+// hours are keyed on a roster user_id, and a crew member who cannot see the
+// roster cannot log hours at all. So it must survive a reload and a dead signal,
+// which an in-memory variable does not. Cached under the crew_ prefix so
+// clearCrewState() wipes it when a different person logs in on a shared phone.
+const CACHE_KEY = "crew_roster_v1";
+
+let cached: DirectoryEntry[] | null = loadCache();
 let inflight: Promise<DirectoryEntry[]> | null = null;
 const listeners = new Set<() => void>();
+
+function loadCache(): DirectoryEntry[] | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length ? (parsed as DirectoryEntry[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCache(list: DirectoryEntry[]): void {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(list));
+  } catch {
+    /* quota - the in-memory copy still works for this session */
+  }
+}
 
 function emit() {
   for (const fn of listeners) fn();
@@ -11,23 +37,51 @@ function emit() {
 
 async function fetchDirectory(): Promise<DirectoryEntry[]> {
   const list = await apiFetch<DirectoryEntry[]>("/api/users/directory");
-  cached = Array.isArray(list) ? list : [];
+  const next = Array.isArray(list) ? list : [];
+  // Never overwrite a good cache with an empty response: a roster that comes back
+  // empty (an auth blip, a bad deploy) would otherwise lock every crew member out
+  // of logging hours, offline and online alike.
+  if (next.length > 0) {
+    cached = next;
+    saveCache(next);
+  } else if (!cached) {
+    cached = next;
+  }
   emit();
-  return cached;
+  return cached ?? [];
 }
 
-/** Kick off (or reuse) a fetch. Callers get the cached list in `current()`. */
+/**
+ * Kick off (or reuse) a fetch. Callers get the cached list in `current()`.
+ *
+ * Stale-while-revalidate: when a cached roster exists it is returned at once (so
+ * an offline launch has a usable roster immediately) AND a refresh runs in the
+ * background, so somebody added to the crew this morning shows up without a
+ * reload. A failed refresh is silent by design; the cache is still good.
+ */
 export function ensureDirectory(): Promise<DirectoryEntry[]> {
-  if (cached) return Promise.resolve(cached);
   if (!inflight) {
-    inflight = fetchDirectory().finally(() => { inflight = null; });
+    inflight = fetchDirectory()
+      .catch(() => cached ?? [])
+      .finally(() => { inflight = null; });
   }
+  if (cached) return Promise.resolve(cached);
   return inflight;
 }
 
-/** Force a refresh (e.g. after the current user edits their own photo). */
+/**
+ * Force a re-fetch (e.g. after the current user edits their own photo).
+ *
+ * Does NOT clear `cached`. It used to, and that was a lockout waiting to happen:
+ * the employee-hours form now REQUIRES a roster pick, so a crew member with no
+ * roster cannot log hours at all. This is called from the Profile screen, on
+ * field signal, right after a photo change - exactly when the follow-up fetch is
+ * most likely to fail. Nulling `cached` and then failing left the roster empty
+ * for the rest of the session. So keep the old roster live and just re-fetch over
+ * it; fetchDirectory already refuses to overwrite a good roster with an empty
+ * response.
+ */
 export function refreshDirectory(): Promise<DirectoryEntry[]> {
-  cached = null;
   inflight = null;
   return ensureDirectory();
 }

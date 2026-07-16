@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { fetchRemoteBol, listOpenBols, type OpenBol } from "../lib/bolStore";
 import RodsSignoff from "./RodsSignoff";
-import RosterTypeahead from "./RosterTypeahead";
+import RosterPicker from "./RosterPicker";
 
 // Multi-day LD trips: each day is its own calendar event / job_uuid, so the
 // driver can link a day to the trip's in-progress BOL. The link is the trip's
@@ -90,6 +90,8 @@ import { formatMountainTime } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
+import WrapUpEstimator from "./WrapUpEstimator";
+import { fireConfetti } from "../lib/confetti";
 
 // Type + billing-math helpers live in lib/employeeHours so BillCalculator
 // can consume them without importing back through this parent. Re-exported
@@ -97,6 +99,12 @@ import { BetaTag } from "./BetaTag";
 export { roundBillableQuarter, type EmployeeHoursEntry } from "../lib/employeeHours";
 import type { EmployeeHoursEntry } from "../lib/employeeHours";
 import { roundBillableQuarter } from "../lib/employeeHours";
+import {
+  TRUCK_IDS,
+  type TruckFullnessEntry,
+} from "../lib/jobTypes";
+import { useJobTypes } from "../lib/jobTypesStore";
+import { useSkills, skillsForJobTypes, type Skill } from "../lib/skillsStore";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
 // dropdowns without leaking the rest of App.tsx's offline state into
@@ -150,6 +158,14 @@ type ReportData = {
   crew_feedback: string;
   // Long-distance: submitter started AND ended the day out of town ($50 per-diem).
   out_of_town: boolean;
+  // Fixed multi-select job-type tags (see lib/jobTypes).
+  job_type_tags: string[];
+  // Per-truck fullness readings against the interior 25% marks.
+  truck_fullness: TruckFullnessEntry[];
+  // Crew's note when actual inventory ran over the linked estimate.
+  overage_note: string;
+  // Crew-lead sign-off that the per-employee hours are correct.
+  hours_verified: boolean;
   employee_hours: EmployeeHoursEntry[];
 };
 
@@ -200,6 +216,27 @@ function clearReportDraft(uuid: string) {
   } catch {}
 }
 
+// A draft saved by an older app version omits fields added since (e.g.
+// job_type_tags, truck_fullness, overage_note). Spreading such a draft leaves
+// those keys undefined, which crashes the render the first time we call
+// `.includes`/`.filter`/`.map` on them ("Cannot read properties of undefined").
+// Backfill every non-primitive/newer field to its blank default on load so a
+// stale draft always hydrates into a complete, render-safe ReportData.
+function normalizeDraftData(d: ReportData): ReportData {
+  return {
+    ...d,
+    review_candidate: coerceReviewCandidate(d.review_candidate),
+    out_of_town: !!d.out_of_town,
+    hours_mismatch_reason: d.hours_mismatch_reason ?? "",
+    crew_feedback: d.crew_feedback ?? "",
+    overage_note: d.overage_note ?? "",
+    hours_verified: !!d.hours_verified,
+    job_type_tags: Array.isArray(d.job_type_tags) ? d.job_type_tags : [],
+    truck_fullness: Array.isArray(d.truck_fullness) ? d.truck_fullness : [],
+    employee_hours: Array.isArray(d.employee_hours) ? d.employee_hours : [],
+  };
+}
+
 type Props = {
   jobUuid: string;
   jobName: string;
@@ -248,6 +285,16 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
 export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
+
+  // Skill-rater gating: the job type and the per-employee skill ratings are
+  // editable only by admins and people an admin has explicitly designated a
+  // skill rater. The crew_lead role does NOT grant this (ADR 0014) - rating the
+  // crew is a smaller, more deliberate job than leading it, so leads are raters
+  // only when an admin says so. Everyone else fills the rest of the report as
+  // normal (it syncs cross-device, so a rater can finish it from their own
+  // device). There is deliberately no self-assess escape hatch. Mirrored
+  // server-side in job_report.py::_is_skill_rater.
+  const canRate = user?.role === "admin" || !!user?.is_skill_rater;
 
   // Long-distance documents: PODS + BOL (with multi-day trip linking).
   const [bolStatus, setBolStatus] = useState<string>("");
@@ -417,6 +464,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     has_crew_feedback: null,
     crew_feedback: "",
     out_of_town: false,
+    job_type_tags: [],
+    truck_fullness: [],
+    overage_note: "",
+    hours_verified: false,
     employee_hours: [],
   });
 
@@ -425,6 +476,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showDVIRModal, setShowDVIRModal] = useState(false);
+  // Admin-configurable job-type tags (server, cached). Union with any tags
+  // already saved on this report so a since-deactivated tag still shows.
+  const jobTypes = useJobTypes();
+  // Skill registry + the subset relevant to this job's type(s) - the only
+  // skills crew are asked to rate per employee.
+  const skills = useSkills();
+  const relevantSkills = useMemo(
+    () => skillsForJobTypes(skills, data.job_type_tags),
+    [skills, data.job_type_tags],
+  );
   // Crew must confirm the auto-populated bill rows before the report submits.
   // The checkbox lives below the M1 sliders so crew see the M1-driven
   // charges populate before acknowledging them.
@@ -463,10 +524,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         // in-progress typing on a stall.
         const draft = loadReportDraft(jobUuid);
         if (draft) {
-          setData({
-            ...draft.data,
-            review_candidate: coerceReviewCandidate(draft.data.review_candidate),
-          });
+          setData(normalizeDraftData(draft.data));
           setBillReviewed(draft.billReviewed);
         }
         skipNextDraftSaveRef.current = true;
@@ -492,6 +550,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           has_crew_feedback: r.has_crew_feedback ?? null,
           crew_feedback: r.crew_feedback ?? "",
           out_of_town: !!(r as any).out_of_town,
+          job_type_tags: (r as any).job_type_tags ?? [],
+          truck_fullness: (r as any).truck_fullness ?? [],
+          overage_note: (r as any).overage_note ?? "",
+          hours_verified: !!(r as any).hours_verified,
           employee_hours: r.employee_hours ?? [],
         });
         serverUpdatedAtRef.current = (r as any).updated_at || "";
@@ -519,6 +581,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             has_crew_feedback: null,
             crew_feedback: "",
             out_of_town: false,
+            job_type_tags: [],
+            truck_fullness: [],
+            overage_note: "",
+            hours_verified: false,
             employee_hours: [],
           });
           serverUpdatedAtRef.current = "";
@@ -535,10 +601,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         const serverUpdated = serverUpdatedAtRef.current;
         const draftWins = !!draft && (!serverUpdated || String(draft.savedAt || "") >= serverUpdated);
         if (draftWins && draft) {
-          setData({
-            ...draft.data,
-            review_candidate: coerceReviewCandidate(draft.data.review_candidate),
-          });
+          setData(normalizeDraftData(draft.data));
           setBillReviewed(draft.billReviewed);
           setDraftStatus("saved");
         } else {
@@ -608,13 +671,20 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     return m;
   }, [sortedEvents]);
 
-  // A "slot" in the editor is either a picked timeline event or a manually
-  // typed HH:MM. Crew picks the manual option when an employee's time
-  // doesn't line up with any logged event (e.g., one person arrived 10
-  // minutes late and there's no per-employee event for that).
+  // A "slot" in the editor is either a picked timeline event, the projected
+  // wrap-up time from the estimator above, or a manually typed HH:MM. Crew
+  // picks the manual option when an employee's time doesn't line up with any
+  // logged event (e.g., one person arrived 10 minutes late and there's no
+  // per-employee event for that).
   const MANUAL_SENTINEL = "__manual__";
+  const WRAPUP_SENTINEL = "__wrapup__";
   type SlotPick = { selection: string; manualTime: string };
   const emptySlot: SlotPick = { selection: "", manualTime: "" };
+
+  // Projected wrap-up time, lifted from <WrapUpEstimator>. Null until the crew
+  // calculates one. Offered as an End option only - it's a projection of when
+  // the job finishes, so it's never a valid start or break bound.
+  const [wrapUpTime, setWrapUpTime] = useState<Date | null>(null);
 
   // First START on the timeline + last FINISH = the natural bookends for a
   // typical crew day. Prefilling these means the common case (everyone
@@ -632,6 +702,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   }, [sortedEvents]);
 
   const [editName, setEditName] = useState<string>("");
+  // Roster id of the person being edited. This, not the name, is the match
+  // key the hours summary joins on. null while nothing is picked, and on a
+  // legacy row whose name is not on the roster.
+  const [editUserId, setEditUserId] = useState<number | null>(null);
   const [editStart, setEditStart] = useState<SlotPick>(emptySlot);
   const [editEnd, setEditEnd] = useState<SlotPick>(emptySlot);
   // uid is a stable React key so removing a middle break doesn't reuse
@@ -692,6 +766,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
       return h * 60 + mm;
     }
+    if (slot.selection === WRAPUP_SENTINEL) {
+      // Resolves live: editing the estimator's minutes above moves this end
+      // time with it. The saved row snapshots the value at Save.
+      return wrapUpTime ? wrapUpTime.getHours() * 60 + wrapUpTime.getMinutes() : null;
+    }
     if (slot.selection) {
       const ev = eventById.get(slot.selection);
       if (!ev) return null;
@@ -704,12 +783,24 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
   function slotToHHMM(slot: SlotPick): string {
     if (slot.selection === MANUAL_SENTINEL) return slot.manualTime || "";
+    if (slot.selection === WRAPUP_SENTINEL) {
+      return wrapUpTime ? fmtHHMM(wrapUpTime.toISOString()) : "";
+    }
     if (slot.selection) {
       const ev = eventById.get(slot.selection);
       return ev ? fmtHHMM(ev.timestamp) : "";
     }
     return "";
   }
+
+  // Clock label for the wrap-up option, e.g. "4:35 PM".
+  const wrapUpLabel = useMemo(
+    () =>
+      wrapUpTime
+        ? wrapUpTime.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        : "",
+    [wrapUpTime],
+  );
 
   // Re-used four times in the editor (start, end, each break's start/end).
   // Renders a <select> over events plus a "Manual time…" option that
@@ -720,6 +811,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     slot: SlotPick,
     setSlot: (next: SlotPick) => void,
     placeholder: string,
+    // End slots may also resolve to the projected wrap-up time from the
+    // estimator above (only offered once one has been calculated).
+    allowWrapUp = false,
   ) {
     return (
       <div
@@ -740,6 +834,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         >
           <option value="">{placeholder}</option>
           <option value={MANUAL_SENTINEL}>Manual time…</option>
+          {allowWrapUp && wrapUpTime && (
+            <option value={WRAPUP_SENTINEL}>Est. wrap-up - {wrapUpLabel}</option>
+          )}
           {sortedEvents.map((ev) => (
             <option key={ev.event_id} value={ev.event_id}>
               {eventOptionLabel(ev)}
@@ -813,6 +910,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
   function resetEditor() {
     setEditName("");
+    setEditUserId(null);
     setEditStart(defaultStart);
     setEditEnd(defaultEnd);
     setEditBreaks([]);
@@ -823,7 +921,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   function saveEmployee() {
     const name = editName.trim();
     if (!name) {
-      setEditError("Enter an employee name.");
+      setEditError("Pick the crew member from the roster.");
+      return;
+    }
+    // A row with no roster id can only be a legacy one loaded for edit (its name
+    // predates the roster requirement). A NEW row must always be keyed to a real
+    // person, or it lands in payroll matched to nobody.
+    if (editUserId == null && editingIndex === null) {
+      setEditError("Pick the crew member from the roster.");
       return;
     }
     if (editorPreview.kind === "error") {
@@ -835,6 +940,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       return;
     }
     const baseEntry: EmployeeHoursEntry = {
+      user_id: editUserId ?? undefined,
       name,
       start: slotToHHMM(editStart),
       end: slotToHHMM(editEnd),
@@ -843,12 +949,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     };
     setData((prev) => {
       if (editingIndex !== null && editingIndex < prev.employee_hours.length) {
-        // Preserve the existing non_billable flag - that toggle lives on the
-        // saved tile, not in the editor, and shouldn't reset on edit.
+        // Preserve the existing non_billable flag + skill_rating - those live
+        // on the saved tile, not in the editor, and shouldn't reset on edit.
         const next = prev.employee_hours.slice();
         next[editingIndex] = {
           ...baseEntry,
           non_billable: prev.employee_hours[editingIndex].non_billable,
+          skill_rating: prev.employee_hours[editingIndex].skill_rating,
+          skill_ratings: prev.employee_hours[editingIndex].skill_ratings,
         };
         return { ...prev, employee_hours: next };
       }
@@ -867,6 +975,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     const emp = data.employee_hours[i];
     if (!emp) return;
     setEditName(emp.name);
+    setEditUserId(emp.user_id ?? null);
     setEditStart({ selection: MANUAL_SENTINEL, manualTime: emp.start || "" });
     setEditEnd({ selection: MANUAL_SENTINEL, manualTime: emp.end || "" });
     setEditBreaks([]); // Drop break detail; crew re-adds breaks if they want different math.
@@ -877,12 +986,22 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function toggleEmployeeNonBillable(i: number) {
+
+  // Crew-lead 1-5 skill rating for this mover on this job. Tapping the active
+  // star again clears it back to N/A (null). Display-only - never touches the
+  // man-hours math.
+  // Set one per-skill rating (0-5) for employee i, keyed by skill name. A
+  // rating of null clears that skill from the map.
+  function setEmployeeSkillTypeRating(i: number, skillName: string, rating: number | null) {
     setData((prev) => ({
       ...prev,
-      employee_hours: prev.employee_hours.map((e, idx) =>
-        idx === i ? { ...e, non_billable: !e.non_billable } : e,
-      ),
+      employee_hours: prev.employee_hours.map((e, idx) => {
+        if (idx !== i) return e;
+        const next = { ...(e.skill_ratings || {}) };
+        if (rating === null) delete next[skillName];
+        else next[skillName] = rating;
+        return { ...e, skill_ratings: next };
+      }),
     }));
     setSaved(false);
   }
@@ -960,6 +1079,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           crew_feedback: data.has_crew_feedback ? (data.crew_feedback.trim() || null) : null,
           out_of_town: !!data.out_of_town,
           bill_personal_vehicles: !!data.bill_personal_vehicles,
+          job_type_tags: data.job_type_tags,
+          // Drop any partially-filled truck rows (no fullness picked yet).
+          truck_fullness: data.truck_fullness.filter(
+            (t) => t.truck && t.vertical_pct > 0 && t.horizontal_pct > 0,
+          ),
+          overage_note: data.overage_note.trim() || null,
+          hours_verified: !!data.hours_verified,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
           employee_hours: data.employee_hours
@@ -972,6 +1098,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               hours: Number(e.hours) || 0,
               non_billable: !!e.non_billable,
               out_of_town: !!e.out_of_town,
+              skill_rating: e.skill_rating ?? null,
+              skill_ratings: e.skill_ratings ?? null,
             })),
         }),
       });
@@ -990,6 +1118,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       }
 
       setSaved(true);
+      fireConfetti(); // celebrate a submitted report
       // Submit succeeded - discard the in-progress drafts (report + bill).
       // The server is now authoritative; further edits start fresh drafts.
       clearReportDraft(jobUuid);
@@ -1058,7 +1187,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       <div className="card" style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6 }}>
         <div>Loading report…</div>
         <div style={{ marginTop: 6 }}>
-          If this stays visible for more than a few seconds, refresh the app —
+          If this stays visible for more than a few seconds, refresh the app -
           the fetch may have stalled.
         </div>
       </div>
@@ -1089,6 +1218,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       recyclingPct={data.recycling_pct}
       employeeHours={loaded ? data.employee_hours : undefined}
       personalVehicleCount={loaded && data.bill_personal_vehicles ? data.personal_vehicles : 0}
+      truckCount={
+        loaded
+          ? data.truck_fullness.filter((t) => (t.truck || "").trim().length > 0).length
+          : undefined
+      }
     >
       {(billSlots) => (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1131,6 +1265,26 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
+      {/* LD driving days: remind whoever enters pay that drive time is a fixed
+          rate, not hourly. Driving (RODS/DUTY) events are already excluded from
+          the billable Employee Hours below - this note guards the manual entry. */}
+      {longDistance && (driveOnly || mixedLd) && (
+        <div
+          style={{
+            border: "1px solid var(--warn)",
+            background: "var(--warn-bg)",
+            borderRadius: 10,
+            padding: "10px 12px",
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          <strong style={{ color: "var(--warn)" }}>Pay reminder (long-distance driving):</strong>{" "}
+          Movers are <strong>not</strong> paid hourly for drive time - long-distance
+          driving is paid at a fixed rate. Do not enter drive time as billable/hourly pay.
+        </div>
+      )}
+
       {/* ── Job data (employee hours + M1 equipment + personal vehicles) ──
           Employee hours drive one auto-populated $80/hr labor line per
           billable employee in the Invoice Builder above, and also land
@@ -1143,22 +1297,118 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Hours, equipment, and vehicles - the data used to build the invoice line items.
         </div>
-        <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <span style={{ fontWeight: 700, fontSize: 13 }}>Employee hours</span>
-          <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
+
+        {/* Job type comes first: it decides which skills are rated per employee
+            below, so the crew must pick it before the skill rows are meaningful.
+            Deliberately NOT gated on canRate: a job with no designated rater on
+            site still needs its job type recorded. Any crew member sets it. */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+          Job type<BetaTag feature="jobTypeTags" />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
+          {ht.jobTypeHint}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
+          {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
+            const active = data.job_type_tags.includes(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => {
+                  setData((prev) => ({
+                    ...prev,
+                    job_type_tags: active
+                      ? prev.job_type_tags.filter((t) => t !== tag)
+                      : [...prev.job_type_tags, tag],
+                  }));
+                  setSaved(false);
+                }}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 999,
+                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  color: active ? "var(--brand)" : "var(--text)",
+                  fontWeight: active ? 700 : 400,
+                  fontSize: 13,
+                  cursor: "pointer",
+                }}
+              >
+                {tag}
+              </button>
+            );
+          })}
         </div>
 
-        {sortedEvents.length < 2 ? (
-          <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
-            Need at least two timeline events for this job before you can
-            log employee hours.
+        {/* Inventory is logged on long-distance jobs only (ADR 0015). On a local
+            job there is no Inventory tab, so this line would be a permanent
+            "none logged yet" pointing at a tab the crew can't see. */}
+        {longDistance && <InventoryCountsSummary jobUuid={jobUuid} />}
+
+        {/* Wrap-up estimator sits directly above the hours record because it
+            feeds it: the projected wrap-up time is offered as an End option in
+            the start/end pickers below. */}
+        <WrapUpEstimator jobUuid={jobUuid} onWrapUpChange={setWrapUpTime} />
+
+        <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>Employee man-hours</span>
+          <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
+          {canRate && <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />}
+        </div>
+        {/* Non-billable time is no longer a per-entry toggle here - it goes in
+            the off-job hours report so payroll and billing stay clean. */}
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+          Log the hours each crew member worked <strong>on this job</strong>. For
+          non-billable or off-job time (shop work, errands, anything not billed to
+          this job), use <strong>Profile → Log Off-Job Hours</strong> instead.
+        </div>
+        {/* Skill ratings are visible only to admins and designated skill raters.
+            Everyone else (including crew leads) doesn't see the hint or the
+            per-employee stars at all - not just a disabled version. */}
+        {relevantSkills.length > 0 && canRate && ht.skillsHint && (
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+            {ht.skillsHint}
           </div>
-        ) : (
-          <>
-            <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-              Type a name, pick the start and end events, add any clocked-out
-              periods, then Save. Repeat for each crew member.
-            </div>
+        )}
+        {/* What the ends of the scale actually mean. Without it, a 3 from one
+            rater and a 3 from another are not the same number, and the whole
+            point of rating is comparability across crews. */}
+        {relevantSkills.length > 0 && canRate && ht.skillScaleHint && (
+          <div
+            className="small"
+            style={{
+              color: "var(--muted)",
+              marginBottom: 8,
+              padding: "6px 8px",
+              border: "1px dashed var(--border)",
+              borderRadius: 8,
+              lineHeight: 1.5,
+            }}
+          >
+            {ht.skillScaleHint}
+          </div>
+        )}
+        {/* Non-raters get a one-line explanation rather than silently missing
+            stars, so "where did the skill ratings go" has an answer on screen. */}
+        {relevantSkills.length > 0 && <RaterGate canRate={canRate} />}
+
+        {/* The editor is always available - even with 0-1 timeline events the
+            crew can log hours via the "Manual time…" option in the pickers.
+            The earlier hard gate hid the whole editor (and its manual path),
+            which read as "no option to log". */}
+        <>
+            {sortedEvents.length < 2 ? (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+                No start/finish events logged yet - choose “Manual time…” in the
+                start and end pickers to type each person's hours by hand.
+              </div>
+            ) : (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+                Type a name, pick the start and end events, add any clocked-out
+                periods, then Save. Repeat for each crew member.
+              </div>
+            )}
 
             <div
               style={{
@@ -1186,17 +1436,20 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   Editing entry #{editingIndex + 1}. Save replaces the row; Cancel keeps the original.
                 </div>
               )}
-              <RosterTypeahead
-                placeholder="Employee name"
-                value={editName}
-                onChange={(v) => { setEditName(v); setEditError(null); }}
-                style={{ width: "100%" }}
+              <RosterPicker
+                userId={editUserId}
+                legacyName={editUserId == null && editName ? editName : undefined}
+                onChange={(id, nm) => {
+                  setEditUserId(id);
+                  setEditName(nm);
+                  setEditError(null);
+                }}
               />
 
               <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>
                 {renderSlotPicker(editStart, (s) => { setEditStart(s); setEditError(null); }, "Start event…")}
                 <span className="small">→</span>
-                {renderSlotPicker(editEnd, (s) => { setEditEnd(s); setEditError(null); }, "End event…")}
+                {renderSlotPicker(editEnd, (s) => { setEditEnd(s); setEditError(null); }, "End event…", true)}
               </div>
 
               <div className="col" style={{ gap: 6 }}>
@@ -1262,8 +1515,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 </button>
               </div>
             </div>
-          </>
-        )}
+        </>
 
         {data.employee_hours.length > 0 && (
           <div className="col" style={{ gap: 0 }}>
@@ -1283,78 +1535,63 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               return (
                 <div
                   key={i}
-                  className="row"
                   style={{
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 8,
                     padding: "8px 0",
                     borderBottom: "1px solid var(--border)",
                     opacity: emp.non_billable ? 0.7 : 1,
                     background: isEditing ? "rgba(106,167,255,0.06)" : undefined,
                   }}
                 >
-                  <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-                    <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
-                      <label
-                        className="row"
-                        style={{ gap: 4, alignItems: "center", cursor: "pointer" }}
-                        title="Toggle whether this entry counts toward total man-hours"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={!!emp.non_billable}
-                          onChange={() => toggleEmployeeNonBillable(i)}
-                          style={{ accentColor: "var(--brand)", width: 14, height: 14 }}
-                        />
-                        <span className="small" style={{ color: "var(--muted)" }}>
-                          Non-billable
+                  {/* Name + hours on the left, Edit/Remove on the right. Skill
+                      ratings used to sit inside this left column, which the
+                      buttons squeeze on a phone, so long skill names wrapped and
+                      the stars got crushed. Ratings are now their own full-width
+                      block below this row (see further down). */}
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+                      <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
+                      </div>
+                      <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                        {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
+                        {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
+                      </div>
+                      <div className="small" style={{ marginTop: 2 }}>
+                        <strong style={{ color: "var(--text)" }}>
+                          {roundBillableQuarter(emp.hours).toFixed(2)}h
+                        </strong>
+                        <span style={{ color: "var(--muted)" }}>
+                          {" "}(actual {emp.hours.toFixed(2)}h)
                         </span>
-                      </label>
+                      </div>
                     </div>
-                    <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                      {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
-                      {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
-                    </div>
-                    <div className="small" style={{ marginTop: 2 }}>
-                      {emp.non_billable ? (
-                        <>
-                          <strong style={{ color: "var(--muted)" }}>
-                            non-billable {roundBillableQuarter(emp.hours).toFixed(2)}h
-                          </strong>
-                          <span style={{ color: "var(--muted)" }}>
-                            {" "}(actual {emp.hours.toFixed(2)}h)
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <strong style={{ color: "var(--text)" }}>
-                            {roundBillableQuarter(emp.hours).toFixed(2)}h
-                          </strong>
-                          <span style={{ color: "var(--muted)" }}>
-                            {" "}(actual {emp.hours.toFixed(2)}h)
-                          </span>
-                        </>
-                      )}
+                    <div className="row" style={{ gap: 6, flex: "0 0 auto" }}>
+                      <button
+                        type="button"
+                        onClick={() => editEmployee(i)}
+                        disabled={isEditing}
+                      >
+                        {isEditing ? "Editing…" : "Edit"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeEmployee(i)}
+                        style={{ color: "var(--danger)" }}
+                      >
+                        Remove
+                      </button>
                     </div>
                   </div>
-                  <div className="row" style={{ gap: 6, flex: "0 0 auto" }}>
-                    <button
-                      type="button"
-                      onClick={() => editEmployee(i)}
-                      disabled={isEditing}
-                    >
-                      {isEditing ? "Editing…" : "Edit"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeEmployee(i)}
-                      style={{ color: "var(--danger)" }}
-                    >
-                      Remove
-                    </button>
-                  </div>
+                  {canRate && (
+                    <div style={{ marginTop: 8 }}>
+                      <EmployeeSkillRatings
+                        skills={relevantSkills}
+                        ratings={emp.skill_ratings || {}}
+                        disabled={false}
+                        onRate={(skillName, r) => setEmployeeSkillTypeRating(i, skillName, r)}
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1445,6 +1682,19 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             </label>
           </>
         )}
+
+        {/* Truck fullness - composite vertical × horizontal fill against the
+            interior 25% marks, one reading per truck used. */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          Truck fullness<BetaTag feature="truckFullness" />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
+          {ht.truckFullnessHint}
+        </div>
+        <TruckFullnessEditor
+          value={data.truck_fullness}
+          onChange={(next) => { set("truck_fullness", next); setSaved(false); }}
+        />
       </div>
       )}
 
@@ -1590,7 +1840,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div className="card" style={{ borderColor: "var(--brand)" }}>
           <div className="sectionTitle">Long-distance</div>
 
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
+          <div data-component="ReportDocuments" style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
             Required for this interstate trip. Each driver's PODS is tracked in the Driver PODS section below. Complete or attach the Bill of Lading; multi-day trips link this day to the trip's BOL.
           </div>
@@ -1656,7 +1906,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             {/* Per-diem sits next to the BOL selector so the crew rep
                 confirming which BOL is attached also flags whether the
                 crew was out of town for that day's charge. */}
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <label data-component="ReportPerDiem" style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 14, marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
               <input type="checkbox" checked={data.out_of_town} onChange={(e) => set("out_of_town", e.target.checked)} style={{ marginTop: 2, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }} />
               <span>The <strong>crew</strong> started and ended the day out of town ($50 per-diem, per crew member)</span>
             </label>
@@ -1879,6 +2129,310 @@ function YesNo({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// Per-employee skill ratings: one compact row per skill relevant to this job's
+// type(s) - core skills always, plus any whose relevant_job_types match.
+// Display-only - never affects the man-hours math.
+function EmployeeSkillRatings({
+  skills,
+  ratings,
+  onRate,
+  disabled = false,
+}: {
+  skills: Skill[];
+  ratings: Record<string, number>;
+  onRate: (skillName: string, rating: number | null) => void;
+  disabled?: boolean;
+}) {
+  if (skills.length === 0) {
+    return (
+      <div className="small" style={{ color: "var(--muted)" }}>
+        Pick a job type above to rate skills.
+      </div>
+    );
+  }
+  return (
+    <div className="col" style={{ gap: 4, opacity: disabled ? 0.55 : 1 }}>
+      <span className="small" style={{ color: "var(--muted)" }}>Skills</span>
+      {skills.map((s) => (
+        <SkillRatingRow key={s.id} skill={s} value={ratings[s.name]} disabled={disabled} onChange={(r) => onRate(s.name, r)} />
+      ))}
+    </div>
+  );
+}
+
+// Skill-rater gate for the skill ratings ONLY. Job type is deliberately open to
+// everyone: it is the job's descriptive data and must be collected whether or not
+// a rater is on site. Anyone who is not a designated rater sees this note instead
+// of the stars, and there is no self-assessment escape hatch.
+function RaterGate({ canRate }: { canRate: boolean }) {
+  if (canRate) return null;
+  return (
+    <div style={{ border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
+      <div className="small" style={{ color: "var(--muted)" }}>
+        Skill ratings are filled in by a designated skill rater. Ask an admin for
+        skill-rater access if you need to rate the crew on this job.
+      </div>
+    </div>
+  );
+}
+
+// Sentinel stored in skill_ratings for a skill the crew explicitly marked "not
+// applicable" on this job - distinct from unrated (absent from the map) and from
+// a real 0-5 score. Backend + sheet export understand this value.
+const SKILL_NA = -1;
+
+function NaButton({ on, onClick, disabled = false }: { on: boolean; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: disabled ? "not-allowed" : "pointer",
+        border: on ? "2px solid var(--muted)" : "1px solid var(--border)",
+        background: on ? "rgba(255,255,255,0.08)" : "transparent",
+        color: on ? "var(--text)" : "var(--muted)", fontWeight: on ? 700 : 400 }}>
+      N/A
+    </button>
+  );
+}
+
+function SkillRatingRow({
+  skill,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  skill: Skill;
+  value: number | undefined;
+  onChange: (rating: number | null) => void;
+  disabled?: boolean;
+}) {
+  const v = value ?? null;
+  const isNa = v === SKILL_NA;
+  if (skill.binary) {
+    return (
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <span className="small" style={{ color: "var(--text)" }}>{skill.name}</span>
+        <div className="row" style={{ gap: 4 }}>
+          {([["No", 0], ["Yes", 5]] as const).map(([label, num]) => {
+            const on = v === num;
+            return (
+              <button key={label} type="button" disabled={disabled} onClick={() => onChange(on ? null : num)}
+                style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: disabled ? "not-allowed" : "pointer",
+                  border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                  color: on ? "var(--brand)" : "var(--muted)" }}>
+                {label}
+              </button>
+            );
+          })}
+          <NaButton on={isNa} disabled={disabled} onClick={() => onChange(isNa ? null : SKILL_NA)} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      {/* Name can wrap; the stars must not shrink. minWidth:0 lets the label take
+          the remaining width and wrap instead of crushing the star buttons. */}
+      <span className="small" style={{ color: "var(--text)", flex: "1 1 120px", minWidth: 0 }}>{skill.name}</span>
+      <div className="row" style={{ gap: 6, alignItems: "center", flex: "0 0 auto" }}>
+        <div className="row" style={{ gap: 4, alignItems: "center", opacity: isNa ? 0.4 : 1 }}>
+          {[1, 2, 3, 4, 5].map((n) => {
+            const filled = !isNa && v != null && n <= v;
+            return (
+              <button key={n} type="button" aria-label={`${skill.name} ${n} of 5`} disabled={disabled}
+                onClick={() => onChange(v === n ? null : n)}
+                style={{ background: "transparent", border: "none", padding: "2px 1px", cursor: disabled ? "not-allowed" : "pointer", fontSize: 20, lineHeight: 1, color: filled ? "var(--brand)" : "var(--border)" }}>
+                {filled ? "★" : "☆"}
+              </button>
+            );
+          })}
+        </div>
+        <NaButton on={isNa} disabled={disabled} onClick={() => onChange(isNa ? null : SKILL_NA)} />
+      </div>
+    </div>
+  );
+}
+
+// Truck fullness: add one reading per truck used, each a composite of a
+// vertical and a horizontal 25%-step fill estimate. Estimated fill is
+// vertical×horizontal/100, matching the interior marks.
+function TruckFullnessEditor({
+  value,
+  onChange,
+}: {
+  value: TruckFullnessEntry[];
+  onChange: (next: TruckFullnessEntry[]) => void;
+}) {
+  // Only fleet entries reserve a fixed id; rentals are free-text so several can
+  // coexist. Updates/removes go by index so two rentals never collide.
+  const usedFleet = new Set(value.filter((t) => !t.is_rental).map((t) => t.truck));
+  const availableFleet = TRUCK_IDS.filter((t) => !usedFleet.has(t));
+
+  const patchAt = (i: number, patch: Partial<TruckFullnessEntry>) =>
+    onChange(value.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  const removeAt = (i: number) => onChange(value.filter((_, idx) => idx !== i));
+
+  const dashedChip: React.CSSProperties = {
+    padding: "6px 12px", borderRadius: 999, border: "1px dashed var(--border)",
+    background: "transparent", color: "var(--text)", fontSize: 13, cursor: "pointer",
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {value.map((t, i) => {
+        const combined = Math.round((t.vertical_pct * t.horizontal_pct) / 100);
+        return (
+          <div key={t.is_rental ? `rental-${i}` : t.truck} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              {t.is_rental ? (
+                <input
+                  value={t.truck}
+                  onChange={(e) => patchAt(i, { truck: e.target.value })}
+                  placeholder="Rental truck (company / name)"
+                  style={{ fontWeight: 700, fontSize: 14, flex: 1, minWidth: 0 }}
+                />
+              ) : (
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{t.truck}</div>
+              )}
+              <button
+                type="button"
+                onClick={() => removeAt(i)}
+                style={{ color: "var(--danger)", flexShrink: 0 }}
+              >
+                Remove
+              </button>
+            </div>
+            {t.is_rental && (
+              <label className="col" style={{ gap: 2, marginTop: 8 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Truck length (ft)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={t.length_ft ?? ""}
+                  onChange={(e) => patchAt(i, { length_ft: e.target.value === "" ? undefined : Number(e.target.value) })}
+                  placeholder="e.g. 26"
+                  style={{ width: 120 }}
+                />
+              </label>
+            )}
+            <FullnessSlider
+              label="Vertical fill"
+              value={t.vertical_pct}
+              onChange={(p) => patchAt(i, { vertical_pct: p })}
+            />
+            <FullnessSlider
+              label="Horizontal fill"
+              value={t.horizontal_pct}
+              onChange={(p) => patchAt(i, { horizontal_pct: p })}
+            />
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+              {t.vertical_pct > 0 && t.horizontal_pct > 0
+                ? `Estimated fill: ${combined}% (V${t.vertical_pct} × H${t.horizontal_pct})${t.is_rental ? " · best guess" : ""}`
+                : "Pick vertical and horizontal fill"}
+            </div>
+            {t.is_rental && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                Rental trucks have no interior 25% markers - estimate the fill as best you can.
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {availableFleet.length > 0 && (
+          <>
+            <span className="small" style={{ color: "var(--muted)" }}>Add truck:</span>
+            {availableFleet.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => onChange([...value, { truck: t, vertical_pct: 0, horizontal_pct: 0 }])}
+                style={dashedChip}
+              >
+                + {t}
+              </button>
+            ))}
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => onChange([...value, { truck: "", vertical_pct: 0, horizontal_pct: 0, is_rental: true }])}
+          style={dashedChip}
+        >
+          + Rental truck
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Continuous slider for truck fill, matching the M1 dumpster/recycling sliders
+// (PctSlider). Replaces the old 25/50/75/100 button row.
+function FullnessSlider({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (pct: number) => void;
+}) {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span className="small" style={{ color: "var(--muted)" }}>{label}</span>
+        <span style={{ fontWeight: 700, fontSize: 15, color: "var(--brand)" }}>{value}%</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width: "100%", accentColor: "var(--brand)" }}
+      />
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 10, color: "var(--muted)" }}>Empty</span>
+        <span style={{ fontSize: 10, color: "var(--muted)" }}>Half</span>
+        <span style={{ fontSize: 10, color: "var(--muted)" }}>Full</span>
+      </div>
+    </div>
+  );
+}
+
+// Read-only actual-inventory counts on the Report tab. The crew logs items on
+// the Inventory tab; this just surfaces the derived furniture/box totals at
+// close-out (and points them to the Inventory tab when empty). Fetches once;
+// stays quiet on error so a network blip never blocks the report.
+function InventoryCountsSummary({ jobUuid }: { jobUuid: string }) {
+  const [counts, setCounts] = useState<{ furniture: number; boxes: number } | null>(null);
+  useEffect(() => {
+    if (!jobUuid) return;
+    let cancelled = false;
+    apiFetch<{ furniture_count: number; box_count: number }>(
+      `/api/job-inventory/${encodeURIComponent(jobUuid)}`,
+    )
+      .then((r) => { if (!cancelled) setCounts({ furniture: r.furniture_count, boxes: r.box_count }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobUuid]);
+  const total = counts ? counts.furniture + counts.boxes : 0;
+  return (
+    <div className="small" style={{ color: "var(--muted)", marginTop: 6, marginBottom: 4 }}>
+      Actual inventory:{" "}
+      {counts && total > 0 ? (
+        <span style={{ color: "var(--text)" }}>
+          <strong>{counts.furniture}</strong> furniture · <strong>{counts.boxes}</strong> boxes
+        </span>
+      ) : (
+        <>none logged yet - add it on the <strong>Inventory</strong> tab</>
+      )}
     </div>
   );
 }

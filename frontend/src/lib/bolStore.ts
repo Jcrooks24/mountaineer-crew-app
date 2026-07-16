@@ -25,10 +25,22 @@
  */
 
 import { apiFetch, ApiError } from "../api/client";
+import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 import { getToken } from "../auth/token";
 import { addPhoto, updatePhoto, listPhotosForJob } from "./photoStore";
+import { slotToBlob, toQueuedPhoto } from "./queuedPhoto";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
+/** Thrown when a BOL signature/queue write can't be persisted (localStorage
+ * quota exceeded / disabled). The form catches it to tell the crew to free up
+ * space, instead of the old silent no-op behind a "signed" success (bug 5). */
+export class BolStorageFullError extends Error {
+  constructor() {
+    super("This device's storage is full, so the signed BOL could not be saved. Free up space and sign again.");
+    this.name = "BolStorageFullError";
+  }
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -197,17 +209,60 @@ export function loadDraft(jobUuid: string): BOLDraft | null {
   }
 }
 
-export function saveDraft(d: BOLDraft): void {
+/** Persist the draft. Returns false on failure (quota exceeded / storage
+ * disabled) so a caller holding a signature that MUST NOT be silently dropped
+ * can surface it instead of reporting a false success (bug 5). */
+export function saveDraft(d: BOLDraft): boolean {
   try {
     localStorage.setItem(draftKey(d.job_uuid), JSON.stringify(d));
+    return true;
   } catch {
-    // Quota exceeded / disabled - ignore.
+    return false;
   }
+}
+
+/** Delete a job's BOL draft. Called once the BOL is fully on the server (a
+ * delivered BOL with no remaining queue ops) so a season of signed drafts -
+ * each up to ~4 base64 signature PNGs - doesn't fill localStorage. */
+export function removeDraft(jobUuid: string): void {
+  try {
+    localStorage.removeItem(draftKey(jobUuid));
+  } catch {
+    /* storage unavailable - nothing to remove */
+  }
+}
+
+/**
+ * The BOL id for a job, derived DETERMINISTICALLY from job_uuid.
+ *
+ * It used to be `newUUID()` - a fresh random id per device. Two crew opening the
+ * BOL for the same job therefore minted two different ids and produced two server
+ * rows that never merged, so neither saw the other's items. That is the root of
+ * "BOL does not sync across devices". Deriving the id from job_uuid means both
+ * devices compute the SAME id and upsert the SAME row - one document per job,
+ * exactly as job identity already works everywhere else (calEventToJobUuid).
+ *
+ * A truly job-less BOL (no job_uuid) falls back to random: there is nothing to
+ * converge on, so per-device is the best available.
+ */
+export function bolIdForJob(job_uuid: string): string {
+  const j = (job_uuid || "").trim();
+  if (!j) return newUUID();
+  const fnv = (s: string): number => {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  };
+  const parts = [fnv(j), fnv(j + "\x01"), fnv(j + "\x02"), fnv(j + "\x03")];
+  return "bol-" + parts.map((n) => n.toString(16).padStart(8, "0")).join("");
 }
 
 export function newDraft(job: { job_uuid: string; job_name: string; job_date: string }): BOLDraft {
   return {
-    bol_id: newUUID(),
+    bol_id: bolIdForJob(job.job_uuid),
     job_uuid: job.job_uuid || "",
     job_name: job.job_name || "",
     job_date: job.job_date || "",
@@ -219,7 +274,7 @@ export function newDraft(job: { job_uuid: string; job_name: string; job_date: st
 
 // ── Job selection (mirrors the Timeline tab) ──────────────────────────────────
 
-export type CalEvent = { id: string; summary: string };
+export type CalEvent = { id: string; summary: string; start?: string; end?: string };
 
 /** Deterministic UUID from a Google Calendar event id - identical to the
  * Timeline's calEventToJobUuid so a job selected here shares the same job_uuid
@@ -277,11 +332,20 @@ export async function fetchManualJobsForDate(date: string): Promise<{ job_uuid: 
 
 /** Resolve a calendar event to its canonical job_uuid (server), falling back to
  * the deterministic local hash offline - same as the Timeline. */
-export async function resolveJobUuid(calId: string): Promise<string> {
+export async function resolveJobUuid(
+  calId: string,
+  scheduledStart?: string,
+  scheduledEnd?: string,
+): Promise<string> {
   if (navigator.onLine) {
     try {
       const token = getToken();
-      const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`, {
+      // Pass the scheduled window so the server caches it on the job for the
+      // est-vs-actual scheduled-duration fallback.
+      let url = `${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`;
+      if (scheduledStart) url += `&scheduled_start=${encodeURIComponent(scheduledStart)}`;
+      if (scheduledEnd) url += `&scheduled_end=${encodeURIComponent(scheduledEnd)}`;
+      const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (res.ok) {
@@ -304,7 +368,12 @@ export async function fetchCalendarDay(date: string): Promise<CalEvent[]> {
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok || json?.ok !== true) throw new Error(json?.detail || `Calendar HTTP ${res.status}`);
-  return (json.events || []).map((e: any) => ({ id: String(e.id), summary: String(e.summary || e.title || "Untitled job") }));
+  return (json.events || []).map((e: any) => ({
+    id: String(e.id),
+    summary: String(e.summary || e.title || "Untitled job"),
+    start: e.start ? String(e.start) : undefined,
+    end: e.end ? String(e.end) : undefined,
+  }));
 }
 
 /** Persist a selected job's name/date so it resolves consistently (shares the
@@ -437,16 +506,76 @@ function queueHasOpsForBol(bolId: string): boolean {
 export async function loadForJob(job: { job_uuid: string; job_name: string; job_date: string }): Promise<BOLDraft> {
   const local = loadDraft(job.job_uuid);
   const pendingLocal = local ? queueHasOpsForBol(local.bol_id) : false;
-  const server = pendingLocal ? null : await fetchRemoteBol(job.job_uuid);
-  if (server) {
-    const serverAheadOrEqual = !local || String(server.updated_at || "") >= String(local.updated_at || "");
-    if (serverAheadOrEqual) {
-      const draft = draftFromServer(server, job, local?.crew_rep);
-      saveDraft(draft);
-      return draft;
-    }
+  const server = await fetchRemoteBol(job.job_uuid);
+
+  if (!server) return local || newDraft(job);
+  const serverDraft = draftFromServer(server, job, local?.crew_rep);
+
+  // No un-synced local edits: the local draft is fully synced, so the SERVER is
+  // authoritative and is adopted unconditionally. This replaces a string compare
+  // of `updated_at` that let a device's own edits permanently block adoption -
+  // the reason a second device never saw the first's items.
+  if (!local || !pendingLocal) {
+    saveDraft(serverDraft);
+    return serverDraft;
   }
-  return local || newDraft(job);
+
+  // Un-synced local edits exist AND the server has a copy. Because the id is now
+  // derived from job_uuid, both refer to the same document, so union the item
+  // lists by item id rather than pick a winner - a second device building the
+  // same BOL must not drop the first device's items. Local wins a per-item
+  // conflict (it holds the edit that hasn't been pushed yet). Signatures/status
+  // stay local while a signing op is queued, else take the server's.
+  const merged = mergeBolDrafts(local, serverDraft);
+  saveDraft(merged);
+  return merged;
+}
+
+/** Union two drafts' items by item id (local wins per-item), preserving both
+ * devices' additions. NOT a deletion-aware merge: an item deleted on one device
+ * while the other still holds it will reappear. Concurrent editing of the SAME
+ * BOL on two devices is rare and this is the safe-for-data direction (keep, don't
+ * lose); a true delete is honored once there are no competing local edits and the
+ * server copy is adopted wholesale above. */
+function mergeBolDrafts(local: BOLDraft, server: BOLDraft): BOLDraft {
+  const byId = new Map<string, BOLItem>();
+  for (const it of server.items) byId.set(it.id, it);
+  for (const it of local.items) byId.set(it.id, it); // local wins
+  const items = [...byId.values()].sort((a, b) => a.item_no - b.item_no);
+  // Renumber item_no so the merged list is contiguous (two devices can both have
+  // assigned e.g. item_no 3).
+  items.forEach((it, i) => { it.item_no = i + 1; });
+
+  const signingQueued = loadQueue().some((o) => o.op === "sign" && o.bol_id === local.bol_id);
+  const sigSource = signingQueued ? local : server;
+  return {
+    ...server,
+    ...local,          // local scalar fields win (notes, verified, etc.)
+    items,
+    // Signature fields come as a set from whichever side owns the pending sign.
+    origin_shipper_sig: sigSource.origin_shipper_sig,
+    origin_carrier_sig: sigSource.origin_carrier_sig,
+    origin_signed_at: sigSource.origin_signed_at,
+    dest_shipper_sig: sigSource.dest_shipper_sig,
+    dest_carrier_sig: sigSource.dest_carrier_sig,
+    dest_signed_at: sigSource.dest_signed_at,
+    status: sigSource.status,
+    signed_pdf_url: sigSource.signed_pdf_url,
+  };
+}
+
+// Debounced background push of the current draft's items to the server.
+//
+// Unlike save(), this does NOT require the completeness attestation - it just
+// gets the item list to the server so a second device sees items as they are
+// added, which is what "sync across devices" means to the crew. Signing stays a
+// deliberate, gated step. The server upsert replaces items_json wholesale and the
+// sheet export is replace-style, so a removed or edited item is reflected too.
+let _autosyncTimer: ReturnType<typeof setTimeout> | null = null;
+export function autosyncDraft(d: BOLDraft): void {
+  enqueueSubmit(d); // persist the intent immediately (survives reload)
+  if (_autosyncTimer) clearTimeout(_autosyncTimer);
+  _autosyncTimer = setTimeout(() => { void syncQueue(); }, 1000);
 }
 
 // ── Submit queue (idempotent upsert by bol_id) ────────────────────────────────
@@ -455,10 +584,25 @@ const QUEUE_KEY = "crew_bol_queue_v1";
 
 // Heterogeneous op queue: inventory upsert, a signing session, or a
 // (re)generate-and-upload of the signed PDF. Drained in order on reconnect.
-type QueueOp =
+// `attempts` / `retry_at` back the transient-failure backoff (bug 6): a
+// repeatedly-failing transient op (e.g. a Drive 502) is spaced out instead of
+// re-fired on every mount/online/save. Both optional, so entries already on crew
+// phones stay valid and a fresh enqueue (which omits them) resets the backoff.
+type RetryMeta = { attempts?: number; retry_at?: string };
+
+type QueueOp = (
   | { op: "submit"; bol_id: string; payload: Record<string, unknown> }
   | { op: "sign"; bol_id: string; payload: Record<string, unknown> }
-  | { op: "pdf"; bol_id: string; job_uuid: string };
+  | { op: "pdf"; bol_id: string; job_uuid: string }
+) & MaybeFailed & RetryMeta;
+
+// Transient-retry backoff: gentle (a signed BOL should sync ASAP) but enough to
+// stop hammering a down Drive/DB. 2s, 4s, 8s ... capped at 2 min.
+const RETRY_BASE_MS = 2000;
+const RETRY_CAP_MS = 120000;
+function backoffMs(attempts: number): number {
+  return Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1));
+}
 
 function loadQueue(): QueueOp[] {
   try {
@@ -473,10 +617,13 @@ function loadQueue(): QueueOp[] {
   }
 }
 
-function saveQueue(q: QueueOp[]): void {
+function saveQueue(q: QueueOp[]): boolean {
   try {
     localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Only uploaded photos (with a drive_url) are sent to the server; pending ones
@@ -507,31 +654,83 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
 
 /** Queue the current draft as an upsert. A re-save replaces any queued SUBMIT
  * for the same bol_id (upsert - no point sending stale intermediate states);
- * queued sign/pdf ops are preserved. */
-export function enqueueSubmit(d: BOLDraft): void {
+ * queued sign/pdf ops are preserved.
+ *
+ * ORDER IS LOAD-BEARING. The submit must stay AHEAD of any sign/pdf for the same
+ * bol_id, because the drain creates the row on submit and a sign/pdf against a
+ * not-yet-created row 404s - which the ADR 0013 drain treats as a permanent
+ * failure, marks the sign failed, and blocks the submit behind it: the signature
+ * then never syncs. So a re-enqueue (from autosync or a photo backfill after the
+ * BOL was already signed) must NOT push the submit to the back of the queue.
+ * Replace it in place if one exists; otherwise insert it before the first
+ * sign/pdf for this bol_id. */
+export function enqueueSubmit(d: BOLDraft): boolean {
   const payload = draftToPayload(d);
-  const q = loadQueue().filter((x) => !(x.op === "submit" && x.bol_id === d.bol_id));
-  q.push({ op: "submit", bol_id: d.bol_id, payload });
-  saveQueue(q);
+  const q = loadQueue();
+  const newOp: QueueOp = { op: "submit", bol_id: d.bol_id, payload };
+  const at = q.findIndex((x) => x.op === "submit" && x.bol_id === d.bol_id);
+  if (at >= 0) {
+    q[at] = newOp; // in place: keeps its position ahead of this BOL's sign/pdf
+  } else {
+    const firstDep = q.findIndex(
+      (x) => x.bol_id === d.bol_id && (x.op === "sign" || x.op === "pdf"),
+    );
+    if (firstDep >= 0) q.splice(firstDep, 0, newOp);
+    else q.push(newOp);
+  }
+  return saveQueue(q);
 }
 
-/** Queue a signing session (origin/destination). */
-function enqueueSign(bolId: string, payload: Record<string, unknown>): void {
+/** Queue a signing session (origin/destination). Returns false if the queue
+ * could not be persisted (quota) so the signature is never silently lost. */
+function enqueueSign(bolId: string, payload: Record<string, unknown>): boolean {
   const q = loadQueue();
   q.push({ op: "sign", bol_id: bolId, payload });
-  saveQueue(q);
+  return saveQueue(q);
 }
 
 /** Queue a (re)generate-and-upload of the signed PDF. A later pdf op replaces
  * an earlier queued one for the same bol_id (only the latest state matters). */
-function enqueuePdf(bolId: string, jobUuid: string): void {
+function enqueuePdf(bolId: string, jobUuid: string): boolean {
   const q = loadQueue().filter((x) => !(x.op === "pdf" && x.bol_id === bolId));
   q.push({ op: "pdf", bol_id: bolId, job_uuid: jobUuid });
-  saveQueue(q);
+  return saveQueue(q);
 }
 
 export function pendingSubmitCount(): number {
-  return loadQueue().length;
+  return loadQueue().filter((o) => !o.failed_at).length;
+}
+
+/** Ops the server permanently refused, kept for the crew to retry (ADR 0013). */
+export function failedBolOps(): QueueOp[] {
+  return loadQueue().filter((o) => o.failed_at);
+}
+
+/** Clear the failed mark on every op for this BOL so the next drain retries the
+ * whole submit->sign->pdf sequence in order. */
+export function retryFailedBol(bolId: string): Promise<number> {
+  saveQueue(loadQueue().map((o) => (o.bol_id === bolId ? { ...o, ...CLEARED_FAILURE } : o)));
+  return syncQueue();
+}
+
+/** Discard the WHOLE op sequence for this BOL, not just the failed op. The ops
+ * are order-coupled (submit->sign->pdf) and a failed submit holds its sign/pdf
+ * behind it with no failed_at of their own; dropping only the failed op would
+ * leave those siblings to run against a row that was never created, 404, and
+ * resurrect the failed banner. So a discard removes every op for the bol_id. The
+ * only path that drops signed work without reaching the server - confirm first. */
+export function discardFailedBol(bolId: string): void {
+  saveQueue(loadQueue().filter((o) => o.bol_id !== bolId));
+}
+
+/** Reject a `{ok:false}` body as a transient failure (status 0, so
+ * isPermanentRejection keeps it queued for retry rather than marking it a
+ * permanent rejection). Defense-in-depth against a BOL endpoint returning HTTP
+ * 200 while signalling failure in the body. */
+function assertOk(r: { ok?: boolean } | null | undefined): void {
+  if (r && r.ok === false) {
+    throw new ApiError(0, r);
+  }
 }
 
 async function uploadBolPdfBlob(bolId: string, blob: Blob): Promise<void> {
@@ -555,51 +754,107 @@ let syncing = false;
 
 /** Drain the op queue in order: inventory upserts, signing sessions, and PDF
  * (re)generation+upload. Transient failures (offline / 5xx / 408 / auth) stay
- * queued for retry; permanent 4xx are dropped so one bad op can't wedge the
- * queue. Returns how many ops were confirmed this run. */
+ * queued for retry.
+ *
+ * A permanent 4xx is MARKED FAILED and KEPT, never dropped (ADR 0013): these ops
+ * carry customer and carrier signatures, and destroying one on a bad payload
+ * loses a signature with no other copy. A failed op also BLOCKS the later ops for
+ * the same bol_id (a sign must not run when the submit that should have created
+ * the row was refused), so the sequence stays coherent until the crew retries it.
+ * Returns how many ops were confirmed this run. */
 export async function syncQueue(): Promise<number> {
   if (!navigator.onLine || syncing) return 0;
   syncing = true;
+  // The session we started under. A logout / user switch can run synchronously
+  // while this drain is awaiting the network; it wipes the queue (clearCrewState).
+  // Writing our post-drain `remaining` back after that would RESURRECT the departed
+  // user's ops for the next crew member on this device (wrong attribution). So we
+  // persist only if the session is unchanged when we finish.
+  const tokenAtStart = getToken();
   try {
     const q = loadQueue();
     if (q.length === 0) return 0;
     const remaining: QueueOp[] = [];
     let synced = 0;
+    // bol_ids with an unsent op earlier in this pass. A later op for the same BOL
+    // must wait behind it - the ops are ordered submit->sign->pdf and each
+    // depends on the one before.
+    const blocked = new Set<string>();
+    // job_uuids of BOLs whose final (pdf) op drained this pass - candidates for
+    // draft cleanup once we know nothing remains for their bol_id.
+    const drainedPdf: Array<{ bol_id: string; job_uuid: string }> = [];
+    const nowMs = Date.now();
     for (const op of q) {
+      if (op.failed_at) { remaining.push(op); blocked.add(op.bol_id); continue; }
+      if (blocked.has(op.bol_id)) { remaining.push(op); continue; }
+      // Transient backoff: not yet due for retry - keep it and hold its sequence.
+      if (op.retry_at && Date.parse(op.retry_at) > nowMs) {
+        remaining.push(op); blocked.add(op.bol_id); continue;
+      }
       try {
         if (op.op === "submit") {
-          await apiFetch("/api/bol", { method: "POST", body: JSON.stringify(op.payload) });
+          const r = await apiFetch<{ ok?: boolean }>("/api/bol", { method: "POST", body: JSON.stringify(op.payload) });
+          // Defense-in-depth: the server now signals failure with a real 5xx
+          // (see ADR 0020), but if any BOL endpoint ever regresses to a
+          // 200-with-ok:false, treat it as a transient failure (keep + retry),
+          // never a silent success that drops a signed BOL. apiFetch only throws
+          // on !res.ok, so this body check is the belt to that suspenders.
+          assertOk(r);
         } else if (op.op === "sign") {
-          await apiFetch(`/api/bol/${encodeURIComponent(op.bol_id)}/sign`, {
+          const r = await apiFetch<{ ok?: boolean }>(`/api/bol/${encodeURIComponent(op.bol_id)}/sign`, {
             method: "PATCH",
             body: JSON.stringify(op.payload),
           });
+          assertOk(r);
         } else {
-          // pdf: regenerate from the persisted draft, then upload. Skip (drop)
-          // if the draft is gone or no longer matches this bol_id.
+          // pdf: regenerate from the persisted draft, then upload. A missing/
+          // mismatched draft is a genuine no-op (nothing to regenerate), not a
+          // rejection, so it is acked rather than kept.
           const d = loadDraft(op.job_uuid);
           if (!d || d.bol_id !== op.bol_id) { synced++; continue; }
           const { generateBolPdf } = await import("./bolPdf");
           const blob = await generateBolPdf(d);
           await uploadBolPdfBlob(op.bol_id, blob);
+          drainedPdf.push({ bol_id: op.bol_id, job_uuid: op.job_uuid });
         }
         synced++;
       } catch (e) {
-        const isPermanent =
-          e instanceof ApiError &&
-          e.status >= 400 &&
-          e.status < 500 &&
-          e.status !== 408 &&
-          e.status !== 401 &&
-          e.status !== 403;
-        if (isPermanent) {
-          console.warn(`[bol] dropping poison-pill ${op.op} (${op.bol_id}): ${e instanceof Error ? e.message : e}`);
+        if (isPermanentRejection(e)) {
+          remaining.push({ ...op, ...failureMark(e) });
         } else {
-          remaining.push(op);
+          // Transient: keep it, but back off so a persistently-down Drive/DB is
+          // not re-hit on every mount/online/save (bug 6).
+          const attempts = (op.attempts || 0) + 1;
+          remaining.push({
+            ...op,
+            attempts,
+            retry_at: new Date(nowMs + backoffMs(attempts)).toISOString(),
+          });
         }
+        // Either way this op did not land, so hold the rest of the sequence for
+        // this BOL until the next pass.
+        blocked.add(op.bol_id);
       }
     }
+    // Skip the write-back (and draft cleanup) if the session changed while we
+    // were draining - a logout wiped the queue and we must not re-create it for
+    // the next user (vet M1).
+    if (getToken() !== tokenAtStart) return synced;
     saveQueue(remaining);
+
+    // Draft cleanup (bug 5): once a BOL's pdf op has drained and NOTHING remains
+    // queued for its bol_id, the fully-signed document is on the server + Drive.
+    // Drop the local draft (up to ~4 base64 signature PNGs) for a DELIVERED BOL
+    // so completed jobs don't accumulate in localStorage over a season. A draft
+    // that is not delivered, or still has queued ops, is left untouched.
+    if (drainedPdf.length) {
+      const stillQueued = new Set(remaining.map((o) => o.bol_id));
+      for (const { bol_id, job_uuid } of drainedPdf) {
+        if (stillQueued.has(bol_id)) continue;
+        const d = loadDraft(job_uuid);
+        if (d && d.bol_id === bol_id && d.status === "delivered") removeDraft(job_uuid);
+      }
+    }
     return synced;
   } finally {
     syncing = false;
@@ -638,7 +893,13 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
       updated_at: now,
     };
   }
-  saveDraft(updated);
+  // Persist the signature-bearing draft FIRST and refuse to continue if storage
+  // is full: a signature we cannot store must surface as an error, never a
+  // silent no-op behind a success message (bug 5). QuotaExceededError is the
+  // realistic failure here - each signed draft holds up to four base64 PNGs.
+  if (!saveDraft(updated)) {
+    throw new BolStorageFullError();
+  }
 
   const signPayload: Record<string, unknown> = {
     phase: input.phase,
@@ -655,10 +916,16 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
     if (input.final_charges != null) signPayload.final_charges = input.final_charges;
   }
   // Make sure the latest inventory is on the server before the signature, then
-  // queue the sign, then the PDF (regenerated from the now-signed draft).
-  enqueueSubmit(updated);
-  enqueueSign(updated.bol_id, signPayload);
-  enqueuePdf(updated.bol_id, updated.job_uuid);
+  // queue the sign, then the PDF (regenerated from the now-signed draft). If any
+  // enqueue can't persist (quota), surface it - a queued signature that never
+  // made it to the queue is the exact silent loss this guards against.
+  if (
+    !enqueueSubmit(updated) ||
+    !enqueueSign(updated.bol_id, signPayload) ||
+    !enqueuePdf(updated.bol_id, updated.job_uuid)
+  ) {
+    throw new BolStorageFullError();
+  }
   return updated;
 }
 
@@ -711,7 +978,8 @@ export async function captureItemPhoto(
       created_at: new Date().toISOString(),
       mime: "image/jpeg",
       caption,
-      blob: resized,
+      // Bytes, not a Blob handle (ADR 0017).
+      blob: await toQueuedPhoto(resized),
       drive_status: "pending",
     });
   } catch {
@@ -756,7 +1024,11 @@ export async function retryPendingPhotos(draft: BOLDraft): Promise<BOLDraft> {
       const s = byId.get(p.photo_id);
       if (!s) { photos.push(p); continue; }
       try {
-        const up = await uploadPhoto(p.photo_id, draft, s.blob, s.caption || p.caption || "BOL item");
+        // Throws if the photo's bytes are gone, rather than uploading an empty
+        // body that the server would reject as a missing photo_id (ADR 0017).
+        const source = await slotToBlob(s.blob);
+        if (!source) throw new Error("Photo has no image data");
+        const up = await uploadPhoto(p.photo_id, draft, source, s.caption || p.caption || "BOL item");
         changed = true;
         try { await updatePhoto(p.photo_id, { drive_status: "uploaded", drive_url: up.drive_url }); } catch {}
         photos.push({ ...p, drive_url: up.drive_url, thumb_url: up.thumb_url, pending: false });

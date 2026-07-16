@@ -6,7 +6,7 @@ own estimate_uuid) so the existing Drive upload pipeline and photo viewer
 work without changes.
 """
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
@@ -36,6 +36,17 @@ class Estimate(Base):
     special_items_notes = Column(Text, nullable=True)  # pianos, safes, art
     general_notes = Column(Text, nullable=True)
 
+    # Estimated crew-hours for the move (admin-entered). Nullable - blank until set.
+    estimated_hours = Column(Float, nullable=True)
+
+    # DORMANT: an estimate does not link to a crew-app job. In practice a PWA
+    # estimate flows into SmartMoving, the client signs, and the booked job comes
+    # back as a Google Calendar event copied onto the Job calendar - so there is
+    # no reliable estimate-to-job correspondence to store here. The manual
+    # link picker + est-vs-actual comparison that used this column were removed;
+    # the column is kept (unused, always NULL) to avoid a destructive migration.
+    job_uuid = Column(String, nullable=True, index=True)
+
     # Rolled-up totals (recomputed on item add/remove)
     estimated_weight_lbs = Column(Float, nullable=False, default=0)
     estimated_cubic_ft = Column(Float, nullable=False, default=0)
@@ -55,6 +66,12 @@ class EstimateItem(Base):
     __tablename__ = "estimate_items"
 
     id = Column(Integer, primary_key=True, index=True)
+
+    # Client-minted idempotency key. Estimator item adds are queued offline and
+    # retried, so a lost response must not produce a duplicate line. Nullable:
+    # rows written before this column existed have none, and Postgres allows
+    # many NULLs under a unique constraint.
+    item_uuid = Column(String, unique=True, index=True, nullable=True)
 
     estimate_id = Column(Integer, ForeignKey("estimates.id", ondelete="CASCADE"), nullable=False, index=True)
 
@@ -82,5 +99,15 @@ class FurnitureCatalogItem(Base):
     weight_lbs = Column(Float, nullable=False, default=0)
     cubic_ft = Column(Float, nullable=False, default=0)
     category = Column(String, nullable=True)
+    # Optional dimensions in inches. When all three are set, cubic_ft is derived
+    # as L*W*H/1728 on import (dimensions win over an explicit cubic_ft).
+    length_in = Column(Float, nullable=True)
+    width_in = Column(Float, nullable=True)
+    height_in = Column(Float, nullable=True)
+    # Extra admin-maintained fields (round-tripped through the catalog CSV).
+    packing_type = Column(String, nullable=True)
+    fragile = Column(Boolean, nullable=True)
+    sku = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, nullable=False)

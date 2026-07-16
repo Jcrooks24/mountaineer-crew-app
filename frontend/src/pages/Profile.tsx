@@ -310,11 +310,20 @@ export default function Profile() {
             onClick={() => nav("/reimbursement")}
           />
           <ProfileNavRow
+            label="Log Off-Job Hours"
+            hint="Hours for work not tied to a job (usually pre-approved)"
+            betaFeature="offJobHours"
+            onClick={() => nav("/off-job")}
+          />
+          <ProfileNavRow
             label="Document Library"
             onClick={() => nav("/documents")}
           />
         </div>
       </div>
+
+      {/* Worked hours - weekly regular / OT / non-billable breakdown */}
+      <WorkedHoursCard />
 
       {/* Patch Notes - latest notes collapsed to a preview */}
       <PatchNotesCard />
@@ -468,6 +477,109 @@ function AppRefreshButton() {
             build {APP_BUILD_ID}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+type WorkedWeek = {
+  week_start: string;
+  regular_hours: number;
+  ot_hours: number;
+  non_billable_hours: number;
+  other_hours: number;
+  total_hours: number;
+};
+type WorkedHistory = {
+  weeks: WorkedWeek[];
+  summary: {
+    regular_hours: number;
+    ot_hours: number;
+    non_billable_hours: number;
+    other_hours: number;
+    total_hours: number;
+  };
+};
+
+// The endpoint returns a hard two-week window (see routers/hours.py): it used to
+// load every job report ever written on every Profile mount, which is an OOM risk
+// on the 512 MB worker. There is deliberately no "show older weeks" expander,
+// because there is nothing older to show.
+
+// week_start is the Monday; render "Mon D - Sun D".
+function fmtWeek(iso: string): string {
+  const start = new Date(iso + "T00:00:00");
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+  return `${start.toLocaleDateString([], opts)} - ${end.toLocaleDateString([], opts)}`;
+}
+
+function HoursTile({ label, value, accent }: { label: string; value: number; accent?: string }) {
+  return (
+    <div style={{ flex: "1 1 70px", minWidth: 70, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px", textAlign: "center" }}>
+      <div style={{ fontSize: 20, fontWeight: 800, color: accent || "var(--text)" }}>{value.toFixed(1)}</div>
+      <div className="small" style={{ color: "var(--muted)" }}>{label}</div>
+    </div>
+  );
+}
+
+// Per-user weekly worked-hours history: regular, overtime (over 40/week), and
+// non-billable, sourced from job-report hours + off-job hours on the server.
+function WorkedHoursCard() {
+  const [data, setData] = useState<WorkedHistory | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<WorkedHistory>("/api/hours/worked-history")
+      .then(setData)
+      .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"));
+  }, []);
+
+  const weeks = data?.weeks ?? [];
+  const s = data?.summary;
+
+  return (
+    <div className="card">
+      <div className="row" style={{ alignItems: "center", gap: 8 }}>
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Worked Hours</div>
+        <BetaTag feature="workedHours" style={{ marginTop: 0 }} />
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        Your logged hours for the last two weeks. Overtime is anything over 40 hrs in a week.
+      </div>
+      {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
+      {data == null && !err && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
+      {s && (
+        <>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <HoursTile label="Regular" value={s.regular_hours} />
+            <HoursTile label="Overtime" value={s.ot_hours} accent="var(--warn)" />
+            <HoursTile label="Non-billable" value={s.non_billable_hours} />
+            {s.other_hours > 0 && <HoursTile label="Other" value={s.other_hours} />}
+            <HoursTile label="Total" value={s.total_hours} accent="var(--brand)" />
+          </div>
+          {weeks.length === 0 ? (
+            <div className="small" style={{ color: "var(--muted)" }}>No hours logged yet.</div>
+          ) : (
+            <div className="col" style={{ gap: 0 }}>
+              <div className="row" style={{ justifyContent: "space-between", fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", paddingBottom: 6, borderBottom: "1px solid var(--border)" }}>
+                <span style={{ flex: "1 1 auto" }}>Week</span>
+                <span style={{ width: 52, textAlign: "right" }}>Reg</span>
+                <span style={{ width: 42, textAlign: "right" }}>OT</span>
+                <span style={{ width: 56, textAlign: "right" }}>N-bill</span>
+              </div>
+              {weeks.map((w) => (
+                <div key={w.week_start} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
+                  <span style={{ flex: "1 1 auto" }}>{fmtWeek(w.week_start)}</span>
+                  <span style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
+                  <span style={{ width: 42, textAlign: "right", color: w.ot_hours > 0 ? "var(--warn)" : "var(--muted)", fontWeight: w.ot_hours > 0 ? 700 : 400 }}>{w.ot_hours.toFixed(1)}</span>
+                  <span style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

@@ -20,6 +20,12 @@ Rules:
 - Separate **Passed (verified)** from **Findings**. Don't pad; a clean check is a result.
 - Distinguish promotion blockers (Critical/High) from follow-ups (Med/Low).
 - Offer to fix; apply only small, safe, high-confidence fixes unless told otherwise.
+- **If the change touches a one-copy, irreplaceable data path** (a signed
+  document, a photo, a receipt), the happy-path checks below are not enough - also
+  run the **Durability vet for irreplaceable data** at the end of this doc. It
+  injects failure at the seams (server error, worker death, logout mid-sync,
+  staging-vs-prod) that normal testing never reaches, and is where the BOL
+  data-loss batch would have been caught.
 - **Staging only.** All changes go to `staging`, never `main`, unless the user
   says "promote" (see `CLAUDE.md`). Confirm `git branch --show-current` is `staging`.
 
@@ -45,6 +51,24 @@ Rules:
   grep changed backend files for `breakpoint(`. NOTE: the backend uses tagged
   `print("[bol] ...")` / `[drive]` / `[rods]` lines as intentional operational
   logging - those are fine; only flag stray/accidental debug prints.
+- **Earned-success grep (unconditional - run on EVERY diff):** the cheap half of
+  the durability vet, run always because a lying success is silent and catastrophic
+  and the grep is free. Two sweeps:
+  ```
+  # A write endpoint that signals failure in the BODY but returns HTTP 200.
+  # apiFetch throws only on !res.ok, so a 200-with-ok:false is read as success
+  # and the queued op is DROPPED. Each hit must be a real raise HTTPException.
+  grep -rn '"ok": *[Ff]alse\|return.*ok=False' backend/app/routers
+
+  # A swallowed write on the client. An empty catch or a swallowed quota error on
+  # a localStorage/IndexedDB write reports success while dropping the data.
+  grep -rn 'catch *{ *}\|catch (_*e*) *{ *}' frontend/src/lib frontend/src/auth
+  ```
+  A backend hit is a finding unless the endpoint ALSO returns a non-2xx status
+  (5xx for a DB/upstream failure = retryable; 4xx for a bad payload = surfaced).
+  A frontend hit is a finding if the swallowed path is a WRITE (a read/best-effort
+  swallow is fine - say which it is). See the Durability vet at the end of this
+  doc for the full failure-seam pass when the change touches irreplaceable data.
 - **Idempotency replay:** call a retryable mutation twice with the same device
   UUID (`event_id`, `submission_id`, `bol_id`, `rods_id` per-day, `day_id`);
   expect one row and the existing record back, never a duplicate or a 500.
@@ -65,7 +89,11 @@ duplicate.
   RODS (`rodsStore`), per-diem (`ldDayStore`), photos (`photoStore` IndexedDB),
   reimbursements (`reimbursementStore`). A new write path MUST follow this shape.
 - Sync drains in order; transient failures (offline / 5xx / 408 / 401 / 403)
-  stay queued; only permanent 4xx are dropped (poison-pill) with a `console.warn`.
+  stay queued. A permanent 4xx is **marked failed and kept**, never deleted, and
+  is shown to the crew member with a reason and a Retry
+  ([ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md)). A queue
+  that deletes rejected work is a finding, including a brand-new queue: the rule
+  binds the one you are writing now, not just the ones already on the list.
 - Drafts autosave before submit (BOL draft, RODS day, report draft) so nothing
   is lost if the app is backgrounded mid-entry.
 - **Failure modes:** a mutation that hits the API without enqueuing (lost when
@@ -75,6 +103,75 @@ duplicate.
 - **Verify:** DevTools offline -> perform the action -> reload (state persists)
   -> go online -> confirm it syncs with no dupes. Grep the changed store's
   `syncQueue` for the permanent-vs-transient split.
+
+### Behavior 1a - Queued work is SELF-CONTAINED (no live handles)
+
+**Invariant:** a queued payload is plain data. Every field is a **value** - string,
+number, boolean, `ArrayBuffer` - never a **handle** to something that lives outside
+the queue: `File`, `Blob`, `URL`, a DOM node, a stream, an object URL.
+
+This is its own check because the rest of Behavior 1 cannot see it. "The queue
+survives a reload" and "the queued payload is still USABLE after a reload" are
+different claims, and we shipped a bug that satisfied the first and failed the
+second.
+
+A `File` off an `<input>` is a *reference to a file on disk*, not the image. Persist
+it, reload, come back two days later, and the reference can be dead. **A dead
+reference does not throw.** Appending it to `FormData` produces a request whose body
+never serialises: the server gets an empty body, every form field looks absent, and
+the API complains about the one field that has no default. The error then names a
+field the client provably sends, on the first line of the form, unconditionally. See
+[ADR 0017](decisions/0017-offline-queues-store-bytes-not-file-handles.md).
+
+- **The check (10 seconds, deterministic, needs no device):** for every type that is
+  written to IndexedDB / localStorage / any queue that drains later, read its field
+  list. Any `Blob`, `File`, or `URL` in it is a **finding**.
+
+  ```
+  grep -rn ": *Blob\|: *File\|Blob | null\|File | null" frontend/src/lib
+  ```
+
+  The grep surfaces **candidates**, not findings. A `Blob` as a *function parameter*
+  or a local is fine - it is transient and dies with the call. It is a finding only
+  when the field belongs to a type that gets **persisted**. Run it against the
+  pre-fix tree and it prints exactly the four fields that were the bug
+  (`reimbursementStore`'s three `_blob` fields and `photoStore.blob`), which is the
+  standard to hold it to.
+
+  Images go in as bytes via `lib/queuedPhoto.ts` (`toQueuedPhoto` on the way in,
+  `slotToBlob` on the way out). Do not hand-roll a second copy of that.
+
+- **The upload path must materialise the bytes BEFORE building the request**, so an
+  unrecoverable payload throws where we can tell the crew member, instead of
+  silently posting an empty body.
+
+- **A round-trip unit test does NOT catch this, and will tell you it is fine.**
+  Write the entry, read it back, assert - it passes, because in a test environment
+  the handle is never dead. It is worse than no test: it is false comfort. The
+  static rule above is the check; the test is not.
+
+- **DevTools offline on desktop does NOT catch this either.** Chrome keeps blobs
+  alive. This is a WebKit/iOS failure and the crew are on phones. Any verification
+  of a binary payload that runs only on a desktop browser proves nothing about the
+  device the bug happens on.
+
+- **The test for a NEW feature:** does a `File` or `Blob` outlive the event handler
+  that produced it? If yes, it must be bytes.
+
+### Triage rule: when the server rejects a field the client provably sends
+
+If an API reports a required field missing, and you can read the client code and see
+it being sent unconditionally, **stop looking at the field.** Look at the body.
+
+"A required form field is missing" has two very different causes, and the field name
+alone cannot tell them apart: the client genuinely omitted it, **or the body never
+parsed** - empty body, dead blob, multipart with no boundary - and so *every* field
+looks missing while only the one without a default is reported.
+
+The `content-length` on the failing request is what separates them, which is why the
+422 handler in `app/main.py` logs `content-type` and `content-length` and must keep
+doing so. A payload with a photo attached and a content-length of a few hundred bytes
+is the whole diagnosis.
 
 ## Core Behavior 2 - Cross-device continuity
 
@@ -116,6 +213,14 @@ write to distinct worksheets; re-submits don't accumulate rows.
   on every autosave keystroke (Sheets API spam - unsigned RODS is DB-only by design).
 - **Verify:** trigger the write, confirm one row in the `*Staging` tab; re-submit
   and confirm still one row.
+- **Health check (run every vet):** open Admin → Advanced Settings → **System
+  Check, Sheet Syncs** (or `GET /api/admin/system-check/sheets`) and confirm
+  Sheets is connected and every sync's tab exists. **If the change adds a new
+  sheet sync, its entry MUST be added to `SHEET_SYNC_REGISTRY` in
+  `backend/app/integrations/sheets_export.py`** so the health check covers it -
+  a new sync missing from the registry is a finding. The check also flags syncs
+  whose `SHEETS_*_TAB` env var is unset (using the default tab - on staging that
+  silently targets the prod worksheet) and any sync with a recent export error.
 
 ## Core Behavior 4 - Crew auth stays intact
 
@@ -194,6 +299,21 @@ surface clearly; admin can interpret the data at a glance.
 - **Regression:** surfaces untouched by the change (DVIR, materials, photos,
   reimbursements, estimator, job report + bill, availability, BOL, RODS) still
   work end-to-end.
+- **Docs still true (bus-factor):** the change did not silently invalidate the
+  docs a successor depends on. Cheapest way to check is to run `/handoff`, but
+  the four that matter here:
+  - every new env var / secret / Google API is in `docs/CREDENTIALS.md`
+    (names only, never values);
+  - `docs/ARCHITECTURE.md` and its diagram still match if a service, queue,
+    integration, or data flow moved;
+  - a decision someone would be tempted to undo has an ADR in
+    `docs/decisions/`;
+  - any bug found and **not** fixed is in Known defects in `docs/RUNBOOKS.md`,
+    and any listed bug that got fixed is deleted from it.
+
+  A promotion that leaves an undocumented env var behind is a promotion that
+  breaks for whoever deploys next. Treat a missing credential entry as a
+  blocker, not a follow-up.
 
 ---
 
@@ -252,3 +372,108 @@ Catches the failure modes that slip past the behavior checks. Cite evidence
   `setInterval` and confirm a matching cleanup.
 - **Cross-device scan:** for a changed store, confirm a server-hydrate path runs
   on mount (Behavior 2), not local-only reads.
+
+---
+
+## Durability vet for irreplaceable data (the failure-seam pass)
+
+**Run this whenever a change touches a one-copy, irreplaceable data path** - a
+signed legal document (BOL, DVIR), a photo or receipt, anything with no second
+copy if this one is lost. It is a DIFFERENT axis from every check above. The rest
+of this protocol tests "does the happy path work and survive reload / offline."
+This class of bug does not fail on that axis: in a test environment the server
+does not error, the worker is not recycled mid-task, nobody logs out during a
+sync, and staging and prod look identical. The bugs live at the FAILURE SEAMS,
+and the only way to catch them is to inject failure there on purpose.
+
+This pass exists because a batch of them shipped anyway - a signed BOL that
+reached neither the sheet nor Drive (see [ADR 0020](decisions/0020-bol-durability-and-honest-failures.md)
+/ [ADR 0021](decisions/0021-preserve-pending-bol-work-on-logout.md)). Each check
+below is named with the failure it would have caught.
+
+**The rule that unifies it:** for irreplaceable data, every success the UI
+reports must be EARNED, and every failure must be surfaced or retried, never
+swallowed.
+
+**Triage first (scopes the whole pass).** Classify each data path the change
+touches by "what happens if this is lost." One-copy / irreplaceable = every audit
+below is mandatory. A cache or a re-derivable value = skip it. This tells you
+where to spend the failure-injection budget.
+
+### 1. Earned-success audit (a success signal must be backed by a durable fact)
+
+Trace every "Saved" / "Synced" / "Complete" the UI shows back to what guarantees
+it. A success is legitimate only when the server returned a real 2xx AND the
+local write actually persisted.
+
+- **Grep the server for a lying 200.** Any write endpoint that returns
+  `{"ok": false}` (or an error body) without ALSO returning a non-2xx status is a
+  lie the client reads as success. `apiFetch` throws only on `!res.ok`, so a
+  200-with-`ok:false` is acked and the queued op is DROPPED.
+  ```
+  grep -rn '"ok": *[Ff]alse\|ok=False' backend/app/routers
+  ```
+  Every hit on a write path must be a real `raise HTTPException(5xx/4xx)` instead.
+  A DB error is a 5xx (retryable); an upstream (Drive) failure is a 502
+  (retryable); a bad payload is a 4xx (permanent, surfaced). *Caught bug 1.*
+- **Grep for swallowed writes.** An empty `catch {}` or a swallowed
+  `QuotaExceededError` on a write path is a silent drop behind a success message.
+  ```
+  grep -rn 'catch {}\|catch (_*) {}' frontend/src/lib frontend/src/auth
+  ```
+  A localStorage/IndexedDB write on a critical path must return success/failure
+  and the caller must surface a failure, not report "saved". *Caught bug 5.*
+- **Follow each success toast to its gate.** Is it gated on the drain's RESULT,
+  or optimistic? Is the failed-op banner refreshed after the write, or only on
+  remount? *Caught bug 6.*
+
+### 2. Kill-test (crash between the DB commit and the external write)
+
+For any write with a "Postgres first, external system (Sheets / Drive) second"
+shape, reason through `kill -9` after each line between the DB commit and the
+external write. The kill is not hypothetical: Render recycles the worker every
+`--limit-max-requests` (1000) and has OOM history, so "the worker dies mid-task"
+is guaranteed to happen.
+
+- **If the process dies before the external write runs, what recovers it?** If
+  the answer is "nothing," a reconciler is required. The events and BOL
+  reconcilers (`sheets_reconcile.py` / `bol_reconcile.py`) are the pattern: find
+  rows in Postgres with no export record and re-ship them, idempotently, from the
+  advisory-locked auto-reconciler, surfaced as a "Sheet drift" health check.
+  A new synced entity on a background pool needs its own reconciler entry, or it
+  is one worker recycle away from permanent loss. *Caught bug 2.*
+- **Is the external write ordered so a crash cannot destroy an existing record?**
+  Delete-before-write fails this (a crash in between leaves a gap);
+  write-first-then-delete-stale passes it (a crash leaves a recoverable, visible
+  duplicate). *Caught bug 4.*
+
+### 3. Lifecycle-interruption audit (an event fires mid-operation)
+
+For every offline store the change touches, enumerate the events that fire while
+work is un-synced: logout, shared-phone user switch, app kill / background, token
+expiry, tab close. For each, ask "what un-synced data exists at that instant, and
+does this event destroy it?"
+
+- The specific trap is the wipe (`clearCrewState`): it must distinguish SAFE TO
+  LOSE (a cache) from ONE COPY, IRREPLACEABLE (a signed BOL). ADR 0013 keeps
+  rejected work; ADR 0021 extends that to PENDING work for one-copy artifacts,
+  because "pending drains before the interruption" is false when crew hand a
+  phone off mid-job offline.
+- **Verify:** DevTools offline, create the artifact, do NOT reconnect, trigger the
+  interruption (log out / switch user), then log the original user back in - the
+  work is still there. *Caught bug 3.*
+
+### 4. Environment-isolation-by-ID audit (staging must not touch prod)
+
+For every external resource the change reads or writes - a Sheet tab, a Drive
+folder, a bucket, a queue - confirm staging and prod resolve to DIFFERENT physical
+resources, and that resolution is by a stable **ID**, not a **name** that can
+collide.
+
+- **Grep for name-based resource resolution.** A folder/tab resolved by name with
+  a shared default means staging and prod resolve the SAME real resource - and an
+  in-place update (e.g. Drive `files().update` by id) lets staging overwrite a
+  prod document. Prefer an ID env var per environment (`DRIVE_*_FOLDER_ID`,
+  `SHEETS_*_TAB`), listed in `.env.staging.example` + `docs/CREDENTIALS.md`, and
+  flagged as load-bearing if unset silently falls back to the prod resource.
+  *Caught the shared signed-BOL Drive folder.*

@@ -5,13 +5,13 @@ from app.db.session import Base
 
 
 class ManualJob(Base):
-    """Manual job entries — jobs the crew types into the "Other (enter
+    """Manual job entries, jobs the crew types into the "Other (enter
     manually)" option on the Timeline. Persisted so the entry shows up in
     other crew members' dropdowns for the same day and so the same manual
     name resolves to the same job_uuid across devices.
 
     The client derives job_uuid deterministically from (normalized name,
-    date) via a shared FNV hash — but we still store the mapping here so
+    date) via a shared FNV hash, but we still store the mapping here so
     the dropdown can list what other devices have added for a given day.
     """
 

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
@@ -74,59 +75,50 @@ def get_bill_seed(
     """Return auto-populated line-item seed data from logged events and materials."""
 
     # ── Hours from start/finish events ────────────────────────────────────────
-    events = (
-        db.query(Event)
+    # Each labor span needs only the EARLIEST start and the LATEST finish per
+    # person per event type, so aggregate that in SQL with MIN/MAX grouped by
+    # (person, type). This reads at most (people x event-types) rows instead of
+    # every event for the job - bounded regardless of a retry storm, so no row
+    # cap is needed, and (unlike an ordered .limit()) it can never truncate the
+    # wrong end of a span. Mirrors `created_by or "Unknown"` / `(type or "").lower()`
+    # from the old per-event scan via nullif+coalesce and lower.
+    person_col = func.coalesce(func.nullif(Event.created_by, ""), "Unknown")
+    type_col = func.lower(func.coalesce(Event.type, ""))
+    agg_rows = (
+        db.query(
+            person_col.label("person"),
+            type_col.label("etype"),
+            func.min(Event.timestamp).label("first_ts"),
+            func.max(Event.timestamp).label("last_ts"),
+        )
         .filter(Event.job_uuid == job_uuid)
-        .order_by(Event.timestamp)
+        .group_by(person_col, type_col)
         .all()
     )
+    # (person, etype) -> (earliest_ts, latest_ts)
+    spans: dict[tuple[str, str], tuple[datetime, datetime]] = {
+        (r.person, r.etype): (r.first_ts, r.last_ts) for r in agg_rows
+    }
+    # Sorted for a stable line order (the old scan ordered by event time).
+    people = sorted({p for (p, _et) in spans})
 
-    # Group by created_by; track earliest start and latest finish per person
-    starts: dict[str, datetime] = {}
-    finishes: dict[str, datetime] = {}
-    for e in events:
-        person = e.created_by or "Unknown"
-        etype = (e.type or "").lower()
-        if etype == "start":
-            if person not in starts:
-                starts[person] = e.timestamp
-        elif etype == "finish":
-            finishes[person] = e.timestamp  # keep latest
-
-    hours_lines = []
-    for person, start_ts in starts.items():
-        if person in finishes:
-            finish_ts = finishes[person]
-            if finish_ts > start_ts:
-                hours = round((finish_ts - start_ts).total_seconds() / 3600, 2)
-                hours_lines.append({
-                    "created_by": person,
-                    "label": "Labor (per hour)",
-                    "hours": hours,
-                })
-
-    # Long-distance: hourly labor is the LOAD span + the UNLOAD span, kept
-    # separate so the multi-day drive between them is NOT billed hourly (drive
-    # time is paid a fixed amount). Only emitted when LOAD_/UNLOAD_ events exist,
-    # so local jobs (START/FINISH only) are unaffected.
     def _span_lines(start_type: str, finish_type: str, label: str) -> list[dict]:
-        s: dict[str, datetime] = {}
-        f: dict[str, datetime] = {}
-        for e in events:
-            person = e.created_by or "Unknown"
-            et = (e.type or "").lower()
-            if et == start_type:
-                if person not in s:
-                    s[person] = e.timestamp
-            elif et == finish_type:
-                f[person] = e.timestamp  # keep latest
         out: list[dict] = []
-        for person, start_ts in s.items():
-            if person in f and f[person] > start_ts:
-                hrs = round((f[person] - start_ts).total_seconds() / 3600, 2)
-                out.append({"created_by": person, "label": label, "hours": hrs})
+        for person in people:
+            st = spans.get((person, start_type))
+            ft = spans.get((person, finish_type))
+            if st and ft:
+                start_ts, finish_ts = st[0], ft[1]  # earliest start, latest finish
+                if finish_ts > start_ts:
+                    hrs = round((finish_ts - start_ts).total_seconds() / 3600, 2)
+                    out.append({"created_by": person, "label": label, "hours": hrs})
         return out
 
+    # Local jobs use START/FINISH. Long-distance splits hourly labor into the
+    # LOAD span + the UNLOAD span (kept separate so the multi-day drive between
+    # them is NOT billed hourly - drive time is paid a fixed amount); those lines
+    # only appear when the LOAD_/UNLOAD_ events exist.
+    hours_lines = _span_lines("start", "finish", "Labor (per hour)")
     hours_lines += _span_lines("pack_start", "pack_finish", "Packing labor (per hour)")
     hours_lines += _span_lines("load_start", "load_finish", "Load labor (per hour)")
     hours_lines += _span_lines("unload_start", "unload_finish", "Unload labor (per hour)")

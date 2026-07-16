@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Children, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
+import { getToken } from "../auth/token";
+
+const ADMIN_API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 import { useAuth } from "../auth/AuthContext";
 import {
   useTheme,
@@ -21,6 +24,7 @@ import {
 } from "../theme/ThemeContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import EstimatorTab from "../components/EstimatorTab";
+import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
 import OfficeHoursPanel from "./OfficeHours";
 import { roundBillableQuarter } from "../components/JobReport";
 import {
@@ -37,6 +41,7 @@ type AdminUser = {
   phone: string | null;
   role: string;
   is_active: boolean;
+  is_skill_rater: boolean;
   tag_ids: number[];
   alias_count: number;
   scheduling_notes: string;
@@ -74,7 +79,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office";
+type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents";
 
 const TAB_TITLES: Record<Tab, string> = {
   map: "Admin Dashboard",
@@ -87,6 +92,7 @@ const TAB_TITLES: Record<Tab, string> = {
   settings: "Settings",
   advanced: "Advanced Settings",
   appearance: "Theme & Appearance",
+  incidents: "Incidents",
 };
 
 const DESKTOP_MODE_KEY = "crew_admin_desktop_mode_v1";
@@ -192,6 +198,7 @@ export default function Admin() {
       {tab === "notes" && <NotesTab />}
       {tab === "summary" && <JobSummaryTab />}
       {tab === "office" && <OfficeHoursPanel />}
+      {tab === "incidents" && <IncidentsAdminTab />}
       {tab === "settings" && (
         <SettingsTab
           onOpenAdvanced={() => setTab("advanced")}
@@ -269,9 +276,10 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
     { tab: "employees", label: "Employees",    hint: "Crew access and roles" },
     { tab: "dvir",      label: "DVIR Review",  hint: "Mechanic sign-off on inspections" },
     { tab: "estimator", label: "Estimator",    hint: "Build and price estimates" },
-    { tab: "notes",     label: "Notes",        hint: "Patch notes and admin notes" },
+    { tab: "notes",     label: "Patch Notes",  hint: "Publish app update notes to the crew" },
     { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
     { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
+    { tab: "incidents", label: "Incidents",    hint: "Crew-reported incident log" },
     { tab: "settings",  label: "Settings",     hint: "Theme, field config, and advanced options" },
   ];
   return (
@@ -302,6 +310,100 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
   );
 }
 
+type AdminIncident = {
+  id: number; incident_uuid: string; job_uuid: string | null; job_name: string | null;
+  incident_date: string | null; reported_by_name: string | null; attributed_crew: string | null;
+  severity: string; attributable: string; description: string; est_cost: number | null;
+  resolved: boolean; notes: string | null; photo_urls: string[]; created_at: string;
+};
+
+// Admin log of crew-reported incidents. Read + resolve/reopen + edit notes/cost.
+function IncidentsAdminTab() {
+  const [incidents, setIncidents] = useState<AdminIncident[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [showResolved, setShowResolved] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<AdminIncident[]>("/api/admin/incidents")
+      .then((r) => { if (!cancelled) setIncidents(r); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function patch(inc: AdminIncident, body: Partial<Pick<AdminIncident, "resolved" | "notes" | "est_cost">>) {
+    setBusy(inc.id);
+    try {
+      const updated = await apiFetch<AdminIncident>(`/api/admin/incidents/${inc.id}`, {
+        method: "PATCH", body: JSON.stringify(body),
+      });
+      setIncidents((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Failed to update");
+    } finally { setBusy(null); }
+  }
+
+  const shown = incidents.filter((i) => showResolved || !i.resolved);
+  const openCount = incidents.filter((i) => !i.resolved).length;
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <div className="sectionTitle" style={{ marginBottom: 0 }}>Incidents</div>
+        <label className="row small" style={{ gap: 6, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+          Show resolved
+        </label>
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 12 }}>
+        {openCount} open · {incidents.length} total. Also exported to the Incidents sheet tab.
+      </div>
+
+      {loading ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : err ? (
+        <div className="small" style={{ color: "var(--danger)" }}>{err}</div>
+      ) : shown.length === 0 ? (
+        <div className="small" style={{ color: "var(--muted)" }}>No incidents.</div>
+      ) : (
+        <div className="col" style={{ gap: 10 }}>
+          {shown.map((inc) => {
+            const color = inc.severity === "major" ? "var(--danger)" : inc.severity === "moderate" ? "var(--warn)" : "var(--ok)";
+            return (
+              <div key={inc.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, opacity: inc.resolved ? 0.6 : 1 }}>
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{inc.severity}</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>{inc.incident_date || inc.created_at.slice(0, 10)}</span>
+                </div>
+                <div style={{ fontSize: 14, marginTop: 4 }}>{inc.description}</div>
+                <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                  {[
+                    inc.job_name ? `Job: ${inc.job_name}` : null,
+                    inc.attributed_crew ? `Attributed: ${inc.attributed_crew}` : null,
+                    `Attributable: ${inc.attributable}`,
+                    inc.est_cost != null ? `Est. $${inc.est_cost}` : null,
+                    inc.reported_by_name ? `by ${inc.reported_by_name}` : null,
+                  ].filter(Boolean).join(" · ")}
+                </div>
+                {inc.notes && <div className="small" style={{ marginTop: 4 }}>Notes: {inc.notes}</div>}
+                <div className="row" style={{ gap: 6, marginTop: 8 }}>
+                  <button disabled={busy === inc.id} onClick={() => patch(inc, { resolved: !inc.resolved })}
+                    style={{ fontSize: 12, padding: "4px 12px" }}>
+                    {inc.resolved ? "Reopen" : "Mark resolved"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────
 // Employees tab
 // ─────────────────────────────────────────
@@ -315,6 +417,7 @@ function EmployeesTab() {
   const [editingTagsFor, setEditingTagsFor] = useState<AdminUser | null>(null);
   const [editingUnlocksFor, setEditingUnlocksFor] = useState<AdminUser | null>(null);
   const [editingAliasesFor, setEditingAliasesFor] = useState<AdminUser | null>(null);
+  const [editingSkillsFor, setEditingSkillsFor] = useState<AdminUser | null>(null);
   const [subview, setSubview] = useState<"roster" | "month">("roster");
 
   useEffect(() => {
@@ -348,14 +451,30 @@ function EmployeesTab() {
     }
   }
 
-  async function toggleRole(u: AdminUser) {
-    const newRole = u.role === "admin" ? "user" : "admin";
-    if (!confirm(`Make ${u.email} a ${newRole}?`)) return;
+  async function setRole(u: AdminUser, newRole: string) {
+    if (newRole === (u.role || "user")) return;
+    const label = newRole === "crew_lead" ? "crew lead" : newRole;
+    if (!confirm(`Make ${u.email} a ${label}?`)) return;
     setBusy(u.id);
     try {
       const updated = await apiFetch<AdminUser>(`/api/admin/users/${u.id}`, {
         method: "PATCH",
         body: JSON.stringify({ role: newRole }),
+      });
+      setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Failed to update");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleSkillRater(u: AdminUser) {
+    setBusy(u.id);
+    try {
+      const updated = await apiFetch<AdminUser>(`/api/admin/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_skill_rater: !u.is_skill_rater }),
       });
       setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
     } catch (e: any) {
@@ -403,7 +522,8 @@ function EmployeesTab() {
     <>
       {/* Roster vs. month-wide schedule view. The roster is the default
           since most admin tasks (tags, unlocks, aliases, role/access)
-          live there; the month view is a wholistic read-only grid. */}
+          live there; the month view is a wholistic grid where tapping a
+          cell cycles that day's availability inline. */}
       <div className="card" style={{ padding: 6 }}>
         <div className="row" style={{ gap: 6 }}>
           {(["roster", "month"] as const).map((v) => {
@@ -445,7 +565,7 @@ function EmployeesTab() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
-              {["Name", "Email", "Role", "Status", "Tags", "Actions"].map((h) => (
+              {["Name", "Contacts", "Role", "Status", "Tags", "Actions"].map((h) => (
                 <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
@@ -460,11 +580,37 @@ function EmployeesTab() {
                 }}
               >
                 <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>-</span>}</td>
-                <td style={{ padding: "10px 14px", color: "var(--muted)" }}>
-                  <div>{u.email}</div>
-                  {u.phone && <div className="small" style={{ color: "var(--text)" }}>{u.phone}</div>}
+                <td style={{ padding: "10px 14px" }}>
+                  {/* Contacts: email + phone as compact clickable pills so the
+                      roster reads as one "Contacts" column instead of two rows. */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+                    <a
+                      href={`mailto:${u.email}`}
+                      title={u.email}
+                      style={{
+                        fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999,
+                        border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none",
+                        maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}
+                    >
+                      ✉ {u.email}
+                    </a>
+                    {u.phone && (
+                      <a
+                        href={`tel:${u.phone}`}
+                        title={u.phone}
+                        style={{
+                          fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999,
+                          border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        ☎ {u.phone}
+                      </a>
+                    )}
+                  </div>
                 </td>
-                <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role}</td>
+                <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
                 <td style={{ padding: "10px 14px" }}>
                   <span style={{
                     fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
@@ -528,12 +674,24 @@ function EmployeesTab() {
                     >
                       {u.is_active ? "Revoke" : "Restore"}
                     </button>
-                    <button
+                    <select
                       className="roster-btn"
                       disabled={busy === u.id}
-                      onClick={() => toggleRole(u)}
+                      value={u.role || "user"}
+                      onChange={(e) => setRole(u, e.target.value)}
+                      title="Set this person's role"
                     >
-                      {u.role === "admin" ? "Make user" : "Make admin"}
+                      <option value="user">Crew</option>
+                      <option value="crew_lead">Crew lead</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button
+                      className={`roster-btn ${u.is_skill_rater ? "ok" : ""}`}
+                      disabled={busy === u.id}
+                      onClick={() => toggleSkillRater(u)}
+                      title="Allow this person to set the job type and fill out per-employee skill ratings on the Job Report. This is the only way to grant it apart from being an admin: the Crew lead role does NOT include skill rating, so designate each rater here."
+                    >
+                      {u.is_skill_rater ? "Skill rater ✓" : "Skill rater"}
                     </button>
                     <button
                       className="roster-btn"
@@ -556,6 +714,13 @@ function EmployeesTab() {
                       title="Set the contact phone shown on the scheduling header"
                     >
                       Phone
+                    </button>
+                    <button
+                      className="roster-btn"
+                      onClick={() => setEditingSkillsFor(u)}
+                      title="Set this employee's skill levels (0-5 matrix)"
+                    >
+                      Skills
                     </button>
                     <button
                       className="roster-btn"
@@ -585,6 +750,12 @@ function EmployeesTab() {
           }}
         />
       )}
+      {editingSkillsFor && (
+        <SkillMatrixPicker
+          user={editingSkillsFor}
+          onClose={() => setEditingSkillsFor(null)}
+        />
+      )}
       {editingUnlocksFor && (
         <AvailabilityUnlocksPicker
           user={editingUnlocksFor}
@@ -605,6 +776,129 @@ function EmployeesTab() {
         />
       )}
     </>
+  );
+}
+
+// Admin modal for setting an employee's 0-5 skill levels (the roster matrix).
+function SkillMatrixPicker({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const [skills, setSkills] = useState<AdminSkill[]>([]);
+  const [levels, setLevels] = useState<Record<number, number>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      apiFetch<AdminSkill[]>("/api/admin/skills"),
+      apiFetch<{ skill_id: number; level: number }[]>(`/api/admin/users/${user.id}/skills`),
+    ])
+      .then(([s, ls]) => {
+        if (cancelled) return;
+        setSkills(s.filter((x) => x.active));
+        const m: Record<number, number> = {};
+        for (const l of ls) m[l.skill_id] = l.level;
+        setLevels(m);
+      })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [user.id]);
+
+  function setLevel(skillId: number, level: number) {
+    setLevels((prev) => ({ ...prev, [skillId]: level }));
+  }
+
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/admin/users/${user.id}/skills`, {
+        method: "PUT",
+        body: JSON.stringify({ skills: Object.entries(levels).map(([id, lvl]) => ({ skill_id: Number(id), level: lvl })) }),
+      });
+      onClose();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to save");
+    } finally { setBusy(false); }
+  }
+
+  const byCategory = skills.reduce<Record<string, AdminSkill[]>>((acc, s) => {
+    (acc[s.category || "Other"] ||= []).push(s);
+    return acc;
+  }, {});
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="card" style={{ maxWidth: 520, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+        <div className="sectionTitle">Skills - {user.name || user.email}</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          0 = none/very poor · 5 = mastery · blank (0) = not yet assessed.
+        </div>
+
+        {loading ? (
+          <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+        ) : (
+          <div className="col" style={{ gap: 12 }}>
+            {Object.entries(byCategory).map(([cat, list]) => (
+              <div key={cat}>
+                <div className="small" style={{ color: "var(--brand)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{cat}</div>
+                <div className="col" style={{ gap: 8 }}>
+                  {list.map((s) => {
+                    const lvl = levels[s.id] ?? 0;
+                    return (
+                      <div key={s.id} className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 13, flex: 1 }}>{s.name}</span>
+                        {s.binary ? (
+                          <div className="row" style={{ gap: 4 }}>
+                            {[0, 5].map((v) => (
+                              <button key={v} type="button" onClick={() => setLevel(s.id, v)}
+                                style={{ padding: "4px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                                  border: lvl === v ? "2px solid var(--brand)" : "1px solid var(--border)",
+                                  background: lvl === v ? "rgba(93,214,194,0.18)" : "transparent",
+                                  color: lvl === v ? "var(--brand)" : "var(--muted)" }}>
+                                {v === 0 ? "No" : "Yes"}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="row" style={{ gap: 3 }}>
+                            {[0, 1, 2, 3, 4, 5].map((v) => (
+                              <button key={v} type="button" onClick={() => setLevel(s.id, v)}
+                                style={{ width: 28, height: 28, borderRadius: 6, fontSize: 12, cursor: "pointer",
+                                  border: lvl === v ? "2px solid var(--brand)" : "1px solid var(--border)",
+                                  background: lvl === v ? "rgba(93,214,194,0.18)" : "transparent",
+                                  color: lvl === v ? "var(--brand)" : "var(--muted)", fontWeight: lvl === v ? 700 : 400 }}>
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {skills.length === 0 && (
+              <div className="small" style={{ color: "var(--muted)" }}>No active skills. Add some in Settings → Crew Skills.</div>
+            )}
+          </div>
+        )}
+
+        {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+        <div className="row" style={{ gap: 8, marginTop: 14 }}>
+          <button className="btnPrimary" onClick={save} disabled={busy || loading}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1030,7 +1324,8 @@ function AvailabilityUnlocksPicker({
   );
 }
 
-// Read-only month-wide availability matrix nested under the Employees tab.
+// Month-wide availability matrix nested under the Employees tab. Cells are
+// editable: tapping one cycles that day's status (admin upsert, lock-bypassing).
 // Days down, active employees across, status-colored cells. Month navigation
 // arrows mirror Google Calendar's month picker. Employees with no submitted
 // record for a given day render as a blank cell so admin can spot gaps.
@@ -1079,6 +1374,31 @@ const HC_SCHEDULED_COLORS: MonthScheduledPalette = { bg: "#4285f4", fg: "#ffffff
 
 const HC_MONTH_KEY = "crew_admin_hc_month_v1";
 
+// Local-date helpers for the rolling window. All parsing is done as LOCAL noon,
+// never `new Date("2026-07-14")`, which JS parses as UTC midnight and renders as
+// the previous day for anyone west of Greenwich - i.e. everyone here.
+function isoToDate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0);
+}
+
+function dateToIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function todayIso(): string {
+  return dateToIso(new Date());
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const d = isoToDate(iso);
+  d.setDate(d.getDate() + days);
+  return dateToIso(d);
+}
+
 function MonthScheduleView({
   users,
   tags,
@@ -1094,38 +1414,51 @@ function MonthScheduleView({
     return `${y}-${m}-${day}`;
   }, []);
 
-  // year + 0-indexed month, defaulting to today's month.
-  const [year, setYear] = useState<number>(() => new Date().getFullYear());
-  const [month, setMonth] = useState<number>(() => new Date().getMonth());
+  // ROLLING 30-DAY WINDOW, not a calendar month.
+  //
+  // A calendar month is the wrong shape for scheduling: on the 28th, "this month"
+  // is almost entirely the past, and the days you actually need to staff are in a
+  // different view. The window is anchored on a start date that defaults to today,
+  // so the useful days are always on screen.
+  //
+  // The window crosses month boundaries, so every date here is built with real
+  // Date arithmetic. The old code assembled ISO strings by concatenating the
+  // month state, which silently produces "2026-07-33" the moment a window spills
+  // into August.
+  const WINDOW_DAYS = 30;
 
-  const monthLabel = useMemo(
-    () => new Date(year, month, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-    [year, month],
-  );
-
-  // Bounds for the API range query.
-  const lastDayOfMonth = useMemo(() => new Date(year, month + 1, 0).getDate(), [year, month]);
-  const monthStart = `${year}-${String(month + 1).padStart(2, "0")}-01`;
-  const monthEnd = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDayOfMonth).padStart(2, "0")}`;
+  const [anchor, setAnchor] = useState<string>(() => todayIso());
 
   const dayList = useMemo(() => {
     const out: string[] = [];
-    for (let d = 1; d <= lastDayOfMonth; d++) {
-      out.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
-    }
+    for (let i = 0; i < WINDOW_DAYS; i++) out.push(addDaysIso(anchor, i));
     return out;
-  }, [year, month, lastDayOfMonth]);
+  }, [anchor]);
+
+  const rangeStart = dayList[0];
+  const rangeEnd = dayList[dayList.length - 1];
+
+  const rangeLabel = useMemo(() => {
+    const fmt = (iso: string) =>
+      isoToDate(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const endYear = isoToDate(rangeEnd).getFullYear();
+    return `${fmt(rangeStart)} - ${fmt(rangeEnd)}, ${endYear}`;
+  }, [rangeStart, rangeEnd]);
 
   const [rows, setRows] = useState<AvailabilityRangeRow[]>([]);
   const [scheduledRows, setScheduledRows] = useState<ScheduledJobRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // The pinned row. The table is far wider than the screen, so when you scroll
+  // sideways to reach an employee you lose track of which day you are on. Click
+  // the day cell to pin it; click again to unpin.
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${monthStart}&end=${monthEnd}`)
+    apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${rangeStart}&end=${rangeEnd}`)
       .then((r) => {
         if (cancelled) return;
         setRows(r.days);
@@ -1134,7 +1467,7 @@ function MonthScheduleView({
       .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [monthStart, monthEnd]);
+  }, [rangeStart, rangeEnd]);
 
   const tagsById = useMemo(() => {
     const m = new Map<number, EmployeeTag>();
@@ -1157,6 +1490,14 @@ function MonthScheduleView({
   }, [highContrast]);
   const statusPalette = highContrast ? HC_MONTH_STATUS_COLORS : MONTH_STATUS_COLORS;
   const scheduledPalette = highContrast ? HC_SCHEDULED_COLORS : SCHEDULED_COLORS;
+
+  // Edit mode is OFF by default: this is a wide, scroll-heavy grid, and tapping a
+  // cell CHANGES a crew member's availability. Read-only by default means a stray
+  // tap while scanning can't silently overwrite someone's schedule; the admin
+  // turns editing on deliberately when they mean to change something. Not
+  // persisted - it resets to read-only every time the view opens, so editing is
+  // always an explicit choice.
+  const [editMode, setEditMode] = useState(false);
   const [reminderCopied, setReminderCopied] = useState(false);
   const AVAILABILITY_REMINDER =
     "Hi! Please update your crew availability in the app for the next two weeks. Open the Mountaineer app, go to Availability, and mark each day (available, unavailable, or conditional). This helps us schedule jobs around you. Thanks!";
@@ -1197,6 +1538,40 @@ function MonthScheduleView({
     return m;
   }, [rows]);
 
+  // Inline editing: tap a cell to cycle available → unavailable → conditional.
+  // Reuses the admin per-user upsert (POST /api/admin/availability/{id}) which
+  // bypasses the 14-day lock, so admin can edit any day right here instead of
+  // opening each employee's page. Optimistic; reverts on error.
+  const [cellBusy, setCellBusy] = useState<string | null>(null);
+  async function cycleCell(userId: number, dIso: string, record: AvailabilityRangeRow | null | undefined) {
+    // Read-only unless the admin has explicitly turned editing on. Guards against
+    // an accidental tap changing someone's availability while scrolling the grid.
+    if (!editMode) return;
+    const order = ["available", "unavailable", "conditional"] as const;
+    const cur = record?.status as (typeof order)[number] | undefined;
+    const next = cur == null ? "available" : order[(order.indexOf(cur) + 1) % order.length];
+    const windowStart = record?.window_start || dIso;
+    const key = `${userId}:${dIso}`;
+    const prevRows = rows;
+    setCellBusy(key);
+    setErr(null);
+    setRows((rs) => [
+      ...rs.filter((r) => !(r.user_id === userId && r.day === dIso)),
+      { user_id: userId, day: dIso, status: next, note: record?.note ?? null, window_start: windowStart },
+    ]);
+    try {
+      await apiFetch(`/api/admin/availability/${userId}`, {
+        method: "POST",
+        body: JSON.stringify({ window_start: windowStart, days: [{ day: dIso, status: next, note: record?.note ?? null }] }),
+      });
+    } catch (e: any) {
+      setRows(prevRows);
+      setErr(e instanceof ApiError ? e.message : "Failed to save availability");
+    } finally {
+      setCellBusy(null);
+    }
+  }
+
   // (user_id, day) → list of job titles for the day. Built from scheduledRows.
   // Multiple events for the same (user, day) accumulate into the list; the
   // cell renders them as a numbered list. Yellow overrides the availability
@@ -1216,30 +1591,37 @@ function MonthScheduleView({
     return m;
   }, [scheduledRows]);
 
-  function shiftMonth(delta: number) {
-    let m = month + delta;
-    let y = year;
-    while (m < 0) { m += 12; y -= 1; }
-    while (m > 11) { m -= 12; y += 1; }
-    setMonth(m);
-    setYear(y);
+  // Step by a whole window. A half-window step would be friendlier for spotting
+  // things that straddle the edge, but a full step means paging never shows the
+  // same day twice, which is what admin actually asked for.
+  function shiftWindow(deltaDays: number) {
+    setAnchor((a) => addDaysIso(a, deltaDays));
+    setSelectedDay(null);
   }
 
   function jumpToToday() {
-    const now = new Date();
-    setYear(now.getFullYear());
-    setMonth(now.getMonth());
+    setAnchor(todayIso());
+    setSelectedDay(null);
   }
 
   return (
     <>
-      {/* Row hover highlight. HC mode uses a bright inset ring + darker
-          tint because the plain dark overlay is invisible against the
-          saturated blue Scheduled cells (#4285f4). Non-HC keeps the
-          cheap dark tint since the muted fills read fine with it. */}
+      {/* Row hover + selection. HC mode uses a bright inset ring + darker tint
+          because the plain dark overlay is invisible against the saturated blue
+          Scheduled cells (#4285f4). Non-HC keeps the cheap dark tint since the
+          muted fills read fine with it.
+
+          Selection is a CLASS rule, not an inline style, on purpose: an inline
+          boxShadow on the td would be beaten by nothing and would in turn clobber
+          the hover rule. As a class it composes, and `.selected` is declared after
+          `:hover` so a pinned row stays visibly pinned while the pointer is
+          elsewhere. Selection outranks hover deliberately: the whole point is to
+          keep your eye on ONE row while you scroll a wide table sideways. */}
       <style>{highContrast
-        ? `.month-row:hover td { box-shadow: inset 0 0 0 3px rgba(255,255,255,0.75), inset 0 0 0 9999px rgba(0,0,0,0.30); }`
-        : `.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.22); }`
+        ? `.month-row:hover td { box-shadow: inset 0 0 0 3px rgba(255,255,255,0.75), inset 0 0 0 9999px rgba(0,0,0,0.30); }
+           .month-row.selected td { box-shadow: inset 0 0 0 2px var(--brand), inset 0 0 0 9999px rgba(0,0,0,0.20); }`
+        : `.month-row:hover td { box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.22); }
+           .month-row.selected td { box-shadow: inset 0 0 0 2px var(--brand), inset 0 0 0 9999px rgba(0,0,0,0.14); }`
       }</style>
       <div
         className="card"
@@ -1250,14 +1632,14 @@ function MonthScheduleView({
       >
         <button
           type="button"
-          onClick={() => shiftMonth(-1)}
+          onClick={() => shiftWindow(-WINDOW_DAYS)}
           style={{ padding: "6px 14px", fontSize: 16, fontWeight: 700 }}
-          aria-label="Previous month"
+          aria-label="Previous 30 days"
         >
           ‹
         </button>
         <div className="col" style={{ alignItems: "center", gap: 2 }}>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>{monthLabel}</div>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>{rangeLabel}</div>
           <button
             type="button"
             onClick={jumpToToday}
@@ -1272,9 +1654,9 @@ function MonthScheduleView({
         </div>
         <button
           type="button"
-          onClick={() => shiftMonth(1)}
+          onClick={() => shiftWindow(WINDOW_DAYS)}
           style={{ padding: "6px 14px", fontSize: 16, fontWeight: 700 }}
-          aria-label="Next month"
+          aria-label="Next 30 days"
         >
           ›
         </button>
@@ -1301,6 +1683,24 @@ function MonthScheduleView({
           />
           <span>High contrast (saturated fills)</span>
         </label>
+        {/* Edit toggle. Off by default so tapping a cell does nothing until the
+            admin opts in; on, it is clearly flagged so it is obvious the grid is
+            now live. */}
+        <button
+          type="button"
+          onClick={() => setEditMode((v) => !v)}
+          aria-pressed={editMode}
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "6px 14px", fontSize: 13, fontWeight: 700, borderRadius: 8,
+            cursor: "pointer",
+            border: editMode ? "2px solid var(--warn)" : "1px solid var(--border)",
+            background: editMode ? "var(--warn-bg)" : "transparent",
+            color: editMode ? "var(--warn)" : "var(--text)",
+          }}
+        >
+          {editMode ? "Editing on - tap a day to change it" : "Edit availability"}
+        </button>
       </div>
 
       {err && (
@@ -1477,26 +1877,48 @@ function MonthScheduleView({
             </thead>
             <tbody>
               {dayList.map((dIso) => {
-                const dNum = parseInt(dIso.slice(8), 10);
-                const dt = new Date(year, month, dNum);
+                // Parse the day from the ISO string itself. It used to be built
+                // from the month/year state, which is wrong the moment a rolling
+                // window crosses into the next month: every spilled day rendered
+                // with the previous month's weekday.
+                const dt = isoToDate(dIso);
+                const dNum = dt.getDate();
+                const mon = dt.toLocaleDateString("en-US", { month: "short" });
                 const dow = dt.toLocaleDateString("en-US", { weekday: "short" });
                 const isToday = dIso === today;
                 const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+                const isSelected = dIso === selectedDay;
                 return (
-                  <tr key={dIso} className="month-row">
+                  <tr
+                    key={dIso}
+                    className={`month-row${isSelected ? " selected" : ""}`}
+                  >
                     <td
+                      // Click-to-select lives on the DAY cell, not the row: every
+                      // other cell already has a click that cycles availability, and
+                      // a row-level handler would fight it.
+                      onClick={() => setSelectedDay((cur) => (cur === dIso ? null : dIso))}
+                      title={isSelected ? "Click to unpin this row" : "Click to pin this row while scrolling"}
                       style={{
                         position: "sticky", left: 0, zIndex: 1,
-                        background: isToday ? "rgba(93,214,194,0.10)" : "var(--card)",
+                        // Must stay OPAQUE: employee columns scroll underneath it.
+                        background: isSelected
+                          ? "var(--card2)"
+                          : isToday
+                            ? "rgba(93,214,194,0.10)"
+                            : "var(--card)",
                         borderBottom: "1px solid var(--border)",
                         borderRight: "1px solid var(--border)",
+                        borderLeft: isSelected ? "3px solid var(--brand)" : "3px solid transparent",
                         padding: "4px 8px", fontSize: 12,
-                        fontWeight: isToday ? 800 : 600,
+                        fontWeight: isToday || isSelected ? 800 : 600,
                         color: isToday ? "var(--brand)" : (isWeekend ? "var(--muted)" : "var(--text)"),
                         whiteSpace: "nowrap",
+                        cursor: "pointer",
+                        userSelect: "none",
                       }}
                     >
-                      {dNum}{" "}
+                      {mon} {dNum}{" "}
                       <span style={{ color: "var(--muted)", fontWeight: 400 }}>{dow}</span>
                     </td>
                     {activeUsers.map((u) => {
@@ -1525,35 +1947,56 @@ function MonthScheduleView({
                       return (
                         <td
                           key={u.id}
-                          title={title}
+                          title={editMode ? `${title} - tap to change` : title}
+                          onClick={() => cycleCell(u.id, dIso, record)}
                           style={{
                             borderBottom: "1px solid var(--border)",
                             borderRight: "1px solid var(--border)",
                             padding: isScheduled ? "4px 6px" : 0,
                             minHeight: 26,
                             background: cellBg,
-                            // Highlight a conflict (scheduled cell on a
-                            // submitted-availability day) with the
-                            // availability color as a tinted outline.
-                            // Conflict outline: HC saturated bg + white fg
-                            // needs a two-tone stroke that reads on ALL four
-                            // Google fills. A dashed pure-white outline
-                            // paired with a small inset dark ring gives
-                            // visible edges over yellow, red, green, and
-                            // blue alike.
-                            outline:
-                              isScheduled && availColors
-                                ? (highContrast ? `2px dashed #ffffff` : `2px solid ${availColors.fg}`)
-                                : undefined,
-                            outlineOffset:
-                              isScheduled && availColors ? "-2px" : undefined,
-                            boxShadow:
-                              isScheduled && availColors && highContrast
-                                ? "inset 0 0 0 3px rgba(0,0,0,0.35)"
-                                : undefined,
+                            cursor: cellBusy === `${u.id}:${dIso}`
+                              ? "wait"
+                              : editMode ? "pointer" : "default",
                             verticalAlign: "top",
                           }}
                         >
+                          {/* A scheduled cell paints over the availability color,
+                              so the availability has to come back some other way or
+                              you cannot see that somebody is booked on a day they
+                              said they were unavailable.
+
+                              It used to come back as an OUTLINE around the cell. In
+                              high-contrast that outline was hardcoded white-dashed,
+                              because no single stroke color reads against all four
+                              saturated fills - which meant the one thing the outline
+                              existed to tell you (WHICH availability) was exactly
+                              the thing it threw away. A white ring says "there is a
+                              conflict" and nothing about what kind.
+
+                              A chip carries the actual color instead. It is the
+                              availability color itself, on every theme and in both
+                              contrast modes, so red-on-blue reads as "booked but
+                              unavailable" at a glance. */}
+                          {isScheduled && availColors && (
+                            <span
+                              title={`Availability: ${availColors.label}`}
+                              style={{
+                                display: "inline-block",
+                                width: 10,
+                                height: 10,
+                                borderRadius: 3,
+                                background: availColors.bg,
+                                border: `2px solid ${availColors.fg}`,
+                                boxSizing: "border-box",
+                                marginBottom: 3,
+                                // Keep it legible on the saturated Scheduled fill:
+                                // a hairline of the cell's own text color separates
+                                // the chip from the blue behind it.
+                                outline: `1px solid ${scheduledPalette.fg}`,
+                              }}
+                            />
+                          )}
                           {isScheduled && (
                             <div
                               style={{
@@ -1639,6 +2082,27 @@ function MonthScheduleView({
           />
           <span>Not submitted</span>
         </span>
+        {/* Explain the chip, or it reads as decoration. */}
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              width: 14, height: 14, borderRadius: 3,
+              background: scheduledPalette.bg,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            <span
+              style={{
+                width: 8, height: 8, borderRadius: 2,
+                background: statusPalette.unavailable.bg,
+                border: `2px solid ${statusPalette.unavailable.fg}`,
+                boxSizing: "border-box",
+                outline: `1px solid ${scheduledPalette.fg}`,
+              }}
+            />
+          </span>
+          <span>Chip = their availability on a scheduled day</span>
+        </span>
       </div>
 
       {/* Copy-pasteable reminder for Google Voice SMS. Lists who hasn't
@@ -1676,7 +2140,7 @@ function MonthScheduleView({
               </div>
               {notSubmitted.length > 0 && (
                 <div className="small" style={{ color: "var(--muted)", marginTop: 10 }}>
-                  Not submitted for this month ({notSubmitted.length}):{" "}
+                  Not submitted for this window ({notSubmitted.length}):{" "}
                   <span style={{ color: "var(--text)" }}>{notSubmitted.map((u) => u.name || u.email).join(", ")}</span>
                 </div>
               )}
@@ -2136,8 +2600,55 @@ function SettingsTab({
       />
       <DVIRUnitsCard />
       <EmployeeTagsManagerCard />
+      <JobTypesManagerCard />
+      <SkillsManagerCard />
+      <FurnitureCatalogCard />
       <HelpTextCard />
     </div>
+  );
+}
+
+// Collapses a long list to its first `initialCount` children with a
+// "Show N more / Show less" toggle. Used across the Settings-tab manager cards
+// (Employee Tags, Job Types, Crew Skills, Field Help Text) so admin isn't
+// scrolling past every row at once. The wrapped children keep their own state
+// (edit-in-place, etc.) since they're the same elements, just sliced.
+function CollapsibleList({
+  children,
+  initialCount = 3,
+  className,
+  style,
+  moreLabel = "more",
+}: {
+  children: ReactNode;
+  initialCount?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  // Noun shown in the toggle, e.g. "more tags" -> pass "tags".
+  moreLabel?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const items = Children.toArray(children);
+  const shown = expanded ? items : items.slice(0, initialCount);
+  const hiddenCount = items.length - initialCount;
+
+  return (
+    <>
+      <div className={className} style={style}>{shown}</div>
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          style={{
+            marginTop: 8, fontSize: 12, padding: "4px 10px", alignSelf: "flex-start",
+            background: "none", border: "1px solid var(--border)", color: "var(--muted)",
+            borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          {expanded ? "Show less" : `Show ${hiddenCount} ${moreLabel}`}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -2227,7 +2738,7 @@ function EmployeeTagsManagerCard() {
       {loading ? (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
       ) : (
-        <div className="col" style={{ gap: 6 }}>
+        <CollapsibleList className="col" style={{ gap: 6 }} moreLabel="tags">
           {tags.map((t) => {
             const isEditing = editing === t.id;
             return (
@@ -2285,7 +2796,7 @@ function EmployeeTagsManagerCard() {
               </div>
             );
           })}
-        </div>
+        </CollapsibleList>
       )}
 
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
@@ -2307,6 +2818,598 @@ function EmployeeTagsManagerCard() {
       </div>
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+    </div>
+  );
+}
+
+type JobType = { id: number; name: string; sort_order: number; active: boolean };
+
+// Admin CRUD for the configurable job-type tag list shown on the Job Report.
+function JobTypesManagerCard() {
+  const [types, setTypes] = useState<JobType[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<JobType[]>("/api/admin/job-types")
+      .then((t) => { if (!cancelled) setTypes(t); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function createType() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true); setErr(null);
+    try {
+      const created = await apiFetch<JobType>("/api/admin/job-types", {
+        method: "POST", body: JSON.stringify({ name }),
+      });
+      setTypes((prev) => [...prev, created].sort((a, b) => a.sort_order - b.sort_order));
+      setNewName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to create job type");
+    } finally { setBusy(false); }
+  }
+
+  async function patchType(id: number, patch: Partial<Pick<JobType, "name" | "active">>) {
+    setBusy(true); setErr(null);
+    try {
+      const updated = await apiFetch<JobType>(`/api/admin/job-types/${id}`, {
+        method: "PATCH", body: JSON.stringify(patch),
+      });
+      setTypes((prev) => prev.map((t) => (t.id === id ? updated : t)));
+      setEditing(null); setEditName("");
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to update");
+    } finally { setBusy(false); }
+  }
+
+  async function deleteType(t: JobType) {
+    if (!confirm(`Delete job type "${t.name}"? It stays on any report already tagged with it, but won't be offered on new reports.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/admin/job-types/${t.id}`, { method: "DELETE" });
+      setTypes((prev) => prev.filter((x) => x.id !== t.id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to delete");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Job Types</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        The "Job type" tags crew pick on the Job Report. These also drive which
+        skills are shown to rate on a job (Crew Skills). Deactivate to hide a
+        type from new reports without losing it on old ones.
+      </div>
+
+      {loading ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <CollapsibleList className="col" style={{ gap: 6 }} moreLabel="job types">
+          {types.map((t) => {
+            const isEditing = editing === t.id;
+            return (
+              <div key={t.id} className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                {isEditing ? (
+                  <input autoFocus value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") patchType(t.id, { name: editName.trim() }); if (e.key === "Escape") setEditing(null); }}
+                    style={{ flex: 1, padding: "4px 8px", fontSize: 13 }} />
+                ) : (
+                  <span style={{ fontSize: 14, fontWeight: 600, opacity: t.active ? 1 : 0.5 }}>
+                    {t.name}{t.active ? "" : " (inactive)"}
+                  </span>
+                )}
+                <div className="row" style={{ gap: 6 }}>
+                  {isEditing ? (
+                    <>
+                      <button onClick={() => patchType(t.id, { name: editName.trim() })} disabled={busy} style={{ fontSize: 12, padding: "4px 10px" }}>Save</button>
+                      <button onClick={() => { setEditing(null); setEditName(""); }} style={{ fontSize: 12, padding: "4px 10px", background: "none", border: "1px solid var(--border)", color: "var(--muted)" }}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => patchType(t.id, { active: !t.active })} disabled={busy} style={{ fontSize: 12, padding: "4px 10px" }}>
+                        {t.active ? "Deactivate" : "Activate"}
+                      </button>
+                      <button onClick={() => { setEditing(t.id); setEditName(t.name); }} style={{ fontSize: 12, padding: "4px 10px" }}>Rename</button>
+                      <button onClick={() => deleteType(t)} disabled={busy} style={{ fontSize: 12, padding: "4px 10px", background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}>Delete</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </CollapsibleList>
+      )}
+
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <input value={newName} onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") createType(); }}
+          placeholder="New job type" style={{ flex: 1, padding: "6px 10px", fontSize: 13 }} />
+        <button onClick={createType} disabled={busy || !newName.trim()} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>Add</button>
+      </div>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+    </div>
+  );
+}
+
+// Bulk furniture-catalog CSV import. Feeds the single server catalog that both
+// the Estimator and Actual Inventory read (uploaded items appear in both).
+// Quote a CSV cell only when it contains a comma, quote, or newline (RFC-4180
+// escaping: double any inner quotes). Keeps plain names unquoted so the file
+// stays readable in a spreadsheet.
+function csvEscape(v: string): string {
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+// Read just the first field of a CSV line, honoring a leading quoted field so a
+// name containing a comma is read whole. Used only to dedupe built-ins against
+// server rows by name.
+function csvFirstField(line: string): string {
+  if (line[0] === '"') {
+    let out = "";
+    for (let i = 1; i < line.length; i++) {
+      if (line[i] === '"') {
+        if (line[i + 1] === '"') { out += '"'; i++; continue; }
+        break;
+      }
+      out += line[i];
+    }
+    return out;
+  }
+  const comma = line.indexOf(",");
+  return comma === -1 ? line : line.slice(0, comma);
+}
+
+function FurnitureCatalogCard() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ added: number; updated: number; skipped: number; errors: string[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [count, setCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ name: string }[]>("/api/furniture-catalog")
+      .then((rows) => setCount(rows.length))
+      .catch(() => {});
+  }, [result]);
+
+  async function upload(file: File) {
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file, file.name);
+      const token = getToken() || "";
+      const res = await fetch(`${ADMIN_API}/api/furniture-catalog/import-csv`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) throw new Error(body?.detail || body?.error || `HTTP ${res.status}`);
+      setResult(body);
+    } catch (e: any) {
+      setErr(e?.message ?? "Import failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Export the catalog as a CSV. The server's export-csv endpoint only holds
+  // admin-managed / CSV-imported rows; the ~40 built-in items the Estimator and
+  // Actual-Inventory show are a frontend-only list (data/furnitureCatalog.ts)
+  // the server never sees. Exporting the server rows alone yields a nearly-empty
+  // file, so we fetch the server CSV (full columns), then append any built-in
+  // item whose name isn't already a server row - giving the admin the complete
+  // catalog to edit and re-import. Endpoint is admin-gated, hence the authed
+  // fetch (a plain <a href> without the token would 401).
+  async function exportCsv() {
+    setBusy(true); setErr(null);
+    try {
+      const token = getToken() || "";
+      const res = await fetch(`${ADMIN_API}/api/furniture-catalog/export-csv`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const serverCsv = (await res.text()).replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+      const lines = serverCsv.split("\n");
+      // Header order is the server's own (name,category,length_in,...); map each
+      // built-in field into the right column so re-import lines up.
+      const cols = (lines[0] || "").split(",").map((c) => c.trim().toLowerCase());
+      const existing = new Set(
+        lines.slice(1).filter(Boolean).map((ln) => csvFirstField(ln).trim().toLowerCase()),
+      );
+      const extraRows = FURNITURE_CATALOG
+        .filter((f) => !existing.has(f.name.trim().toLowerCase()))
+        .map((f) => {
+          const cell: Record<string, string> = {
+            name: f.name,
+            category: f.category,
+            cubic_ft: String(f.cubic_ft),
+            weight_lbs: String(f.weight_lbs),
+          };
+          // Dimension / packing columns are blank for built-ins - the admin
+          // fills them in the spreadsheet; blank cells don't wipe on re-import.
+          return cols.map((c) => csvEscape(cell[c] ?? "")).join(",");
+        });
+
+      const out = [serverCsv, ...extraRows].join("\n") + "\n";
+      const blob = new Blob([out], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "furniture_catalog.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setErr(e?.message ?? "Export failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Furniture Catalog</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Maintain the catalog in a spreadsheet: <strong>Export CSV</strong>, fill in
+        dimensions and other data, then <strong>Upload CSV</strong> to push it back.
+        Imported items appear in both the Estimator and the job Actual-Inventory search.
+        {count !== null && <> Currently <strong>{count}</strong> catalog items.</>}
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Columns: <code>name</code> (match key), <code>category</code>,{" "}
+        <code>length_in</code>, <code>width_in</code>, <code>height_in</code>,{" "}
+        <code>cubic_ft</code>, <code>weight_lbs</code>, <code>packing_type</code>,{" "}
+        <code>fragile</code>, <code>sku</code>, <code>notes</code>. Fill L×W×H and
+        volume is computed for you. Blank cells are left unchanged (they don't
+        wipe existing values). Set category to <code>Boxes</code> for box types.
+      </div>
+
+      <div className="row wrap" style={{ gap: 8 }}>
+        <button
+          type="button"
+          onClick={exportCsv}
+          disabled={busy}
+          style={{ display: "inline-flex", alignItems: "center", padding: "8px 16px", borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)", cursor: busy ? "not-allowed" : "pointer" }}
+        >
+          {busy ? "Working…" : "Export CSV"}
+        </button>
+        <label className="btnPrimary" style={{ display: "inline-flex", alignItems: "center", padding: "8px 16px", borderRadius: "var(--btn-r)", cursor: busy ? "not-allowed" : "pointer" }}>
+          {busy ? "Importing…" : "Upload CSV"}
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            style={{ display: "none" }}
+            disabled={busy}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.currentTarget.value = "";
+              if (f) upload(f);
+            }}
+          />
+        </label>
+      </div>
+
+      {result && (
+        <div className="small" style={{ marginTop: 10, color: "var(--ok)" }}>
+          Imported: {result.added} added, {result.updated} updated, {result.skipped} skipped.
+          {result.errors.length > 0 && (
+            <div style={{ color: "var(--danger)", marginTop: 4 }}>
+              {result.errors.length} row error(s): {result.errors.slice(0, 5).join("; ")}
+            </div>
+          )}
+        </div>
+      )}
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+    </div>
+  );
+}
+
+type AdminSkill = {
+  id: number; name: string; category: string; binary: boolean; core: boolean;
+  relevant_job_types: string[]; definition: string | null; sort_order: number; active: boolean;
+};
+
+// Admin registry for the crew skill types (name, category, 0-5 vs binary,
+// whether it's a "core" skill always rated, and which job types make it
+// relevant on the Job Report).
+function SkillsManagerCard() {
+  const [skills, setSkills] = useState<AdminSkill[]>([]);
+  const [jobTypeNames, setJobTypeNames] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<AdminSkill | null>(null);
+  const [newName, setNewName] = useState("");
+  // Core + scale are chosen up front for custom-added skills (still editable
+  // later). binary=true means a pass/fail (No/Yes = 0/5) rating; false = 1-5 stars.
+  const [newCore, setNewCore] = useState(false);
+  const [newBinary, setNewBinary] = useState(false);
+  const [newRel, setNewRel] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      apiFetch<AdminSkill[]>("/api/admin/skills"),
+      apiFetch<{ name: string; active: boolean }[]>("/api/admin/job-types").catch(() => []),
+    ])
+      .then(([s, jt]) => {
+        if (cancelled) return;
+        setSkills(s);
+        setJobTypeNames(jt.filter((x) => x.active).map((x) => x.name));
+      })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function createSkill() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true); setErr(null);
+    try {
+      const created = await apiFetch<AdminSkill>("/api/admin/skills", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          core: newCore,
+          binary: newBinary,
+          // A core skill is rated on every job, so its job-type list is ignored
+          // by skillsForJobTypes. Send it empty rather than storing tags that
+          // read as meaningful and are not.
+          relevant_job_types: newCore ? [] : newRel,
+        }),
+      });
+      setSkills((prev) => [...prev, created]);
+      setNewName("");
+      setNewCore(false);
+      setNewBinary(false);
+      setNewRel([]);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to create skill");
+    } finally { setBusy(false); }
+  }
+
+  async function saveSkill(patch: Partial<AdminSkill>) {
+    if (!editing) return;
+    setBusy(true); setErr(null);
+    try {
+      const updated = await apiFetch<AdminSkill>(`/api/admin/skills/${editing.id}`, {
+        method: "PATCH", body: JSON.stringify(patch),
+      });
+      setSkills((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      setEditing(null);
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to save skill");
+    } finally { setBusy(false); }
+  }
+
+  async function deleteSkill(s: AdminSkill) {
+    if (!confirm(`Delete skill "${s.name}"? This removes it from every employee's matrix.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/admin/skills/${s.id}`, { method: "DELETE" });
+      setSkills((prev) => prev.filter((x) => x.id !== s.id));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Failed to delete");
+    } finally { setBusy(false); }
+  }
+
+  const byCategory = skills.reduce<Record<string, AdminSkill[]>>((acc, s) => {
+    (acc[s.category || "Other"] ||= []).push(s);
+    return acc;
+  }, {});
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Crew Skills</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        The skill types crew get rated on. "Core" skills are rated on every job;
+        others only appear on the Job Report when the job's type matches. Set
+        each employee's 0–5 levels from the Employees tab.
+      </div>
+
+      {loading ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <CollapsibleList className="col" style={{ gap: 12 }} moreLabel="categories">
+          {Object.entries(byCategory).map(([cat, list]) => (
+            <div key={cat}>
+              <div className="small" style={{ color: "var(--brand)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{cat}</div>
+              <div className="col" style={{ gap: 4 }}>
+                {list.map((s) => (
+                  <div key={s.id} className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
+                    <span style={{ fontSize: 14, opacity: s.active ? 1 : 0.5 }}>
+                      {s.name}
+                      {s.core && <span style={{ fontSize: 10, color: "var(--brand)", marginLeft: 6 }}>CORE</span>}
+                      {s.binary && <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 6 }}>0/5</span>}
+                      {!s.active && <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 6 }}>inactive</span>}
+                    </span>
+                    <div className="row" style={{ gap: 6 }}>
+                      <button onClick={() => setEditing(s)} style={{ fontSize: 12, padding: "3px 10px" }}>Edit</button>
+                      <button onClick={() => deleteSkill(s)} disabled={busy} style={{ fontSize: 12, padding: "3px 10px", background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}>Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </CollapsibleList>
+      )}
+
+      <div className="col" style={{ gap: 8, marginTop: 12 }}>
+        <div className="row" style={{ gap: 8 }}>
+          <input value={newName} onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createSkill(); }}
+            placeholder="New skill name" style={{ flex: 1, padding: "6px 10px", fontSize: 13 }} />
+          <button onClick={createSkill} disabled={busy || !newName.trim()} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>Add</button>
+        </div>
+        <div className="row wrap" style={{ gap: 14, alignItems: "center" }}>
+          <label className="row" style={{ gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={newCore} onChange={(e) => setNewCore(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+            <span className="small">Core (rated on every job)</span>
+          </label>
+          <div className="row" style={{ gap: 6, alignItems: "center" }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Scale:</span>
+            {([["1–5 stars", false], ["Pass / fail", true]] as const).map(([label, bin]) => {
+              const on = newBinary === bin;
+              return (
+                <button key={label} type="button" onClick={() => setNewBinary(bin)}
+                  style={{ padding: "3px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                    border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                    background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                    color: on ? "var(--brand)" : "var(--muted)" }}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Applies-to, on CREATE. It was previously edit-only, so a new skill was
+            born applying to no job type and therefore rated on no job at all
+            until somebody remembered to reopen it. A core skill is rated on every
+            job, so the picker is pointless there and hides itself. */}
+        {!newCore && (
+          <div className="col" style={{ gap: 6 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>
+              Applies to (leave empty and this skill is never rated)
+            </span>
+            {jobTypeNames.length === 0 ? (
+              <span className="small" style={{ color: "var(--muted)" }}>
+                No job types defined yet. Add them under Job Types first.
+              </span>
+            ) : (
+              <div className="row wrap" style={{ gap: 6 }}>
+                {jobTypeNames.map((t) => {
+                  const on = newRel.includes(t);
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() =>
+                        setNewRel((prev) => (on ? prev.filter((x) => x !== t) : [...prev, t]))
+                      }
+                      style={{
+                        padding: "3px 10px",
+                        borderRadius: 999,
+                        fontSize: 12,
+                        cursor: "pointer",
+                        border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                        background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                        color: on ? "var(--brand)" : "var(--muted)",
+                      }}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+
+      {editing && (
+        <SkillEditModal
+          skill={editing}
+          jobTypeNames={jobTypeNames}
+          busy={busy}
+          onCancel={() => setEditing(null)}
+          onSave={saveSkill}
+        />
+      )}
+    </div>
+  );
+}
+
+function SkillEditModal({
+  skill, jobTypeNames, busy, onCancel, onSave,
+}: {
+  skill: AdminSkill;
+  jobTypeNames: string[];
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (patch: Partial<AdminSkill>) => void;
+}) {
+  const [name, setName] = useState(skill.name);
+  const [category, setCategory] = useState(skill.category);
+  const [binary, setBinary] = useState(skill.binary);
+  const [core, setCore] = useState(skill.core);
+  const [active, setActive] = useState(skill.active);
+  const [rel, setRel] = useState<string[]>(skill.relevant_job_types);
+
+  function toggleRel(t: string) {
+    setRel((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="card" style={{ maxWidth: 460, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+        <div className="sectionTitle">Edit skill</div>
+        <div className="col" style={{ gap: 10 }}>
+          <label className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Name</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Category</span>
+            <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Physical / Technical" />
+          </label>
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={core} onChange={(e) => setCore(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+            <span className="small">Core - rated on every job</span>
+          </label>
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={binary} onChange={(e) => setBinary(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+            <span className="small">Binary - trained / not (0 or 5)</span>
+          </label>
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
+            <span className="small">Active</span>
+          </label>
+          <div className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Relevant job types (non-core only)</span>
+            <div className="row wrap" style={{ gap: 6 }}>
+              {jobTypeNames.length === 0 && <span className="small" style={{ color: "var(--muted)" }}>No job types configured.</span>}
+              {jobTypeNames.map((t) => {
+                const on = rel.includes(t);
+                return (
+                  <button key={t} type="button" onClick={() => toggleRel(t)}
+                    style={{ padding: "4px 10px", borderRadius: 99, fontSize: 12, cursor: "pointer",
+                      border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                      background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                      color: on ? "var(--brand)" : "var(--text)" }}>
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 4 }}>
+            <button className="btnPrimary" disabled={busy || !name.trim()}
+              onClick={() => onSave({ name: name.trim(), category: category.trim(), binary, core, active, relevant_job_types: rel })}>
+              Save
+            </button>
+            <button onClick={onCancel}>Cancel</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3206,12 +4309,165 @@ function AdvancedSettingsPage() {
           every visit to Settings. Order: action card (Sheet Sync) before
           read-only health snapshot, then collapsible Diagnostics. */}
       <SheetSyncCard />
+      <SheetSyncHealthCard />
       <AppHealthCard />
 
       {/* Diagnostics last and collapsed by default - admin only goes here
           when something looks off. Keeps the operational cards above it
           uncluttered. */}
       <DiagnosticsCard />
+    </div>
+  );
+}
+
+// Reports whether the staging dev tools made it into the running build.
+//
+// VITE_STAGING is inlined by Vite at build time, and when it is missing the
+// "Preview as role" pill renders nothing: no error, no console warning, it is
+// simply absent. That failure mode cost us the ability to check what a non-rater
+// sees on the Job Report, and it is invisible from inside the app. So say it out
+// loud, here, where an admin already goes to ask "why is this not working".
+//
+// Setting the var in Vercel is NOT enough on its own: the build bakes it in, so
+// the staging project has to be redeployed before this flips to enabled.
+function StagingToolsCheck() {
+  const enabled = import.meta.env.VITE_STAGING === "true";
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+      <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
+        Staging dev tools
+      </div>
+      <div className="small" style={{ color: enabled ? "var(--ok)" : "var(--muted)" }}>
+        {enabled ? (
+          <>
+            ✓ Enabled. The <strong>VIEW AS</strong> pill at the bottom of the screen
+            previews the app as Crew, Crew Lead, or Skill Rater.
+          </>
+        ) : (
+          <>
+            Off. <code>VITE_STAGING</code> was not <code>true</code> when this build was
+            made, so the "Preview as role" pill is not rendering. On the staging project:
+            set <code>VITE_STAGING=true</code> in Vercel and <strong>redeploy</strong>
+            {" "}(the value is baked in at build time, so setting it alone changes nothing).
+            This is expected to be off on production.
+          </>
+        )}
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+        Note: previewing a role changes only what this browser renders. Your token is
+        still an admin token, so it does not test whether the server refuses the write.
+        For that, log in as a real crew account.
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Sheet-sync health check (System Check)
+// Verifies every app->sheet sync in one place. New feature syncs are picked up
+// automatically from the backend registry (SHEET_SYNC_REGISTRY).
+// ─────────────────────────────────────────
+type SyncCheck = {
+  key: string;
+  label: string;
+  tab: string;
+  env_var: string;
+  env_set: boolean;
+  tab_exists: boolean;
+  last_ok_at: string | null;
+  last_error_at: string | null;
+  last_error: string | null;
+};
+type SheetSyncHealth = {
+  spreadsheet_id: string;
+  connected: boolean;
+  error: string | null;
+  ok?: boolean;
+  syncs: SyncCheck[];
+};
+
+function SheetSyncHealthCard() {
+  const [busy, setBusy] = useState(false);
+  const [data, setData] = useState<SheetSyncHealth | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true); setErr(null); setData(null);
+    try {
+      setData(await apiFetch<SheetSyncHealth>("/api/admin/system-check/sheets"));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Health check failed");
+    } finally { setBusy(false); }
+  }
+
+  const problems = data?.syncs.filter((s) => !s.tab_exists || s.last_error_at) ?? [];
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">System Check - Sheet Syncs</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Verifies the Google Sheets connection and that every app→sheet sync has its
+        worksheet tab and a valid config. Run this after adding a feature that
+        writes to the sheet, or if data looks like it stopped syncing.
+      </div>
+      <button onClick={run} disabled={busy} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>
+        {busy ? "Checking…" : "Run check"}
+      </button>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+
+      <StagingToolsCheck />
+
+      {data && (
+        <div style={{ marginTop: 12 }}>
+          <div className="small" style={{ marginBottom: 8, fontWeight: 700, color: data.connected ? "var(--ok)" : "var(--danger)" }}>
+            {data.connected
+              ? (problems.length === 0 ? "✓ Connected - all syncs healthy" : `⚠ Connected - ${problems.length} sync(s) need attention`)
+              : `✗ Not connected: ${data.error || "unknown error"}`}
+          </div>
+          {data.connected && (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: "var(--muted)" }}>
+                    <th style={{ padding: "4px 6px" }}>Sync</th>
+                    <th style={{ padding: "4px 6px" }}>Tab</th>
+                    <th style={{ padding: "4px 6px" }}>Exists</th>
+                    <th style={{ padding: "4px 6px" }}>Env set</th>
+                    <th style={{ padding: "4px 6px" }}>Last sync</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.syncs.map((s) => (
+                    <tr key={s.key} style={{ borderTop: "1px solid var(--border)" }}>
+                      <td style={{ padding: "4px 6px" }}>{s.label}</td>
+                      <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{s.tab}</td>
+                      <td style={{ padding: "4px 6px", color: s.tab_exists ? "var(--ok)" : "var(--danger)", fontWeight: 700 }}>
+                        {s.tab_exists ? "✓" : "missing"}
+                      </td>
+                      <td style={{ padding: "4px 6px", color: s.env_set ? "var(--text)" : "var(--warn)" }} title={s.env_set ? "" : `${s.env_var} not set - using default tab`}>
+                        {s.env_set ? "yes" : "default"}
+                      </td>
+                      <td style={{ padding: "4px 6px", color: s.last_error_at ? "var(--danger)" : "var(--muted)" }}>
+                        {s.last_error_at
+                          ? `error ${new Date(s.last_error_at).toLocaleString()}`
+                          : s.last_ok_at ? new Date(s.last_ok_at).toLocaleString() : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {problems.some((s) => s.last_error) && (
+            <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>
+              {problems.filter((s) => s.last_error).slice(0, 3).map((s) => (
+                <div key={s.key}>{s.label}: {s.last_error}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -3513,41 +4769,80 @@ function HelpTextCard() {
     update({ helpTexts: { ...ht, [key]: val } });
   }
 
-  const fields: { key: keyof HelpTexts; label: string }[] = [
-    { key: "photoCaptionPlaceholder",        label: "Photo caption placeholder" },
-    { key: "jobNotesPlaceholder",            label: "Job notes placeholder" },
-    { key: "billNotesPlaceholder",           label: "Bill notes placeholder" },
-    { key: "hoursMismatchPlaceholder",       label: "Hours mismatch reason placeholder" },
-    { key: "jobDescriptionPlaceholder",      label: "Manual job description placeholder" },
-    { key: "photosHint",                     label: "Photos tab instructions" },
-    { key: "schedulingNotesPlaceholder",     label: "Scheduling notes placeholder" },
-    { key: "availabilityDayNotePlaceholder", label: "Availability day note placeholder" },
-    { key: "futureAbsenceNotePlaceholder",   label: "Future absence note placeholder" },
+  // Grouped by the page/tab the field appears on so admin can find the wording
+  // they want to change by where they see it in the crew app.
+  const groups: { page: string; fields: { key: keyof HelpTexts; label: string }[] }[] = [
+    {
+      page: "Photos tab",
+      fields: [
+        { key: "photosHint",                  label: "Photos tab instructions" },
+        { key: "photoCaptionPlaceholder",     label: "Photo caption placeholder" },
+        { key: "incidentHint",                label: "Incident reporting hint" },
+        { key: "incidentDescriptionPlaceholder", label: "Incident “what happened” placeholder" },
+      ],
+    },
+    {
+      page: "Job Report tab",
+      fields: [
+        { key: "jobTypeHint",                 label: "Job type hint" },
+        { key: "skillsHint",                  label: "Skill rating hint" },
+        { key: "skillScaleHint",              label: "Star scale (what 1 and 5 mean)" },
+        { key: "truckFullnessHint",           label: "Truck fullness hint" },
+        { key: "overageHint",                 label: "Estimate overage hint" },
+        { key: "hoursMismatchPlaceholder",    label: "Hours mismatch reason placeholder" },
+        { key: "billNotesPlaceholder",        label: "Bill notes placeholder" },
+      ],
+    },
+    {
+      page: "Timeline tab",
+      fields: [
+        { key: "jobNotesPlaceholder",         label: "Job notes placeholder" },
+        { key: "jobDescriptionPlaceholder",   label: "Manual job description placeholder" },
+      ],
+    },
+    {
+      page: "Availability page",
+      fields: [
+        { key: "schedulingNotesPlaceholder",     label: "Scheduling notes placeholder" },
+        { key: "availabilityDayNotePlaceholder", label: "Availability day note placeholder" },
+        { key: "futureAbsenceNotePlaceholder",   label: "Future absence note placeholder" },
+      ],
+    },
   ];
 
   return (
     <div className="card">
       <div className="sectionTitle">Field Help Text</div>
-      <div className="col" style={{ gap: 12 }}>
-        {fields.map(({ key, label }) => (
-          <div key={key} className="col" style={{ gap: 4 }}>
-            <label className="small">{label}</label>
-            <div className="row" style={{ gap: 8 }}>
-              <input
-                value={ht[key]}
-                onChange={(e) => set(key, e.target.value)}
-                style={{ flex: 1, fontSize: 13 }}
-              />
-              <button
-                onClick={() => set(key, DEFAULT_HELP_TEXTS[key])}
-                style={{ fontSize: 11, padding: "4px 10px", color: "var(--muted)", whiteSpace: "nowrap" }}
-              >
-                Reset
-              </button>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Placeholder and hint text shown to crew, grouped by the page it appears on.
+      </div>
+      <CollapsibleList className="col" style={{ gap: 18 }} moreLabel="page groups">
+        {groups.map((group) => (
+          <div key={group.page} className="col" style={{ gap: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>
+              {group.page}
             </div>
+            {group.fields.map(({ key, label }) => (
+              <div key={key} className="col" style={{ gap: 4 }}>
+                <label className="small">{label}</label>
+                <div className="row" style={{ gap: 8 }}>
+                  <input
+                    value={ht[key]}
+                    onChange={(e) => set(key, e.target.value)}
+                    style={{ flex: 1, fontSize: 13 }}
+                  />
+                  <button
+                    onClick={() => set(key, DEFAULT_HELP_TEXTS[key])}
+                    style={{ fontSize: 11, padding: "4px 10px", color: "var(--muted)", whiteSpace: "nowrap" }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         ))}
-      </div>
+      </CollapsibleList>
     </div>
   );
 }
@@ -3579,6 +4874,11 @@ type DVIRRecord = {
   mechanic_signature_requested_email: string | null;
   created_at: string;
   needs_mechanic_review: boolean;
+  // Signed-ness flags always present. The list response ships these instead of
+  // the heavy base64 signatures (which it blanks); the detail view refetches the
+  // single DVIR to get the real signature images.
+  driver_signed: boolean;
+  mechanic_signed: boolean;
 };
 
 // ─────────────────────────────────────────
@@ -3713,7 +5013,14 @@ function DVIRTab() {
         dvir={selected}
         onBack={() => setSelected(null)}
         onSigned={(updated) => {
-          setDvirs((prev) => prev.map((d) => (d.dvir_id === updated.dvir_id ? updated : d)));
+          // Once signed, the DVIR no longer belongs in the pending-review list,
+          // so drop it there; in the full list keep it and refresh its row so the
+          // "Mech. Signed" chip updates.
+          setDvirs((prev) =>
+            pendingOnly
+              ? prev.filter((d) => d.dvir_id !== updated.dvir_id)
+              : prev.map((d) => (d.dvir_id === updated.dvir_id ? updated : d)),
+          );
           setSelected(null);
         }}
       />
@@ -3772,7 +5079,7 @@ function DVIRTab() {
                   {d.condition === "satisfactory" ? "Satisfactory" : `${d.defects.length} Defect${d.defects.length !== 1 ? "s" : ""}`}
                 </span>
                 {(() => {
-                  const signed = !!d.mechanic_signature;
+                  const signed = d.mechanic_signed;
                   const awaiting = !signed && d.needs_mechanic_review;
                   const label = signed
                     ? "Mech. Signed"
@@ -3887,6 +5194,19 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
     !!dvir.mechanic_signature_requested_at,
   );
 
+  // The list `dvir` arrives with its signature images blanked (the list ships
+  // only signed-ness booleans to stay light). Refetch the single DVIR so the
+  // detail view renders the real driver + mechanic signature images and the
+  // correct signed state. Falls back to the list object on failure.
+  const [full, setFull] = useState<DVIRRecord>(dvir);
+  useEffect(() => {
+    let alive = true;
+    apiFetch<DVIRRecord>(`/api/dvir/${dvir.dvir_id}`)
+      .then((d) => { if (alive) setFull(d); })
+      .catch(() => { /* keep the list object; status booleans are still right */ });
+    return () => { alive = false; };
+  }, [dvir.dvir_id]);
+
   async function handleSendRequest(e: React.FormEvent) {
     e.preventDefault();
     setReqErr(null);
@@ -3942,7 +5262,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
     }
   }
 
-  const isSigned = !!dvir.mechanic_signature;
+  const isSigned = full.mechanic_signed || !!full.mechanic_signature;
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -3997,12 +5317,18 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
         )}
 
         <div>
-          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver: {dvir.driver_name}</div>
-          <img
-            src={dvir.driver_signature}
-            alt="Driver signature"
-            style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
-          />
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Driver: {full.driver_name}</div>
+          {full.driver_signature ? (
+            <img
+              src={full.driver_signature}
+              alt="Driver signature"
+              style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
+            />
+          ) : (
+            <div className="small" style={{ color: "var(--muted)", fontStyle: "italic" }}>
+              Loading signature…
+            </div>
+          )}
         </div>
       </div>
 
@@ -4013,17 +5339,23 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             ✓ Mechanic Approved
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
-            Signed by: {dvir.mechanic_name} · {dvir.mechanic_signed_at ? formatMountainDateTime(dvir.mechanic_signed_at) : ""}
+            Signed by: {full.mechanic_name} · {full.mechanic_signed_at ? formatMountainDateTime(full.mechanic_signed_at) : ""}
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-            Repairs made: {dvir.repairs_made ? "Yes" : "No - no repair needed"}
+            Repairs made: {full.repairs_made ? "Yes" : "No - no repair needed"}
           </div>
-          {dvir.mechanic_notes && <div style={{ fontSize: 13, marginBottom: 8 }}>{dvir.mechanic_notes}</div>}
-          <img
-            src={dvir.mechanic_signature!}
-            alt="Mechanic signature"
-            style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
-          />
+          {full.mechanic_notes && <div style={{ fontSize: 13, marginBottom: 8 }}>{full.mechanic_notes}</div>}
+          {full.mechanic_signature ? (
+            <img
+              src={full.mechanic_signature}
+              alt="Mechanic signature"
+              style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)" }}
+            />
+          ) : (
+            <div className="small" style={{ color: "var(--muted)", fontStyle: "italic" }}>
+              Loading signature…
+            </div>
+          )}
         </div>
       ) : !dvir.needs_mechanic_review ? (
         <div className="card">
@@ -4723,22 +6055,83 @@ type JobSummary = {
   job_report: {
     submitted_by_name: string | null;
     personal_vehicles: number;
+    bill_personal_vehicles: boolean;
     dumpster_pct: number;
     recycling_pct: number;
     billing_method: string;
     review_candidate: "yes" | "no" | "na";
     hours_match: boolean;
+    hours_verified: boolean;
     hours_mismatch_reason: string | null;
+    job_type_tags: string[];
+    truck_fullness: Array<{ truck?: string; vertical_pct?: number; horizontal_pct?: number }>;
+    out_of_town: boolean;
+    has_crew_feedback: boolean | null;
+    crew_feedback: string;
+    overage_note: string;
     employee_hours: Array<{
+      user_id?: number;
       name: string;
       start: string;
       end: string;
       break_hours: number;
       hours: number;
       non_billable?: boolean;
+      // Per-skill ratings, keyed by skill name. -1 = the rater marked it N/A.
+      skill_ratings?: Record<string, number> | null;
+      skill_rating?: number | null;
     }>;
     updated_at: string | null;
   } | null;
+  inventory: {
+    furniture_count: number;
+    box_count: number;
+    items: Array<{
+      name: string;
+      qty: number;
+      is_box: boolean;
+      pack_type: string | null;
+      room: string | null;
+      notes: string | null;
+      created_by_name: string | null;
+    }>;
+  };
+  incidents: Array<{
+    incident_uuid: string;
+    claim_number: string | null;
+    incident_date: string | null;
+    severity: string;
+    attributable: string;
+    attributed_crew: string | null;
+    description: string;
+    est_cost: number | null;
+    resolved: boolean;
+    notes: string | null;
+    reported_by_name: string | null;
+    photo_urls: string[];
+    created_at: string | null;
+  }>;
+  bol: {
+    bol_id: string;
+    status: string;
+    item_count: number;
+    inventory_verified: number | null;
+    inventory_note: string | null;
+    signed_pdf_url: string | null;
+    updated_at: string | null;
+  } | null;
+  ld_days: Array<{ driver_name: string; date: string; out_of_town: boolean; drive_day: boolean }>;
+  reimbursements: Array<{
+    reimbursement_uuid: string;
+    type: string;
+    user_name: string;
+    amount: number | null;
+    category: string | null;
+    vendor: string | null;
+    status: string;
+    notes: string | null;
+    created_at: string | null;
+  }>;
   bill: {
     saved_by_name: string | null;
     items: Array<{ label?: string; qty?: number; unit?: string; rate?: number; discount?: number }>;
@@ -5187,14 +6580,18 @@ function JobSummaryTab() {
                           return (
                             <div
                               key={i}
+                              style={{
+                                padding: "8px 0",
+                                borderBottom: "1px solid var(--border)",
+                                opacity: emp.non_billable ? 0.7 : 1,
+                              }}
+                            >
+                            <div
                               className="row"
                               style={{
                                 justifyContent: "space-between",
                                 alignItems: "center",
                                 gap: 8,
-                                padding: "8px 0",
-                                borderBottom: "1px solid var(--border)",
-                                opacity: emp.non_billable ? 0.7 : 1,
                               }}
                             >
                               <div style={{ minWidth: 0 }}>
@@ -5239,6 +6636,33 @@ function JobSummaryTab() {
                                 )}
                               </div>
                             </div>
+                            {/* Skill ratings. They were already in this API response
+                                and simply never rendered, so the entire skills
+                                feature was invisible to the person it was built for.
+                                -1 is the rater's explicit "not applicable", which is
+                                different from unrated (absent) and from a 0. */}
+                            {emp.skill_ratings && Object.keys(emp.skill_ratings).length > 0 && (
+                              <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
+                                {Object.entries(emp.skill_ratings).map(([skill, score]) => (
+                                  <span
+                                    key={skill}
+                                    className="small"
+                                    style={{
+                                      border: "1px solid var(--border)",
+                                      borderRadius: 999,
+                                      padding: "1px 8px",
+                                      color: score === -1 ? "var(--muted)" : "var(--text)",
+                                    }}
+                                  >
+                                    {skill}:{" "}
+                                    <strong style={{ color: score === -1 ? "var(--muted)" : "var(--brand)" }}>
+                                      {score === -1 ? "N/A" : `${score}/5`}
+                                    </strong>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                           );
                         })}
                       </div>
@@ -5349,9 +6773,189 @@ function JobSummaryTab() {
                     ? ` - ${summary.job_report.hours_mismatch_reason}`
                     : ""}
                 </div>
+                {/* Everything below existed on the report and in the sheet, and none
+                    of it reached this page. Job type in particular decides which
+                    skills the crew were rated on, so a rating with no job type
+                    beside it is not interpretable. */}
+                <div className="small">
+                  <strong>Job type:</strong>{" "}
+                  {summary.job_report.job_type_tags.length
+                    ? summary.job_report.job_type_tags.join(", ")
+                    : "not set"}
+                </div>
+                <div className="small">
+                  <strong>Hours verified by lead:</strong> {summary.job_report.hours_verified ? "Yes" : "No"}
+                </div>
+                {summary.job_report.bill_personal_vehicles && (
+                  <div className="small"><strong>Bill personal vehicles:</strong> Yes</div>
+                )}
+                {summary.job_report.out_of_town && (
+                  <div className="small"><strong>Out of town:</strong> Yes</div>
+                )}
+                {summary.job_report.truck_fullness.length > 0 && (
+                  <div className="small">
+                    <strong>Truck fullness:</strong>{" "}
+                    {summary.job_report.truck_fullness
+                      .map((t) => `${t.truck ?? "truck"} ${t.vertical_pct ?? 0}%v / ${t.horizontal_pct ?? 0}%h`)
+                      .join(" · ")}
+                  </div>
+                )}
+                {summary.job_report.crew_feedback && (
+                  <div
+                    className="small"
+                    style={{
+                      marginTop: 6,
+                      padding: "6px 8px",
+                      borderLeft: "3px solid var(--brand)",
+                      background: "var(--card2)",
+                    }}
+                  >
+                    <strong>Crew feedback:</strong> {summary.job_report.crew_feedback}
+                  </div>
+                )}
               </div>
             )}
           </div>
+
+          {/* ── Incidents ──
+              A liability record. It was reaching the sheet and not this page, so the
+              one screen called "every source for a job" omitted the damage claims. */}
+          <div className="card" style={{ borderColor: summary.incidents.length ? "var(--danger)" : undefined }}>
+            <div className="sectionTitle">Incidents ({summary.incidents.length})</div>
+            {summary.incidents.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>None reported.</div>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                {summary.incidents.map((i) => (
+                  <div
+                    key={i.incident_uuid}
+                    style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 10 }}
+                  >
+                    <div className="row wrap" style={{ gap: 8, alignItems: "center" }}>
+                      <span style={{ fontWeight: 800, fontSize: 12, textTransform: "uppercase", color: i.severity === "major" ? "var(--danger)" : i.severity === "moderate" ? "var(--warn)" : "var(--ok)" }}>
+                        {i.severity}
+                      </span>
+                      {i.claim_number && (
+                        <span className="small" style={{ fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
+                          {i.claim_number}
+                        </span>
+                      )}
+                      {i.resolved && <span className="small" style={{ color: "var(--ok)" }}>Resolved</span>}
+                      <span className="small" style={{ color: "var(--muted)", marginLeft: "auto" }}>{i.incident_date || ""}</span>
+                    </div>
+                    <div style={{ fontSize: 14, marginTop: 4 }}>{i.description || "(no description)"}</div>
+                    <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                      {[
+                        i.reported_by_name ? `Reported by ${i.reported_by_name}` : null,
+                        i.attributed_crew ? `Attributed to ${i.attributed_crew}` : null,
+                        i.attributable && i.attributable !== "unknown" ? `Attributable: ${i.attributable}` : null,
+                        i.est_cost != null ? `Est. cost $${i.est_cost.toFixed(2)}` : null,
+                      ].filter(Boolean).join(" · ")}
+                    </div>
+                    {i.photo_urls.length > 0 && (
+                      <div className="row wrap" style={{ gap: 8, marginTop: 6 }}>
+                        {i.photo_urls.map((u, n) => (
+                          <a key={u} href={u} target="_blank" rel="noreferrer" className="small" style={{ color: "var(--brand)" }}>
+                            Photo {n + 1}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Inventory ── */}
+          <div className="card">
+            <div className="sectionTitle">
+              Inventory ({summary.inventory.furniture_count} furniture · {summary.inventory.box_count} boxes)
+            </div>
+            {summary.inventory.items.length === 0 ? (
+              <div className="small" style={{ color: "var(--muted)" }}>
+                Nothing logged. Inventory is collected on long-distance jobs only (ADR 0015).
+              </div>
+            ) : (
+              <div className="col" style={{ gap: 2 }}>
+                {summary.inventory.items.map((it, i) => (
+                  <div key={i} className="small">
+                    {it.qty} × {it.name}
+                    <span style={{ color: "var(--muted)" }}>
+                      {[it.pack_type, it.room, it.notes].filter(Boolean).length
+                        ? ` - ${[it.pack_type, it.room, it.notes].filter(Boolean).join(" · ")}`
+                        : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Bill of lading ── */}
+          {summary.bol && (
+            <div className="card">
+              <div className="sectionTitle">Bill of Lading</div>
+              <div className="col" style={{ gap: 4 }}>
+                <div className="small"><strong>Status:</strong> {summary.bol.status}</div>
+                <div className="small"><strong>Items:</strong> {summary.bol.item_count}</div>
+                {summary.bol.inventory_verified != null && (
+                  <div className="small">
+                    <strong>Inventory verified:</strong> {summary.bol.inventory_verified ? "Yes" : "No"}
+                    {summary.bol.inventory_note ? ` - ${summary.bol.inventory_note}` : ""}
+                  </div>
+                )}
+                {summary.bol.signed_pdf_url && (
+                  <a className="small" href={summary.bol.signed_pdf_url} target="_blank" rel="noreferrer" style={{ color: "var(--brand)" }}>
+                    Open signed PDF
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Long-distance per-diem / drive days ──
+              $50 per person per out-of-town day, so admin needs the count, not the flag. */}
+          {summary.ld_days.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Long-distance days</div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+                Per-diem is owed per out-of-town day, per person.
+              </div>
+              <div className="col" style={{ gap: 2 }}>
+                {summary.ld_days.map((d, i) => (
+                  <div key={i} className="small">
+                    {d.date} - <strong>{d.driver_name}</strong>
+                    <span style={{ color: "var(--muted)" }}>
+                      {[d.out_of_town ? "out of town" : null, d.drive_day ? "drive day" : null]
+                        .filter(Boolean).join(" · ") || " no flags"}
+                    </span>
+                  </div>
+                ))}
+                <div className="small" style={{ marginTop: 6, fontWeight: 700 }}>
+                  Per-diem days: {summary.ld_days.filter((d) => d.out_of_town).length} · Drive days:{" "}
+                  {summary.ld_days.filter((d) => d.drive_day).length}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Reimbursements tied to this job ── */}
+          {summary.reimbursements.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Reimbursements ({summary.reimbursements.length})</div>
+              <div className="col" style={{ gap: 4 }}>
+                {summary.reimbursements.map((r) => (
+                  <div key={r.reimbursement_uuid} className="small">
+                    <strong>{r.user_name}</strong> - {r.type}
+                    {r.amount != null ? ` $${r.amount.toFixed(2)}` : ""}
+                    {r.category ? ` (${r.category})` : ""}
+                    <span style={{ color: "var(--muted)" }}> · {r.status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="card">
             <div className="sectionTitle">

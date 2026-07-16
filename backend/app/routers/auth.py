@@ -269,7 +269,9 @@ def email_debug(_admin: User = Depends(require_admin)):
         "smtp_from": smtp_from,
         "smtp_from_set": bool(smtp_from.strip()),
         "frontend_url": frontend_url,
+        # Whether the token is set, never any of its bytes. It used to return the
+        # first 8 characters "to confirm it matches the dashboard", but that is a
+        # secret fragment in a JSON response, and set-or-not is enough to diagnose
+        # a missing token, which is the only thing this endpoint is for.
         "postmark_token_set": bool(postmark_token),
-        # show first 8 chars of token so you can confirm it matches Postmark dashboard
-        "postmark_token_prefix": postmark_token[:8] if postmark_token else None,
     }

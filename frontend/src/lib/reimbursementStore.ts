@@ -11,6 +11,15 @@
 
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
+import {
+  slotToBlob,
+  toQueuedPhoto,
+  UnreadablePhotoError,
+  type PhotoSlot,
+} from "./queuedPhoto";
+
+export { toQueuedPhoto, slotToBlob, UnreadablePhotoError };
+export type { QueuedPhoto } from "./queuedPhoto";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,8 +86,8 @@ export type MileageQueueEntry = {
   job_date: string;
   expense_date: string;
   notes: string;
-  odo_start_blob: Blob | null;
-  odo_end_blob: Blob | null;
+  odo_start_blob: PhotoSlot;
+  odo_end_blob: PhotoSlot;
   created_at: string;
 } & Partial<QueueFailure>;
 
@@ -96,7 +105,7 @@ export type ExpenseQueueEntry = {
   job_date: string;
   expense_date: string;
   notes: string;
-  receipt_blob: Blob | null;
+  receipt_blob: PhotoSlot;
   created_at: string;
 } & Partial<QueueFailure>;
 
@@ -463,12 +472,13 @@ export async function syncQueue(): Promise<number> {
           if (entry.odometer_end != null) {
             form.append("odometer_end", String(entry.odometer_end));
           }
-          if (entry.odo_start_blob) {
-            form.append("odometer_start_photo", entry.odo_start_blob, "odo_start.jpg");
-          }
-          if (entry.odo_end_blob) {
-            form.append("odometer_end_photo", entry.odo_end_blob, "odo_end.jpg");
-          }
+          // Materialise the photo bytes BEFORE building the request. A dead
+          // File handle throws here, where we can tell the crew member, instead
+          // of silently producing a request with no body at all.
+          const startBlob = await slotToBlob(entry.odo_start_blob);
+          if (startBlob) form.append("odometer_start_photo", startBlob, "odo_start.jpg");
+          const endBlob = await slotToBlob(entry.odo_end_blob);
+          if (endBlob) form.append("odometer_end_photo", endBlob, "odo_end.jpg");
           await postMultipart("/api/reimbursements/mileage", form);
         } else {
           if (entry.amount != null) {
@@ -477,14 +487,27 @@ export async function syncQueue(): Promise<number> {
           form.append("category", entry.category || "");
           form.append("vendor", entry.vendor || "");
           form.append("payment_method", entry.payment_method);
-          if (entry.receipt_blob) {
-            form.append("receipt_photo", entry.receipt_blob, "receipt.jpg");
-          }
+          const receiptBlob = await slotToBlob(entry.receipt_blob);
+          if (receiptBlob) form.append("receipt_photo", receiptBlob, "receipt.jpg");
           await postMultipart("/api/reimbursements/expense", form);
         }
         await removeFromQueue(entry.reimbursement_uuid);
         synced++;
       } catch (e) {
+        // A photo whose bytes cannot be read is not a network problem and will
+        // never fix itself, so retrying is pointless. Mark it failed with words
+        // that tell the crew member what to actually do: the claim is still here,
+        // the photo is the part that is gone.
+        if (e instanceof UnreadablePhotoError) {
+          await markFailed(
+            entry.reimbursement_uuid,
+            0,
+            "The photo attached to this claim can no longer be read from this phone. " +
+              "The rest of the claim is safe. Retake the photo and submit it again, " +
+              "or delete this one and re-file it.",
+          );
+          continue;
+        }
         // 401/403 are excluded - an expired token is transient; dropping the
         // op would silently lose a crew member's reimbursement submission.
         const isPermanent =

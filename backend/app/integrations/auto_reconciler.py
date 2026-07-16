@@ -38,6 +38,10 @@ _ADVISORY_LOCK_KEY = 0x7C8E0001
 RECONCILE_INTERVAL_S = 300   # 5 minutes
 BATCH_SIZE = 100
 MAX_EVENTS_PER_CYCLE = 500
+# BOLs are far lower-volume than events (one per long-distance job), so a small
+# per-cycle cap is plenty and keeps the Sheets calls modest.
+BOL_BATCH_SIZE = 50
+BOL_MAX_PER_CYCLE = 200
 ON_ERROR_BACKOFF_S = 60
 
 _started = False
@@ -80,6 +84,7 @@ def _try_acquire_advisory_lock(db) -> bool:
 def _run_once() -> None:
     from app.db.session import SessionLocal
     from app.integrations.sheets_reconcile import reconcile_events
+    from app.integrations.bol_reconcile import reconcile_bols
 
     db = SessionLocal()
     try:
@@ -97,6 +102,16 @@ def _run_once() -> None:
                 f"[auto-reconcile] {result.get('exported', 0)} exported, "
                 f"{result.get('errors', 0)} errors, "
                 f"{result.get('duration_ms', 0)} ms"
+            )
+
+        # Same durability sweep for signed BOLs: a scheduled export whose pool
+        # thread died leaves the BOL in Postgres but not the sheet (ADR 0020).
+        bol_result = reconcile_bols(db, batch_size=BOL_BATCH_SIZE, max_bols=BOL_MAX_PER_CYCLE)
+        if bol_result.get("found", 0) > 0 or bol_result.get("errors", 0) > 0:
+            print(
+                f"[auto-reconcile] bols: {bol_result.get('exported', 0)} exported, "
+                f"{bol_result.get('errors', 0)} errors, "
+                f"{bol_result.get('duration_ms', 0)} ms"
             )
     finally:
         try:

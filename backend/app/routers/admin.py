@@ -20,18 +20,26 @@ from sqlalchemy.orm import Session
 from app.core.deps import require_admin
 from app.db.models.admin_entry_status import AdminEntryStatus
 from app.db.models.admin_note import AdminNote
+from app.db.models.bol import DigitalBOL
 from app.db.models.dvir import DVIR
 from app.db.models.event import Event
+from app.db.models.incident import Incident
 from app.db.models.job_bill import JobBill
+from app.db.models.job_inventory import JobInventoryItem
 from app.db.models.job_report import JobReport
+from app.db.models.long_distance import LdDay
 from app.db.models.materials import MaterialsSubmission
 from app.db.models.photo import Photo
+from app.db.models.reimbursement import Reimbursement
 from app.db.models.system_config import SystemConfig
 from app.db.models.employee_tag import user_employee_tags
 from app.db.models.user import User
 from app.db.models.user_email_alias import UserEmailAlias
 from app.db.session import get_db
-from app.integrations.sheets_export import update_entry_status_in_sheets
+from app.integrations.sheets_export import (
+    _incident_photo_urls,
+    update_entry_status_in_sheets,
+)
 
 DVIR_UNITS_KEY = "dvir_units"
 DEFAULT_DVIR_UNITS = ["26INT", "24FR8", "16FORD"]
@@ -52,6 +60,7 @@ class UserAdminResponse(BaseModel):
     phone: Optional[str] = None
     role: str
     is_active: bool
+    is_skill_rater: bool = False
     tag_ids: List[int] = []
     alias_count: int = 0
     # Free-form text the crew maintains on their availability page. Surfaced
@@ -65,6 +74,7 @@ class UserAdminResponse(BaseModel):
 class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
     role: Optional[str] = None
+    is_skill_rater: Optional[bool] = None
     name: Optional[str] = None
     phone: Optional[str] = None
 
@@ -100,6 +110,7 @@ def _user_with_tags(
         phone=user.phone,
         role=user.role,
         is_active=user.is_active,
+        is_skill_rater=bool(user.is_skill_rater),
         tag_ids=tag_ids,
         alias_count=alias_count,
         scheduling_notes=user.scheduling_notes or "",
@@ -144,8 +155,16 @@ def update_user(
 
     if payload.is_active is not None:
         user.is_active = payload.is_active
-    if payload.role is not None and payload.role in ("user", "admin"):
+    # Three roles: user (crew), crew_lead (hours verify), admin. Unknown values
+    # are ignored so a bad client can't set a junk role. Note crew_lead does not
+    # grant skill rating - that is the separate is_skill_rater designation below.
+    if payload.role is not None and payload.role in ("user", "crew_lead", "admin"):
         user.role = payload.role
+    # Skill-rating designation (independent of role, see ADR 0014). No
+    # self-lockout concern since it grants a capability rather than removing
+    # access.
+    if payload.is_skill_rater is not None:
+        user.is_skill_rater = payload.is_skill_rater
     if payload.name is not None:
         user.name = payload.name.strip() or None
     if payload.phone is not None:
@@ -384,6 +403,19 @@ def job_search(
 # Per-job summary (all sources collated by job_uuid)
 # ---------------------------
 
+def _decode_json_list(raw: Optional[str]) -> list:
+    """Decode a JSON-array text column, tolerating junk. A malformed blob must not
+    take down the whole job summary: the point of this page is that admin can see a
+    job whole, so one bad column degrades to an empty list rather than a 500."""
+    if not raw:
+        return []
+    try:
+        val = _json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return val if isinstance(val, list) else []
+
+
 def _iso(dt: Any) -> Optional[str]:
     """Serialize a datetime for the JSON response. Naive datetimes in this
     app are stored as UTC; emit them with a trailing 'Z' so the browser
@@ -473,6 +505,50 @@ def job_summary(
         .all()
     )
 
+    # ── Sources added because the summary had fallen behind the app ──────────
+    # Every feature below is keyed by job_uuid and was already reaching the Google
+    # Sheet, but never reached this page, so admin had to open the sheet (or three
+    # tabs of it) to see a job whole. Off-job hours, office hours and availability
+    # are deliberately absent: they are not job-scoped and cannot be joined here.
+    inventory_items = (
+        db.query(JobInventoryItem)
+        .filter(JobInventoryItem.job_uuid == job_uuid)
+        .order_by(JobInventoryItem.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
+        .all()
+    )
+    incidents = (
+        db.query(Incident)
+        .filter(Incident.job_uuid == job_uuid)
+        .order_by(Incident.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
+        .all()
+    )
+    bol = (
+        db.query(DigitalBOL)
+        .filter(DigitalBOL.job_uuid == job_uuid)
+        .order_by(DigitalBOL.updated_at.desc())
+        .first()
+    )
+    ld_days = (
+        db.query(LdDay)
+        .filter(LdDay.job_uuid == job_uuid)
+        .order_by(LdDay.date.asc())
+        .limit(JOB_SUMMARY_CAP)
+        .all()
+    )
+    reimbursements = (
+        db.query(Reimbursement)
+        .filter(Reimbursement.job_uuid == job_uuid)
+        .order_by(Reimbursement.created_at.asc())
+        .limit(JOB_SUMMARY_CAP)
+        .all()
+    )
+
+    # Tolerant decode: a corrupt JSON column must degrade to empty, not 500 the
+    # whole summary page (the point of this endpoint is to show a job WHOLE).
+    employee_hours = _decode_json_list(report.employee_hours_json) if report else []
+
     # Pick the most-common job_name from events/materials so the header reads cleanly.
     name_candidates: List[str] = []
     for e in events:
@@ -507,7 +583,7 @@ def job_summary(
                 "vehicle_number": d.vehicle_number,
                 "trailer_number": d.trailer_number,
                 "condition": d.condition,
-                "defects": _json.loads(d.defects_json) if d.defects_json else [],
+                "defects": _decode_json_list(d.defects_json),
                 "defect_notes": d.defect_notes,
                 "driver_name": d.driver_name,
                 "mechanic_name": d.mechanic_name,
@@ -521,7 +597,7 @@ def job_summary(
                 "id": m.submission_id,
                 "created_at": _iso(m.created_at),
                 "notes": m.notes or "",
-                "items": _json.loads(m.items_json or "[]"),
+                "items": _decode_json_list(m.items_json),
                 "total": float(m.total or 0),
             }
             for m in materials
@@ -529,19 +605,107 @@ def job_summary(
         "job_report": None if not report else {
             "submitted_by_name": report.submitted_by_name,
             "personal_vehicles": report.personal_vehicles,
+            "bill_personal_vehicles": bool(report.bill_personal_vehicles),
             "dumpster_pct": report.dumpster_pct,
             "recycling_pct": report.recycling_pct,
             "billing_method": report.billing_method,
             "review_candidate": report.review_candidate,
             "hours_match": report.hours_match,
+            "hours_verified": bool(report.hours_verified),
             "hours_mismatch_reason": report.hours_mismatch_reason,
-            "employee_hours": _json.loads(report.employee_hours_json or "[]") or [],
+            # These all existed on the model and in the sheet, and none of them
+            # reached this page. The job type in particular decides which skills
+            # the crew were rated on, so a rating with no job type next to it is
+            # not interpretable.
+            "job_type_tags": _decode_json_list(report.job_type_tags_json),
+            "truck_fullness": _decode_json_list(report.truck_fullness_json),
+            "out_of_town": bool(report.out_of_town),
+            "has_crew_feedback": report.has_crew_feedback,
+            "crew_feedback": report.crew_feedback or "",
+            "overage_note": report.overage_note or "",
+            "employee_hours": employee_hours,
             "created_at": _iso(report.created_at),
             "updated_at": _iso(report.updated_at),
         },
+        "inventory": {
+            "furniture_count": sum(
+                (it.qty or 0) for it in inventory_items if not it.is_box
+            ),
+            "box_count": sum((it.qty or 0) for it in inventory_items if it.is_box),
+            "items": [
+                {
+                    "name": it.name,
+                    "qty": it.qty,
+                    "is_box": bool(it.is_box),
+                    "pack_type": it.pack_type,
+                    "room": it.room,
+                    "notes": it.notes,
+                    "created_by_name": it.created_by_name,
+                }
+                for it in inventory_items
+            ],
+        },
+        "incidents": [
+            {
+                "incident_uuid": i.incident_uuid,
+                "claim_number": i.claim_number,
+                "incident_date": i.incident_date,
+                "severity": i.severity,
+                "attributable": i.attributable,
+                "attributed_crew": i.attributed_crew,
+                "description": i.description,
+                "est_cost": float(i.est_cost) if i.est_cost is not None else None,
+                "resolved": bool(i.resolved),
+                "notes": i.notes,
+                "reported_by_name": i.reported_by_name,
+                # Same helper the sheet export uses: unions the photos table with
+                # the incident's own snapshot, so a URL captured offline and never
+                # re-uploaded is not lost, and it queries photos by incident_uuid
+                # directly rather than filtering the job's photo list (which is
+                # capped at 1000 - the incident's photos are attached later and
+                # would be exactly the truncated ones on a busy job).
+                "photo_urls": _incident_photo_urls(db, i.incident_uuid, _decode_json_list(i.photo_urls)),
+                "created_at": _iso(i.created_at),
+            }
+            for i in incidents
+        ],
+        "bol": None if not bol else {
+            "bol_id": bol.bol_id,
+            "status": bol.status,
+            "item_count": len(_decode_json_list(bol.items_json)),
+            "inventory_verified": getattr(bol, "inventory_verified", None),
+            "inventory_note": getattr(bol, "inventory_note", None),
+            "signed_pdf_url": getattr(bol, "signed_pdf_url", None),
+            "updated_at": _iso(bol.updated_at),
+        },
+        # Per-diem and drive days. $50/day/person, so admin needs the count, not
+        # just the flag.
+        "ld_days": [
+            {
+                "driver_name": ld.driver_name,
+                "date": ld.date,
+                "out_of_town": bool(ld.out_of_town),
+                "drive_day": bool(ld.drive_day),
+            }
+            for ld in ld_days
+        ],
+        "reimbursements": [
+            {
+                "reimbursement_uuid": r.reimbursement_uuid,
+                "type": r.type,
+                "user_name": r.user_name,
+                "amount": float(r.amount) if r.amount is not None else None,
+                "category": r.category,
+                "vendor": r.vendor,
+                "status": r.status,
+                "notes": r.notes,
+                "created_at": _iso(r.created_at),
+            }
+            for r in reimbursements
+        ],
         "bill": None if not bill else {
             "saved_by_name": bill.saved_by_name,
-            "items": _json.loads(bill.items_json or "[]"),
+            "items": _decode_json_list(bill.items_json),
             "global_discount": float(bill.global_discount or 0),
             "notes": bill.notes or "",
             "updated_at": _iso(bill.updated_at),
@@ -752,6 +916,37 @@ def reconcile_events_endpoint(
     return {"ok": True, **result}
 
 
+@router.post("/sheets/reconcile-bols")
+def reconcile_bols_endpoint(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Ship any BOLs that are in Postgres but missing from the BOLs sheet tab
+    (a scheduled export whose pool thread died). Idempotent. See ADR 0020."""
+    from app.integrations.bol_reconcile import reconcile_bols
+
+    result = reconcile_bols(db)
+    return {"ok": True, **result}
+
+
+@router.post("/bol/{bol_id}/reexport")
+def force_reexport_bol_endpoint(
+    bol_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Force a fresh sheet + Drive-link export of one BOL by id, even if it is
+    already exported or its row is stale/blank. Recovery tool for a specific
+    document; there was previously no way to force a re-export short of a real
+    save. See ADR 0020."""
+    from app.integrations.bol_reconcile import force_reexport_bol
+
+    result = force_reexport_bol(db, bol_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error", "BOL not found"))
+    return result
+
+
 # ---------------------------
 # App Health - snapshot of critical functions for the Settings tab. Each
 # check is independently try/excepted so one failing probe doesn't blank
@@ -843,6 +1038,26 @@ def _check_event_drift(db: Session) -> Dict[str, str]:
         return {"name": "Sheet drift - events", "status": "fail", "detail": f"{ex}"}
 
 
+def _check_bol_drift(db: Session) -> Dict[str, str]:
+    try:
+        from app.integrations.bol_reconcile import count_unexported_bols
+        n = count_unexported_bols(db)
+        if n == 0:
+            return {"name": "Sheet drift - BOLs", "status": "ok", "detail": "0 missing"}
+        # BOLs are signed legal documents and low-volume - ANY missing one is
+        # worth surfacing, so this warns from 1 (the auto-reconciler clears them
+        # every cycle; a persistent count means something is wrong).
+        return {
+            "name": "Sheet drift - BOLs",
+            "status": "warn",
+            "detail": f"{n} BOLs in the database but missing from the sheet - the "
+                      f"auto-reconciler clears these each cycle; a persistent count means "
+                      f"something is wrong (POST /api/admin/sheets/reconcile-bols to force)",
+        }
+    except Exception as ex:
+        return {"name": "Sheet drift - BOLs", "status": "fail", "detail": f"{ex}"}
+
+
 def _check_event_freshness(db: Session) -> Dict[str, str]:
     try:
         latest = db.query(func.max(Event.timestamp)).scalar()
@@ -897,6 +1112,7 @@ def app_health(
         _check_sheets_api(db),
         _check_drive_api(db),
         _check_event_drift(db),
+        _check_bol_drift(db),
         _check_event_freshness(db),
     ]
     worst = "ok"
@@ -912,3 +1128,15 @@ def app_health(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
     }
+
+
+@router.get("/system-check/sheets")
+def system_check_sheets(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Advanced Settings health check: verify the Google Sheets connection and
+    that every registered app->sheet sync has its worksheet tab (and flag env
+    vars that aren't set). Covers all syncs via SHEET_SYNC_REGISTRY."""
+    from app.integrations.sheets_export import check_sheets_sync
+    return check_sheets_sync(db)

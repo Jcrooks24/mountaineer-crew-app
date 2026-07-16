@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime
+from sqlalchemy import Column, String, DateTime, Integer
 from sqlalchemy.sql import func
 from app.db.session import Base
 
@@ -11,5 +11,18 @@ class CalendarJob(Base):
 
     # Canonical job UUID shared across all devices
     job_uuid = Column(String, unique=True, nullable=False, index=True)
+
+    # Scheduled window from the Google Calendar event (ISO strings), cached at
+    # resolve time so the server can compute a scheduled-duration baseline for
+    # est-vs-actual hours (Phase 4) without a live Calendar API call. Nullable -
+    # older rows and manual jobs have no window.
+    scheduled_start = Column(String, nullable=True)
+    scheduled_end = Column(String, nullable=True)
+
+    # Number of crew invited to the calendar event (non-declined attendees),
+    # cached at resolve time so the scheduled-duration fallback can express an
+    # estimated MAN-hours baseline (invitees x duration) instead of raw wall
+    # duration. Nullable - older rows / manual jobs have none.
+    invitee_count = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())

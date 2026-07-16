@@ -308,6 +308,9 @@ def delete_event(
 @router.get("/jobs/resolve")
 def resolve_calendar_job(
     calendar_event_id: str = Query(...),
+    scheduled_start: Optional[str] = Query(None),
+    scheduled_end: Optional[str] = Query(None),
+    invitee_count: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -315,16 +318,41 @@ def resolve_calendar_job(
     Return (or create) the canonical job_uuid for a Google Calendar event ID.
     All devices calling this with the same calendar_event_id receive the same
     job_uuid, ensuring cross-device event history is unified under one key.
+
+    The optional scheduled_start/scheduled_end (ISO strings from the calendar
+    event) are cached on the row so the server can later compute a
+    scheduled-duration baseline for est-vs-actual hours. Backfilled on an
+    existing row when currently empty and now supplied.
     """
     row = db.query(CalendarJob).filter(
         CalendarJob.calendar_event_id == calendar_event_id
     ).first()
 
     if row:
+        changed = False
+        if scheduled_start and not row.scheduled_start:
+            row.scheduled_start = scheduled_start
+            changed = True
+        if scheduled_end and not row.scheduled_end:
+            row.scheduled_end = scheduled_end
+            changed = True
+        # Refresh invitee_count whenever supplied - crew get added/removed from
+        # the event over time, so the latest count is the most accurate baseline.
+        if invitee_count is not None and invitee_count != row.invitee_count:
+            row.invitee_count = invitee_count
+            changed = True
+        if changed:
+            db.commit()
         return {"ok": True, "job_uuid": row.job_uuid, "created": False}
 
     new_uuid = str(_uuid.uuid4())
-    row = CalendarJob(calendar_event_id=calendar_event_id, job_uuid=new_uuid)
+    row = CalendarJob(
+        calendar_event_id=calendar_event_id,
+        job_uuid=new_uuid,
+        scheduled_start=scheduled_start or None,
+        scheduled_end=scheduled_end or None,
+        invitee_count=invitee_count,
+    )
     db.add(row)
     db.commit()
     return {"ok": True, "job_uuid": new_uuid, "created": True}
@@ -401,7 +429,7 @@ def upsert_manual_job(
         db.commit()
     except IntegrityError:
         # Race: another device inserted the same (name, date) pair first.
-        # Whichever job_uuid wins the race is canonical — the client will
+        # Whichever job_uuid wins the race is canonical, the client will
         # re-derive its UUID from the deterministic hash on next load and
         # they should match anyway.
         db.rollback()

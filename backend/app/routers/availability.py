@@ -20,6 +20,19 @@ from typing import List, Optional
 # the backend so a tampered client can't sneak in a change to a locked day.
 LOCK_WINDOW_DAYS = 14
 
+# availability_days grows one row per (user, day) forever. These bounds keep the
+# read endpoints from scanning the whole table into a 512 MB worker's memory.
+# A user only ever edits the current + future windows, and the admin views only
+# render a rolling window, so old rows are never needed by a live screen.
+_OWN_STATE_HISTORY_FLOOR_DAYS = 120   # caller's own /availability
+_AUDIT_HISTORY_FLOOR_DAYS = 180       # admin /availability/all
+_AUDIT_ROW_CAP = 20000                # hard backstop on the audit scan
+_RANGE_MAX_SPAN_DAYS = 92             # admin /range clamp
+
+
+def _iso_days_ago(n: int) -> str:
+    return date.fromordinal(date.today().toordinal() - n).isoformat()
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -29,8 +42,7 @@ from app.db.models.availability import AVAILABILITY_STATUSES, AvailabilityDay
 from app.db.models.availability_unlock import AvailabilityUnlock
 from app.db.models.user import User
 from app.integrations.sheets_export import (
-    export_availability_window_to_sheets,
-    run_export_in_background,
+    schedule_availability_export,
 )
 from app.schemas.availability import (
     AvailabilityBatchIn,
@@ -102,9 +114,13 @@ def _contiguous_horizon(day_strs: set[str], today: date) -> Optional[str]:
 
 
 def _state_for_user(db: Session, user_id: int) -> AvailabilityState:
+    # Floor at recent history: the horizon only looks forward from today and the
+    # UI only edits current/future windows, so scanning years of past rows on
+    # this hot path is pure memory cost.
     rows = (
         db.query(AvailabilityDay)
         .filter(AvailabilityDay.user_id == user_id)
+        .filter(AvailabilityDay.day >= _iso_days_ago(_OWN_STATE_HISTORY_FLOOR_DAYS))
         .order_by(AvailabilityDay.day.asc())
         .all()
     )
@@ -129,38 +145,19 @@ def _queue_window_export(
     user_email: str,
     window_start: str,
 ) -> None:
-    """Refresh the sheet row for one (user, window) by reading the current
-    state out of the DB and pushing it to AvailabilityStaging. Kept here so
-    the export captures the post-commit state - the background thread only
-    needs the prepared payload, not a live db handle.
+    """Schedule a COALESCED sheet refresh for one (user, window).
+
+    This used to read the DB and fire an uncoalesced background export per call.
+    An admin editing a run of days on the month grid then fired one export per
+    edit, each doing ~4 Google Sheets reads, which blew the 60-reads/min quota
+    (429s) and piled unbounded tasks onto the 2-worker export pool - a rate-limit
+    and memory problem at once. schedule_availability_export coalesces a burst for
+    the same (user, window) into one write of the final state, and its worker
+    re-reads the DB itself (name/email included), so the read here is no longer
+    needed. user_name/user_email are kept in the signature for the callers but are
+    now looked up in the worker.
     """
-    rows = (
-        db.query(AvailabilityDay)
-        .filter(
-            AvailabilityDay.user_id == user_id,
-            AvailabilityDay.window_start == window_start,
-        )
-        .order_by(AvailabilityDay.day.asc())
-        .all()
-    )
-    if not rows:
-        return
-    payload = {
-        "user_id": user_id,
-        "user_name": user_name,
-        "user_email": user_email,
-        "window_start": window_start,
-        "days": [
-            {
-                "day": r.day,
-                "status": r.status,
-                "note": r.note or "",
-                "updated_at": r.updated_at,
-            }
-            for r in rows
-        ],
-    }
-    run_export_in_background(export_availability_window_to_sheets, payload)
+    schedule_availability_export(user_id, window_start)
 
 
 @router.get("", response_model=AvailabilityState)
@@ -177,10 +174,18 @@ def list_all(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    """Admin audit endpoint - every crew member's days, no horizon."""
+    """Admin audit endpoint - every crew member's recent + future days.
+
+    Floored to recent history and hard-capped: this scans every user at once, so
+    an unbounded read of a forever-growing table is a direct OOM risk on the
+    512 MB worker. Old windows are past the lock and never edited, so dropping
+    them costs the audit nothing a live screen uses.
+    """
     rows = (
         db.query(AvailabilityDay)
+        .filter(AvailabilityDay.day >= _iso_days_ago(_AUDIT_HISTORY_FLOOR_DAYS))
         .order_by(AvailabilityDay.user_name.asc(), AvailabilityDay.day.asc())
+        .limit(_AUDIT_ROW_CAP)
         .all()
     )
     return [_to_out(r) for r in rows]
@@ -257,8 +262,15 @@ def submit_batch(
                 )
                 .first()
             )
+            # The lock applies only to *modifying* an already-submitted day.
+            # A never-submitted day in the window (no existing row) stays
+            # editable, and re-submitting an already-submitted day with its
+            # unchanged value is a no-op - neither should trip the lock. Only a
+            # genuine value change to a submitted day requires an admin unlock.
             if existing:
-                locked_changes.append(entry.day)
+                new_note = (entry.note or "").strip() or None
+                if existing.status != entry.status or (existing.note or None) != new_note:
+                    locked_changes.append(entry.day)
     if locked_changes and not window_unlocked:
         raise HTTPException(
             status_code=409,
@@ -467,6 +479,14 @@ def admin_get_range(
         raise HTTPException(status_code=400, detail="Bad start/end date")
     if end < start:
         raise HTTPException(status_code=400, detail="end must be >= start")
+    # Clamp the span so a client can't request a multi-year range that scans the
+    # whole table across every user into the 512 MB worker. The month grid only
+    # ever asks for ~30-60 days.
+    if (date.fromisoformat(end).toordinal() - date.fromisoformat(start).toordinal()) > _RANGE_MAX_SPAN_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Range too wide (max {_RANGE_MAX_SPAN_DAYS} days).",
+        )
 
     rows = (
         db.query(AvailabilityDay)

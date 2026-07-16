@@ -63,11 +63,36 @@ class JobReport(Base):
     bill_personal_vehicles = Column(Boolean, nullable=True, default=False)
 
     # JSON-encoded list of per-employee entries:
-    #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float }]
+    #   [{ name, start: "HH:MM", end: "HH:MM", break_hours: float, hours: float,
+    #      skill_rating: int|null }]
     # Crew enters these on the Report tab using the time-math helper. Stored
     # as Text to match the existing JobBill / MaterialsSubmission pattern.
+    # skill_rating (1-5, null = N/A) rides inside each entry - no separate column.
     employee_hours_json = Column(Text, nullable=True)
+
+    # JSON array of job-type tags from the fixed vocabulary (see JOB_TYPE_TAGS
+    # in schemas/job_report.py). Multi-select; drives per-mover skill-exposure
+    # accrual by job type downstream. Nullable so pre-existing rows read empty
+    # without a backfill.
+    job_type_tags_json = Column(Text, nullable=True)
+
+    # JSON array of per-truck fullness readings:
+    #   [{ truck, vertical_pct, horizontal_pct }] where pct ∈ {25,50,75,100}.
+    # Crew estimates fill against the interior 25% marks. Nullable - blank when
+    # not collected.
+    truck_fullness_json = Column(Text, nullable=True)
+
+    # Crew's explanation when the actual inventory ran over the linked estimate
+    # (extra items, different access, stairs/parking). Captured by the overage
+    # prompt - the objective est-vs-actual note for the client conversation.
+    overage_note = Column(Text, nullable=True)
+
+    # Crew-lead sign-off that the per-employee hours are correct. Null = not yet
+    # verified; the crew-lead-only checkbox on the report sets it.
+    hours_verified = Column(Boolean, nullable=True, default=False)
 
     # Timestamps
     created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=False)
+    # Indexed: the worked-hours query filters on it to bound its scan to the
+    # last two weeks (see routers/hours.py).
+    updated_at = Column(DateTime, nullable=False, index=True)

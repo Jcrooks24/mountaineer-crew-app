@@ -173,6 +173,13 @@ def invalidate_cache() -> None:
         # Defensive: never let cache cleanup break the admin token-rotation
         # endpoint. The next sheet export's first call will rebuild anyway.
         pass
+    # Same cascade for the per-thread Drive service, which also holds a
+    # reference to the previous creds.
+    try:
+        from app.integrations.drive_upload import invalidate_drive_svc_cache
+        invalidate_drive_svc_cache()
+    except Exception:
+        pass
 
 
 def get_calendar_service(db=None):
@@ -247,12 +254,49 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List
 
     resp = _ssl_retry(_fetch)
     items = resp.get("items", [])
+    ignored = _ignored_invitee_emails()
     out: List[Dict[str, Any]] = []
     for it in items:
         start = it.get("start", {}).get("dateTime") or it.get("start", {}).get("date")
+        end = it.get("end", {}).get("dateTime") or it.get("end", {}).get("date")
         out.append({
             "id": it.get("id"),
             "summary": it.get("summary") or "(no title)",
             "start": start,
+            # `end` powers the scheduled-duration fallback for est-vs-actual
+            # hours (Phase 4). Previously fetched from Google but dropped.
+            "end": end,
+            # Count of invited crew (non-declined, real people, minus workspace/
+            # shared mailboxes). Cached at resolve time so the schedule fallback
+            # can express estimated MAN-hours (invitees x duration).
+            "invitees": _count_invitees(it.get("attendees"), ignored),
         })
     return out
+
+
+def _ignored_invitee_emails() -> set:
+    """Workspace / shared-mailbox addresses that shouldn't count as crew.
+    Configured via IGNORED_INVITEE_EMALS (comma-separated); mirrors the crew-
+    resources scanner's filtering without importing it (avoids an import cycle)."""
+    raw = os.getenv("IGNORED_INVITEE_EMAILS", "") or ""
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def _count_invitees(attendees: Any, ignored: set) -> int:
+    """Number of real crew invited to an event: attendees with an email who
+    haven't declined, excluding room/resource entries and ignored addresses."""
+    if not isinstance(attendees, list):
+        return 0
+    n = 0
+    for a in attendees:
+        if not isinstance(a, dict):
+            continue
+        email = (a.get("email") or "").strip().lower()
+        if not email or email in ignored:
+            continue
+        if a.get("resource") is True:
+            continue
+        if a.get("responseStatus") == "declined":
+            continue
+        n += 1
+    return n

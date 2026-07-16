@@ -1,6 +1,7 @@
 import traceback
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -8,7 +9,11 @@ from app.core.deps import get_current_user
 from app.db.models.user import User
 from app.db.models.photo import Photo
 from app.db.session import get_db
-from app.integrations.drive_upload import upload_photo_to_drive
+from app.integrations.drive_upload import (
+    update_drive_file_description,
+    upload_photo_to_drive,
+)
+from app.routers.incidents import export_incident_by_uuid
 
 router = APIRouter(prefix="/api/photos", tags=["photos"])
 
@@ -22,10 +27,19 @@ def upload_photo(
     job_date: str = Form(default=""),
     caption: str = Form(default=""),
     folder: str = Form(default=""),  # "estimator" routes to the estimator parent folder
+    incident_uuid: str = Form(default=""),  # tags this photo to an incident
+    claim_number: str = Form(default=""),   # denormalized for display / Drive search
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     mime_type = file.content_type or "image/jpeg"
+
+    incident_uuid = (incident_uuid or "").strip()
+    claim_number = (claim_number or "").strip()
+    # Prefix the Drive caption with the claim number so an incident's photos are
+    # findable in Drive by claim, mirroring the incident's claim_number in the
+    # sheet. The DB fields below are the primary link; this is admin convenience.
+    drive_caption = f"[{claim_number}] {caption}".strip() if claim_number else caption
 
     # Idempotent: if this photo_id is already stored, skip the Drive upload
     # and return the existing record. The offline queue retries with the same
@@ -49,7 +63,7 @@ def upload_photo(
             mime_type=mime_type,
             job_name=job_name,
             job_date=job_date,
-            caption=caption,
+            caption=drive_caption,
             is_estimator=(folder.strip().lower() == "estimator"),
         )
     except Exception as e:
@@ -65,6 +79,8 @@ def upload_photo(
         drive_file_id=result["file_id"],
         drive_url=result["url"],
         mime_type=mime_type,
+        incident_uuid=incident_uuid or None,
+        claim_number=claim_number or None,
     )
     db.add(row)
     try:
@@ -78,6 +94,13 @@ def upload_photo(
         traceback.print_exc()
         return {"ok": False, "photo_id": photo_id, "error": "Failed to save photo record"}
 
+    # This photo belongs to an incident, so the incident's sheet row is now out
+    # of date: its photo_urls column is rebuilt from the photos table on export.
+    # Crew file the incident first and attach photos afterwards, so without this
+    # re-export the incident would sit in the sheet with no photo links at all.
+    if incident_uuid:
+        export_incident_by_uuid(db, incident_uuid)
+
     return {
         "ok": True,
         "photo_id": photo_id,
@@ -85,6 +108,45 @@ def upload_photo(
         "drive_url": result["url"],
         "thumb_url": result["thumb_url"],
     }
+
+
+class CaptionUpdate(BaseModel):
+    photo_id: str
+    caption: str = ""
+
+
+@router.post("/caption")
+def update_caption(
+    payload: CaptionUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Update a photo's caption/note after it was submitted. Lets the crew add
+    or edit a note on an individual photo from the Saved gallery. Persists to
+    the DB (so it syncs across devices) and best-effort mirrors it onto the
+    Drive file description so admin sees the note in Drive too."""
+    row = db.query(Photo).filter(Photo.id == payload.photo_id).first()
+    if not row:
+        return {"ok": False, "error": "Photo not found"}
+
+    caption = (payload.caption or "").strip()
+    row.caption = caption
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        traceback.print_exc()
+        return {"ok": False, "error": "Failed to save note"}
+
+    # Best-effort: keep the Drive description in sync. Never fail the request
+    # on a Drive hiccup - the note is already saved to the DB.
+    if row.drive_file_id:
+        try:
+            update_drive_file_description(db, row.drive_file_id, caption)
+        except Exception:
+            traceback.print_exc()
+
+    return {"ok": True, "photo_id": payload.photo_id, "caption": caption}
 
 
 @router.get("")
@@ -116,6 +178,8 @@ def get_photos(
                 "thumb_url": f"https://drive.google.com/thumbnail?id={r.drive_file_id}&sz=w800",
                 "created_at": r.created_at.isoformat(),
                 "mime_type": r.mime_type,
+                "incident_uuid": r.incident_uuid,
+                "claim_number": r.claim_number,
             }
             for r in rows
         ],

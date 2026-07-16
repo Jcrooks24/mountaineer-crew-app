@@ -247,6 +247,14 @@ export interface HelpTexts {
   schedulingNotesPlaceholder: string;
   availabilityDayNotePlaceholder: string;
   futureAbsenceNotePlaceholder: string;
+  // Newer-feature hints, admin-editable so wording can change without a redeploy.
+  incidentHint: string;          // Photos tab - incident reporting card
+  incidentDescriptionPlaceholder: string; // Photos tab - "what happened" field
+  skillsHint: string;            // Job Report - per-employee skill rating
+  skillScaleHint: string;        // Job Report - what 1 star and 5 stars mean
+  jobTypeHint: string;           // Job Report - job type tag picker
+  truckFullnessHint: string;     // Job Report - truck fullness readings
+  overageHint: string;           // Job Report - overage conversation prompt
 }
 
 export const DEFAULT_HELP_TEXTS: HelpTexts = {
@@ -259,6 +267,14 @@ export const DEFAULT_HELP_TEXTS: HelpTexts = {
   schedulingNotesPlaceholder: "e.g. Mornings only until July 1. No Saturdays. Back to full availability after the 15th.",
   availabilityDayNotePlaceholder: 'e.g. "available after 1pm"',
   futureAbsenceNotePlaceholder: 'e.g. "Hawaii vacation"',
+  incidentHint: "Document damage, injuries, or near-misses. Submitting generates a claim number - then add photos below and tag them to the claim.",
+  incidentDescriptionPlaceholder: "Describe the incident, location, and any damage.",
+  skillsHint: "Rate each mover on the skills this job called for. Use N/A for any skill that didn't apply.",
+  skillScaleHint:
+    "1 star = actively detracted from job flow, needs follow-up. 5 stars = operated on par with the most seasoned crew leaders.",
+  jobTypeHint: "Tag the kind of work on this job (select all that apply). This decides which skills you rate below.",
+  truckFullnessHint: "Add one reading per truck used - vertical and horizontal fill against the interior 25% marks.",
+  overageHint: "Actual inventory ran over the estimate. Note what the extra items were and whether you discussed the overage with the customer.",
 };
 
 // ─── Settings shape ───────────────────────────────────────────────────────────

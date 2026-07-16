@@ -29,8 +29,13 @@ import app.db.models.reimbursement  # noqa: F401 - register reimbursements table
 import app.db.models.availability  # noqa: F401 - register availability_days table
 import app.db.models.availability_unlock  # noqa: F401 - register availability_unlocks
 import app.db.models.employee_tag  # noqa: F401 - register employee_tags + user_employee_tags
+import app.db.models.job_type  # noqa: F401 - register job_types
+import app.db.models.skill  # noqa: F401 - register skills + user_skills
+import app.db.models.incident  # noqa: F401 - register incidents
+import app.db.models.off_job_entry  # noqa: F401 - register off-job hours
 import app.db.models.user_email_alias  # noqa: F401 - register user_email_aliases
 import app.db.models.bol  # noqa: F401 - register digital_bols table
+import app.db.models.job_inventory  # noqa: F401 - register job_inventory_items table
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -63,6 +68,27 @@ from app.routers.employee_tags import (
 )
 from app.routers.user_email_aliases import router as user_email_aliases_router
 from app.routers.bol import router as bol_router
+from app.routers.job_inventory import router as job_inventory_router
+from app.routers.job_types import (
+    public_router as job_types_public_router,
+    admin_router as job_types_admin_router,
+)
+from app.routers.skills import (
+    public_router as skills_public_router,
+    admin_router as skills_admin_router,
+    users_router as skills_users_router,
+)
+from app.routers.furniture_catalog import router as furniture_catalog_router
+from app.routers.routing import router as routing_router
+from app.routers.hours import router as hours_router
+from app.routers.incidents import (
+    router as incidents_router,
+    admin_router as incidents_admin_router,
+)
+from app.routers.off_job import (
+    router as off_job_router,
+    admin_router as off_job_admin_router,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -116,8 +142,20 @@ async def log_validation_error(request: Request, exc: RequestValidationError):
         f"{'.'.join(str(p) for p in err.get('loc', []))}: {err.get('msg', '?')}"
         for err in exc.errors()
     )
+    # Content-type and length, because "a required form field is missing" has two very
+    # different causes and the field name alone cannot tell them apart: the client
+    # genuinely omitted it, or the body never parsed as a form (empty body, or a
+    # multipart content-type with no boundary) and so EVERY field looks missing.
+    # Header shape only. Never the body: these payloads carry crew notes and photos.
+    ctype = request.headers.get("content-type", "(none)")
+    clen = request.headers.get("content-length", "(none)")
     logger.warning(
-        "[422] %s %s rejected: %s", request.method, request.url.path, fields or "(no detail)"
+        "[422] %s %s rejected: %s | content-type=%s content-length=%s",
+        request.method,
+        request.url.path,
+        fields or "(no detail)",
+        ctype,
+        clen,
     )
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
@@ -220,3 +258,16 @@ app.include_router(employee_tags_router)         # /api/admin/employee-tags
 app.include_router(employee_tags_users_router)   # /api/admin/users/{id}/employee-tags
 app.include_router(user_email_aliases_router)    # /api/admin/users/{id}/email-aliases
 app.include_router(bol_router)                   # /api/bol (Digital Bill of Lading)
+app.include_router(job_inventory_router)         # /api/job-inventory (actual inventory → counts)
+app.include_router(job_types_public_router)      # /api/job-types (crew: active list)
+app.include_router(job_types_admin_router)       # /api/admin/job-types (admin CRUD)
+app.include_router(skills_public_router)         # /api/skills (crew: active registry)
+app.include_router(skills_admin_router)          # /api/admin/skills (admin CRUD)
+app.include_router(skills_users_router)          # /api/admin/users/{id}/skills (matrix)
+app.include_router(furniture_catalog_router)     # /api/furniture-catalog (crew read + admin CSV import)
+app.include_router(incidents_router)             # /api/incidents (crew report + job list)
+app.include_router(incidents_admin_router)       # /api/admin/incidents (admin log)
+app.include_router(off_job_router)               # /api/off-job-hours (crew log + own history)
+app.include_router(off_job_admin_router)         # /api/admin/off-job-hours (admin log)
+app.include_router(routing_router)               # /api/routing/return-trip (drive time to dispatch)
+app.include_router(hours_router)                 # /api/hours/worked-history (per-user weekly hours)

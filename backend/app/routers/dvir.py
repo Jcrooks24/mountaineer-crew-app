@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.core.deps import get_current_user, get_db, require_admin
 from app.core.mailer import send_email
@@ -38,9 +38,31 @@ def _needs_mechanic_review(d: DVIR) -> bool:
     return len(defects) > 0
 
 
-def _to_response(d: DVIR) -> DVIRResponse:
+def _to_response(
+    d: DVIR,
+    include_signatures: bool = True,
+    *,
+    driver_signed: Optional[bool] = None,
+    mechanic_signed: Optional[bool] = None,
+) -> DVIRResponse:
+    # include_signatures=False is for list responses: the two signature columns
+    # are base64 PNG data URLs (tens of KB each) and a list of up to 1000 DVIRs
+    # would otherwise serialize ~30 MB of signatures nobody renders in a list.
+    # The driver_signed / mechanic_signed booleans carry the status the list
+    # needs; the detail view refetches the single DVIR for the actual images.
+    #
+    # On the list path the caller DEFERS the two blob columns and passes
+    # driver_signed / mechanic_signed computed in SQL, so this function never
+    # touches (and never lazy-loads) the base64 blobs. On single-DVIR responses
+    # the columns are loaded and the flags are derived here.
     defects = json.loads(d.defects_json) if d.defects_json else []
+    driver_signature = d.driver_signature if include_signatures else ""
+    mechanic_signature = d.mechanic_signature if include_signatures else None
+    ds = driver_signed if driver_signed is not None else bool(d.driver_signature)
+    ms = mechanic_signed if mechanic_signed is not None else bool(d.mechanic_signature)
     return DVIRResponse(
+        driver_signed=ds,
+        mechanic_signed=ms,
         id=d.id,
         dvir_id=d.dvir_id,
         vehicle_number=d.vehicle_number,
@@ -57,11 +79,11 @@ def _to_response(d: DVIR) -> DVIRResponse:
         overnight_hold=d.overnight_hold,
         driver_id=d.driver_id,
         driver_name=d.driver_name,
-        driver_signature=d.driver_signature,
+        driver_signature=driver_signature,
         driver_signed_at=d.driver_signed_at,
         mechanic_id=d.mechanic_id,
         mechanic_name=d.mechanic_name,
-        mechanic_signature=d.mechanic_signature,
+        mechanic_signature=mechanic_signature,
         mechanic_signed_at=d.mechanic_signed_at,
         repairs_made=d.repairs_made,
         mechanic_notes=d.mechanic_notes,
@@ -191,7 +213,20 @@ def list_dvirs(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    q = db.query(DVIR)
+    # Keep the base64 signature data URLs (tens of KB each) OUT of both the
+    # response AND the DB load: DEFER the two blob columns so a page of up to
+    # 1000 rows never pulls ~30 MB of signatures into the 512 MB worker's memory,
+    # and compute signed-ness as SQL booleans (IS NOT NULL) so we get the status
+    # without the blobs. _to_response blanks the signature strings in the payload.
+    # The single-DVIR GET below still returns full signatures for the detail view.
+    q = db.query(
+        DVIR,
+        DVIR.driver_signature.isnot(None).label("driver_signed"),
+        DVIR.mechanic_signature.isnot(None).label("mechanic_signed"),
+    ).options(
+        defer(DVIR.driver_signature),
+        defer(DVIR.mechanic_signature),
+    )
     if pending_only:
         # Only DVIRs with defects need mechanic review. Satisfactory/no-defect
         # inspections auto-clear and are excluded from the pending queue.
@@ -205,7 +240,15 @@ def list_dvirs(
         .limit(limit)
         .all()
     )
-    return [_to_response(d) for d in rows]
+    return [
+        _to_response(
+            d,
+            include_signatures=False,
+            driver_signed=bool(driver_signed),
+            mechanic_signed=bool(mechanic_signed),
+        )
+        for d, driver_signed, mechanic_signed in rows
+    ]
 
 
 # ── Get single ────────────────────────────────────────────────────────────────

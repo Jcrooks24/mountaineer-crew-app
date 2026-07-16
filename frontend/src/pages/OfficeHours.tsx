@@ -8,6 +8,8 @@ import {
   newEntryUuid,
   pendingOpCount,
   rendered,
+  retryFailedOfficeHours,
+  discardFailedOfficeHours,
   syncQueue,
   type BreakPeriod,
   type OfficeHoursEntry,
@@ -326,15 +328,29 @@ export default function OfficeHoursPanel() {
               style={{
                 borderTop: "1px solid var(--border)",
                 paddingTop: 8,
-                opacity: e.pending ? 0.7 : 1,
+                opacity: e.pending && !e.failed ? 0.7 : 1,
               }}
             >
               <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 14 }}>
                     {e.work_date} · {e.hours.toFixed(2)}h
-                    {e.pending && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--muted)" }}>(pending)</span>}
+                    {e.failed
+                      ? <span style={{ marginLeft: 6, fontSize: 11, color: "var(--danger)", fontWeight: 700 }}>NOT SENT</span>
+                      : e.pending && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--muted)" }}>(pending)</span>}
                   </div>
+                  {/* Kept, not deleted, on a server refusal (ADR 0013). */}
+                  {e.failed && (
+                    <div style={{ marginTop: 4 }}>
+                      <div className="small" style={{ color: "var(--muted)" }}>{e.failedReason || "The server rejected this."}</div>
+                      <div className="row" style={{ gap: 8, marginTop: 4 }}>
+                        <button onClick={() => { void retryFailedOfficeHours(e.entry_uuid).then(refresh); }}
+                          style={{ fontSize: 12, minHeight: 36, color: "var(--brand)", border: "1px solid var(--brand)", background: "none", fontWeight: 700, borderRadius: 8, padding: "4px 10px" }}>Retry</button>
+                        <button onClick={() => { discardFailedOfficeHours(e.entry_uuid); refresh(); }}
+                          style={{ fontSize: 12, minHeight: 36, color: "var(--muted)", border: "1px solid var(--border)", background: "none", borderRadius: 8, padding: "4px 10px" }}>Discard</button>
+                      </div>
+                    </div>
+                  )}
                   <div className="small" style={{ color: "var(--muted)" }}>
                     {e.start_time}–{e.end_time}
                     {e.break_hours > 0 ? ` · break ${e.break_hours.toFixed(2)}h` : ""}

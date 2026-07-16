@@ -9,10 +9,20 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
 from app.db.models.event import Event
+from app.db.models.job_inventory import JobInventoryItem
 from app.db.models.job_report import JobReport
 from app.db.models.user import User
-from app.integrations.sheets_export import export_job_report_to_sheets, run_export_in_background
-from app.schemas.job_report import EmployeeHoursEntry, JobReportResponse, JobReportUpsert
+from app.routers.job_inventory import counts_for
+from app.integrations.sheets_export import (
+    export_job_report_to_sheets,
+    run_export_in_background,
+)
+from app.schemas.job_report import (
+    EmployeeHoursEntry,
+    JobReportResponse,
+    JobReportUpsert,
+    TruckFullnessEntry,
+)
 
 router = APIRouter(prefix="/api/job-report", tags=["job-report"])
 
@@ -25,6 +35,30 @@ def _decode_employee_hours(raw: Optional[str]) -> Optional[list[EmployeeHoursEnt
         if not isinstance(data, list):
             return None
         return [EmployeeHoursEntry(**row) for row in data if isinstance(row, dict)]
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _decode_job_type_tags(raw: Optional[str]) -> Optional[list[str]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        return [str(t) for t in data]
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _decode_truck_fullness(raw: Optional[str]) -> Optional[list[TruckFullnessEntry]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        return [TruckFullnessEntry(**row) for row in data if isinstance(row, dict)]
     except (json.JSONDecodeError, ValueError):
         return None
 
@@ -46,6 +80,10 @@ def _to_response(r: JobReport) -> JobReportResponse:
         crew_feedback=r.crew_feedback,
         out_of_town=bool(r.out_of_town),
         bill_personal_vehicles=bool(r.bill_personal_vehicles),
+        job_type_tags=_decode_job_type_tags(r.job_type_tags_json),
+        truck_fullness=_decode_truck_fullness(r.truck_fullness_json),
+        overage_note=r.overage_note,
+        hours_verified=bool(r.hours_verified),
         employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
         updated_at=r.updated_at,
@@ -68,6 +106,22 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
     # closes), then push the actual sheets call onto a background thread
     # so the API response is never blocked by Google.
     employees = _decode_employee_hours(report.employee_hours_json)
+    truck_fullness = _decode_truck_fullness(report.truck_fullness_json)
+
+    # Derived furniture/box counts from the actual inventory logged on this job.
+    # Left blank (None) when no inventory rows exist, so the sheet cell reads
+    # empty rather than a misleading 0.
+    inv_items = (
+        db.query(JobInventoryItem)
+        .filter(JobInventoryItem.job_uuid == report.job_uuid)
+        .limit(5000)  # bound the per-job scan; real inventories are far smaller
+        .all()
+    )
+    if inv_items:
+        furniture_count, box_count = counts_for(inv_items)
+    else:
+        furniture_count = box_count = None
+
     payload = {
         "job_uuid": report.job_uuid,
         "job_name": _job_name_for(db, report.job_uuid),
@@ -83,11 +137,28 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "crew_feedback": report.crew_feedback,
         "out_of_town": bool(report.out_of_town),
         "bill_personal_vehicles": bool(report.bill_personal_vehicles),
+        "job_type_tags": _decode_job_type_tags(report.job_type_tags_json) or [],
+        "truck_fullness": [t.model_dump() for t in truck_fullness] if truck_fullness else [],
+        "furniture_count": "" if furniture_count is None else furniture_count,
+        "box_count": "" if box_count is None else box_count,
+        "overage_note": report.overage_note or "",
+        "hours_verified": bool(report.hours_verified),
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
         "updated_at": report.updated_at,
     }
     run_export_in_background(export_job_report_to_sheets, payload)
+
+
+def _is_skill_rater(user: User) -> bool:
+    """Skill ratings are editable only by admins and admin-designated skill raters
+    (users.is_skill_rater). The crew_lead role does NOT grant this on its own
+    (ADR 0014) - rating is deliberately a smaller group than the leads. Enforced
+    server-side so a stale or tampered client can't persist skill edits from a
+    regular crew member.
+
+    Job type is NOT covered by this gate: see the note in upsert_job_report."""
+    return user.role == "admin" or bool(getattr(user, "is_skill_rater", False))
 
 
 @router.post("", response_model=JobReportResponse)
@@ -99,9 +170,58 @@ def upsert_job_report(
     now = datetime.now(timezone.utc)
     existing = db.query(JobReport).filter(JobReport.job_uuid == body.job_uuid).first()
 
-    employee_hours_json = (
-        json.dumps([e.model_dump() for e in body.employee_hours])
-        if body.employee_hours
+    # Non-raters can't create or change skill ratings. Keep whatever a rater
+    # already saved on the existing report (matched by employee name) and drop
+    # anything the non-rater's payload carries.
+    #
+    # `preserve_employee_hours` closes the bypass-by-omission hole: stripping the
+    # rating fields off the entries the payload HAS does nothing if the payload
+    # has no entries at all. A non-rater posting an empty employee_hours list
+    # (delete every row in the editor and save) would otherwise write NULL over
+    # employee_hours_json and take every rating a rater had set with it. So when
+    # a non-rater sends nothing, we keep what is already stored rather than
+    # letting an empty payload erase it.
+    preserve_employee_hours = False
+    if not _is_skill_rater(current_user):
+        if body.employee_hours:
+            # Key prior entries by roster user_id where the row has one, and fall
+            # back to the name for legacy rows. Keying on name alone meant renaming
+            # somebody in the roster silently detached them from their own ratings.
+            def _key(e) -> object:
+                uid = getattr(e, "user_id", None)
+                return ("id", uid) if isinstance(uid, int) else ("name", e.name)
+
+            prior_by_key: dict = {}
+            if existing:
+                prior = _decode_employee_hours(existing.employee_hours_json) or []
+                prior_by_key = {_key(e): e for e in prior}
+            for entry in body.employee_hours:
+                keep = prior_by_key.get(_key(entry))
+                entry.skill_ratings = keep.skill_ratings if keep else None
+                entry.skill_rating = keep.skill_rating if keep else None
+        elif existing and existing.employee_hours_json:
+            preserve_employee_hours = True
+        # Job type is deliberately NOT gated. It was, briefly, on the reasoning
+        # that it decides which skills get rated. But it is also the job's basic
+        # descriptive data, and gating it meant a job with no designated rater on
+        # site recorded no job type at all. Collecting it always beats collecting
+        # it only when the right person happens to be on the crew, so any crew
+        # member sets it. Only the skill ratings above are held back.
+
+    if preserve_employee_hours:
+        employee_hours_json = existing.employee_hours_json
+    else:
+        employee_hours_json = (
+            json.dumps([e.model_dump() for e in body.employee_hours])
+            if body.employee_hours
+            else None
+        )
+    job_type_tags_json = (
+        json.dumps(body.job_type_tags) if body.job_type_tags else None
+    )
+    truck_fullness_json = (
+        json.dumps([t.model_dump() for t in body.truck_fullness])
+        if body.truck_fullness
         else None
     )
 
@@ -119,6 +239,10 @@ def upsert_job_report(
         existing.crew_feedback = body.crew_feedback
         existing.out_of_town = body.out_of_town
         existing.bill_personal_vehicles = body.bill_personal_vehicles
+        existing.job_type_tags_json = job_type_tags_json
+        existing.truck_fullness_json = truck_fullness_json
+        existing.overage_note = body.overage_note
+        existing.hours_verified = body.hours_verified
         existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
         db.commit()
@@ -141,6 +265,10 @@ def upsert_job_report(
         crew_feedback=body.crew_feedback,
         out_of_town=body.out_of_town,
         bill_personal_vehicles=body.bill_personal_vehicles,
+        job_type_tags_json=job_type_tags_json,
+        truck_fullness_json=truck_fullness_json,
+        overage_note=body.overage_note,
+        hours_verified=body.hours_verified,
         employee_hours_json=employee_hours_json,
         created_at=now,
         updated_at=now,

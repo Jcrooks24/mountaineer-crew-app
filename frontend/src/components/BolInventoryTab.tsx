@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
+import { useMergedCatalog } from "../lib/furnitureCatalogStore";
 import {
   type BOLDraft,
   type BOLItem,
+  autosyncDraft,
   enqueueSubmit,
   itemIsBox,
   loadForJob,
@@ -11,6 +12,7 @@ import {
   syncQueue,
 } from "../lib/bolStore";
 import BetaTag from "./BetaTag";
+import SuggestInput from "./SuggestInput";
 
 type Props = {
   jobUuid: string;
@@ -25,6 +27,9 @@ type Props = {
  * server (via loadForJob), and every add/edit is queued for upsert.
  */
 export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
+  // Shared catalogue (server rows + built-in, cached offline) so this picker
+  // matches Actual Inventory and the Estimator instead of the built-in list.
+  const catalog = useMergedCatalog();
   const [draft, setDraft] = useState<BOLDraft | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "syncing">("loading");
   const [itemName, setItemName] = useState("");
@@ -79,6 +84,15 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
     if (draft) saveDraft(draft);
   }, [draft]);
 
+  // A local EDIT: persist it and push it to the server (debounced) so a second
+  // device on the same job sees the item without waiting for a gated Save. Server
+  // adoption in loadForJob uses plain setDraft, not this, so adopting does not
+  // echo back to the server.
+  function commit(next: BOLDraft) {
+    setDraft(next);
+    autosyncDraft(next);
+  }
+
   function nextItemNo(items: BOLItem[]): number {
     return items.reduce((m, it) => Math.max(m, it.item_no), 0) + 1;
   }
@@ -98,14 +112,14 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
       packed_by: "",
       photos: [],
     };
-    setDraft({ ...draft, items: [...draft.items, item], updated_at: new Date().toISOString() });
+    commit({ ...draft, items: [...draft.items, item], updated_at: new Date().toISOString() });
     setItemName("");
     setItemQty(1);
   }
 
   function updateItem(item_no: number, patch: Partial<BOLItem>) {
     if (!draft) return;
-    setDraft({
+    commit({
       ...draft,
       items: draft.items.map((it) => (it.item_no === item_no ? { ...it, ...patch } : it)),
       updated_at: new Date().toISOString(),
@@ -114,7 +128,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   function removeItem(item_no: number) {
     if (!draft) return;
-    setDraft({
+    commit({
       ...draft,
       items: draft.items.filter((it) => it.item_no !== item_no),
       updated_at: new Date().toISOString(),
@@ -123,7 +137,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   function setVerified(v: boolean) {
     if (!draft) return;
-    setDraft({
+    commit({
       ...draft,
       inventory_verified: v,
       inventory_note: v ? "" : (draft.inventory_note || ""),
@@ -133,7 +147,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   function setIncompleteReason(text: string) {
     if (!draft) return;
-    setDraft({ ...draft, inventory_note: text, updated_at: new Date().toISOString() });
+    commit({ ...draft, inventory_note: text, updated_at: new Date().toISOString() });
   }
 
   async function save() {
@@ -177,7 +191,7 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
 
   return (
     <>
-      <div className="card">
+      <div className="card" data-component="BolInventoryTab">
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 4 }}>
           <div className="sectionTitle" style={{ marginBottom: 0 }}>BOL Inventory</div>
           <BetaTag feature="bolInventoryTab" style={{ marginTop: 0 }} />
@@ -203,18 +217,16 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
         <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
           <label className="col" style={{ gap: 4, flex: "2 1 200px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Item</span>
-            <input
-              list="bol-inv-tab-furniture"
+            {/* A native <datalist> suppresses the mobile keyboard's autocorrect
+                strip, which is why crew were logging misspelled items on the BOL.
+                Rendered suggestions instead: autocorrect works, typeahead works. */}
+            <SuggestInput
               value={itemName}
-              onChange={(e) => setItemName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addItem(); } }}
+              onChange={setItemName}
+              options={catalog.map((f) => f.name)}
+              onEnter={addItem}
               placeholder="Sofa, dresser, CP box, PBO box…"
             />
-            <datalist id="bol-inv-tab-furniture">
-              {FURNITURE_CATALOG.map((f) => (
-                <option key={f.name} value={f.name} />
-              ))}
-            </datalist>
           </label>
           <label className="col" style={{ gap: 4, width: 90 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Qty</span>

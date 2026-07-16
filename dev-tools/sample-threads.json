@@ -1,0 +1,42 @@
+{
+  "threads": [
+    {
+      "id": "vc_thread_a1",
+      "url": "https://mountaineer-crew-app-staging.vercel.app/?tab=timeline",
+      "selector": "div[data-component=\"RodsRecorder\"] > div.sectionTitle",
+      "text": "The duty-status buttons are too small to tap with gloves on. Can we make them bigger on mobile?",
+      "resolved": false,
+      "replies": [
+        { "author": "Dispatch", "text": "Agreed, the drivers keep mis-tapping ON DUTY vs DRIVING." }
+      ]
+    },
+    {
+      "id": "vc_thread_b2",
+      "path": "/",
+      "anchor": { "selector": "[data-component='ReportPerDiem'] span" },
+      "text": "Per-diem wording should say 'per crew member per day' explicitly so nobody thinks it's a flat $50.",
+      "resolved": false
+    },
+    {
+      "id": "vc_thread_c3",
+      "url": "https://mountaineer-crew-app-staging.vercel.app/long-distance",
+      "selector": "[data-component=\"LdTralaExemption\"]",
+      "text": "Add a link to download the TRALA exemption PDF so drivers can save it offline.",
+      "resolved": false
+    },
+    {
+      "id": "vc_thread_d4",
+      "url": "https://mountaineer-crew-app-staging.vercel.app/?tab=report",
+      "selector": "main > div.card:nth-child(3) > button",
+      "text": "This save button doesn't show a spinner and I tapped it twice by accident.",
+      "resolved": false
+    },
+    {
+      "id": "vc_thread_e5",
+      "url": "https://mountaineer-crew-app-staging.vercel.app/?tab=inventory",
+      "selector": "div[data-component=\"ActualInventory\"] input",
+      "text": "Already fixed - ignore.",
+      "resolved": true
+    }
+  ]
+}

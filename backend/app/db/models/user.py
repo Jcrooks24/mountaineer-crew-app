@@ -23,6 +23,12 @@ class User(Base):
 
     is_active = Column(Boolean, default=True, nullable=False)
 
+    # Admin-set flag: may this user view + fill out the job type and the
+    # per-employee skill ratings on the Job Report? Independent of `role` - the
+    # crew_lead role does NOT grant it (ADR 0014), so rating stays a small,
+    # explicitly designated group. Defaults false.
+    is_skill_rater = Column(Boolean, nullable=False, server_default="false", default=False)
+
     # Password reset
     reset_token = Column(String, nullable=True, index=True)
     reset_token_expiry = Column(DateTime(timezone=True), nullable=True)

@@ -8,6 +8,7 @@ from typing import Callable, List, Dict, Any, Optional, Set
 
 from sqlalchemy.orm import Session
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.google_cal_oauth import _build_authorized_http, _ssl_retry, _get_creds
 
@@ -71,6 +72,24 @@ def invalidate_sheets_svc_cache() -> None:
 _estimate_export_in_flight: Set[str] = set()
 _estimate_export_rerun: Set[str] = set()
 _estimate_export_lock = threading.Lock()
+
+# Same coalescing for job-inventory exports (crew adds stream in as the
+# offline queue drains). Keyed by job_uuid.
+_job_inventory_export_in_flight: Set[str] = set()
+_job_inventory_export_rerun: Set[str] = set()
+_job_inventory_export_lock = threading.Lock()
+
+_incident_export_in_flight: Set[str] = set()
+_incident_export_rerun: Set[str] = set()
+_incident_export_lock = threading.Lock()
+
+_availability_export_in_flight: Set[str] = set()
+_availability_export_rerun: Set[str] = set()
+_availability_export_lock = threading.Lock()
+
+_bol_export_in_flight: Set[str] = set()
+_bol_export_rerun: Set[str] = set()
+_bol_export_lock = threading.Lock()
 
 # Serialize note-cell updates per event_id so rapid edits on the same event
 # (or client retries) can't stack multiple in-memory googleapiclient instances
@@ -141,8 +160,14 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
         db = SessionLocal()
         try:
             export_fn(db, *args, **kwargs)
+            record_sheet_sync(db, export_fn.__name__, True)
         except Exception as exc:
             print(f"[sheets] background export failed ({export_fn.__name__}): {exc}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            record_sheet_sync(db, export_fn.__name__, False, str(exc))
         finally:
             try:
                 db.close()
@@ -150,6 +175,30 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
                 pass
 
     _EXPORT_POOL.submit(_worker)
+
+
+def record_sheet_sync(db: Session, fn_name: str, ok: bool, error: Optional[str] = None) -> None:
+    """Best-effort: record the last success/failure for a sheet export function so
+    the Advanced Settings health check can flag a silently-failing sync. Never
+    raises - a health-tracking hiccup must not affect the export itself."""
+    try:
+        from app.db.models.sheet_sync_status import SheetSyncStatus
+        now = datetime.utcnow()
+        row = db.query(SheetSyncStatus).filter(SheetSyncStatus.fn_name == fn_name).first()
+        if row is None:
+            row = SheetSyncStatus(fn_name=fn_name)
+            db.add(row)
+        if ok:
+            row.last_ok_at = now
+        else:
+            row.last_error_at = now
+            row.last_error = (error or "")[:500]
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
@@ -823,12 +872,33 @@ JOB_REPORT_HEADERS = [
     "job_uuid", "job_name", "submitted_by", "personal_vehicles",
     "bill_personal_vehicles",
     "dumpster_pct", "recycling_pct", "billing_method",
-    "review_candidate", "hours_match", "hours_mismatch_reason",
+    "review_candidate", "hours_match", "hours_verified", "hours_mismatch_reason",
     "has_crew_feedback", "crew_feedback",
     "employee_hours", "has_non_billable_hours", "per_diem_total",
+    "job_type_tags", "truck_fullness",
+    "furniture_count", "box_count",
+    "actual_man_hours",
+    "overage_note",
     "created_at", "updated_at",
     "entered_by", "entered_on",
 ]
+
+
+def _billable_man_hours(entries: Optional[list]) -> float:
+    """Total billable man-hours for a report: sum of actual worked hours across
+    non-`non_billable` entries, rounded once (company quarter-hour rule). Mirrors
+    the 'Total man-hours' line in _format_employee_hours."""
+    if not entries:
+        return 0.0
+    total = 0.0
+    for e in entries:
+        if not isinstance(e, dict) or e.get("non_billable"):
+            continue
+        try:
+            total += float(e.get("hours") or 0)
+        except (TypeError, ValueError):
+            continue
+    return _round_billable_quarter(total)
 
 
 def _yes_no_blank(value: Any) -> str:
@@ -853,6 +923,40 @@ def _has_non_billable(entries: Optional[list]) -> str:
         if isinstance(e, dict) and e.get("non_billable"):
             return "Yes"
     return "No"
+
+
+def _format_truck_fullness(entries: Optional[list]) -> str:
+    """One line per truck used, e.g. "26Int: V75×H50 (38%)". The composite %
+    is vertical×horizontal/100, matching the interior 25% fill marks. Semicolon-
+    joined so it stays a single readable cell."""
+    if not entries:
+        return ""
+    parts: list[str] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        truck = (e.get("truck") or "").strip() or "-"
+        try:
+            v = int(e.get("vertical_pct") or 0)
+            h = int(e.get("horizontal_pct") or 0)
+        except (TypeError, ValueError):
+            v = h = 0
+        combined = round(v * h / 100)
+        # Rental trucks: note the length (if given) and that fill is a best
+        # guess (no interior markers). e.g. "Penske 26ft (rental): V75×H50 (38%)".
+        label = truck
+        if e.get("is_rental"):
+            length = e.get("length_ft")
+            if length not in (None, "", 0):
+                try:
+                    length = int(float(length))
+                except (TypeError, ValueError):
+                    length = None
+                if length:
+                    label = f"{truck} {length}ft"
+            label = f"{label} (rental)"
+        parts.append(f"{label}: V{v}×H{h} ({combined}%)")
+    return "; ".join(parts)
 
 
 def _per_diem_total(report: Dict[str, Any]) -> Any:
@@ -926,7 +1030,31 @@ def _format_employee_hours(entries: Optional[list]) -> str:
             pieces.append(span + ("," if br > 0 else ""))
         if br > 0:
             pieces.append(f"break {br:.2f}h")
-        tail = f"{rounded:.2f}h (actual {hrs:.2f}h)"
+        # Per-skill ratings ride inside each entry (keyed by skill name);
+        # display-only, never affect the man-hours math. Falls back to the
+        # legacy single skill_rating for reports saved before the change.
+        skill_str = "skill N/A"
+        ratings = e.get("skill_ratings")
+        if isinstance(ratings, dict) and ratings:
+            parts = []
+            for sk_name, sk_val in ratings.items():
+                try:
+                    n = int(sk_val)
+                except (TypeError, ValueError):
+                    continue
+                # -1 is the explicit "not applicable" sentinel the crew set.
+                parts.append(f"{sk_name} N/A" if n < 0 else f"{sk_name} {n}/5")
+            if parts:
+                skill_str = "skills: " + ", ".join(parts)
+        else:
+            raw_skill = e.get("skill_rating")
+            try:
+                skill = int(raw_skill) if raw_skill is not None else None
+            except (TypeError, ValueError):
+                skill = None
+            if skill:
+                skill_str = f"skill {skill}/5"
+        tail = f"{rounded:.2f}h (actual {hrs:.2f}h), {skill_str}"
         if non_billable:
             pieces.append(f"→ non-billable {tail}")
         else:
@@ -957,6 +1085,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         return 0
 
     entered_by, entered_on = _entry_status_for(db, job_uuid)
+    _actual_man_hours = _billable_man_hours(report.get("employee_hours"))
     row = {
         "job_uuid": job_uuid,
         "job_name": report.get("job_name", ""),
@@ -968,6 +1097,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "billing_method": report.get("billing_method", ""),
         "review_candidate": _review_candidate_label(report.get("review_candidate")),
         "hours_match": "Yes" if report.get("hours_match") else "No",
+        "hours_verified": _yes_no_blank(report.get("hours_verified")),
         "hours_mismatch_reason": report.get("hours_mismatch_reason", "") or "",
         "has_crew_feedback": _yes_no_blank(report.get("has_crew_feedback")),
         "crew_feedback": report.get("crew_feedback", "") or "",
@@ -975,6 +1105,14 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         "has_non_billable_hours": _has_non_billable(report.get("employee_hours")),
         # Per-diem: $50/day per crew member when the whole crew is out of town.
         "per_diem_total": _per_diem_total(report),
+        "job_type_tags": ", ".join(report.get("job_type_tags") or []),
+        "truck_fullness": _format_truck_fullness(report.get("truck_fullness")),
+        # Derived from the actual inventory (blank when none collected).
+        "furniture_count": report.get("furniture_count", ""),
+        "box_count": report.get("box_count", ""),
+        # Total billable man-hours for the job (standalone metric).
+        "actual_man_hours": _actual_man_hours,
+        "overage_note": report.get("overage_note", "") or "",
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,
@@ -1368,6 +1506,7 @@ ESTIMATE_HEADERS = [
     "customer_phone", "move_date", "origin_address", "destination_address",
     "origin_access_notes", "destination_access_notes",
     "special_items_notes", "general_notes",
+    "estimated_hours", "job_uuid",
     "estimated_weight_lbs", "estimated_cubic_ft", "item_count",
     "created_at", "updated_at",
 ]
@@ -1450,6 +1589,68 @@ def _delete_sheet_rows_by_value(
     return len(target_indices)
 
 
+def _delete_bol_stale_rows(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    id_col: str,
+    id_val: str,
+    ts_col: str,
+    keep_ts: str,
+) -> int:
+    """Delete rows in `tab` where `id_col` == `id_val` AND `ts_col` != `keep_ts`.
+
+    Backs the BOL export's write-first-then-delete-stale ordering (bug 4 / ADR
+    0020): the freshly-written rows carry `keep_ts` and are preserved; older rows
+    for the same bol_id are removed. Reading only the two key columns keeps this
+    off the whole-tab read path. No-op if the tab / columns are absent."""
+    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
+    if tab not in sheet_ids:
+        return 0
+    sheet_numeric_id = sheet_ids[tab]
+
+    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
+    ).execute())
+    headers_row = (hdr.get("values") or [[]])[0]
+    if id_col not in headers_row or ts_col not in headers_row:
+        return 0
+    id_idx = headers_row.index(id_col)
+    ts_idx = headers_row.index(ts_col)
+    lo, hi = min(id_idx, ts_idx), max(id_idx, ts_idx)
+    res = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}"
+    ).execute())
+    values = res.get("values") or []
+    id_at, ts_at = id_idx - lo, ts_idx - lo
+
+    stale: List[int] = []
+    for i, row in enumerate(values):
+        if i == 0:
+            continue  # header
+        rid = row[id_at] if len(row) > id_at else ""
+        rts = row[ts_at] if len(row) > ts_at else ""
+        if rid == id_val and rts != keep_ts:
+            stale.append(i)
+    if not stale:
+        return 0
+
+    requests = [
+        {"deleteDimension": {"range": {
+            "sheetId": sheet_numeric_id,
+            "dimension": "ROWS",
+            "startIndex": idx,
+            "endIndex": idx + 1,
+        }}}
+        for idx in sorted(stale, reverse=True)
+    ]
+    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id, body={"requests": requests}
+    ).execute())
+    return len(stale)
+
+
 def _delete_estimate_sheet_rows(
     svc: Any,
     spreadsheet_id: str,
@@ -1511,6 +1712,8 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
         "destination_access_notes": estimate.get("destination_access_notes", "") or "",
         "special_items_notes": estimate.get("special_items_notes", "") or "",
         "general_notes": estimate.get("general_notes", "") or "",
+        "estimated_hours": estimate.get("estimated_hours") if estimate.get("estimated_hours") is not None else "",
+        "job_uuid": estimate.get("job_uuid", "") or "",
         "estimated_weight_lbs": round(estimate.get("estimated_weight_lbs", 0) or 0, 2),
         "estimated_cubic_ft": round(estimate.get("estimated_cubic_ft", 0) or 0, 2),
         "item_count": sum(it.get("qty", 1) or 1 for it in items),
@@ -1575,25 +1778,21 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
     if not bol_id:
         return 0
     updated_at = _iso(bol.get("updated_at"))
+    export_key = f"{bol_id}:{updated_at}"
+
+    # Idempotency: if this exact (bol_id, updated_at) is already recorded as
+    # exported, this is a duplicate delivery (a coalescer re-run or the reconciler
+    # on an unchanged BOL). Do nothing - the write-first ordering below only
+    # deletes rows with a DIFFERENT timestamp, so re-writing an unchanged state
+    # would stack a second copy.
+    already = db.execute(
+        text("SELECT 1 FROM sheet_generic_exports WHERE kind = 'bol' AND export_key = :k LIMIT 1"),
+        {"k": export_key},
+    ).first()
+    if already is not None:
+        return 0
 
     svc = _get_sheets_svc(db)
-
-    # Delete existing rows for this bol_id from both tabs so we end with exactly
-    # one summary row and one row per current item.
-    for tab in (summary_tab, items_tab):
-        _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "bol_id", bol_id)
-
-    # Clear dedup entries so the fresh rows are accepted.
-    db.execute(
-        text(
-            "DELETE FROM sheet_generic_exports "
-            "WHERE kind IN ('bol', 'bol_item') AND export_key LIKE :prefix"
-        ),
-        {"prefix": f"{bol_id}:%"},
-    )
-    db.commit()
-
-    total_written = 0
     items = bol.get("items") or []
 
     # Summary row
@@ -1620,16 +1819,14 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
         "updated_at": updated_at,
     }
     actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, BOL_HEADERS))
-    _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, actual_summary_headers)])
-    _generic_mark_exported(db, "bol", [f"{bol_id}:{updated_at}"])
-    total_written += 1
 
-    # Item rows - one per current item
+    # Build item rows up front so all writes happen together, before any delete.
+    item_rows: List[Dict[str, Any]] = []
+    item_keys: List[str] = []
+    actual_item_headers: Optional[List[str]] = None
     if items:
         job_name = bol.get("job_name", "") or ""
         job_date = bol.get("job_date", "") or ""
-        item_rows: List[Dict[str, Any]] = []
-        item_keys: List[str] = []
         for it in items:
             item_id = it.get("id", "")
             photos = it.get("photos") or []
@@ -1655,12 +1852,53 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
                 "exported_at": updated_at,
             })
             item_keys.append(f"{bol_id}:{item_id}:{updated_at}")
-
         actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, BOL_ITEM_HEADERS))
+
+    # WRITE FIRST, delete stale after (bug 4 / ADR 0020). The old ordering deleted
+    # every row for this bol_id BEFORE writing, so an exception in between left
+    # the sheet with NO row for a signed BOL that previously had one. Writing
+    # first means a mid-export crash leaves at worst a DUPLICATE (visible, never a
+    # gap in a signed legal document's record). A different-timestamp duplicate is
+    # removed by _delete_bol_stale_rows below; a same-timestamp duplicate (a rare
+    # re-export of an unchanged state) is only cleared by the next real change to
+    # the BOL, which is acceptable - a visible duplicate, not a loss.
+    #
+    # CRUCIAL: write the summary AND the item rows to the sheet BEFORE marking the
+    # `bol` dedupe key. The item rows are the BOL's declared inventory (the legally
+    # meaningful contents), and the item write is the slow multi-call that a worker
+    # recycle / OOM is most likely to interrupt. If we marked `bol` first (as an
+    # earlier version did) and then died before the item write, the reconciler, the
+    # drift check, and the idempotency skip ALL key on the `bol` dedupe row - so a
+    # summary-present / items-missing BOL would be silently un-recoverable. Marking
+    # only after both writes means a crash there leaves NO dedupe row, so the
+    # reconciler re-selects and re-ships the BOL (a recoverable duplicate, not a
+    # silent item loss).
+    _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, actual_summary_headers)])
+    total_written = 1
+    if item_rows and actual_item_headers is not None:
         item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
         _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
-        _generic_mark_exported(db, "bol_item", item_keys)
         total_written += len(item_rows)
+    # Both tabs are now written; record the dedupe keys together.
+    _generic_mark_exported(db, "bol", [export_key])
+    if item_keys:
+        _generic_mark_exported(db, "bol_item", item_keys)
+
+    # Now remove the STALE rows for this bol_id: any row whose timestamp differs
+    # from the fresh write. The just-written rows carry `updated_at` and survive.
+    _delete_bol_stale_rows(svc, spreadsheet_id, summary_tab, "bol_id", bol_id, "updated_at", updated_at)
+    _delete_bol_stale_rows(svc, spreadsheet_id, items_tab, "bol_id", bol_id, "exported_at", updated_at)
+    # Drop stale dedup entries for this bol_id, keeping the current-timestamp keys
+    # (both `bol_id:updated_at` and `bol_id:item_id:updated_at` end with the ts).
+    db.execute(
+        text(
+            "DELETE FROM sheet_generic_exports "
+            "WHERE kind IN ('bol', 'bol_item') "
+            "AND export_key LIKE :prefix AND export_key NOT LIKE :cur"
+        ),
+        {"prefix": f"{bol_id}:%", "cur": f"%:{updated_at}"},
+    )
+    db.commit()
 
     return total_written
 
@@ -1683,6 +1921,8 @@ def _build_estimate_payload(db: Session, estimate_uuid: str) -> Optional[Dict[st
         "destination_access_notes": e.destination_access_notes,
         "special_items_notes": e.special_items_notes,
         "general_notes": e.general_notes,
+        "estimated_hours": e.estimated_hours,
+        "job_uuid": e.job_uuid,
         "estimated_weight_lbs": e.estimated_weight_lbs,
         "estimated_cubic_ft": e.estimated_cubic_ft,
         "created_at": e.created_at,
@@ -1703,6 +1943,30 @@ def _build_estimate_payload(db: Session, estimate_uuid: str) -> Optional[Dict[st
     }
 
 
+def delete_estimate_from_sheets(db: Session, estimate_uuid: str) -> int:
+    """Remove a deleted estimate's summary + item rows from the sheet so it
+    doesn't leave ghost rows. Mirrors the delete phase of
+    export_estimate_to_sheets and is safe to run repeatedly (deletes by
+    estimate_uuid; clears the dedup markers too)."""
+    if not estimate_uuid:
+        return 0
+    summary_tab = os.getenv("SHEETS_ESTIMATES_TAB", "Estimates").strip() or "Estimates"
+    items_tab = os.getenv("SHEETS_ESTIMATE_ITEMS_TAB", "EstimateItems").strip() or "EstimateItems"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    svc = _get_sheets_svc(db)
+    _delete_estimate_sheet_rows(svc, spreadsheet_id, [summary_tab, items_tab], estimate_uuid)
+    db.execute(
+        text(
+            "DELETE FROM sheet_generic_exports "
+            "WHERE kind IN ('estimate', 'estimate_item') AND export_key LIKE :prefix"
+        ),
+        {"prefix": f"{estimate_uuid}:%"},
+    )
+    db.commit()
+    return 1
+
+
 def _estimate_export_worker(estimate_uuid: str) -> None:
     from app.db.session import SessionLocal
     # Loop until no rerun flag was set while the previous export was running.
@@ -1720,14 +1984,21 @@ def _estimate_export_worker(estimate_uuid: str) -> None:
             try:
                 payload = _build_estimate_payload(db, estimate_uuid)
                 if payload is None:
-                    break  # estimate was deleted - nothing to export
+                    # Estimate was deleted - remove its stale summary + item rows
+                    # so a deleted estimate doesn't leave ghost rows behind.
+                    delete_estimate_from_sheets(db, estimate_uuid)
+                    record_sheet_sync(db, "export_estimate_to_sheets", True)
+                    break
                 export_estimate_to_sheets(db, payload)
+                record_sheet_sync(db, "export_estimate_to_sheets", True)
                 break  # success
             except Exception as exc:
                 try:
                     db.rollback()
                 except Exception:
                     pass
+                if attempt >= 2:
+                    record_sheet_sync(db, "export_estimate_to_sheets", False, str(exc))
                 if attempt >= 2:
                     print(f"[sheets] estimate export failed after retries ({estimate_uuid}): {exc}")
                 else:
@@ -1760,6 +2031,418 @@ def schedule_estimate_export(estimate_uuid: str) -> None:
             return
         _estimate_export_in_flight.add(estimate_uuid)
     _EXPORT_POOL.submit(_estimate_export_worker, estimate_uuid)
+
+
+# ── Job inventory (actual inventory → furniture + box counts) ─────────────────
+
+JOB_INVENTORY_HEADERS = [
+    "job_uuid", "job_name", "submitted_by",
+    "furniture_count", "box_count", "item_count",
+    "updated_at",
+]
+
+JOB_INVENTORY_ITEM_HEADERS = [
+    "job_uuid", "item_id", "kind", "item_name", "qty", "pack_type", "room", "notes",
+    "exported_at",
+]
+
+
+def export_job_inventory_to_sheets(db: Session, inv: Dict[str, Any]) -> int:
+    """Replace-style export: one summary row per job_uuid in JobInventory + one
+    row per item in JobInventoryItems. Any prior rows for this job are deleted
+    before the fresh set is written so re-saves overwrite in place."""
+    summary_tab = os.getenv("SHEETS_JOB_INVENTORY_TAB", "JobInventory").strip() or "JobInventory"
+    items_tab = os.getenv("SHEETS_JOB_INVENTORY_ITEMS_TAB", "JobInventoryItems").strip() or "JobInventoryItems"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+
+    job_uuid = inv.get("job_uuid", "") or ""
+    if not job_uuid:
+        return 0
+
+    items = inv.get("items") or []
+    updated_at = _iso(inv.get("updated_at"))
+    furniture_count = sum((it.get("qty", 0) or 0) for it in items if not it.get("is_box"))
+    box_count = sum((it.get("qty", 0) or 0) for it in items if it.get("is_box"))
+
+    svc = _get_sheets_svc(db)
+
+    # Summary row (replace by job_uuid).
+    summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, JOB_INVENTORY_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, summary_tab, "job_uuid", job_uuid)
+    summary_row = {
+        "job_uuid": job_uuid,
+        "job_name": inv.get("job_name", "") or "",
+        "submitted_by": inv.get("submitted_by_name", "") or "",
+        "furniture_count": furniture_count,
+        "box_count": box_count,
+        "item_count": sum((it.get("qty", 0) or 0) for it in items),
+        "updated_at": updated_at,
+    }
+    _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, summary_headers)])
+
+    # Item rows (replace by job_uuid).
+    item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, JOB_INVENTORY_ITEM_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, items_tab, "job_uuid", job_uuid)
+    if items:
+        item_rows = [
+            _build_row({
+                "job_uuid": job_uuid,
+                "item_id": it.get("id"),
+                "kind": "Box" if it.get("is_box") else "Furniture",
+                "item_name": it.get("name", ""),
+                "qty": it.get("qty", 0) or 0,
+                "pack_type": it.get("pack_type", "") or "",
+                "room": it.get("room", "") or "",
+                "notes": it.get("notes", "") or "",
+                "exported_at": updated_at,
+            }, item_headers)
+            for it in items
+        ]
+        _write_rows_top(svc, spreadsheet_id, items_tab, item_rows)
+
+    return 1 + len(items)
+
+
+def _build_job_inventory_payload(db: Session, job_uuid: str) -> Optional[Dict[str, Any]]:
+    from app.db.models.job_inventory import JobInventoryItem  # local import to avoid cycles
+
+    items = (
+        db.query(JobInventoryItem)
+        .filter(JobInventoryItem.job_uuid == job_uuid)
+        .order_by(JobInventoryItem.id.asc())
+        .all()
+    )
+    # Best-effort job name + latest submitter from the rows themselves.
+    job_name = _job_name_from_events(db, job_uuid)
+    submitted_by = items[-1].created_by_name if items else ""
+    updated_at = max((it.updated_at for it in items), default=None)
+    return {
+        "job_uuid": job_uuid,
+        "job_name": job_name,
+        "submitted_by_name": submitted_by,
+        "updated_at": updated_at,
+        "items": [
+            {
+                "id": it.id,
+                "name": it.name,
+                "qty": it.qty,
+                "is_box": bool(it.is_box),
+                "pack_type": it.pack_type,
+                "room": it.room,
+                "notes": it.notes,
+            }
+            for it in items
+        ],
+    }
+
+
+def _job_name_from_events(db: Session, job_uuid: str) -> str:
+    from app.db.models.event import Event  # local import to avoid cycles
+    row = (
+        db.query(Event.job_name)
+        .filter(Event.job_uuid == job_uuid, Event.job_name.isnot(None), Event.job_name != "")
+        .order_by(Event.timestamp.desc())
+        .first()
+    )
+    return row[0] if row and row[0] else ""
+
+
+def _job_inventory_export_worker(job_uuid: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_job_inventory_payload(db, job_uuid)
+            if payload is not None:
+                export_job_inventory_to_sheets(db, payload)
+            # Record health the same way the estimate worker does. Without this
+            # the sync's registry entries never get a last_ok_at / last_error, so
+            # Admin > System Check reports it as fine forever and cannot see this
+            # export silently failing.
+            record_sheet_sync(db, "export_job_inventory_to_sheets", True)
+        except Exception as exc:
+            print(f"[sheets] job-inventory export failed ({job_uuid}): {exc}")
+            record_sheet_sync(db, "export_job_inventory_to_sheets", False, str(exc))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _job_inventory_export_lock:
+            if job_uuid in _job_inventory_export_rerun:
+                _job_inventory_export_rerun.discard(job_uuid)
+                continue
+            _job_inventory_export_in_flight.discard(job_uuid)
+            return
+
+
+def schedule_job_inventory_export(job_uuid: str) -> None:
+    """Coalesce repeated exports for the same job into one in-flight worker
+    with at most one pending rerun. The worker re-reads the DB when it runs so
+    the export always reflects the latest committed inventory."""
+    if not job_uuid:
+        return
+    with _job_inventory_export_lock:
+        if job_uuid in _job_inventory_export_in_flight:
+            _job_inventory_export_rerun.add(job_uuid)
+            return
+        _job_inventory_export_in_flight.add(job_uuid)
+    _EXPORT_POOL.submit(_job_inventory_export_worker, job_uuid)
+
+
+# ── Incident export ──────────────────────────────────────────────────────────
+
+INCIDENT_HEADERS = [
+    "incident_uuid", "claim_number", "incident_date", "job_uuid", "job_name",
+    "reported_by", "attributed_crew", "severity", "attributable", "description",
+    "est_cost", "resolved", "notes", "photo_urls", "created_at",
+]
+
+
+def _incident_photo_urls(db: Session, incident_uuid: str, snapshot: Any) -> list:
+    """Every Drive URL belonging to an incident, newest link last.
+
+    `incidents.photo_urls` is only a snapshot of whatever the client had at the
+    moment the incident was filed, and the normal flow is the other way round:
+    file the incident, then get bounced to the Photos tab to attach photos to it.
+    So the snapshot is usually empty or short. The authoritative link is
+    `photos.incident_uuid` (see the model comment on Photo).
+
+    Read the photos table, union it with the snapshot (so a URL captured offline
+    and never re-uploaded is not lost), dedupe, and keep insertion order.
+    """
+    from app.db.models.photo import Photo  # local import to avoid a cycle
+
+    urls: list = []
+    seen: set = set()
+    for u in snapshot or []:
+        if isinstance(u, str) and u.strip() and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    try:
+        rows = (
+            db.query(Photo)
+            .filter(Photo.incident_uuid == incident_uuid)
+            .order_by(Photo.created_at.asc())
+            .all()
+        )
+    except SQLAlchemyError:
+        return urls  # DB blip: fall back to the snapshot rather than losing the row
+    for p in rows:
+        u = (p.drive_url or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    return urls
+
+
+def export_incident_to_sheets(db: Session, inc: Dict[str, Any]) -> int:
+    """Replace-style export: one row per incident_uuid on the Incidents tab, so
+    admin edits (resolve, notes, cost) overwrite in place."""
+    tab = os.getenv("SHEETS_INCIDENTS_TAB", "Incidents").strip() or "Incidents"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = inc.get("incident_uuid") or ""
+    if not uuid:
+        return 0
+
+    svc = _get_sheets_svc(db)
+    headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, INCIDENT_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "incident_uuid", uuid)
+
+    row = {
+        "incident_uuid": uuid,
+        "claim_number": inc.get("claim_number") or "",
+        "incident_date": inc.get("incident_date") or "",
+        "job_uuid": inc.get("job_uuid") or "",
+        "job_name": inc.get("job_name") or "",
+        "reported_by": inc.get("reported_by_name") or "",
+        "attributed_crew": inc.get("attributed_crew") or "",
+        "severity": inc.get("severity") or "",
+        "attributable": inc.get("attributable") or "",
+        "description": inc.get("description") or "",
+        "est_cost": inc.get("est_cost") if inc.get("est_cost") is not None else "",
+        "resolved": "Y" if inc.get("resolved") else "N",
+        "notes": inc.get("notes") or "",
+        "photo_urls": ", ".join(_incident_photo_urls(db, uuid, inc.get("photo_urls"))),
+        "created_at": inc.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
+def _build_incident_payload(db: Session, incident_uuid: str) -> Optional[Dict[str, Any]]:
+    """Re-read one incident from the DB into the export shape. The worker calls
+    this when it runs, so a coalesced export always writes the latest committed
+    state rather than a stale payload captured at request time."""
+    from app.db.models.incident import Incident  # local import to avoid cycles
+
+    inc = (
+        db.query(Incident)
+        .filter(Incident.incident_uuid == incident_uuid)
+        .first()
+    )
+    if inc is None:
+        return None
+    try:
+        photo_urls = json.loads(inc.photo_urls or "[]")
+    except (ValueError, TypeError):
+        photo_urls = []
+    return {
+        "incident_uuid": inc.incident_uuid,
+        "claim_number": inc.claim_number,
+        "incident_date": inc.incident_date,
+        "job_uuid": inc.job_uuid,
+        "job_name": inc.job_name,
+        "reported_by_name": inc.reported_by_name,
+        "attributed_crew": inc.attributed_crew,
+        "severity": inc.severity,
+        "attributable": inc.attributable,
+        "description": inc.description,
+        "est_cost": inc.est_cost,
+        "resolved": inc.resolved,
+        "notes": inc.notes,
+        "photo_urls": photo_urls,
+        "created_at": inc.created_at.isoformat() if inc.created_at else "",
+    }
+
+
+def _incident_export_worker(incident_uuid: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_incident_payload(db, incident_uuid)
+            if payload is not None:
+                export_incident_to_sheets(db, payload)
+            record_sheet_sync(db, "export_incident_to_sheets", True)
+        except Exception as exc:
+            print(f"[sheets] incident export failed ({incident_uuid}): {exc}")
+            record_sheet_sync(db, "export_incident_to_sheets", False, str(exc))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _incident_export_lock:
+            if incident_uuid in _incident_export_rerun:
+                _incident_export_rerun.discard(incident_uuid)
+                continue
+            _incident_export_in_flight.discard(incident_uuid)
+            return
+
+
+def schedule_incident_export(incident_uuid: str) -> None:
+    """Coalesce repeated exports for the same incident into one in-flight worker
+    with at most one pending rerun.
+
+    This MUST be used instead of firing export_incident_to_sheets directly.
+    The export is replace-style (delete every row for this incident_uuid, then
+    append one), and every photo tagged to an incident triggers another export so
+    its photo_urls column stays current. Uploading a batch of photos therefore
+    fires several exports at once; with two pool workers they interleave as
+    A.delete, B.delete (finds nothing to delete), A.append, B.append, and the
+    incident ends up in the admin's sheet TWICE. Coalescing collapses the burst
+    into one write of the final state."""
+    if not incident_uuid:
+        return
+    with _incident_export_lock:
+        if incident_uuid in _incident_export_in_flight:
+            _incident_export_rerun.add(incident_uuid)
+            return
+        _incident_export_in_flight.add(incident_uuid)
+    _EXPORT_POOL.submit(_incident_export_worker, incident_uuid)
+
+
+def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
+    """Re-read one BOL from the DB into the export shape export_bol_to_sheets
+    expects. The worker calls this when it runs, so a coalesced export always
+    writes the latest committed state. Signature blobs are deliberately NOT read
+    - the sheet export never uses them, so keeping them out of the payload avoids
+    pulling several base64 PNGs into memory per export."""
+    from app.db.models.bol import DigitalBOL  # local import to avoid cycles
+
+    row = db.query(DigitalBOL).filter(DigitalBOL.bol_id == bol_id).first()
+    if row is None:
+        return None
+    try:
+        items = json.loads(row.items_json or "[]")
+    except (ValueError, TypeError):
+        items = []
+    return {
+        "bol_id": row.bol_id,
+        "created_by": row.created_by or "",
+        "job_uuid": row.job_uuid or "",
+        "job_name": row.job_name or "",
+        "job_date": row.job_date or "",
+        "status": row.status or "",
+        "items": items,
+        "inventory_verified": (
+            True if row.inventory_verified == 1
+            else False if row.inventory_verified == 0
+            else None
+        ),
+        "inventory_note": row.inventory_note or "",
+        "origin_signed_at": row.origin_signed_at,
+        "dest_signed_at": row.dest_signed_at,
+        "final_charges": (
+            float(row.final_charges) if row.final_charges is not None else None
+        ),
+        "walkthrough_notes": row.walkthrough_notes or "",
+        "signed_pdf_url": row.signed_pdf_url or "",
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _bol_export_worker(bol_id: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_bol_payload(db, bol_id)
+            if payload is not None:
+                export_bol_to_sheets(db, payload)
+            record_sheet_sync(db, "export_bol_to_sheets", True)
+        except Exception as exc:
+            print(f"[sheets] bol export failed ({bol_id}): {exc}")
+            record_sheet_sync(db, "export_bol_to_sheets", False, str(exc))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _bol_export_lock:
+            if bol_id in _bol_export_rerun:
+                _bol_export_rerun.discard(bol_id)
+                continue
+            _bol_export_in_flight.discard(bol_id)
+            return
+
+
+def schedule_bol_export(bol_id: str) -> None:
+    """Coalesce repeated exports for the same BOL into one in-flight worker with
+    at most one pending rerun.
+
+    Use this instead of firing export_bol_to_sheets directly. The export is
+    replace-style (delete every row for this bol_id across both tabs, then write
+    fresh), and a single BOL is written repeatedly: the initial save, again per
+    per-item photo link as it finishes uploading, again at origin signing, again
+    at destination signing, again on PDF upload - and two crew share one BOL
+    across devices. Firing an uncoalesced background export each time both lets
+    two workers interleave delete/append into duplicate rows AND piles unbounded
+    tasks onto the 2-worker pool. Coalescing collapses each burst into one write
+    of the final state (same fix applied to incidents/inventory/availability)."""
+    if not bol_id:
+        return
+    with _bol_export_lock:
+        if bol_id in _bol_export_in_flight:
+            _bol_export_rerun.add(bol_id)
+            return
+        _bol_export_in_flight.add(bol_id)
+    _EXPORT_POOL.submit(_bol_export_worker, bol_id)
 
 
 # ── Admin entry-status sweep ─────────────────────────────────────────────────
@@ -2115,21 +2798,32 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
         user_col = win_col = None  # Tab malformed - skip delete, just append.
 
     if user_col is not None and win_col is not None:
+        # Read ONLY the two key columns, not the whole tab. This tab grows one row
+        # per (user, window) forever, and it used to read A:Z (all 26 columns x
+        # every row) into memory on every export - a memory cost that grew without
+        # bound. user_name/window_start are the only columns needed to find rows to
+        # delete; reading just their span (A:B in practice) is ~13x lighter and the
+        # absolute row indices are unchanged, so the delete stays correct.
+        lo, hi = min(user_col, win_col), max(user_col, win_col)
         result = _ssl_retry(
             lambda: svc.spreadsheets()
             .values()
-            .get(spreadsheetId=spreadsheet_id, range=f"{tab}!A:Z")
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}",
+            )
             .execute()
         )
         values = result.get("values", []) or []
+        u_at, w_at = user_col - lo, win_col - lo
         rows_to_delete: List[int] = []
         for idx, existing_row in enumerate(values):
             if idx == 0:
                 continue  # header row
             if (
-                len(existing_row) > max(user_col, win_col)
-                and existing_row[user_col] == user_name
-                and existing_row[win_col] == window_start
+                len(existing_row) > max(u_at, w_at)
+                and existing_row[u_at] == user_name
+                and existing_row[w_at] == window_start
             ):
                 rows_to_delete.append(idx)
         if rows_to_delete:
@@ -2170,4 +2864,204 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
         ).execute()
 
     _ssl_retry(_append_avail)
+    return 1
+
+
+def _build_availability_payload(db: Session, user_id: int, window_start: str):
+    """Re-read one (user, window)'s availability from the DB into the export
+    shape. The coalescing worker calls this when it runs, so a burst of edits
+    collapses to a single write of the final committed state."""
+    from app.db.models.availability import AvailabilityDay  # local import: avoid cycle
+    from app.db.models.user import User
+
+    rows = (
+        db.query(AvailabilityDay)
+        .filter(
+            AvailabilityDay.user_id == user_id,
+            AvailabilityDay.window_start == window_start,
+        )
+        .order_by(AvailabilityDay.day.asc())
+        .all()
+    )
+    if not rows:
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    name = (user.name if user else None) or (user.email if user else None) or ""
+    return {
+        "user_id": user_id,
+        "user_name": name,
+        "user_email": (user.email if user else "") or "",
+        "window_start": window_start,
+        "days": [
+            {"day": r.day, "status": r.status, "note": r.note or "", "updated_at": r.updated_at}
+            for r in rows
+        ],
+    }
+
+
+def _availability_export_worker(key: str, user_id: int, window_start: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            payload = _build_availability_payload(db, user_id, window_start)
+            if payload is not None:
+                export_availability_window_to_sheets(db, payload)
+            record_sheet_sync(db, "export_availability_window_to_sheets", True)
+        except Exception as exc:
+            print(f"[sheets] availability export failed ({key}): {exc}")
+            record_sheet_sync(db, "export_availability_window_to_sheets", False, str(exc))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _availability_export_lock:
+            if key in _availability_export_rerun:
+                _availability_export_rerun.discard(key)
+                continue
+            _availability_export_in_flight.discard(key)
+            return
+
+
+def schedule_availability_export(user_id: int, window_start: str) -> None:
+    """Coalesce repeated availability exports for one (user, window) into a single
+    in-flight worker with at most one pending rerun.
+
+    This MUST be used instead of firing export_availability_window_to_sheets
+    directly. The export is replace-style, and EACH does ~4 Google Sheets READ
+    calls (two full-spreadsheet metadata gets, a header read, and a full-column
+    read of a tab that grows forever). An admin editing a run of days fired one
+    uncoalesced export per edit, which blew the 60-reads/min Sheets quota (429s),
+    starved every other export, and piled unbounded tasks onto the 2-worker pool -
+    a memory and rate-limit problem at once. Coalescing collapses a burst for one
+    (user, window) into a single write of the final state. The other high-frequency
+    exports (incidents, inventory, estimates) were already coalesced; this one was
+    the gap."""
+    if user_id is None or not window_start:
+        return
+    key = f"{user_id}::{window_start}"
+    with _availability_export_lock:
+        if key in _availability_export_in_flight:
+            _availability_export_rerun.add(key)
+            return
+        _availability_export_in_flight.add(key)
+    _EXPORT_POOL.submit(_availability_export_worker, key, user_id, window_start)
+
+
+# ── Sheets sync health check ─────────────────────────────────────────────────
+# One entry per app->sheet sync. The Advanced Settings system check iterates this
+# registry, so when a new feature adds a sync, add its entry here and it's
+# automatically covered by the health check (and the /vet protocol). `fn` is the
+# export function name used to look up last-run status (several syncs can share a
+# function, e.g. a summary + its item rows).
+SHEET_SYNC_REGISTRY = [
+    {"key": "events",            "label": "Timeline events",     "env": "SHEETS_EVENTS_TAB",             "default": "Events",            "fn": "export_events_to_sheets"},
+    {"key": "materials",         "label": "Materials",           "env": "SHEETS_MATERIALS_TAB",          "default": "Materials",         "fn": "export_materials_to_sheets"},
+    {"key": "job_reports",       "label": "Job reports",         "env": "SHEETS_JOB_REPORTS_TAB",        "default": "JobReports",        "fn": "export_job_report_to_sheets"},
+    {"key": "bills",             "label": "Bills / invoices",    "env": "SHEETS_BILLS_TAB",              "default": "Bills",             "fn": "export_bill_to_sheets"},
+    {"key": "estimates",         "label": "Estimates",           "env": "SHEETS_ESTIMATES_TAB",          "default": "Estimates",         "fn": "export_estimate_to_sheets"},
+    {"key": "estimate_items",    "label": "Estimate items",      "env": "SHEETS_ESTIMATE_ITEMS_TAB",     "default": "EstimateItems",     "fn": "export_estimate_to_sheets"},
+    {"key": "bols",              "label": "Bills of lading",     "env": "SHEETS_BOLS_TAB",               "default": "BOLs",              "fn": "export_bol_to_sheets"},
+    {"key": "bol_items",         "label": "BOL items",           "env": "SHEETS_BOL_ITEMS_TAB",          "default": "BOLItems",          "fn": "export_bol_to_sheets"},
+    {"key": "job_inventory",     "label": "Job inventory",       "env": "SHEETS_JOB_INVENTORY_TAB",      "default": "JobInventory",      "fn": "export_job_inventory_to_sheets"},
+    {"key": "job_inventory_items","label": "Job inventory items","env": "SHEETS_JOB_INVENTORY_ITEMS_TAB","default": "JobInventoryItems", "fn": "export_job_inventory_to_sheets"},
+    {"key": "incidents",         "label": "Incidents",           "env": "SHEETS_INCIDENTS_TAB",          "default": "Incidents",         "fn": "export_incident_to_sheets"},
+    {"key": "dvirs",             "label": "DVIRs",               "env": "SHEETS_DVIRS_TAB",              "default": "DVIRs",             "fn": "export_dvir_to_sheets"},
+    {"key": "prior_hours",       "label": "Prior on-duty (PODS)","env": "SHEETS_PRIOR_HOURS_TAB",        "default": "PriorOnDuty",       "fn": "export_prior_hours_to_sheets"},
+    {"key": "rods",             "label": "RODS logs",            "env": "SHEETS_RODS_TAB",               "default": "RODS",              "fn": "export_rods_to_sheets"},
+    {"key": "ld_pay",            "label": "Long-distance pay",   "env": "SHEETS_LD_PAY_TAB",             "default": "LongDistancePay",   "fn": "export_ld_day_to_sheets"},
+    {"key": "office_hours",      "label": "Office hours",        "env": "SHEETS_OFFICE_HOURS_TAB",       "default": "OfficeHours",       "fn": "export_office_hours_to_sheets"},
+    {"key": "reimbursements",    "label": "Reimbursements",      "env": "SHEETS_REIMBURSEMENTS_TAB",     "default": "Reimbursements",    "fn": "export_reimbursement_to_sheets"},
+    {"key": "availability",      "label": "Availability",        "env": "SHEETS_AVAILABILITY_TAB",       "default": "Availability",      "fn": "export_availability_window_to_sheets"},
+    {"key": "off_job_hours",     "label": "Off-job hours",       "env": "SHEETS_OFF_JOB_TAB",            "default": "OffJobHours",       "fn": "export_off_job_to_sheets"},
+]
+
+
+def check_sheets_sync(db: Session) -> Dict[str, Any]:
+    """Health check for every app->sheet sync. Verifies the Sheets connection,
+    then per registered sync: whether its tab exists in the spreadsheet, whether
+    its tab env var is explicitly set (unset = using the default, which on
+    staging silently targets the prod tab), and the last success/failure time.
+
+    Returns a JSON-able dict for the Advanced Settings system check. New syncs
+    are covered automatically by adding to SHEET_SYNC_REGISTRY."""
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    result: Dict[str, Any] = {
+        "spreadsheet_id": spreadsheet_id,
+        "connected": False,
+        "error": None,
+        "syncs": [],
+    }
+
+    try:
+        svc = _get_sheets_svc(db)
+        meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+        titles = {s["properties"]["title"] for s in meta.get("sheets", [])}
+        result["connected"] = True
+    except Exception as e:  # noqa: BLE001 - surface the failure to the admin
+        result["error"] = str(e)
+        return result
+
+    try:
+        from app.db.models.sheet_sync_status import SheetSyncStatus
+        statuses = {r.fn_name: r for r in db.query(SheetSyncStatus).all()}
+    except Exception:
+        statuses = {}
+
+    for entry in SHEET_SYNC_REGISTRY:
+        raw = (os.getenv(entry["env"]) or "").strip()
+        tab = raw or entry["default"]
+        st = statuses.get(entry.get("fn") or "")
+        result["syncs"].append({
+            "key": entry["key"],
+            "label": entry["label"],
+            "tab": tab,
+            "env_var": entry["env"],
+            "env_set": bool(raw),
+            "tab_exists": tab in titles,
+            "last_ok_at": st.last_ok_at.isoformat() if st and st.last_ok_at else None,
+            "last_error_at": st.last_error_at.isoformat() if st and st.last_error_at else None,
+            "last_error": (st.last_error if st else None),
+        })
+
+    result["ok"] = all(s["tab_exists"] for s in result["syncs"])
+    return result
+
+
+# ── Off-job hours export ─────────────────────────────────────────────────────
+
+OFF_JOB_HEADERS = [
+    "entry_uuid", "submitted_by", "work_date", "start_time", "end_time",
+    "hours", "pay_structure", "pay_other_note", "notes", "created_at",
+]
+
+
+def export_off_job_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """Replace-style export: one row per entry_uuid on the OffJobHours tab, so a
+    re-submit (offline retry) overwrites in place rather than duplicating."""
+    tab = os.getenv("SHEETS_OFF_JOB_TAB", "OffJobHours").strip() or "OffJobHours"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = entry.get("entry_uuid") or ""
+    if not uuid:
+        return 0
+
+    svc = _get_sheets_svc(db)
+    headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, OFF_JOB_HEADERS))
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", uuid)
+
+    row = {
+        "entry_uuid": uuid,
+        "submitted_by": entry.get("submitted_by_name") or "",
+        "work_date": entry.get("work_date") or "",
+        "start_time": entry.get("start_time") or "",
+        "end_time": entry.get("end_time") or "",
+        "hours": entry.get("hours") if entry.get("hours") is not None else "",
+        "pay_structure": entry.get("pay_structure") or "",
+        "pay_other_note": entry.get("pay_other_note") or "",
+        "notes": entry.get("notes") or "",
+        "created_at": entry.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
     return 1

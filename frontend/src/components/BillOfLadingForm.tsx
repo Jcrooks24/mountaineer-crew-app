@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { apiFetch } from "../api/client";
 import { BetaTag } from "./BetaTag";
 import SignaturePad, { type SignaturePadHandle } from "./SignaturePad";
-import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
+import { useMergedCatalog } from "../lib/furnitureCatalogStore";
 import {
   applySignature,
   type BOLDraft,
@@ -12,6 +12,7 @@ import {
   type CalEvent,
   type OpenBol,
   type SignInput,
+  autosyncDraft,
   captureItemPhoto,
   enqueueSubmit,
   fetchCalendarDay,
@@ -19,16 +20,22 @@ import {
   listOpenBols,
   loadDraft,
   loadForJob,
+  manualJobToJobUuid,
   newDraft,
   newUUID,
   pendingSubmitCount,
+  failedBolOps,
+  retryFailedBol,
+  discardFailedBol,
   rememberJob,
   resolveJobUuid,
   retryPendingPhotos,
   saveDraft,
   syncQueue,
+  BolStorageFullError,
 } from "../lib/bolStore";
 import { BOL_CONTRACT_SECTIONS } from "../lib/bolContract";
+import SuggestInput from "./SuggestInput";
 
 /** Hand the shipper their dated copy: Web Share (with file) if available,
  * otherwise a download. Works offline. */
@@ -177,7 +184,11 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
   function startManual() {
     const name = manualName.trim();
     if (!name) return;
-    const job = { job_uuid: newUUID(), job_name: name, job_date: selDate };
+    // Derive job_uuid from the name+date the same way the Timeline and PODS do,
+    // NOT a per-device random id. Two crew typing the same manual job must land on
+    // the same job_uuid, or the derived bol_id can't converge and each device gets
+    // its own BOL for the one job (defeats ADR 0018 on the manual path).
+    const job = { job_uuid: manualJobToJobUuid(name, selDate), job_name: name, job_date: selDate };
     rememberJob(job);
     const draft = newDraft(job);
     saveDraft(draft);
@@ -293,14 +304,41 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   // Crew rep - carries over from the BOL if set, otherwise the logged-in user.
   const [crewRep, setCrewRep] = useState(initialDraft.crew_rep || user?.name || user?.email || "");
   const [draft, setDraft] = useState<BOLDraft>(initialDraft);
+  // Always-current draft for the reconnect handler below, which has an empty dep
+  // array. Without this it would close over the MOUNT-TIME draft and, on
+  // reconnect, rebuild + persist from that stale item list - dropping any item
+  // the crew added after mount (state, localStorage, AND the queue). See vet H1.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  // Shared catalogue (server rows + built-in, cached offline) so the BOL item
+  // picker matches Actual Inventory and the Estimator.
+  const catalog = useMergedCatalog();
 
   // Add-item form state
   const [itemName, setItemName] = useState("");
   const [itemQty, setItemQty] = useState(1);
   const [err, setErr] = useState<string | null>(null);
 
+  // Failed queue ops for THIS BOL. A permanent 4xx (e.g. a submit the server
+  // refuses) is kept, not deleted (ADR 0013), and blocks this BOL's sign/pdf
+  // behind it - so without a retry surface a signed-on-device BOL could get
+  // stuck with its signature never reaching the server. This banner is that
+  // surface. Refreshed after every drain.
+  const [failedOps, setFailedOps] = useState(() =>
+    failedBolOps().filter((o) => o.bol_id === initialDraft.bol_id),
+  );
+  const refreshFailed = () =>
+    setFailedOps(failedBolOps().filter((o) => o.bol_id === draft.bol_id));
+
   // Session-only preview URLs for freshly-captured photos (photoId -> objectURL).
   const [previews, setPreviews] = useState<Record<string, string>>({});
+  // Revoke the preview object URLs on unmount so they don't leak for the session.
+  const previewsRef = useRef(previews);
+  previewsRef.current = previews;
+  useEffect(() => {
+    return () => { Object.values(previewsRef.current).forEach((u) => URL.revokeObjectURL(u)); };
+  }, []);
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [busyPhotoItem, setBusyPhotoItem] = useState<number | null>(null);
 
@@ -338,6 +376,18 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     saveDraft(draft);
   }, [draft]);
 
+  // Push item + verification changes to the SERVER (debounced) so a second device
+  // sees them without waiting for a gated Save. Skips the first run so adopting
+  // the server copy on open does not echo straight back. Signatures are not
+  // autosynced - they go through the explicit sign flow. Deps are the item array
+  // reference (changes only on an item edit) and the two inventory scalars.
+  const didFirstAutosync = useRef(false);
+  useEffect(() => {
+    if (!didFirstAutosync.current) { didFirstAutosync.current = true; return; }
+    autosyncDraft(draft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.items, draft.inventory_verified, draft.inventory_note]);
+
   // On mount + reconnect: finish any offline photo uploads and drain the queue
   // so queued BOLs, signatures, and PDFs reach the server. (The server copy was
   // already adopted by the hub before this editor opened.)
@@ -347,10 +397,14 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       const after = await retryPendingPhotos(draft);
       if (!cancelled && after !== draft) setDraft(after);
       await syncQueue();
+      if (!cancelled) refreshFailed();
     })();
     const onOnline = () => {
-      syncQueue();
-      retryPendingPhotos(draft).then((u) => { if (!cancelled && u !== draft) setDraft(u); });
+      syncQueue().then(() => { if (!cancelled) refreshFailed(); });
+      // Read the LATEST draft via the ref, not the stale mount-time closure, so a
+      // reconnect never rebuilds from an outdated item list (vet H1).
+      const cur = draftRef.current;
+      retryPendingPhotos(cur).then((u) => { if (!cancelled && u !== cur) setDraft(u); });
     };
     window.addEventListener("online", onOnline);
     return () => { cancelled = true; window.removeEventListener("online", onOnline); };
@@ -422,10 +476,14 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     setErr(null);
     if (draft.items.length === 0) return setErr("Add at least one item before saving.");
     const snapshot: BOLDraft = { ...draft, updated_at: new Date().toISOString() };
-    saveDraft(snapshot);
+    // Surface a storage-full failure instead of a false "Saved" (bug 5): if the
+    // draft or the queued submit can't be persisted, nothing was saved.
+    if (!saveDraft(snapshot) || !enqueueSubmit(snapshot)) {
+      return setErr("This device's storage is full, so the BOL could not be saved. Free up space and try again.");
+    }
     setDraft(snapshot);
-    enqueueSubmit(snapshot);
     const synced = await syncQueue();
+    refreshFailed(); // surface a rejected op now, not on the next remount (bug 6)
     const queued = pendingSubmitCount();
     setSavedNote(
       synced > 0 && queued === 0
@@ -481,14 +539,22 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
       // Push to the server (or leave queued if offline).
       const synced = await syncQueue();
+      refreshFailed(); // surface a rejected sign/pdf op now, not on remount (bug 6)
       setSavedNote(
         synced > 0 && pendingSubmitCount() === 0
           ? `${phase === "origin" ? "Origin" : "Delivery"} signing complete - copy delivered and synced.`
           : `${phase === "origin" ? "Origin" : "Delivery"} signing saved - copy delivered; will sync when back online.`,
       );
       window.setTimeout(() => setSavedNote(null), 5000);
-    } catch {
-      setSignErr("Could not complete signing. Your data is saved - try again.");
+    } catch (e) {
+      // A storage-full error means the signature was NOT saved - do not tell the
+      // crew "your data is saved" (bug 5). Every other failure happens after the
+      // draft + queue ops are persisted, so retry is safe there.
+      setSignErr(
+        e instanceof BolStorageFullError
+          ? e.message
+          : "Could not complete signing. Your data is saved - try again.",
+      );
     } finally {
       setSignBusy(false);
     }
@@ -519,6 +585,49 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         </div>
         <button onClick={onBack} style={backBtnStyle}>← BOLs</button>
       </div>
+
+      {/* Failed-sync banner: this BOL was refused by the server and is stuck on
+          this phone (ADR 0013 keeps it rather than deleting it). Retry re-drains
+          the whole submit->sign->pdf sequence; Discard is confirm-gated because
+          it can drop a captured signature. */}
+      {failedOps.length > 0 && (
+        <div className="card" style={{ borderColor: "var(--danger)" }}>
+          <div style={{ fontWeight: 800, color: "var(--danger)" }}>This BOL could not be sent</div>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+            {failedOps[0].failed_reason || "The server rejected it."}
+          </div>
+          <div className="small" style={{ marginTop: 4 }}>
+            It is still saved on this phone. Nothing has been lost.
+            {draft.status !== "draft" ? " The signature is safe and will send once this clears." : ""}
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+            <button
+              className="btnPrimary"
+              style={{ padding: "8px 14px", fontSize: 13, minHeight: 40 }}
+              onClick={async () => {
+                setErr(null);
+                await retryFailedBol(draft.bol_id);
+                refreshFailed();
+              }}
+            >
+              Retry
+            </button>
+            <button
+              style={{ padding: "8px 14px", fontSize: 13, minHeight: 40, borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)" }}
+              onClick={() => {
+                const ok = window.confirm(
+                  "Discard this BOL's unsent changes?\n\nIt was never received by the office. If it was signed, that signature will be lost.",
+                );
+                if (!ok) return;
+                discardFailedBol(draft.bol_id);
+                refreshFailed();
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Job (selected in the chooser) + crew rep */}
       <div className="card">
@@ -556,18 +665,16 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
           <label className="col" style={{ gap: 4, flex: "2 1 200px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Item</span>
-            <input
-              list="bol-furniture"
+            {/* A native <datalist> suppresses the mobile keyboard's autocorrect
+                strip, which is why crew were logging misspelled items on the BOL.
+                Rendered suggestions instead: autocorrect works, typeahead works. */}
+            <SuggestInput
               value={itemName}
-              onChange={(e) => setItemName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addItem(); } }}
+              onChange={setItemName}
+              options={catalog.map((f) => f.name)}
+              onEnter={addItem}
               placeholder="Sofa, dresser, CP box, PBO box…"
             />
-            <datalist id="bol-furniture">
-              {FURNITURE_CATALOG.map((f) => (
-                <option key={f.name} value={f.name} />
-              ))}
-            </datalist>
           </label>
           <label className="col" style={{ gap: 4, width: 90 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Qty</span>

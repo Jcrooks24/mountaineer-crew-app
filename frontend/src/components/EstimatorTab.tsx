@@ -14,6 +14,9 @@ import {
   removeOp as removeEstimatorOp,
 } from "../lib/estimatorQueue";
 import { mountainDateYYYYMMDD } from "../lib/time";
+import { addPhoto, listPhotosForJob, getPhoto, updatePhoto, deletePhoto } from "../lib/photoStore";
+import { toQueuedPhoto, slotToBlob, slotToPreviewBlob } from "../lib/queuedPhoto";
+import { BetaTag } from "./BetaTag";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -45,6 +48,7 @@ type Estimate = {
   destination_access_notes: string | null;
   special_items_notes: string | null;
   general_notes: string | null;
+  estimated_hours: number | null;
   estimated_weight_lbs: number;
   estimated_cubic_ft: number;
   created_at: string;
@@ -262,8 +266,18 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
 
   // Rooms that exist only in the UI (before their first item is added)
   const [pendingRooms, setPendingRooms] = useState<string[]>([]);
+  // Inline room-name entry - see note on subcategory entry below; window.prompt
+  // is unusable in a mobile standalone/PWA context.
+  const [addingRoom, setAddingRoom] = useState(false);
+  const [roomDraft, setRoomDraft] = useState("");
 
-  useEffect(() => { setLocal(estimate); }, [estimate]);
+  // Resync local ONLY when a different estimate is opened. Keying on the whole
+  // `estimate` object would reset local every time our own autosave echoes back
+  // an updated record, clobbering characters typed during the save round-trip
+  // (and any trailing whitespace the backend trims) - the "lose a sentence while
+  // typing" bug. Item edits refresh local.items explicitly via refreshEstimate.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setLocal(estimate); }, [estimate.estimate_uuid]);
 
   const totalWeight = useMemo(
     () => local.items.reduce((s, i) => s + (i.weight_lbs || 0) * (i.qty || 0), 0),
@@ -276,16 +290,39 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
 
   // Rooms to render = distinct rooms-with-items + pending empty rooms + an
   // "Unassigned" bucket if anything lacks a room.
+  //
+  // NEWLY ADDED ROOMS COME FIRST, newest at the very top. The list used to be
+  // sorted alphabetically, so adding "Office" dropped it into the middle of the
+  // list and the estimator had to scroll to find the room they had just created,
+  // in order to put things in it. Adding a room is always immediately followed by
+  // filling it, so the room you just made is the one you need under your thumb.
+  //
+  // A room stays pinned to the top for the rest of the session, even once it has
+  // items, because `pendingRooms` is never pruned. That is deliberate: a room that
+  // jumped back into alphabetical order the moment you added a chair would be
+  // worse than either behavior on its own.
   const rooms = useMemo<string[]>(() => {
-    const set = new Set<string>();
+    const withItems = new Set<string>();
     let hasUnassigned = false;
     for (const it of local.items) {
-      if (it.room && it.room.trim()) set.add(it.room.trim());
+      if (it.room && it.room.trim()) withItems.add(it.room.trim());
       else hasUnassigned = true;
     }
-    for (const r of pendingRooms) set.add(r);
-    const out = [...set];
-    out.sort((a, b) => a.localeCompare(b));
+
+    const seen = new Set<string>();
+    const out: string[] = [];
+    // Newest-added first.
+    for (let i = pendingRooms.length - 1; i >= 0; i--) {
+      const r = pendingRooms[i];
+      if (!seen.has(r)) { seen.add(r); out.push(r); }
+    }
+    // Then everything else, alphabetical, as before.
+    const rest = [...withItems].filter((r) => !seen.has(r)).sort((a, b) => a.localeCompare(b));
+    out.push(...rest);
+
+    // Unassigned stays where it has always been, pinned above everything. It is
+    // where items with no room land, so it is the bucket you are most likely to
+    // be emptying. Only the ordering of REAL rooms changes here.
     if (hasUnassigned) out.unshift("Unassigned");
     return out;
   }, [local.items, pendingRooms]);
@@ -319,6 +356,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
           destination_access_notes: l.destination_access_notes ?? "",
           special_items_notes: l.special_items_notes ?? "",
           general_notes: l.general_notes ?? "",
+          estimated_hours: l.estimated_hours,
         }),
       });
       if (!isMounted.current) return;
@@ -354,6 +392,7 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
             destination_access_notes: l.destination_access_notes ?? "",
             special_items_notes: l.special_items_notes ?? "",
             general_notes: l.general_notes ?? "",
+            estimated_hours: l.estimated_hours,
           }),
         }).catch(() => {});
       }
@@ -375,6 +414,10 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     try {
       const fresh = await apiFetch<Estimate>(`/api/estimates/${local.estimate_uuid}`);
       onChange(fresh);
+      // Pull the refreshed item list into local (item add/remove/edit happens in
+      // child rows). Meta fields the user may be typing are preserved - the
+      // prop-sync effect above no longer resets local for the same estimate.
+      setLocal((prev) => ({ ...prev, items: fresh.items }));
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Reload failed");
     }
@@ -426,9 +469,12 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     const optimistic: EstimateItem = { id: tempId, ...payload };
     setLocal((prev) => ({ ...prev, items: [...prev.items, optimistic] }));
 
+    // item_uuid = opId. The server upserts on it, so this POST and any later
+    // retry from drainEstimatorQueue() are the same write. Without it, a lost
+    // response here left the op queued and the next drain added the item twice.
     apiFetch<EstimateItem>(`/api/estimates/${local.estimate_uuid}/items`, {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, item_uuid: opId }),
     })
       .then((server) => {
         removeEstimatorOp(opId);
@@ -438,9 +484,12 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
         const isPermanent =
           e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408;
         if (isPermanent) {
-          removeEstimatorOp(opId);
-          dropTempItem(tempId);
-          setErr(e instanceof ApiError ? e.message : "Add failed");
+          // Do NOT delete the op or the row (ADR 0013). The estimator is right
+          // here and sees the reason now; the item stays visible and stays in the
+          // queue (the drain marks it failed and keeps it), and the row's own
+          // delete button is the discard path. Deleting it here silently threw
+          // away the line item.
+          setErr(e instanceof ApiError ? `Item not saved: ${e.message}` : "Item not saved");
         }
         // else: network / 5xx - leave queued, drain will retry
       });
@@ -475,9 +524,10 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     drainEstimatorQueue(
       local.estimate_uuid,
       (tempId, server) => resolveTempItem(tempId, server),
-      (tempId, reason) => {
-        dropTempItem(tempId);
-        setErr(`An add failed and was dropped: ${reason}`);
+      (_tempId, reason) => {
+        // The item is KEPT (marked failed in the queue), not dropped (ADR 0013).
+        // It stays on screen; the row's delete button discards it if wanted.
+        setErr(`An item could not be saved: ${reason}. It is still shown - delete it or try again.`);
       },
     );
     // Run whenever the estimate UUID changes (including drill-down/back).
@@ -493,11 +543,12 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
     }));
   }
 
-  function addRoom() {
-    const name = prompt("Room name (e.g. Living Room, Kitchen, Garage):")?.trim();
+  function confirmRoom() {
+    const name = roomDraft.trim();
     if (!name) return;
-    if (rooms.includes(name)) return;
-    setPendingRooms((prev) => [...prev, name]);
+    if (!rooms.includes(name)) setPendingRooms((prev) => [...prev, name]);
+    setRoomDraft("");
+    setAddingRoom(false);
   }
 
   return (
@@ -528,9 +579,21 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
               <input value={local.customer_phone ?? ""} onChange={(e) => setField("customer_phone", e.target.value)} />
             </Field>
           </div>
-          <Field label="Target Move Date">
-            <input type="date" value={local.move_date ?? ""} onChange={(e) => setField("move_date", e.target.value)} />
-          </Field>
+          <div className="row wrap" style={{ gap: 10 }}>
+            <Field label="Target Move Date" flex>
+              <input type="date" value={local.move_date ?? ""} onChange={(e) => setField("move_date", e.target.value)} />
+            </Field>
+            <Field label="Estimated Hours" flex>
+              <input
+                type="number"
+                min={0}
+                step={0.5}
+                value={local.estimated_hours ?? ""}
+                onChange={(e) => setField("estimated_hours", e.target.value === "" ? null : Number(e.target.value))}
+                placeholder="e.g. 6.5"
+              />
+            </Field>
+          </div>
           <Field label="Origin Address">
             <input value={local.origin_address ?? ""} onChange={(e) => setField("origin_address", e.target.value)} placeholder="Street, City, ST" />
           </Field>
@@ -596,8 +659,45 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
               Totals: {Math.round(totalWeight).toLocaleString()} lbs · {Math.round(totalCuft)} cu ft
             </div>
           </div>
-          <button type="button" className="btnPrimary" onClick={addRoom}>+ Add Room</button>
+          {!addingRoom && (
+            <button type="button" className="btnPrimary" onClick={() => { setRoomDraft(""); setAddingRoom(true); }}>+ Add Room</button>
+          )}
         </div>
+
+        {addingRoom && (
+          <div className="col" style={{ gap: 6, marginTop: 10 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>New room</span>
+            <div className="row" style={{ gap: 6 }}>
+              <input
+                autoFocus
+                value={roomDraft}
+                onChange={(e) => setRoomDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); confirmRoom(); }
+                  if (e.key === "Escape") { setAddingRoom(false); setRoomDraft(""); }
+                }}
+                placeholder="e.g. Living Room, Kitchen, Garage"
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btnPrimary"
+                onClick={confirmRoom}
+                disabled={!roomDraft.trim()}
+                style={{ padding: "6px 12px" }}
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAddingRoom(false); setRoomDraft(""); }}
+                style={{ padding: "6px 10px", color: "var(--muted)" }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {rooms.length === 0 ? (
           <div className="small" style={{ color: "var(--muted)", marginTop: 12 }}>
@@ -628,6 +728,10 @@ function EstimateDetail({ estimate, onBack, onChange }: DetailProps) {
 
       {/* Photos */}
       <EstimatePhotos
+        // Key by estimate so switching estimates in place remounts the component,
+        // resetting `pending` + preview URLs. Otherwise a stale pending photo from
+        // a prior estimate could upload to the wrong one (vet M1).
+        key={local.estimate_uuid}
         estimateUuid={local.estimate_uuid}
         customerName={local.customer_name}
         moveDate={local.move_date ?? ""}
@@ -670,6 +774,11 @@ function RoomTile({
 }) {
   const [addingItem, setAddingItem] = useState(false);
   const [preSubcategory, setPreSubcategory] = useState<string | null>(null);
+  // Inline subcategory-name entry. Replaces window.prompt(), which mobile
+  // standalone/PWA browsers silently suppress (crew tapped "+ Subcategory"
+  // and nothing happened - no way to classify items on a phone).
+  const [addingSub, setAddingSub] = useState(false);
+  const [subDraft, setSubDraft] = useState("");
 
   const subcategories = useMemo<string[]>(() => {
     const set = new Set<string>();
@@ -687,10 +796,12 @@ function RoomTile({
   const roomWeight = items.reduce((s, i) => s + (i.weight_lbs || 0) * (i.qty || 0), 0);
   const roomCuft = items.reduce((s, i) => s + (i.cubic_ft || 0) * (i.qty || 0), 0);
 
-  function addSubcategory() {
-    const name = prompt(`Add subcategory to "${room}" (e.g. Going, Not Going, Pack, Don't Touch):`)?.trim();
+  function confirmSubcategory() {
+    const name = subDraft.trim();
     if (!name) return;
     setPreSubcategory(name);
+    setAddingSub(false);
+    setSubDraft("");
     setAddingItem(true);
   }
 
@@ -758,10 +869,10 @@ function RoomTile({
         >
           + Add item
         </button>
-        {!isUnassigned && (
+        {!isUnassigned && !addingSub && (
           <button
             type="button"
-            onClick={addSubcategory}
+            onClick={() => { setSubDraft(""); setAddingSub(true); }}
             style={{ fontSize: 12, padding: "6px 10px", flex: 1 }}
           >
             + Subcategory
@@ -769,17 +880,49 @@ function RoomTile({
         )}
       </div>
 
+      {addingSub && (
+        <div className="col" style={{ gap: 6 }}>
+          <span className="small" style={{ color: "var(--muted)" }}>
+            New subcategory for "{room}"
+          </span>
+          <div className="row" style={{ gap: 6 }}>
+            <input
+              autoFocus
+              value={subDraft}
+              onChange={(e) => setSubDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); confirmSubcategory(); }
+                if (e.key === "Escape") { setAddingSub(false); setSubDraft(""); }
+              }}
+              placeholder="e.g. Going, Not Going, Pack, Don't Touch"
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              onClick={confirmSubcategory}
+              disabled={!subDraft.trim()}
+              style={{ fontSize: 12, padding: "6px 12px" }}
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAddingSub(false); setSubDraft(""); }}
+              style={{ fontSize: 12, padding: "6px 10px", color: "var(--muted)" }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {addingItem && (
         <AddItemDialog
           room={isUnassigned ? "" : room}
           subcategory={preSubcategory ?? ""}
           knownSubcategories={subcategories.filter((s) => s !== "-")}
           onClose={() => { setAddingItem(false); setPreSubcategory(null); }}
-          onAdd={(payload) => {
-            onAddItem(payload);
-            setAddingItem(false);
-            setPreSubcategory(null);
-          }}
+          onAdd={(payload) => { onAddItem(payload); }}
         />
       )}
     </div>
@@ -1087,6 +1230,11 @@ function AddItemDialog({
 }) {
   const { list: catalog, refresh: refreshCatalog } = useCatalog();
 
+  // The dialog stays open after each add so the estimator can add several items
+  // in a row; searchRef lets us drop the cursor straight back in the item box,
+  // and justAdded gives a quick confirmation of the item that was just added.
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [justAdded, setJustAdded] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Match | null>(null);
   // String-backed so the user can clear and retype. A numeric-clamped state
@@ -1140,6 +1288,23 @@ function AddItemDialog({
       subcategory: sub.trim() || null,
       notes: notes.trim() || null,
     });
+    resetForNext(name);
+  }
+
+  // Clear the item-specific fields and drop the cursor back in the search box so
+  // the next item can be typed immediately. Keeps `sub` (subcategory) so a run
+  // of items in the same subcategory stays grouped without re-picking it.
+  function resetForNext(addedName: string) {
+    setJustAdded(addedName);
+    setSelected(null);
+    setQuery("");
+    setWeight("");
+    setCuft("");
+    setNotes("");
+    setQty("1");
+    setSaveToCatalog(false);
+    setErr(null);
+    requestAnimationFrame(() => searchRef.current?.focus());
   }
 
   function chooseAndAdd(m: Match) {
@@ -1186,9 +1351,12 @@ function AddItemDialog({
           {/* Subcategory chips render before the Item input so they stay
               visible once the mobile keyboard opens (the Item input used to
               autoFocus, pushing the chips below the keyboard fold). */}
-          {knownSubcategories.length > 0 && (
-            <div className="col" style={{ gap: 4 }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Subcategory</span>
+          {/* Subcategory is always available here (not behind the advanced
+              toggle) so crew can classify items on mobile: tap an existing
+              chip, or type a new name. */}
+          <div className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Subcategory (optional)</span>
+            {knownSubcategories.length > 0 && (
               <div className="row wrap" style={{ gap: 6 }}>
                 {knownSubcategories.map((s) => (
                   <button
@@ -1210,6 +1378,23 @@ function AddItemDialog({
                   </button>
                 ))}
               </div>
+            )}
+            <input
+              list={knownSubcategories.length ? "subcategory-suggest" : undefined}
+              value={sub}
+              onChange={(e) => setSub(e.target.value)}
+              placeholder="e.g. Going, Not Going, Pack…"
+            />
+            {knownSubcategories.length > 0 && (
+              <datalist id="subcategory-suggest">
+                {knownSubcategories.map((s) => <option key={s} value={s} />)}
+              </datalist>
+            )}
+          </div>
+
+          {justAdded && (
+            <div className="small" style={{ color: "var(--ok)", fontWeight: 600 }}>
+              ✓ Added “{justAdded}”. Add another, or tap Done.
             </div>
           )}
 
@@ -1217,8 +1402,9 @@ function AddItemDialog({
             <span className="small" style={{ color: "var(--muted)" }}>Item *</span>
             <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
               <input
+                ref={searchRef}
                 value={query}
-                onChange={(e) => { setQuery(e.target.value); setSelected(null); }}
+                onChange={(e) => { setQuery(e.target.value); setSelected(null); if (justAdded) setJustAdded(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } }}
                 placeholder="Start typing - e.g. Sofa, Dresser, Box…"
                 style={{ flex: 1 }}
@@ -1313,21 +1499,6 @@ function AddItemDialog({
               </div>
 
               <label className="col" style={{ gap: 4 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Subcategory (optional)</span>
-                <input
-                  list={knownSubcategories.length ? "subcategory-suggest" : undefined}
-                  value={sub}
-                  onChange={(e) => setSub(e.target.value)}
-                  placeholder="e.g. Going, Not Going, Pack…"
-                />
-                {knownSubcategories.length > 0 && (
-                  <datalist id="subcategory-suggest">
-                    {knownSubcategories.map((s) => <option key={s} value={s} />)}
-                  </datalist>
-                )}
-              </label>
-
-              <label className="col" style={{ gap: 4 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Notes (optional)</span>
                 <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Fragile, PBO, client disassembles…" />
               </label>
@@ -1352,7 +1523,7 @@ function AddItemDialog({
             <button type="submit" className="btnPrimary" style={{ flex: 1 }}>
               Add to inventory
             </button>
-            <button type="button" onClick={onClose}>Cancel</button>
+            <button type="button" onClick={onClose}>{justAdded ? "Done" : "Cancel"}</button>
           </div>
         </form>
       </div>
@@ -1376,9 +1547,23 @@ function EstimatePhotos({
   const [photos, setPhotos] = useState<ServerPhoto[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [caption, setCaption] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
+  // Pending batch: take several shots and/or multi-select from the library, each
+  // with its own note, then upload them together. The IMAGE BYTES live in
+  // IndexedDB (photoStore), keyed by estimateUuid, so a failed upload or a reload
+  // no longer loses a picked photo; this in-memory list is only the UI view
+  // (id + caption + a preview objectURL). Mirrors the crew and BOL photo paths
+  // (ADR 0017: store bytes, never a File handle).
+  const [pending, setPending] = useState<{ id: string; caption: string; previewUrl: string }[]>([]);
+  // Saved-grid note editor: which photo's note is open + its draft.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+
+  // Always-current pending, so the unmount cleanup revokes the live preview URLs.
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  useEffect(() => {
+    return () => { pendingRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl)); };
+  }, []);
 
   async function refresh() {
     try {
@@ -1389,39 +1574,134 @@ function EstimatePhotos({
     } catch { /* offline */ }
   }
 
-  useEffect(() => { refresh(); }, [estimateUuid]);
+  useEffect(() => {
+    refresh();
+    // Recover any pending estimator photos persisted on this device (they survive
+    // a reload / app kill because the bytes are in IndexedDB, not a File handle).
+    (async () => {
+      try {
+        const stored = await listPhotosForJob(estimateUuid);
+        const items: { id: string; caption: string; previewUrl: string }[] = [];
+        for (const s of stored) {
+          if (s.drive_status === "uploaded") continue;
+          const b = await slotToPreviewBlob(s.blob); // one at a time, bounded memory
+          items.push({ id: s.id, caption: s.caption || "", previewUrl: b ? URL.createObjectURL(b) : "" });
+        }
+        if (items.length) setPending(items);
+      } catch { /* IndexedDB unavailable */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estimateUuid]);
 
-  async function upload() {
-    if (!pendingFile) return;
+  // Persist each picked file's BYTES to IndexedDB immediately (resized first, so a
+  // huge library photo can't blow memory - resizeImage caps at 1920px). Sequential
+  // so only one image is decoded at a time regardless of how many are selected.
+  async function addFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setErr(null);
+    for (const file of Array.from(files)) {
+      try {
+        const id = newUUID();
+        const resized = await resizeImage(file);
+        await addPhoto({
+          id,
+          job_uuid: estimateUuid,
+          created_at: new Date().toISOString(),
+          mime: "image/jpeg",
+          caption: "",
+          blob: await toQueuedPhoto(resized),
+          drive_status: "pending",
+        });
+        const previewUrl = URL.createObjectURL(resized);
+        setPending((prev) => [...prev, { id, caption: "", previewUrl }]);
+      } catch {
+        setErr("Could not add a photo on this device. Try again.");
+      }
+    }
+  }
+
+  async function uploadOne(photoId: string, blob: Blob, caption: string) {
+    const form = new FormData();
+    form.append("file", blob, "estimate.jpg");
+    form.append("photo_id", photoId);
+    form.append("job_uuid", estimateUuid);
+    form.append("job_name", `Estimate - ${customerName}`);
+    form.append("job_date", moveDate || mountainDateYYYYMMDD());
+    form.append("caption", caption.trim());
+    // Routes the upload to the estimator-photos Drive parent folder so
+    // estimator captures don't mix into the crew-job photos folder.
+    form.append("folder", "estimator");
+
+    const token = getToken() || "";
+    const res = await fetch(`${API}/api/photos/upload`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+  }
+
+  async function uploadAll() {
+    if (pending.length === 0) return;
+    setBusy(true);
+    setErr(null);
+    let lastErr = "";
+    const succeeded = new Set<string>();
+    for (const p of pending) {
+      try {
+        // Read this one photo's bytes now (not the whole job's at once), so peak
+        // memory stays at a single image regardless of how many are queued.
+        const stored = await getPhoto(p.id);
+        const blob = stored ? await slotToBlob(stored.blob) : null;
+        if (!blob) throw new Error("A photo could not be read from this device. Re-add it.");
+        await uploadOne(p.id, blob, p.caption);
+        await deletePhoto(p.id); // now on the server; the grid shows it via refresh()
+        URL.revokeObjectURL(p.previewUrl);
+        succeeded.add(p.id);
+      } catch (e: any) {
+        lastErr = e?.message ?? "Upload failed";
+        // Persist the latest caption so a retry keeps it; the bytes stay in
+        // IndexedDB (drive_status pending), so the photo is NOT lost.
+        try { await updatePhoto(p.id, { caption: p.caption }); } catch { /* ignore */ }
+      }
+    }
+    // Keep the ones that FAILED (was setPending([]) - which dropped failed
+    // photos). Successful uploads are removed; failures stay for a retry.
+    setPending((prev) => prev.filter((x) => !succeeded.has(x.id)));
+    if (lastErr) setErr(lastErr);
+    await refresh();
+    setBusy(false);
+  }
+
+  async function discardPending(id: string) {
+    const p = pendingRef.current.find((x) => x.id === id);
+    if (p) URL.revokeObjectURL(p.previewUrl);
+    try { await deletePhoto(id); } catch { /* ignore */ }
+    setPending((prev) => prev.filter((x) => x.id !== id));
+  }
+
+  async function discardAllPending() {
+    for (const p of pendingRef.current) {
+      URL.revokeObjectURL(p.previewUrl);
+      try { await deletePhoto(p.id); } catch { /* ignore */ }
+    }
+    setPending([]);
+  }
+
+  async function saveNote(photoId: string, caption: string) {
     setBusy(true);
     setErr(null);
     try {
-      const form = new FormData();
-      const resized = await resizeImage(pendingFile);
-      form.append("file", resized, (pendingFile.name || "estimate.jpg").replace(/.[^.]+$/, ".jpg"));
-      form.append("photo_id", newUUID());
-      form.append("job_uuid", estimateUuid);
-      form.append("job_name", `Estimate - ${customerName}`);
-      form.append("job_date", moveDate || mountainDateYYYYMMDD());
-      form.append("caption", caption.trim());
-      // Routes the upload to the estimator-photos Drive parent folder so
-      // estimator captures don't mix into the crew-job photos folder.
-      form.append("folder", "estimator");
-
-      const token = getToken() || "";
-      const res = await fetch(`${API}/api/photos/upload`, {
+      await apiFetch(`/api/photos/caption`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
+        body: JSON.stringify({ photo_id: photoId, caption }),
       });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json?.error || `HTTP ${res.status}`);
-      setPendingFile(null);
-      setCaption("");
-      if (fileRef.current) fileRef.current.value = "";
+      setEditingId(null);
+      setNoteDraft("");
       await refresh();
     } catch (e: any) {
-      setErr(e?.message ?? "Upload failed");
+      setErr(e?.message ?? "Could not save note");
     } finally {
       setBusy(false);
     }
@@ -1429,56 +1709,73 @@ function EstimatePhotos({
 
   return (
     <div className="card">
-      <div className="sectionTitle">Site Photos ({photos.length})</div>
+      <div className="sectionTitle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        Site Photos ({photos.length})<BetaTag feature="multiPhoto" />
+      </div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Add photos of rooms, furniture, access paths, and anything worth noting for the crew.
       </div>
 
-      {pendingFile ? (
-        <div className="col" style={{ gap: 8 }}>
-          <img
-            src={URL.createObjectURL(pendingFile)}
-            alt="preview"
-            style={{ width: "100%", maxHeight: 260, objectFit: "cover", borderRadius: 8 }}
-          />
-          <textarea
-            rows={2}
-            value={caption}
-            onChange={(e) => setCaption(e.target.value)}
-            placeholder="Note (optional)…"
-          />
-          <div className="row" style={{ gap: 8 }}>
-            <button type="button" className="btnPrimary" onClick={upload} disabled={busy} style={{ flex: 1 }}>
-              {busy ? "Uploading…" : "Save photo"}
-            </button>
-            <button type="button" onClick={() => { setPendingFile(null); setCaption(""); }}>Cancel</button>
-          </div>
-        </div>
-      ) : (
+      <div className="row wrap" style={{ gap: 8 }}>
         <label
           className="btnPrimary"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            padding: "10px 18px",
-            borderRadius: "var(--btn-r)",
-            cursor: busy ? "not-allowed" : "pointer",
-          }}
+          style={{ display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)", cursor: busy ? "not-allowed" : "pointer" }}
         >
-          Add Photo
+          Take Photo
           <input
-            ref={fileRef}
             type="file"
             accept="image/*"
+            capture="environment"
             style={{ display: "none" }}
             disabled={busy}
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
-              e.currentTarget.value = "";
-              if (f) setPendingFile(f);
-            }}
+            onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
           />
         </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)", cursor: busy ? "not-allowed" : "pointer" }}
+        >
+          Add from Library
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            style={{ display: "none" }}
+            disabled={busy}
+            onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
+          />
+        </label>
+      </div>
+
+      {/* Pending batch - note each photo, then upload together. */}
+      {pending.length > 0 && (
+        <div className="col" style={{ gap: 10, marginTop: 12 }}>
+          <div className="small" style={{ fontWeight: 700 }}>Ready to upload ({pending.length})</div>
+          {pending.map((p) => {
+            return (
+              <div key={p.id} className="col" style={{ gap: 6, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                {p.previewUrl && <img src={p.previewUrl} alt="preview" style={{ width: "100%", maxHeight: 220, objectFit: "cover" }} />}
+                <div className="col" style={{ gap: 6, padding: 8 }}>
+                  <textarea
+                    rows={2}
+                    value={p.caption}
+                    onChange={(e) => setPending((prev) => prev.map((x) => x.id === p.id ? { ...x, caption: e.target.value } : x))}
+                    placeholder="Note (optional)…"
+                  />
+                  <button type="button" onClick={() => discardPending(p.id)} disabled={busy}
+                    style={{ alignSelf: "flex-start", fontSize: 12, padding: "4px 10px" }}>
+                    Remove
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          <div className="row wrap" style={{ gap: 8 }}>
+            <button type="button" className="btnPrimary" onClick={uploadAll} disabled={busy} style={{ flex: 1 }}>
+              {busy ? "Uploading…" : (pending.length === 1 ? "Upload photo" : `Upload all (${pending.length})`)}
+            </button>
+            <button type="button" onClick={discardAllPending} disabled={busy}>Clear</button>
+          </div>
+        </div>
       )}
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
@@ -1486,18 +1783,44 @@ function EstimatePhotos({
       {photos.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8, marginTop: 12 }}>
           {photos.map((p) => (
-            <a
-              key={p.id}
-              href={p.drive_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ display: "block", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}
-            >
-              <img src={p.thumb_url} alt={p.caption} style={{ width: "100%", display: "block" }} />
-              {p.caption && (
-                <div style={{ fontSize: 11, color: "var(--muted)", padding: "4px 6px" }}>{p.caption}</div>
-              )}
-            </a>
+            <div key={p.id} style={{ borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+              <a href={p.drive_url} target="_blank" rel="noopener noreferrer" style={{ display: "block" }}>
+                <img src={p.thumb_url} alt={p.caption} style={{ width: "100%", display: "block" }} />
+              </a>
+              <div style={{ padding: "4px 6px" }}>
+                {editingId === p.id ? (
+                  <div className="col" style={{ gap: 4 }}>
+                    <textarea
+                      rows={2}
+                      value={noteDraft}
+                      onChange={(e) => setNoteDraft(e.target.value)}
+                      placeholder="Note…"
+                      autoFocus
+                    />
+                    <div className="row" style={{ gap: 4 }}>
+                      <button type="button" className="btnPrimary" disabled={busy}
+                        onClick={() => saveNote(p.id, noteDraft.trim())}
+                        style={{ fontSize: 11, padding: "3px 8px" }}>
+                        Save
+                      </button>
+                      <button type="button" onClick={() => { setEditingId(null); setNoteDraft(""); }}
+                        style={{ fontSize: 11, padding: "3px 8px" }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {p.caption && <div style={{ fontSize: 11, color: "var(--muted)" }}>{p.caption}</div>}
+                    <button type="button" onClick={() => { setEditingId(p.id); setNoteDraft(p.caption || ""); }}
+                      disabled={busy}
+                      style={{ fontSize: 11, padding: "3px 8px", marginTop: 4 }}>
+                      {p.caption ? "Edit note" : "Add note"}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
           ))}
         </div>
       )}

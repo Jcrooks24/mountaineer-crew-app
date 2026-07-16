@@ -13,7 +13,8 @@
  * cross-device mid-day resume arrives once a day is signed.
  */
 
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch } from "../api/client";
+import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 
 export type DutyStatus = "off_duty" | "sleeper" | "driving" | "on_duty";
 
@@ -280,7 +281,7 @@ export function listLocalDays(): RodsDay[] {
 
 const QUEUE_KEY = "crew_rods_queue_v1";
 
-type QueuedDay = { log_date: string; driver_name: string; payload: Record<string, unknown> };
+type QueuedDay = { log_date: string; driver_name: string; payload: Record<string, unknown> } & MaybeFailed;
 
 function loadQueue(): QueuedDay[] {
   try {
@@ -335,13 +336,40 @@ export function enqueueDay(day: RodsDay): void {
 }
 
 export function pendingCount(): number {
-  return loadQueue().length;
+  return loadQueue().filter((o) => !o.failed_at).length;
+}
+
+/** Days the server permanently refused, kept for the crew to see and retry. */
+export function failedDays(): QueuedDay[] {
+  return loadQueue().filter((o) => o.failed_at);
+}
+
+function queuedDayKey(o: { log_date: string; driver_name: string }): string {
+  return `${o.log_date}::${o.driver_name || ""}`;
+}
+
+/** Clear the failed mark so the next drain retries this day. */
+export function retryFailedDay(log_date: string, driver_name: string): Promise<number> {
+  const key = queuedDayKey({ log_date, driver_name });
+  saveQueue(loadQueue().map((o) => (queuedDayKey(o) === key ? { ...o, ...CLEARED_FAILURE } : o)));
+  return syncQueue();
+}
+
+/** Explicit, crew-initiated delete of a failed day. The only way one leaves the
+ * queue without reaching the server. A RODS day is a DOT duty-status record, so
+ * confirm before calling. */
+export function discardFailedDay(log_date: string, driver_name: string): void {
+  const key = queuedDayKey({ log_date, driver_name });
+  saveQueue(loadQueue().filter((o) => queuedDayKey(o) !== key));
 }
 
 let syncing = false;
 
-/** Drain the RODS submit queue. Transient failures stay queued; permanent 4xx
- * are dropped. Returns count confirmed this run. */
+/** Drain the RODS submit queue. Transient failures stay queued. A permanent 4xx
+ * is MARKED FAILED and kept (ADR 0013), never dropped: a RODS day is a DOT
+ * duty-status record and deleting one on a bad payload is a compliance problem,
+ * not an annoyance. Failed days are skipped so they can't wedge the queue.
+ * Returns count confirmed this run. */
 export async function syncQueue(): Promise<number> {
   if (!navigator.onLine || syncing) return 0;
   syncing = true;
@@ -351,6 +379,7 @@ export async function syncQueue(): Promise<number> {
     const remaining: QueuedDay[] = [];
     let synced = 0;
     for (const op of q) {
+      if (op.failed_at) { remaining.push(op); continue; } // waiting on a person
       try {
         await apiFetch("/api/long-distance/rods", { method: "POST", body: JSON.stringify(op.payload) });
         // Mark the local day submitted.
@@ -358,10 +387,8 @@ export async function syncQueue(): Promise<number> {
         if (d) { d.submitted = true; saveDay(d); }
         synced++;
       } catch (e) {
-        const permanent =
-          e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 401 && e.status !== 403;
-        if (permanent) {
-          console.warn(`[rods] dropping poison-pill day ${op.log_date}: ${e instanceof Error ? e.message : e}`);
+        if (isPermanentRejection(e)) {
+          remaining.push({ ...op, ...failureMark(e) });
         } else {
           remaining.push(op);
         }

@@ -4,12 +4,18 @@ import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
 import BolInventoryTab from "./components/BolInventoryTab";
+import ActualInventory from "./components/ActualInventory";
+import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport";
+import { drainIncidents } from "./lib/incidentStore";
+import { drainOffJob } from "./lib/offJobStore";
+import { drainAll as drainJobInventory } from "./lib/jobInventoryQueue";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
+import { slotToBlob, slotToPreviewBlob, toQueuedPhoto, UnreadablePhotoError } from "./lib/queuedPhoto";
 import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
 import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
 import {
@@ -162,6 +168,10 @@ type CalEvent = {
   id: string;
   summary: string;
   start?: string;
+  end?: string;
+  // Count of invited crew on the event; cached server-side at resolve so the
+  // est-vs-actual schedule fallback can express man-hours (invitees x duration).
+  invitees?: number;
 };
 
 type JobMeta = {
@@ -183,7 +193,14 @@ type ServerPhoto = {
   thumb_url: string;
   created_at: string;
   mime_type: string;
+  incident_uuid?: string | null;
+  claim_number?: string | null;
 };
+
+// One entry in the pending photo batch (not yet saved). Crew can queue several
+// - multi-selected from the library and/or taken one at a time - and add a
+// per-photo note before submitting the whole batch.
+type PendingPhoto = { id: string; file: File; caption: string };
 
 // `<input type="time">` round-tripping. The element's value is "HH:mm" in
 // the user's local time. We keep the event's existing date intact and only
@@ -211,7 +228,7 @@ function applyTimeToIso(localTime: string, baseIso: string): string | null {
 }
 
 // Returns null when valid, or a short reason when the user picked an
-// unparseable time. Any real timestamp is allowed — crew can set event
+// unparseable time. Any real timestamp is allowed - crew can set event
 // time to any time, past or future.
 function validateEditableTimestamp(newIso: string, _loggedAtIso: string | undefined): string | null {
   const newT = Date.parse(newIso);
@@ -329,6 +346,16 @@ export default function App() {
     localStorage.setItem(MODE_KEY, val);
   }
 
+  // The Inventory tab only exists in long-distance mode. Today the mode switch
+  // itself lives on the Timeline tab, so nobody can be sitting on Inventory at
+  // the moment it flips to local - but that is a layout coincidence, not a
+  // guarantee. If the switch ever moves, the crew would land on a tab whose
+  // button is gone and whose body renders nothing: a blank screen with no way
+  // back. Cheap insurance.
+  useEffect(() => {
+    if (!longDistance && tab === "inventory") setTab("timeline");
+  }, [longDistance, tab]);
+
   // Long-distance day plan - drives whether the timeline shows the labor Actions
   // buttons (packing/loading/unloading/unpacking) or the RODS recorder (driving).
   const {
@@ -421,10 +448,49 @@ export default function App() {
 
   // Photos
   const [photos, setPhotos] = useState<StoredPhoto[]>([]);
+  // Object URLs for the local photo previews, keyed by photo id.
+  //
+  // Photos are stored as BYTES now (ADR 0017), so a preview URL cannot be built
+  // synchronously in render the way it could from a Blob. Built here instead, and
+  // revoked when the set changes, which also fixes a leak: the old code called
+  // URL.createObjectURL on every render and never revoked any of them.
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const made: string[] = [];
+    (async () => {
+      const next: Record<string, string> = {};
+      for (const p of photos) {
+        const blob = await slotToPreviewBlob(p.blob);
+        if (!blob) continue; // unreadable: no thumbnail, but the row still renders
+        const url = URL.createObjectURL(blob);
+        made.push(url);
+        next[p.id] = url;
+      }
+      if (cancelled) {
+        made.forEach((u) => URL.revokeObjectURL(u));
+        return;
+      }
+      setPreviewUrls(next);
+    })();
+    return () => {
+      cancelled = true;
+      made.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [photos]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string>("");
-  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
-  const [pendingCaption, setPendingCaption] = useState<string>("");
+  // Pending batch: crew queue several photos (library multi-select and/or one
+  // capture at a time), each with an optional note, then submit them together.
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+  // Saved-gallery note editor: id of the photo whose note is open + its draft.
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState<string>("");
+  // Incident reporting now lives on the Photos tab. jobIncidents feeds the
+  // "attach these photos to <claim>" selector; attachIncidentUuid is the
+  // currently-selected target ("" = tag the batch to the job, not an incident).
+  const [jobIncidents, setJobIncidents] = useState<JobIncidentRef[]>([]);
+  const [attachIncidentUuid, setAttachIncidentUuid] = useState<string>("");
 
   const [sendingType, setSendingType] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -943,7 +1009,13 @@ export default function App() {
         note: e.note ?? null,
         job_name: loadJobMeta(e.job_uuid)?.jobName || localStorage.getItem(JOB_NAME_PREFIX + e.job_uuid) || "",
         job_date: loadJobMeta(e.job_uuid)?.jobDate || localStorage.getItem(JOB_DATE_PREFIX + e.job_uuid) || "",
-        created_by: user?.name || user?.email || "",
+        // Send the author stamped when the event was CREATED (recordEvent), not
+        // whoever is logged in now. On a shared phone the sync can fire under a
+        // different session than the one that logged the event; overwriting with
+        // the current user misattributed A's field work to B. Fall back to the
+        // current user only for legacy queued events that predate this and have
+        // no stored author.
+        created_by: e.created_by || user?.name || user?.email || "",
       })),
     };
 
@@ -1196,7 +1268,13 @@ export default function App() {
     let jobId: string;
     try {
       const token = getToken();
-      const res = await fetch(`${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`, {
+      // Pass the event's scheduled window so the server caches it for the
+      // est-vs-actual scheduled-duration fallback.
+      let resolveUrl = `${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`;
+      if (ev.start) resolveUrl += `&scheduled_start=${encodeURIComponent(ev.start)}`;
+      if (ev.end) resolveUrl += `&scheduled_end=${encodeURIComponent(ev.end)}`;
+      if (typeof ev.invitees === "number") resolveUrl += `&invitee_count=${ev.invitees}`;
+      const res = await fetch(resolveUrl, {
         headers: makeAuthHeaders(token),
       });
       if (res.ok) {
@@ -1368,55 +1446,98 @@ export default function App() {
     }
   }
 
-  function onPickPhotoFile(file: File | null) {
-    if (!file) return;
+  // Count photos tagged to each incident (local + server), deduped by photo id,
+  // so the incident rows can show "N photos attached".
+  const incidentPhotoCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    const seen = new Set<string>();
+    for (const p of photos) {
+      if (!p.incident_uuid) continue;
+      seen.add(p.id);
+      counts[p.incident_uuid] = (counts[p.incident_uuid] || 0) + 1;
+    }
+    for (const sp of serverPhotos) {
+      if (!sp.incident_uuid || seen.has(sp.id)) continue;
+      counts[sp.incident_uuid] = (counts[sp.incident_uuid] || 0) + 1;
+    }
+    return counts;
+  }, [photos, serverPhotos]);
+
+  // Reset the photo attach target when the job changes. Keyed on jobUuid (not
+  // on jobIncidents) so it can't race the onReported auto-select: jobIncidents
+  // updates a render after onReported sets the target, and keying on it here
+  // would clobber the just-selected incident before the list caught up.
+  useEffect(() => {
+    setAttachIncidentUuid("");
+  }, [jobUuid]);
+
+  // Append one or more picked/taken files to the pending batch. Called by both
+  // the "Add from Library" (multiple) and "Take Photo" (capture) inputs, so a
+  // crew member can accumulate several shots before submitting.
+  function onAddPhotoFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
     if (!jobUuid.trim()) { setPhotoError("Select a job first"); return; }
     setPhotoError("");
-    setPendingPhotoFile(file);
-    setPendingCaption("");
+    const additions: PendingPhoto[] = Array.from(files).map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      caption: "",
+    }));
+    setPendingPhotos((prev) => [...prev, ...additions]);
   }
 
-  async function onSavePendingPhoto() {
-    if (!pendingPhotoFile || !jobUuid.trim()) return;
-    setPhotoBusy(true);
-    setPhotoError("");
+  function setPendingCaptionFor(id: string, caption: string) {
+    setPendingPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, caption } : p)));
+  }
 
-    // Capture before clearing state
-    const fileRef = pendingPhotoFile;
-    const photoId = crypto.randomUUID();
-    const caption = pendingCaption.trim();
+  function removePendingPhoto(id: string) {
+    setPendingPhotos((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  // Save one photo: store locally first (offline-safe), then attempt the Drive
+  // upload. Drive failures leave the photo queued as "failed"/"pending" for the
+  // Retry button - they never lose the local copy.
+  async function uploadOnePhoto(photoId: string, file: File, caption: string) {
+    // Resolve the incident this batch is tagged to (if any). "" target = a plain
+    // job photo. A stale selection (incident not in the current list) is ignored.
+    const inc = attachIncidentUuid
+      ? jobIncidents.find((x) => x.incident_uuid === attachIncidentUuid)
+      : undefined;
+    // Store the photo's BYTES, not the File.
+    //
+    // A File off an <input> is a reference to a file on disk, not the data. This
+    // queue persists it and uploads it later, sometimes days later, across
+    // reloads. On iOS/WebKit that reference can go stale, and a stale File does
+    // not fail loudly: appending it to FormData yields a request whose body never
+    // serialises, so the server sees an empty body. Reading it once, here, while
+    // the handle is still live, makes the queued photo self-contained. See
+    // ADR 0017.
     const stored: StoredPhoto = {
       id: photoId,
       job_uuid: jobUuid.trim(),
       created_at: new Date().toISOString(),
-      mime: fileRef.type || "image/jpeg",
+      mime: file.type || "image/jpeg",
       caption,
-      blob: fileRef,
+      blob: await toQueuedPhoto(file),
       drive_status: "pending",
+      incident_uuid: inc?.incident_uuid,
+      claim_number: inc?.claim_number,
     };
+    await addPhoto(stored);
 
-    try {
-      await addPhoto(stored);
-      setPendingPhotoFile(null);
-      setPendingCaption("");
-      await refreshPhotos();
-      setStatus("Photo saved - uploading to Drive…");
-    } catch (e: any) {
-      setPhotoError(e?.message ?? "Photo save failed");
-      setPhotoBusy(false);
-      return;
-    }
-
-    // Upload to Drive (non-blocking after local save)
     try {
       const form = new FormData();
-      const resized = await resizeImage(fileRef);
-      form.append("file", resized, (fileRef.name || "photo.jpg").replace(/.[^.]+$/, ".jpg"));
+      const resized = await resizeImage(file);
+      form.append("file", resized, (file.name || "photo.jpg").replace(/.[^.]+$/, ".jpg"));
       form.append("photo_id", photoId);
       form.append("job_uuid", jobUuid.trim());
       form.append("job_name", jobName);
       form.append("job_date", jobDate);
       form.append("caption", caption);
+      if (inc) {
+        form.append("incident_uuid", inc.incident_uuid);
+        form.append("claim_number", inc.claim_number || "");
+      }
 
       const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {
@@ -1427,13 +1548,8 @@ export default function App() {
       const { error, body } = await readPhotoUploadResponse(res);
       if (!error && body?.drive_url) {
         await updatePhoto(photoId, { drive_status: "uploaded", drive_url: body.drive_url });
-        await refreshPhotos();
-        setStatus("Photo saved to Drive");
       } else {
-        const errMsg = error ?? "Drive upload failed";
-        await updatePhoto(photoId, { drive_status: "failed", drive_error: errMsg });
-        await refreshPhotos();
-        setPhotoError(errMsg);
+        await updatePhoto(photoId, { drive_status: "failed", drive_error: error ?? "Drive upload failed" });
       }
     } catch (uploadErr: any) {
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
@@ -1441,28 +1557,92 @@ export default function App() {
         ? "Offline - photo will retry when you're back online"
         : (uploadErr?.message ?? "Network error - tap Retry");
       await updatePhoto(photoId, { drive_status: "failed", drive_error: msg });
-      await refreshPhotos();
-      setPhotoError(msg);
+    }
+  }
+
+  async function onSaveAllPending() {
+    if (pendingPhotos.length === 0 || !jobUuid.trim()) return;
+    setPhotoBusy(true);
+    setPhotoError("");
+
+    const batch = pendingPhotos;
+    let saved = 0;
+    let lastErr = "";
+    // Sequential: keeps peak memory and server load bounded, and preserves the
+    // offline-first "local save always succeeds" guarantee per photo.
+    for (const p of batch) {
+      try {
+        await uploadOnePhoto(p.id, p.file, p.caption.trim());
+        saved++;
+      } catch (e: any) {
+        lastErr = e?.message ?? "Photo save failed";
+      }
     }
 
+    setPendingPhotos([]);
+    await refreshPhotos();
+    if (lastErr) setPhotoError(lastErr);
+    setStatus(saved === 1 ? "Photo saved" : `${saved} photos saved`);
     setPhotoBusy(false);
   }
 
-  async function onRetryPhotoUpload(photo: StoredPhoto) {
-    if (photoBusy) return;
+  // Add/edit a note on an already-saved photo (from the Saved gallery). Updates
+  // the local copy when present and syncs to the server so the note lands in
+  // the DB and on the Drive file. Offline: the local caption is saved and the
+  // eventual upload/retry carries it; server-only photos need connectivity.
+  async function onSaveNote(id: string, caption: string, isLocal: boolean) {
     setPhotoBusy(true);
     setPhotoError("");
-    await updatePhoto(photo.id, { drive_status: "pending", drive_error: undefined });
-    await refreshPhotos();
+    try {
+      if (isLocal) await updatePhoto(id, { caption });
+      try {
+        await apiFetch(`/api/photos/caption`, {
+          method: "POST",
+          body: JSON.stringify({ photo_id: id, caption }),
+        });
+      } catch {
+        // Offline or not-yet-uploaded: local caption is saved above and will
+        // ride along on the next upload/retry. Non-fatal.
+      }
+      await refreshPhotos();
+      await fetchServerPhotos(jobUuid.trim());
+      setEditingNoteId(null);
+      setNoteDraft("");
+      setStatus("Note saved");
+    } catch (e: any) {
+      setPhotoError(e?.message ?? "Could not save note");
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
+  // Push one already-stored photo to Drive, updating its drive_status. Returns
+  // null on success or the error message on failure. Shared by the manual Retry
+  // button and the automatic drain below, so the two can never diverge.
+  //
+  // Safe to call concurrently with an in-flight upload of the same photo: the
+  // endpoint is idempotent by photo_id (an existing row short-circuits before
+  // the Drive call, because Drive uploads themselves are NOT idempotent and
+  // would otherwise duplicate the file).
+  async function pushPhotoToDrive(photo: StoredPhoto): Promise<string | null> {
     try {
       const form = new FormData();
-      const resized = await resizeImage(photo.blob);
+      // Materialise the bytes BEFORE building the request. A dead handle throws
+      // here, where the photo is marked failed and the crew member is told, rather
+      // than silently producing a request with no body (ADR 0017).
+      const source = await slotToBlob(photo.blob);
+      if (!source) throw new Error("Photo has no image data");
+      const resized = await resizeImage(source);
       form.append("file", resized, photo.id + ".jpg");
       form.append("photo_id", photo.id);
       form.append("job_uuid", photo.job_uuid);
       form.append("job_name", jobName);
       form.append("job_date", jobDate);
       form.append("caption", photo.caption);
+      if (photo.incident_uuid) {
+        form.append("incident_uuid", photo.incident_uuid);
+        form.append("claim_number", photo.claim_number || "");
+      }
       const token = getToken() || "";
       const res = await fetch(`${API}/api/photos/upload`, {
         method: "POST",
@@ -1472,22 +1652,76 @@ export default function App() {
       const { error, body } = await readPhotoUploadResponse(res);
       if (!error && body?.drive_url) {
         await updatePhoto(photo.id, { drive_status: "uploaded", drive_url: body.drive_url });
-        setStatus("Photo uploaded to Drive");
-      } else {
-        const errMsg = error ?? "Drive upload failed";
-        await updatePhoto(photo.id, { drive_status: "failed", drive_error: errMsg });
-        setPhotoError(errMsg);
+        return null;
       }
+      const errMsg = error ?? "Drive upload failed";
+      await updatePhoto(photo.id, { drive_status: "failed", drive_error: errMsg });
+      return errMsg;
     } catch (uploadErr: any) {
+      // An unreadable photo is not a network problem and retrying will never fix
+      // it, so do not tell the crew member it will retry when they are back
+      // online. Say what actually happened and what to do (ADR 0017). The row is
+      // kept either way - it is never deleted out from under them.
+      if (uploadErr instanceof UnreadablePhotoError) {
+        const msg = "This photo can no longer be read from this phone. Retake it.";
+        await updatePhoto(photo.id, { drive_status: "failed", drive_error: msg });
+        return msg;
+      }
       const offline = typeof navigator !== "undefined" && navigator.onLine === false;
       const msg = offline
         ? "Offline - photo will retry when you're back online"
         : (uploadErr?.message ?? "Network error - tap Retry");
       await updatePhoto(photo.id, { drive_status: "failed", drive_error: msg });
-      setPhotoError(msg);
+      return msg;
     }
+  }
+
+  async function onRetryPhotoUpload(photo: StoredPhoto) {
+    if (photoBusy) return;
+    setPhotoBusy(true);
+    setPhotoError("");
+    await updatePhoto(photo.id, { drive_status: "pending", drive_error: undefined });
+    await refreshPhotos();
+    const errMsg = await pushPhotoToDrive(photo);
+    if (errMsg) setPhotoError(errMsg);
+    else setStatus("Photo uploaded to Drive");
     await refreshPhotos();
     setPhotoBusy(false);
+  }
+
+  // Drain the active job's un-uploaded photos on reconnect.
+  //
+  // Photos were the one queue with no automatic drain: the UI promised the crew
+  // "photo will retry when you're back online", but only the manual Retry button
+  // ever re-pushed, so a photo taken offline sat on the device until someone
+  // noticed the failed badge and tapped it. Every other queue in the app drains
+  // on the `online` event; photos now do too.
+  //
+  // Silent by design: no photoBusy, no error banner. This runs unprompted in the
+  // background, and a failure here is not something the crew asked for and can
+  // act on. It just leaves the photo queued (still marked failed, still
+  // retryable) for the next reconnect or a manual tap.
+  const drainingPhotosRef = useRef(false);
+  async function drainPendingPhotos() {
+    if (!navigator.onLine) return;
+    if (drainingPhotosRef.current) return;
+    const uuid = jobUuid.trim();
+    if (!uuid) return;
+
+    drainingPhotosRef.current = true;
+    try {
+      const stuck = (await listPhotosForJob(uuid)).filter((p) => p.drive_status !== "uploaded");
+      if (stuck.length === 0) return;
+      for (const p of stuck) {
+        // Signal can drop again mid-drain. Stop rather than burning through the
+        // rest of the batch marking everything failed.
+        if (!navigator.onLine) break;
+        await pushPhotoToDrive(p);
+      }
+      await refreshPhotos();
+    } finally {
+      drainingPhotosRef.current = false;
+    }
   }
 
   async function onDeletePhoto(id: string) {
@@ -1509,7 +1743,7 @@ export default function App() {
   }
 
   // Drain offline-queued materials + warm the cache so the Invoice Builder
-  // opens with fresh data. No render — the visible summary lives only in
+  // opens with fresh data. No render - the visible summary lives only in
   // the Invoice Builder on the Report tab.
   async function syncMaterialsInBackground(uuid: string) {
     const trimmed = uuid.trim();
@@ -1522,8 +1756,10 @@ export default function App() {
   // Effects
   // -----------------------
   useEffect(() => {
-    // Auto-load calendar for today on login
-    loadCalendarEvents();
+    // Calendar auto-loads via the jobDate effect's first-mount branch below, so
+    // we deliberately don't call loadCalendarEvents() here too - it was firing
+    // twice on every cold boot (a wasted duplicate /api/calendar/day +
+    // /api/jobs/manual against a spun-down backend).
     // Load server events for any active job
     if (jobUuid.trim()) fetchJobEvents(jobUuid.trim());
 
@@ -1553,8 +1789,17 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainPendingPhotos(); void drainJobInventory(); };
     const onOffline = () => setIsOnline(false);
+    // Flush any incidents + off-job hours + un-uploaded photos queued while
+    // offline on this mount too.
+    drainIncidents();
+    drainOffJob();
+    void drainPendingPhotos();
+    // Inventory adds queued offline: drained here rather than only inside
+    // ActualInventory, because that component no longer mounts on local jobs.
+    // Anything a crew member logged before the tab went away still syncs.
+    void drainJobInventory();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
@@ -1612,6 +1857,7 @@ export default function App() {
     if (!isOnline) return;
     void syncQueueNow();
     void drainNotePatchQueue();
+    void drainPendingPhotos();
     if (notesStatus === "offline") setNotesStatus("saved");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline]);
@@ -1824,7 +2070,10 @@ export default function App() {
         <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
           Photos
         </button>
-        {longDistance && ldLabor.includes("loading") && (
+        {/* Inventory is long-distance only: item-by-item logging was too slow to
+            be worth it on a local job, and it is paused there until there's a
+            faster capture flow (ADR 0015). LD keeps it - the BOL needs it. */}
+        {longDistance && (
           <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
             Inventory
           </button>
@@ -2007,7 +2256,7 @@ export default function App() {
             // Local, or LD labor-only day: the normal Actions tile.
             if (!longDistance || ldLabor.length > 0) {
               return (
-                <div className="card">
+                <div className="card" data-component="TimelineActionsTile">
                   <div className="sectionTitle">Actions</div>
                   {longDistance && (
                     <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
@@ -2312,62 +2561,133 @@ export default function App() {
       {/* Photos */}
       {tab === "photos" && (
         <>
-          {/* Pending photo - caption + save */}
-          {pendingPhotoFile ? (
-            <div className="card">
-              <div className="sectionTitle">Add Photo</div>
-              <img
-                src={URL.createObjectURL(pendingPhotoFile)}
-                alt="preview"
-                style={{ width: "100%", borderRadius: 8, marginBottom: 10 }}
-              />
-              <div className="col" style={{ gap: 8 }}>
-                <div className="label">Note (optional)</div>
-                <textarea
-                  value={pendingCaption}
-                  onChange={(e) => setPendingCaption(e.target.value)}
-                  placeholder={ht.photoCaptionPlaceholder}
-                  rows={2}
-                  autoFocus
-                />
-                <div className="row wrap" style={{ gap: 8 }}>
-                  <button className="btnPrimary" onClick={onSavePendingPhoto} disabled={photoBusy}>
-                    {photoBusy ? "Saving…" : "Save Photo"}
-                  </button>
-                  <button onClick={() => { setPendingPhotoFile(null); setPendingCaption(""); }}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
+          {/* Incident reporting lives on the Photos tab so crew document an
+              incident and attach photos to its claim in one place. */}
+          {jobUuid ? (
+            <IncidentReport
+              jobUuid={jobUuid}
+              jobName={jobName}
+              jobDate={jobDate}
+              onIncidentsChange={setJobIncidents}
+              onReported={(ref) => { setAttachIncidentUuid(ref.incident_uuid); setTab("photos"); }}
+              photoCounts={incidentPhotoCounts}
+            />
           ) : (
             <div className="card">
-              <div className="sectionTitle">Photos</div>
-              {ht.photosHint && (
-                <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 2 }}>
-                  {ht.photosHint}
+              <div className="small" style={{ color: "var(--muted)" }}>
+                Select a job on the Timeline tab to report an incident or add photos.
+              </div>
+            </div>
+          )}
+
+          {/* Capture: take one at a time and/or multi-select from the library,
+              accumulating a batch before submitting. */}
+          <div className="card">
+            <div className="sectionTitle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              Photos<BetaTag feature="multiPhoto" />
+            </div>
+            {ht.photosHint && (
+              <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 2 }}>
+                {ht.photosHint}
+              </div>
+            )}
+            <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+              Take several photos (each adds to the batch) or pick multiple from your library, then save them together. Add a note per photo before or after saving.
+            </div>
+            <div className="row wrap" style={{ marginTop: 10, gap: 8 }}>
+              <label className="btnPrimary" style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)" }}>
+                {photoBusy ? "Working…" : "Take Photo"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  style={{ display: "none" }}
+                  disabled={photoBusy}
+                  onChange={(e) => { onAddPhotoFiles(e.target.files); e.currentTarget.value = ""; }}
+                />
+              </label>
+              <label style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)" }}>
+                Add from Library
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  style={{ display: "none" }}
+                  disabled={photoBusy}
+                  onChange={(e) => { onAddPhotoFiles(e.target.files); e.currentTarget.value = ""; }}
+                />
+              </label>
+              <button onClick={refreshPhotos} disabled={photoBusy}>Refresh</button>
+            </div>
+            {photoError && (
+              <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{photoError}</div>
+            )}
+          </div>
+
+          {/* Pending batch - review, note each photo, then submit together. */}
+          {pendingPhotos.length > 0 && (
+            <div className="card">
+              <div className="sectionTitle">Ready to save ({pendingPhotos.length})</div>
+
+              {/* Attach target: tag this batch to an incident's claim, or leave
+                  as plain job photos. Only shown when the job has incidents. */}
+              {jobIncidents.length > 0 && (
+                <div className="col" style={{ gap: 6, marginTop: 8 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Attach these photos to</span>
+                  <div className="row wrap" style={{ gap: 6 }}>
+                    {[{ incident_uuid: "", claim_number: "", severity: "", description: "The job (not an incident)" } as JobIncidentRef, ...jobIncidents].map((inc) => {
+                      const on = attachIncidentUuid === inc.incident_uuid;
+                      const label = inc.incident_uuid
+                        ? (inc.claim_number || "Incident")
+                        : "The job";
+                      return (
+                        <button key={inc.incident_uuid || "__job__"} type="button"
+                          onClick={() => setAttachIncidentUuid(inc.incident_uuid)}
+                          title={inc.description}
+                          style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, cursor: "pointer",
+                            border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                            background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                            color: on ? "var(--brand)" : "var(--text)", fontWeight: on ? 700 : 400 }}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
-              <div className="row wrap" style={{ marginTop: 10, gap: 8 }}>
-                <label className="btnPrimary" style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)" }}>
-                  {photoBusy ? "Working…" : "Add Photo"}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style={{ display: "none" }}
-                    disabled={photoBusy}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0] ?? null;
-                      e.currentTarget.value = "";
-                      onPickPhotoFile(f);
-                    }}
-                  />
-                </label>
-                <button onClick={refreshPhotos} disabled={photoBusy}>Refresh</button>
+
+              <div className="col" style={{ gap: 12, marginTop: 8 }}>
+                {pendingPhotos.map((p) => {
+                  const url = URL.createObjectURL(p.file);
+                  return (
+                    <div key={p.id} style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "rgba(255,255,255,0.02)" }}>
+                      <img src={url} alt="preview" style={{ width: "100%", display: "block" }} onLoad={() => URL.revokeObjectURL(url)} />
+                      <div className="col" style={{ gap: 6, padding: 10 }}>
+                        <div className="label">Note (optional)</div>
+                        <textarea
+                          value={p.caption}
+                          onChange={(e) => setPendingCaptionFor(p.id, e.target.value)}
+                          placeholder={ht.photoCaptionPlaceholder}
+                          rows={2}
+                        />
+                        <button
+                          onClick={() => removePendingPhoto(p.id)}
+                          disabled={photoBusy}
+                          style={{ alignSelf: "flex-start", fontSize: 12, padding: "4px 10px" }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              {photoError && (
-                <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{photoError}</div>
-              )}
+              <div className="row wrap" style={{ gap: 8, marginTop: 12 }}>
+                <button className="btnPrimary" onClick={onSaveAllPending} disabled={photoBusy}>
+                  {photoBusy ? "Saving…" : (pendingPhotos.length === 1 ? "Save Photo" : `Save All (${pendingPhotos.length})`)}
+                </button>
+                <button onClick={() => setPendingPhotos([])} disabled={photoBusy}>Clear</button>
+              </div>
             </div>
           )}
 
@@ -2379,7 +2699,7 @@ export default function App() {
             ) : (
               <div className="col" style={{ gap: 12 }}>
                 {photos.map((p) => {
-                  const url = URL.createObjectURL(p.blob);
+                  const url = previewUrls[p.id];
                   const driveOk = p.drive_status === "uploaded";
                   const driveFail = p.drive_status === "failed";
                   return (
@@ -2387,18 +2707,63 @@ export default function App() {
                       key={p.id}
                       style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "rgba(255,255,255,0.02)" }}
                     >
-                      <img
-                        src={url}
-                        alt={p.caption || "job photo"}
-                        style={{ width: "100%", display: "block" }}
-                        onLoad={() => URL.revokeObjectURL(url)}
-                      />
+                      {/* Do NOT revoke onLoad: the URL is owned by the previewUrls
+                          effect, which revokes it when the photo set changes. Revoking
+                          here killed a URL still held as src, and nothing re-minted it,
+                          so the thumbnail broke permanently once iOS evicted the decoded
+                          image (backgrounded tab / memory pressure). url is undefined
+                          for a photo whose bytes are unreadable - show a placeholder
+                          rather than a broken-image icon. */}
+                      {url ? (
+                        <img
+                          src={url}
+                          alt={p.caption || "job photo"}
+                          style={{ width: "100%", display: "block" }}
+                        />
+                      ) : (
+                        <div className="small" style={{ padding: 16, color: "var(--muted)", textAlign: "center" }}>
+                          Preview unavailable on this device
+                        </div>
+                      )}
                       <div style={{ padding: 10 }}>
-                        {p.caption && (
-                          <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
+                        {editingNoteId === p.id ? (
+                          <div className="col" style={{ gap: 6, marginBottom: 8 }}>
+                            <textarea
+                              value={noteDraft}
+                              onChange={(e) => setNoteDraft(e.target.value)}
+                              placeholder={ht.photoCaptionPlaceholder}
+                              rows={2}
+                              autoFocus
+                            />
+                            <div className="row wrap" style={{ gap: 6 }}>
+                              <button className="btnPrimary" disabled={photoBusy}
+                                onClick={() => onSaveNote(p.id, noteDraft.trim(), true)}
+                                style={{ fontSize: 12, padding: "4px 10px" }}>
+                                Save note
+                              </button>
+                              <button onClick={() => { setEditingNoteId(null); setNoteDraft(""); }}
+                                style={{ fontSize: 12, padding: "4px 10px" }}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          p.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
+                        )}
+                        {p.claim_number && (
+                          <div style={{ display: "inline-block", marginBottom: 6, fontSize: 11, fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
+                            Incident {p.claim_number}
+                          </div>
                         )}
                         <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(p.created_at)}</div>
                         <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
+                          {editingNoteId !== p.id && (
+                            <button onClick={() => { setEditingNoteId(p.id); setNoteDraft(p.caption || ""); }}
+                              disabled={photoBusy}
+                              style={{ fontSize: 12, padding: "4px 10px" }}>
+                              {p.caption ? "Edit note" : "Add note"}
+                            </button>
+                          )}
                           {driveOk && p.drive_url ? (
                             <a href={p.drive_url} target="_blank" rel="noopener noreferrer"
                               style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
@@ -2441,7 +2806,35 @@ export default function App() {
                       style={{ width: "100%", display: "block" }}
                     />
                     <div style={{ padding: 10 }}>
-                      {sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>}
+                      {editingNoteId === sp.id ? (
+                        <div className="col" style={{ gap: 6, marginBottom: 8 }}>
+                          <textarea
+                            value={noteDraft}
+                            onChange={(e) => setNoteDraft(e.target.value)}
+                            placeholder={ht.photoCaptionPlaceholder}
+                            rows={2}
+                            autoFocus
+                          />
+                          <div className="row wrap" style={{ gap: 6 }}>
+                            <button className="btnPrimary" disabled={photoBusy}
+                              onClick={() => onSaveNote(sp.id, noteDraft.trim(), false)}
+                              style={{ fontSize: 12, padding: "4px 10px" }}>
+                              Save note
+                            </button>
+                            <button onClick={() => { setEditingNoteId(null); setNoteDraft(""); }}
+                              style={{ fontSize: 12, padding: "4px 10px" }}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        sp.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{sp.caption}</div>
+                      )}
+                      {sp.claim_number && (
+                        <div style={{ display: "inline-block", marginBottom: 6, fontSize: 11, fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
+                          Incident {sp.claim_number}
+                        </div>
+                      )}
                       <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(sp.created_at)}</div>
                       {sp.created_by && (
                         <div className="row" style={{ gap: 6, marginTop: 4 }}>
@@ -2449,7 +2842,14 @@ export default function App() {
                           <span className="small" style={{ color: "var(--muted)" }}>by {sp.created_by}</span>
                         </div>
                       )}
-                      <div style={{ marginTop: 8 }}>
+                      <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
+                        {editingNoteId !== sp.id && (
+                          <button onClick={() => { setEditingNoteId(sp.id); setNoteDraft(sp.caption || ""); }}
+                            disabled={photoBusy}
+                            style={{ fontSize: 12, padding: "4px 10px" }}>
+                            {sp.caption ? "Edit note" : "Add note"}
+                          </button>
+                        )}
                         <a href={sp.drive_url} target="_blank" rel="noopener noreferrer"
                           style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
                           View in Drive
@@ -2464,10 +2864,16 @@ export default function App() {
         </>
       )}
 
-      {/* Inventory (LD+ load/unload days) */}
-      {tab === "inventory" && (
+      {/* Inventory: actual inventory + BOL packing inventory (LD load days).
+          Long-distance only - see the tab button above. */}
+      {tab === "inventory" && longDistance && (
         jobUuid ? (
-          <BolInventoryTab jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+          <>
+            <ActualInventory jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+            {longDistance && ldLabor.includes("loading") && (
+              <BolInventoryTab jobUuid={jobUuid} jobName={jobName} jobDate={jobDate} />
+            )}
+          </>
         ) : (
           <div className="card">
             <div className="small" style={{ color: "var(--muted)" }}>

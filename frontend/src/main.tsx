@@ -12,6 +12,7 @@ import RequireAuth from "./auth/RequireAuth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateBanner from "./components/UpdateBanner";
 import AvailabilityReminderBanner from "./components/AvailabilityReminderBanner";
+import RolePreviewSwitch from "./components/RolePreviewSwitch";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -24,6 +25,7 @@ import DVIRPage from "./pages/DVIR";
 import LongDistance from "./pages/LongDistance";
 import DocumentLibrary from "./pages/DocumentLibrary";
 import Reimbursement from "./pages/Reimbursement";
+import OffJob from "./pages/OffJob";
 import Availability from "./pages/Availability";
 
 createRoot(document.getElementById("root")!).render(
@@ -35,6 +37,8 @@ createRoot(document.getElementById("root")!).render(
         {/* App-wide; fixed-position, renders over whatever route is active */}
         <UpdateBanner />
         <AvailabilityReminderBanner />
+        {/* Staging-only role preview (self-hides on production) */}
+        <RolePreviewSwitch />
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
@@ -51,6 +55,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/long-distance" element={<RequireAuth><LongDistance /></RequireAuth>} />
           <Route path="/documents" element={<RequireAuth><DocumentLibrary /></RequireAuth>} />
           <Route path="/reimbursement" element={<RequireAuth><Reimbursement /></RequireAuth>} />
+          <Route path="/off-job" element={<RequireAuth><OffJob /></RequireAuth>} />
           <Route path="/availability" element={<RequireAuth><Availability /></RequireAuth>} />
 
           {/* Everything else requires auth */}

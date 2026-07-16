@@ -14,6 +14,8 @@ import {
   enqueueAdd as storeEnqueueAdd,
   enqueueDeleteOrCancel as storeEnqueueDeleteOrCancel,
   renderedForJob,
+  retryFailedMaterial,
+  discardFailedMaterial,
   syncQueue,
   fetchAndCache,
   type LiveMaterial,
@@ -32,7 +34,7 @@ type LineItem = {
   rate: number;
   unit: Unit;
   discount: number;   // per-line % (0–100)
-  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips" | "personal_vehicle";
+  source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips" | "personal_vehicle" | "truck";
 };
 
 type Bill = {
@@ -182,11 +184,15 @@ type Props = {
   // Personal vehicles the crew flagged to bill as crew transport ($100/day).
   // Number of vehicles; 0 means "don't bill". One line item per vehicle.
   personalVehicleCount?: number;
+  // Number of trucks recorded in the Report's Truck fullness section. Each one
+  // auto-populates a "Truck (per hour)" line at $90/hr, mirroring how employee
+  // hours auto-populate labor lines. 0 = no trucks recorded.
+  truckCount?: number;
   children?: (slots: BillSlots) => ReactNode;
 };
 
 const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
-  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, employeeHours, personalVehicleCount, children },
+  { jobUuid, jobName, dumpsterPct = 0, recyclingPct = 0, employeeHours, personalVehicleCount, truckCount, children },
   ref,
 ) {
   const { settings: themeSettings } = useTheme();
@@ -430,6 +436,53 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       return { ...prev, items: nextItems };
     });
   }, [loaded, personalVehicleCount]);
+
+  // ── Trucks billed per hour ($90/hr) ──
+  // Each truck recorded in the Report's Truck fullness section gets one "Truck
+  // (per hour)" line, so admin doesn't hand-add them. The hours default to the
+  // job's longest single shift (a truck runs at least the length of the longest
+  // crew member's day) as a starting point admin can adjust; a truck line the
+  // admin has already edited keeps its qty and rate on later renders, like the
+  // labor and vehicle lines.
+  useEffect(() => {
+    if (!loaded || truckCount === undefined) return;
+    // Longest billable shift, as the default truck-hours proxy.
+    const defaultTruckHours = (employeeHours ?? []).reduce(
+      (max, e) => (e.non_billable ? max : Math.max(max, roundBillableQuarter(e.hours || 0))),
+      0,
+    ) || 1;
+    setBill((prev) => {
+      const desired = [] as LineItem[];
+      for (let i = 1; i <= truckCount; i++) {
+        const label = `Truck #${i} (per hour)`;
+        const existing = prev.items.find((it) => it.source === "truck" && it.label === label);
+        desired.push({
+          id: existing?.id ?? uuid(),
+          label,
+          // Preserve an admin-edited value; only default on first creation.
+          qty: existing ? existing.qty : defaultTruckHours,
+          rate: existing ? existing.rate : 90,
+          unit: "hr",
+          discount: existing?.discount ?? 0,
+          source: "truck",
+        });
+      }
+      const otherItems = prev.items.filter((it) => it.source !== "truck");
+      const nextItems = [...otherItems, ...desired];
+      if (nextItems.length === prev.items.length) {
+        const same = nextItems.every((n, i) => {
+          const p = prev.items[i];
+          return p && p.id === n.id && p.label === n.label &&
+            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
+            p.discount === n.discount && p.source === n.source;
+        });
+        if (same) return prev;
+      }
+      return { ...prev, items: nextItems };
+    });
+    // employeeHours only feeds the DEFAULT for a new line; existing lines are
+    // preserved, so re-running when hours change won't stomp an admin edit.
+  }, [loaded, truckCount, employeeHours]);
 
   // ── Materials: local cache + queue (offline-safe) ────────────────────────────
   function refreshMaterials() {
@@ -696,25 +749,42 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
               const unit = m.unitPrice == null ? "TBD" : fmt(m.unitPrice);
               const ext = m.unitPrice == null ? "-" : fmt(materialExt(m));
               return (
-                <div key={m.submissionId} style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 60px 90px 80px 28px",
-                  gap: 6, padding: "6px 12px 6px 28px",
-                  borderBottom: "1px solid var(--border)",
-                  alignItems: "center",
-                  fontSize: 12, color: "var(--text)",
-                  opacity: m.pending ? 0.75 : 1,
-                }}>
-                  <span style={{ color: "var(--muted)" }}>
-                    • {m.name}
-                    {m.pending && <span title="Waiting to sync" style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
-                  </span>
-                  <span style={{ textAlign: "right", color: "var(--muted)" }}>×{m.qty}</span>
-                  <span style={{ textAlign: "right", color: "var(--muted)" }}>{unit}</span>
-                  <span style={{ textAlign: "right", fontWeight: 600 }}>{ext}</span>
-                  <button type="button" onClick={() => removeMaterial(m.submissionId)}
-                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
-                    aria-label="Remove material">×</button>
+                <div key={m.submissionId}>
+                  <div style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 60px 90px 80px 28px",
+                    gap: 6, padding: "6px 12px 6px 28px",
+                    borderBottom: m.failed ? "none" : "1px solid var(--border)",
+                    alignItems: "center",
+                    fontSize: 12, color: "var(--text)",
+                    opacity: m.pending && !m.failed ? 0.75 : 1,
+                  }}>
+                    <span style={{ color: "var(--muted)" }}>
+                      • {m.name}
+                      {m.failed
+                        ? <span style={{ marginLeft: 6, fontSize: 10, color: "var(--danger)", fontWeight: 700 }}>NOT SENT</span>
+                        : m.pending && <span title="Waiting to sync" style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
+                    </span>
+                    <span style={{ textAlign: "right", color: "var(--muted)" }}>×{m.qty}</span>
+                    <span style={{ textAlign: "right", color: "var(--muted)" }}>{unit}</span>
+                    <span style={{ textAlign: "right", fontWeight: 600 }}>{ext}</span>
+                    <button type="button" onClick={() => removeMaterial(m.submissionId)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
+                      aria-label="Remove material">×</button>
+                  </div>
+                  {/* The server refused this item. It is kept, not deleted (ADR
+                      0013); the crew see why and can retry or discard. */}
+                  {m.failed && (
+                    <div style={{ padding: "0 12px 8px 28px", borderBottom: "1px solid var(--border)" }}>
+                      <div className="small" style={{ color: "var(--muted)" }}>{m.failedReason || "The server rejected this."}</div>
+                      <div className="row" style={{ gap: 8, marginTop: 4 }}>
+                        <button type="button" onClick={() => { void retryFailedMaterial(m.submissionId).then(refreshMaterials); }}
+                          style={{ padding: "4px 10px", fontSize: 12, minHeight: 36, borderRadius: 8, border: "1px solid var(--brand)", background: "transparent", color: "var(--brand)", fontWeight: 700 }}>Retry</button>
+                        <button type="button" onClick={() => { discardFailedMaterial(m.submissionId); refreshMaterials(); }}
+                          style={{ padding: "4px 10px", fontSize: 12, minHeight: 36, borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)" }}>Discard</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}

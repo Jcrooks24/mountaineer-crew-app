@@ -7,6 +7,11 @@
 // export time. `non_billable` rows show in the table but contribute 0 to
 // total man-hours and are excluded from the Bill Helper autopopulate.
 export type EmployeeHoursEntry = {
+  // Roster user id. THIS is the match key the worked-hours summary joins on, so a
+  // rename or a nickname no longer detaches somebody from their own hours. Absent
+  // on legacy rows written before the roster was required, which the server still
+  // falls back to matching by name.
+  user_id?: number;
   name: string;
   start: string;
   end: string;
@@ -15,6 +20,13 @@ export type EmployeeHoursEntry = {
   non_billable?: boolean;
   // Long-distance: this employee was out of town this day → $50 per-diem.
   out_of_town?: boolean;
+  // Legacy single overall skill rating (1–5). Superseded by skill_ratings
+  // below; kept so old reports still hydrate. Display-only.
+  skill_rating?: number | null;
+  // Per-skill ratings for this mover on this job, keyed by skill name. Only the
+  // skills relevant to the job's type(s) are shown to rate. 0-5 (or 0/5 for
+  // binary skills). Display-only - never affects the man-hours math.
+  skill_ratings?: Record<string, number> | null;
 };
 
 // Company billing rule: round to the next quarter-hour if the worked time

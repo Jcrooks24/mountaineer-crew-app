@@ -12,6 +12,21 @@
  *
  * Reads only. Never writes to the spreadsheet.
  *
+ * NOT THE AUTHORITATIVE JOB SUMMARY. Use Admin > Job Summary in the app.
+ * -------------------------------------------------------------------
+ * This sidebar reads 7 of the 19 exported sheets and has fallen behind the app.
+ * It does not show: job inventory, incidents (damage claims), the linked estimate,
+ * est-vs-actual hours, the BOL, long-distance per-diem, reimbursements, skill
+ * ratings, job type, truck fullness, crew feedback, or the overage note.
+ *
+ * It also joins DVIRs and RODS to a job by DATE rather than by job_uuid, which is
+ * a guess, and it hardcodes the PRODUCTION tab names, so it ignores the
+ * staging/prod split entirely.
+ *
+ * The in-app Admin > Job Summary tab reads all of it, joins on job_uuid, and is
+ * the one that gets maintained. Keep this only for the copy-as-TSV composite
+ * comparison, which the app does not have. Do not add features here.
+ *
  * Install
  * -------
  * 1. Open the Mountaineer crew-logs spreadsheet.

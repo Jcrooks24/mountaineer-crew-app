@@ -14,6 +14,9 @@ class EstimateItemIn(BaseModel):
     room: Optional[str] = None
     subcategory: Optional[str] = None
     notes: Optional[str] = None
+    # Client-minted idempotency key. Optional so an older app build (which does
+    # not send one) keeps working; when present the add is an upsert.
+    item_uuid: Optional[str] = None
 
 
 class EstimateItemPatch(BaseModel):
@@ -28,6 +31,7 @@ class EstimateItemPatch(BaseModel):
 
 class EstimateItemOut(BaseModel):
     id: int
+    item_uuid: Optional[str] = None
     name: str
     qty: int
     weight_lbs: float
@@ -45,6 +49,13 @@ class CatalogItemIn(BaseModel):
     weight_lbs: float = 0
     cubic_ft: float = 0
     category: Optional[str] = None
+    length_in: Optional[float] = None
+    width_in: Optional[float] = None
+    height_in: Optional[float] = None
+    packing_type: Optional[str] = None
+    fragile: Optional[bool] = None
+    sku: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class CatalogItemOut(BaseModel):
@@ -53,6 +64,13 @@ class CatalogItemOut(BaseModel):
     weight_lbs: float
     cubic_ft: float
     category: Optional[str] = None
+    length_in: Optional[float] = None
+    width_in: Optional[float] = None
+    height_in: Optional[float] = None
+    packing_type: Optional[str] = None
+    fragile: Optional[bool] = None
+    sku: Optional[str] = None
+    notes: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -83,6 +101,7 @@ class EstimateUpdate(BaseModel):
     destination_access_notes: Optional[str] = None
     special_items_notes: Optional[str] = None
     general_notes: Optional[str] = None
+    estimated_hours: Optional[float] = None
 
 
 class EstimateResponse(BaseModel):
@@ -100,6 +119,7 @@ class EstimateResponse(BaseModel):
     destination_access_notes: Optional[str]
     special_items_notes: Optional[str]
     general_notes: Optional[str]
+    estimated_hours: Optional[float] = None
     estimated_weight_lbs: float
     estimated_cubic_ft: float
     created_at: datetime

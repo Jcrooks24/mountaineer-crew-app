@@ -1,6 +1,7 @@
 import os
 import re
-from typing import BinaryIO, Optional
+import threading
+from typing import Any, BinaryIO, Optional
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -35,17 +36,38 @@ ESTIMATOR_PARENT_ENV_VAR = "DRIVE_ESTIMATOR_PARENT_FOLDER_ID"
 # default crew-photos parent if the env var isn't set.
 REIMBURSEMENT_PARENT_ENV_VAR = "DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID"
 
-_cached_drive_service = None
+# The Drive service wraps an httplib2 Http, whose pooled TLS socket is NOT
+# thread-safe under OpenSSL. Photo/PDF uploads run on FastAPI's request
+# threadpool, so a single process-wide service shared across concurrent uploads
+# routes them through one socket and corrupts it (SSL errors, and on Render this
+# has crashed the worker). Cache it per-thread instead - the exact pattern
+# sheets_export._get_sheets_svc uses - with a version counter so an admin token
+# rotation forces every thread to rebuild on next use.
+_drive_svc_threadlocal = threading.local()
+_drive_svc_version: int = 0
+_drive_svc_version_lock = threading.Lock()
 
 
-def _get_drive_service(db=None):
-    global _cached_drive_service
-    if _cached_drive_service is not None:
-        return _cached_drive_service
+def _get_drive_service(db=None) -> Any:
+    cached = getattr(_drive_svc_threadlocal, "svc", None)
+    cached_version = getattr(_drive_svc_threadlocal, "version", -1)
+    if cached is not None and cached_version == _drive_svc_version:
+        return cached
     # Use certifi-backed http to avoid SSL errors on Render
     authorized_http = _build_authorized_http(_get_creds(db))
-    _cached_drive_service = build("drive", "v3", http=authorized_http, cache_discovery=False)
-    return _cached_drive_service
+    svc = build("drive", "v3", http=authorized_http, cache_discovery=False)
+    _drive_svc_threadlocal.svc = svc
+    _drive_svc_threadlocal.version = _drive_svc_version
+    return svc
+
+
+def invalidate_drive_svc_cache() -> None:
+    """Force every thread to rebuild its cached Drive svc on next use. Called on
+    OAuth token rotation. We can't reach into another thread's threading.local,
+    so bump a version counter each cached svc compares against."""
+    global _drive_svc_version
+    with _drive_svc_version_lock:
+        _drive_svc_version += 1
 
 
 def _safe(s: str) -> str:
@@ -372,12 +394,28 @@ def upload_file_to_drive(
 # ── Signed Bill of Lading PDF uploader ───────────────────────────────────────
 
 BOL_FOLDER_KEY = "drive_bol_folder_id"
+# Preferred: a Drive folder ID (matches DRIVE_ESTIMATOR_PARENT_FOLDER_ID /
+# DRIVE_REIMBURSEMENT_PARENT_FOLDER_ID). An ID points staging and production at
+# DIFFERENT physical folders, so staging can never write into - or overwrite in
+# place - the real signed-BOL documents. Grab it from the folder URL (the segment
+# after /folders/). See docs/CREDENTIALS.md and .env.staging.example.
+BOL_FOLDER_ID_ENV_VAR = "DRIVE_BOL_FOLDER_ID"
 DEFAULT_BOL_FOLDER_NAME = "Signed Bills of Lading"
 
 
 def _get_bol_folder_id(svc, db: Optional[Session]) -> str:
-    """Resolve (and cache) the dedicated top-level folder for signed BOL PDFs.
-    Overridable via DRIVE_BOL_FOLDER_NAME."""
+    """Resolve the dedicated top-level folder for signed BOL PDFs.
+
+    Prefer DRIVE_BOL_FOLDER_ID (an explicit folder ID) - the reliable way to keep
+    staging and prod on separate folders. Fall back to the LEGACY name-based
+    lookup (DRIVE_BOL_FOLDER_NAME / the default) only when the ID is unset, kept
+    for backward compatibility. The name-based path resolves by folder NAME, so
+    two environments with the same folder name resolve the SAME real folder -
+    which let staging overwrite production BOLs. Always set the ID."""
+    folder_id_env = os.getenv(BOL_FOLDER_ID_ENV_VAR, "").strip()
+    if folder_id_env:
+        return folder_id_env
+
     folder_name = os.getenv("DRIVE_BOL_FOLDER_NAME", DEFAULT_BOL_FOLDER_NAME).strip() or DEFAULT_BOL_FOLDER_NAME
 
     if db:
@@ -476,3 +514,15 @@ def upload_bol_pdf_to_drive(
 def delete_drive_file(db: Session, file_id: str) -> None:
     svc = _get_drive_service(db)
     svc.files().delete(fileId=file_id).execute()
+
+
+def update_drive_file_description(db: Session, file_id: str, description: str) -> None:
+    """Update a Drive file's description in place - used to keep a photo's
+    caption/note in sync on Drive after the crew edits it in-app. Raises on a
+    hard Drive error; callers treat it as best-effort."""
+    svc = _get_drive_service(db)
+    svc.files().update(
+        fileId=file_id,
+        body={"description": description or ""},
+        fields="id",
+    ).execute()

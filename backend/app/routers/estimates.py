@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db, require_admin
+from app.core.deps import get_current_user, get_db, require_admin
 from app.db.models.estimate import Estimate, EstimateItem, FurnitureCatalogItem
 from app.db.models.user import User
 from app.integrations.sheets_export import schedule_estimate_export
@@ -195,6 +196,10 @@ def update_estimate(
             val = val.strip() or None
             setattr(e, field, val)
 
+    # Estimated hours (float, not a string field). None = leave as-is.
+    if body.estimated_hours is not None:
+        e.estimated_hours = max(0.0, float(body.estimated_hours))
+
     _touch(e)
     db.commit()
     db.refresh(e)
@@ -213,6 +218,11 @@ def delete_estimate(
         raise HTTPException(status_code=404, detail="Estimate not found")
     db.delete(e)
     db.commit()
+    # Reconcile the sheet: routed through the same coalescing worker as exports,
+    # which now sees no estimate for this uuid and removes its (ghost) summary +
+    # item rows. Going through schedule_* serializes it with any in-flight export
+    # so a delete can't race a write.
+    schedule_estimate_export(estimate_uuid)
 
 
 @router.post("/{estimate_uuid}/items", response_model=EstimateItemOut, status_code=status.HTTP_201_CREATED)
@@ -226,7 +236,19 @@ def add_item(
     if not e:
         raise HTTPException(status_code=404, detail="Estimate not found")
 
+    # Idempotency. The add is queued on the device and retried, so a response
+    # lost mid-flight must not add the item to the estimate twice (which would
+    # also double-count it in the weight/volume totals below).
+    item_uuid = (body.item_uuid or "").strip() or None
+    if item_uuid:
+        existing = (
+            db.query(EstimateItem).filter(EstimateItem.item_uuid == item_uuid).first()
+        )
+        if existing:
+            return existing
+
     item = EstimateItem(
+        item_uuid=item_uuid,
         estimate_id=e.id,
         name=body.name.strip(),
         qty=max(1, int(body.qty or 1)),
@@ -238,10 +260,28 @@ def add_item(
     )
     db.add(item)
     db.flush()
-    e.items.append(item)
+    # Do NOT `e.items.append(item)` here. `items` is lazy, so after the flush the
+    # first touch of it loads from the DB and ALREADY contains this row; a manual
+    # append then puts the same object in the list twice. The row count stays
+    # correct (same PK), which is why this went unseen, but _recalc_totals sums
+    # the list, so every add double-counted its own weight and volume into the
+    # estimate totals. Expire instead: the next touch reloads it exactly once.
+    db.expire(e, ["items"])
     _recalc_totals(e)
     _touch(e)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Raced a concurrent retry of the same item_uuid. The unique index is
+        # the real guard; the SELECT above is just the fast path. Totals are
+        # rolled back with the insert, so they stay consistent.
+        db.rollback()
+        existing = (
+            db.query(EstimateItem).filter(EstimateItem.item_uuid == item_uuid).first()
+        )
+        if existing:
+            return existing
+        raise
     db.refresh(item)
     db.refresh(e)
     _export_estimate(db, e)
