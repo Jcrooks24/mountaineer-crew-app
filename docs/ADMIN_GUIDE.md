@@ -1,6 +1,6 @@
 # Mountaineer Crew App - Admin Guide
 
-**Last updated:** July 2026
+**Version 2.3**  |  Last updated: July 2026
 **App:** https://mountaineer-crew-app-two.vercel.app
 
 > This is the version-controlled copy of the admin guide. It is written for

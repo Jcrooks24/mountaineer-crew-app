@@ -1,5 +1,5 @@
 TITLE:
-v1.8 - Skills, incidents, inventory, and more
+v2.3 - Skills, incidents, inventory, and more
 
 BODY (paste into Admin > Patch Notes; renders as plain text):
 
