@@ -49,6 +49,10 @@ NEW - FOR ADMIN (back office)
 
 - Job types. Configure the job type tags the crew pick from on the Job Report.
 
+- Company information. Set your company name, address, phone, email, DOT, and MC
+  once in Settings; it shows as the carrier on the Bill of Lading (and anywhere the
+  company address appears) instead of being baked into the app.
+
 - Shared furniture catalogue. Import and export your catalogue as a CSV, with item
   dimensions and custom fields. One catalogue now feeds the Estimator, actual
   inventory, and the BOL item pickers.
@@ -95,6 +99,9 @@ Digital Bill of Lading:
   the customer's valuation choice (Full Value Protection or Released Value). Look
   these up in the job's calendar description. The app will not let you sign until
   the required fields are filled, so the finished BOL is complete for a DOT check.
+  The shipper address defaults to the pickup address (uncheck to enter a different
+  one), the agreed pickup date defaults to today, and estimates are always
+  non-binding so there is no estimate-type question.
 - Pickup and delivery addresses are now on the BOL and print on the document; you
   can also correct them later from the "Signed Bill of Lading" card if needed.
 

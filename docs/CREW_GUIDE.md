@@ -167,10 +167,10 @@ Confirm the inventory is a complete record before saving, or explain why it isn'
 On LD+ load/unload days, this same inventory also appears as its own Inventory tab on the Timeline (see below), so it can be built as items are actually carried on and off the truck rather than only from the Long Distance menu.
 Filling in the BOL details (required by federal law)
 Above the inventory, the BOL now asks for the information a Bill of Lading must legally contain, in short cards you fill in directly. Look these up in the job's Google Calendar description and type them in (the app does not pull them from the estimate). The cards are:
-Shipper and shipment: the customer's name, phone, and address; the origin (pickup) and destination (delivery) addresses; and the shipment/job reference (prefilled from the job, editable). A "Same as pickup" button copies the pickup address into the shipper address when they match.
-Payment and estimate: the form of payment the customer will use at delivery, and whether the estimate is binding or non-binding. If you pick Collect on delivery (COD), a couple more fields appear for who to notify and the maximum amount due at delivery.
+Shipper and shipment: the customer's name and phone; the origin (pickup) and destination (delivery) addresses; and the shipment/job reference (prefilled from the job, editable). The shipper address defaults to the pickup address ("Same as pickup address" is checked by default); uncheck it if the customer's address is different and type it in.
+Payment: the form of payment the customer will use at delivery. If you pick Collect on delivery (COD), a couple more fields appear for who to notify and the maximum amount due at delivery. (Estimates are always non-binding, so there is no estimate-type field.)
 Valuation: have the customer choose one of two liability options, Full Value Protection or Released Value (60 cents per pound, per article). This is a legally required choice and must be made before signing.
-Agreed dates: the pickup and delivery dates or windows agreed with the customer (a single date or a range is fine).
+Agreed dates: the pickup and delivery dates or windows agreed with the customer. Pickup defaults to today; change it if needed. A single date or a range is fine.
 Other required declarations: additional carriers, third-party insurance, and special/accessorial services. Leave blank if there are none; the BOL records None / N/A.
 All of the fields marked with an asterisk are required. If any is missing when you try to sign at origin, the app tells you exactly which card to complete.
 Signing: Origin and Destination

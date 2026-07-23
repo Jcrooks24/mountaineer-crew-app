@@ -18,6 +18,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
+from app.core.company import COMPANY_FIELDS, COMPANY_INFO_KEY, merge_company
 from app.db.models.admin_entry_status import AdminEntryStatus
 from app.db.models.admin_note import AdminNote
 from app.db.models.bol import DigitalBOL
@@ -290,6 +291,46 @@ def set_dvir_units(
         row.value = _json.dumps(units)
     else:
         db.add(SystemConfig(key=DVIR_UNITS_KEY, value=_json.dumps(units)))
+    db.commit()
+
+
+# ---------------------------
+# Company (carrier) information config
+# ---------------------------
+
+class CompanyInfoRequest(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    dot: Optional[str] = None
+    mc: Optional[str] = None
+
+
+@router.get("/config/company")
+def get_company_info(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    row = db.query(SystemConfig).filter(SystemConfig.key == COMPANY_INFO_KEY).first()
+    stored = _json.loads(row.value) if row and row.value else {}
+    return merge_company(stored)
+
+
+@router.put("/config/company", status_code=204)
+def set_company_info(
+    payload: CompanyInfoRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    # Store only the known fields; merge_company applies the defaults on read, so
+    # a field left blank falls back rather than blanking the BOL carrier block.
+    value = _json.dumps({k: (getattr(payload, k) or "") for k in COMPANY_FIELDS})
+    row = db.query(SystemConfig).filter(SystemConfig.key == COMPANY_INFO_KEY).first()
+    if row:
+        row.value = value
+    else:
+        db.add(SystemConfig(key=COMPANY_INFO_KEY, value=value))
     db.commit()
 
 

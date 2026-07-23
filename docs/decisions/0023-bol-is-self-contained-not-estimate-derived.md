@@ -26,9 +26,17 @@ them in; there is no autofill.
 - **Required fields, entered before origin signing** (blocked until filled, in
   `signSession`'s origin branch): shipper name / phone / address (b)(3); origin
   and destination addresses; shipment reference (b)(16); form of payment (b)(4);
-  estimate type (b)(15); **valuation election** (b)(12); agreed pickup and
-  delivery (b)(6). Actual pickup date (b)(8) and vehicle (b)(9) are captured at
-  the origin-signing card as before.
+  **valuation election** (b)(12); agreed pickup and delivery (b)(6). Actual pickup
+  date (b)(8) and vehicle (b)(9) are captured at the origin-signing card as before.
+- **Estimate type (b)(15) is fixed to Non-binding** (the company only does
+  non-binding estimates), set on the draft on mount, no field. It still prints on
+  the BOL; restore a field only if binding estimates ever happen.
+- **Shipper address defaults to the pickup (origin) address** with a "Same as
+  pickup address" checkbox (default on) and an override to type a different one.
+- **Agreed pickup defaults to today** (editable).
+- **The carrier / company block is admin-configurable** (Admin > Settings >
+  Company information, stored in `SystemConfig` under `company_info`, read via
+  the offline-safe `companyInfo.ts` cache), no longer hardcoded in the frontend.
 - **Conditional, low-burden, default None/N-A**: COD notify contact + max
   (b)(5),(11), shown only when payment is COD; additional carriers (b)(2);
   third-party insurance (b)(13); accessorial services (b)(14).

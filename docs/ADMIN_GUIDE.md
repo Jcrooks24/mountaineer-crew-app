@@ -148,6 +148,7 @@ Shared configuration; a change here applies to all crew devices on next load (no
 per-device setup). Contains:
 - **Theme & Appearance** (own page, below)
 - **Advanced Settings** (own page, below)
+- **Company information:** your company name, address, phone, email, U.S. DOT number, and MC number. Shown as the carrier on the Bill of Lading and used anywhere the company address appears. Edit any field and Save; a blank field falls back to the built-in default. This replaces the values that used to be hardcoded in the app
 - **DVIR unit list:** add, edit, remove vehicles from the DVIR dropdown
 - **Employee Tags:** the free-form tag list used across the roster and digest
 - **Job Types:** the job type tags crew pick from on the Job Report

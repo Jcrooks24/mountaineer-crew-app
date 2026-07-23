@@ -39,9 +39,9 @@ import {
 import {
   BOL_CONTRACT_SECTIONS,
   FORM_OF_PAYMENT_OPTIONS,
-  ESTIMATE_TYPE_OPTIONS,
   VALUATION_OPTIONS,
 } from "../lib/bolContract";
+import { getCompanyInfoCached, refreshCompanyInfo, type CompanyInfo } from "../lib/companyInfo";
 import SuggestInput from "./SuggestInput";
 
 /** Hand the shipper their dated copy: Web Share (with file) if available,
@@ -67,16 +67,8 @@ async function deliverPdfToClient(blob: Blob, filename: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-// Static carrier block - from the Mountaineer Moving Bill of Lading template.
-// Autofilled onto every BOL (federal law requires it to appear; §375.505(b)(1)).
-const CARRIER = {
-  name: "Mountaineer Moving LLC",
-  address: "3021 S 27th Ave. #B, Bozeman, MT 59718",
-  phone: "(406) 201-9580",
-  email: "management@mountaineermoving.com",
-  dot: "4557708",
-  mc: "1811084",
-};
+// Carrier block is admin-configurable (Admin > Settings > Company information),
+// read from the offline-safe cache. Federal law requires it on the BOL (§375.505(b)(1)).
 
 function todayLocal() {
   const d = new Date();
@@ -322,6 +314,11 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   // picker matches Actual Inventory and the Estimator.
   const catalog = useMergedCatalog();
 
+  // Company/carrier block (admin-configurable). Cached for offline; refreshed on
+  // mount. The PDF reads the same cache, so both stay in step.
+  const [carrier, setCarrier] = useState<CompanyInfo>(() => getCompanyInfoCached());
+  useEffect(() => { refreshCompanyInfo().then(setCarrier); }, []);
+
   // Add-item form state
   const [itemName, setItemName] = useState("");
   const [itemQty, setItemQty] = useState(1);
@@ -382,14 +379,35 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     setDraft((prev) => ({ ...prev, ...patch, updated_at: new Date().toISOString() }));
   }
 
-  // Prefill the shipment / job reference from the job once, so the crew is not
-  // retyping what the app already knows (still editable).
+  // One-time prefills for a new BOL (all still editable):
+  //  - shipment reference from the job (don't retype what the app knows)
+  //  - estimate type is always Non-binding (we only do non-binding estimates)
+  //  - agreed pickup defaults to today
   useEffect(() => {
-    if (draft.status === "draft" && !draft.shipment_number && (draft.job_name || draft.job_date)) {
-      setField({ shipment_number: [draft.job_name, draft.job_date].filter(Boolean).join(" - ") });
+    if (draft.status !== "draft") return;
+    const patch: Partial<BOLDraft> = {};
+    if (!draft.shipment_number && (draft.job_name || draft.job_date)) {
+      patch.shipment_number = [draft.job_name, draft.job_date].filter(Boolean).join(" - ");
     }
+    if (!draft.estimate_type) patch.estimate_type = "non_binding";
+    if (!draft.agreed_pickup) patch.agreed_pickup = todayLocal();
+    if (Object.keys(patch).length) setField(patch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Shipper address defaults to the pickup (origin) address, with an override for
+  // the crew to enter a different address. Checked = mirror the origin.
+  const [shipperSameAsOrigin, setShipperSameAsOrigin] = useState<boolean>(() => {
+    const sa = (initialDraft.shipper_address || "").trim();
+    const oa = (initialDraft.origin_address || "").trim();
+    return !sa || sa === oa;
+  });
+  useEffect(() => {
+    if (shipperSameAsOrigin && (draft.shipper_address || "") !== (draft.origin_address || "")) {
+      setField({ shipper_address: draft.origin_address || "" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipperSameAsOrigin, draft.origin_address]);
 
   // Signed-BOL retrieval + send-to-client card state (shown once signed).
   const [clientEmail, setClientEmail] = useState("");
@@ -613,9 +631,8 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       if (need(draft.dest_address)) return setSignErr("Enter the destination (delivery) address in Shipper & shipment.");
       if (need(draft.shipper_address)) return setSignErr("Enter the shipper address in Shipper & shipment.");
       if (need(draft.shipment_number)) return setSignErr("Enter the shipment / job reference in Shipper & shipment.");
-      if (need(draft.form_of_payment)) return setSignErr("Select the form of payment in Payment & estimate.");
-      if (draft.form_of_payment === "cod" && need(draft.cod_notify)) return setSignErr("Enter who to notify for COD in Payment & estimate.");
-      if (need(draft.estimate_type)) return setSignErr("Select the estimate type in Payment & estimate.");
+      if (need(draft.form_of_payment)) return setSignErr("Select the form of payment in Payment.");
+      if (draft.form_of_payment === "cod" && need(draft.cod_notify)) return setSignErr("Enter who to notify for COD in Payment.");
       if (need(draft.valuation)) return setSignErr("Have the shipper choose a valuation option in Valuation.");
       if (need(draft.agreed_pickup)) return setSignErr("Enter the agreed pickup date in Agreed dates.");
       if (need(draft.agreed_delivery)) return setSignErr("Enter the agreed delivery date in Agreed dates.");
@@ -850,10 +867,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       <div className="card">
         <div className="sectionTitle">Carrier</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
-          <strong>{CARRIER.name}</strong><br />
-          {CARRIER.address}<br />
-          {CARRIER.phone} · {CARRIER.email}<br />
-          <span style={{ color: "var(--muted)" }}>U.S. DOT {CARRIER.dot} · MC {CARRIER.mc}</span>
+          <strong>{carrier.name}</strong><br />
+          {carrier.address}<br />
+          {carrier.phone} · {carrier.email}<br />
+          <span style={{ color: "var(--muted)" }}>U.S. DOT {carrier.dot} · MC {carrier.mc}</span>
         </div>
       </div>
 
@@ -887,20 +904,28 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                 <span className="small" style={{ color: "var(--muted)" }}>Destination (delivery) address *</span>
                 <input value={draft.dest_address || ""} onChange={(e) => setAddress({ dest_address: e.target.value })} placeholder="Street, City, ST ZIP" />
               </label>
-              <label className="col" style={{ gap: 4 }}>
-                <span className="row small" style={{ color: "var(--muted)", justifyContent: "space-between", alignItems: "center" }}>
-                  <span>Shipper address *</span>
-                  <button
-                    type="button"
-                    onClick={() => setField({ shipper_address: draft.origin_address || "" })}
-                    disabled={!draft.origin_address}
-                    style={{ fontSize: 12, padding: "2px 8px" }}
-                  >
-                    Same as pickup
-                  </button>
-                </span>
-                <input value={draft.shipper_address || ""} onChange={(e) => setField({ shipper_address: e.target.value })} placeholder="Shipper's own address" />
-              </label>
+              <div className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipper address *</span>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    checked={shipperSameAsOrigin}
+                    onChange={(e) => {
+                      setShipperSameAsOrigin(e.target.checked);
+                      if (e.target.checked) setField({ shipper_address: draft.origin_address || "" });
+                    }}
+                    style={{ accentColor: "var(--brand)", width: 16, height: 16, flexShrink: 0 }}
+                  />
+                  <span>Same as pickup address</span>
+                </label>
+                {shipperSameAsOrigin ? (
+                  <div className="small" style={{ color: "var(--muted)", padding: "2px 0" }}>
+                    {draft.origin_address ? draft.origin_address : "Enter the pickup address above."}
+                  </div>
+                ) : (
+                  <input value={draft.shipper_address || ""} onChange={(e) => setField({ shipper_address: e.target.value })} placeholder="Shipper's own address" />
+                )}
+              </div>
               <label className="col" style={{ gap: 4 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Shipment / job reference *</span>
                 <input value={draft.shipment_number || ""} onChange={(e) => setField({ shipment_number: e.target.value })} placeholder="Job / shipment number" />
@@ -908,9 +933,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
             </div>
           </div>
 
-          {/* Card 2: Payment & estimate */}
+          {/* Card 2: Payment. Estimate type is always Non-binding (we only do
+              non-binding estimates), set on mount - no field needed. */}
           <div className="card">
-            <div className="sectionTitle">Payment &amp; estimate</div>
+            <div className="sectionTitle">Payment</div>
             <div className="col" style={{ gap: 10 }}>
               <label className="col" style={{ gap: 4 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Form of payment honored at delivery *</span>
@@ -931,13 +957,6 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                   </label>
                 </div>
               )}
-              <label className="col" style={{ gap: 4 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Estimate type *</span>
-                <select value={draft.estimate_type || ""} onChange={(e) => setField({ estimate_type: e.target.value })}>
-                  <option value="">Select&hellip;</option>
-                  {ESTIMATE_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-              </label>
             </div>
           </div>
 

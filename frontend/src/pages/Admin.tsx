@@ -2,6 +2,7 @@ import { Children, useEffect, useMemo, useRef, useState, type ReactNode } from "
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
+import { getCompanyInfoCached, setCompanyInfoCache, type CompanyInfo } from "../lib/companyInfo";
 
 const ADMIN_API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 import { useAuth } from "../auth/AuthContext";
@@ -2598,6 +2599,7 @@ function SettingsTab({
         action="Open Advanced Settings →"
         onClick={onOpenAdvanced}
       />
+      <CompanyInfoCard />
       <DVIRUnitsCard />
       <EmployeeTagsManagerCard />
       <JobTypesManagerCard />
@@ -4884,6 +4886,75 @@ type DVIRRecord = {
 // ─────────────────────────────────────────
 // DVIR vehicle units editor
 // ─────────────────────────────────────────
+function CompanyInfoCard() {
+  const FIELDS: { key: keyof CompanyInfo; label: string; placeholder: string }[] = [
+    { key: "name", label: "Company name", placeholder: "Mountaineer Moving LLC" },
+    { key: "address", label: "Address", placeholder: "Street, City, ST ZIP" },
+    { key: "phone", label: "Phone", placeholder: "(406) 201-9580" },
+    { key: "email", label: "Email", placeholder: "management@mountaineermoving.com" },
+    { key: "dot", label: "U.S. DOT number", placeholder: "4557708" },
+    { key: "mc", label: "MC number", placeholder: "1811084" },
+  ];
+  const [info, setInfo] = useState<CompanyInfo>(() => getCompanyInfoCached());
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<CompanyInfo>("/api/admin/config/company")
+      .then((r) => setInfo((prev) => ({ ...prev, ...r })))
+      .catch(() => setErr("Failed to load company info"));
+  }, []);
+
+  function set(key: keyof CompanyInfo, value: string) {
+    setInfo((prev) => ({ ...prev, [key]: value }));
+    setSaved(false);
+    setErr(null);
+  }
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/company", { method: "PUT", body: JSON.stringify(info) });
+      setCompanyInfoCache(info); // this device reflects the change immediately
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Company information</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Your company details, shown as the carrier on the Bill of Lading and used
+        anywhere the company address appears. Blank fields fall back to defaults.
+      </div>
+      <div className="col" style={{ gap: 10 }}>
+        {FIELDS.map((f) => (
+          <label key={f.key} className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>{f.label}</span>
+            <input
+              value={info[f.key] || ""}
+              onChange={(e) => set(f.key, e.target.value)}
+              placeholder={f.placeholder}
+              style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14 }}
+            />
+          </label>
+        ))}
+      </div>
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+      <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
+        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
+        <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save company info"}</button>
+      </div>
+    </div>
+  );
+}
+
 function DVIRUnitsCard() {
   const [units, setUnits] = useState<string[]>([]);
   const [newUnit, setNewUnit] = useState("");

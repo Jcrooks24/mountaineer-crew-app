@@ -16,15 +16,7 @@
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import type { BOLDraft } from "./bolStore";
-
-const CARRIER = {
-  name: "Mountaineer Moving LLC",
-  address: "3021 S 27th Ave. #B, Bozeman, MT 59718",
-  phone: "(406) 201-9580",
-  email: "management@mountaineermoving.com",
-  dot: "4557708",
-  mc: "1811084",
-};
+import { getCompanyInfoCached } from "./companyInfo";
 
 // Page geometry (US Letter).
 const PW = 612;
@@ -55,6 +47,8 @@ function fmtDate(iso?: string): string {
 }
 
 export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
+  // Company/carrier block is admin-configurable (cached, offline-safe).
+  const CARRIER = getCompanyInfoCached();
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);

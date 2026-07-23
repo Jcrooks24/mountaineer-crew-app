@@ -291,6 +291,12 @@ as the BOL is signed at origin. See [ADR 0022](decisions/0022-signed-bol-is-retr
 4. **"BOL not found" on send.** The signed row had not reached the server yet; the
    send drains the queue first, so retrying once online usually clears it.
 
+5. **Wrong company name / address / DOT on the BOL.** The carrier block is
+   admin-configurable: Admin > Settings > Company information. Edit and Save; it
+   applies to all devices on next load and the crew app caches it for offline. A
+   blank field falls back to the built-in default (see `backend/app/core/company.py`
+   / `frontend/src/lib/companyInfo.ts`).
+
 Data impact: none. Retrieval is read-only; email sends a copy and changes nothing.
 
 ---
