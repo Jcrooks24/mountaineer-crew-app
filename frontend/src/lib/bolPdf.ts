@@ -32,7 +32,14 @@ const PH = 792;
 const MARGIN = 50;
 const MAXW = PW - MARGIN * 2;
 
-import { BOL_CONTRACT_SECTIONS, type BolContractSection } from "./bolContract";
+import {
+  BOL_CONTRACT_SECTIONS,
+  type BolContractSection,
+  FORM_OF_PAYMENT_OPTIONS,
+  ESTIMATE_TYPE_OPTIONS,
+  VALUATION_OPTIONS,
+  bolOptionLabel,
+} from "./bolContract";
 
 // The 16 CFR §375.505 clauses live in ./bolContract so the BOL editor UI
 // can render the same text next to the signing card without pulling in
@@ -118,18 +125,43 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
   drawText(`${CARRIER.name}\n${CARRIER.address}\n${CARRIER.phone} · ${CARRIER.email}\nU.S. DOT ${CARRIER.dot} · MC ${CARRIER.mc}`, { gap: 6 });
 
   // ── Shipment / job summary ──
-  // Origin + destination addresses are load-bearing on an interstate BOL: a DOT
-  // officer at a border crossing asks for the pickup and delivery addresses, so
-  // they print here explicitly rather than being implied by the job name.
+  // These are the FMCSA 49 CFR 375.505 data elements, captured from the crew and
+  // printed on the document (not carried from an estimate the crew cannot see -
+  // ADR 0023). Origin + destination addresses are load-bearing: a DOT officer at
+  // a border crossing asks for the pickup and delivery addresses.
+  const paymentLabel = bolOptionLabel(FORM_OF_PAYMENT_OPTIONS, draft.form_of_payment);
+  const estimateLabel = bolOptionLabel(ESTIMATE_TYPE_OPTIONS, draft.estimate_type);
   heading("Shipment Summary");
   drawText(
-    `Job: ${draft.job_name || "-"}\nMove date: ${fmtDate(draft.job_date) || "-"}\nCrew representative: ${draft.crew_rep || "-"}` +
-      `\nOrigin (pickup) address: ${draft.origin_address || "-"}` +
-      `\nDestination (delivery) address: ${draft.dest_address || "-"}` +
+    `Shipment / job reference: ${draft.shipment_number || draft.job_name || "-"}\n` +
+      `Bill of Lading issue date: ${fmtDate(draft.job_date) || "-"}\n` +
+      `Crew representative: ${draft.crew_rep || "-"}\n` +
+      `Shipper (customer): ${draft.shipper_name || "-"}\n` +
+      `Shipper phone: ${draft.shipper_phone || "-"}\n` +
+      `Shipper address: ${draft.shipper_address || "-"}\n` +
+      `Origin (pickup) address: ${draft.origin_address || "-"}\n` +
+      `Destination (delivery) address: ${draft.dest_address || "-"}\n` +
+      `Agreed pickup: ${draft.agreed_pickup || "-"}\n` +
+      `Agreed delivery: ${draft.agreed_delivery || "-"}` +
       (draft.actual_pickup_date ? `\nActual pickup date: ${fmtDate(draft.actual_pickup_date)}` : "") +
-      (draft.vehicle ? `\nVehicle: ${draft.vehicle}` : ""),
+      (draft.vehicle ? `\nVehicle: ${draft.vehicle}` : "") +
+      `\nForm of payment at delivery: ${paymentLabel || "-"}\n` +
+      `Estimate type: ${estimateLabel || "-"}` +
+      (draft.form_of_payment === "cod"
+        ? `\nCOD - notify: ${draft.cod_notify || "-"}\nCOD - maximum at delivery: ${draft.cod_max || "-"}`
+        : "") +
+      `\nAdditional carriers: ${draft.additional_carriers || "None"}` +
+      `\nThird-party insurance: ${draft.third_party_insurance || "None"}` +
+      `\nSpecial / accessorial services: ${draft.accessorial_services || "N/A"}`,
     { gap: 6 },
   );
+
+  // Valuation election - the shipper's legally required liability choice, printed
+  // prominently as its own block (375.505(b)(12)).
+  heading("Valuation Election [§375.505(b)(12)]");
+  const valOpt = VALUATION_OPTIONS.find((o) => o.value === draft.valuation);
+  drawText(`Elected: ${valOpt?.label || "NOT ELECTED"}`, { size: 9, f: bold, gap: 2 });
+  if (valOpt?.blurb) drawText(valOpt.blurb, { size: 8, gap: 6 });
 
   // ── Sections 2-11 ──
   for (const s of SECTIONS.filter((x) => x.n <= 11)) {

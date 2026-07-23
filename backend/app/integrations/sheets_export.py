@@ -1522,12 +1522,27 @@ ESTIMATE_ITEM_HEADERS = [
 BOL_HEADERS = [
     "bol_id", "created_by", "job_uuid", "job_name", "job_date",
     "status", "item_count",
+    "shipment_number", "shipper_name", "shipper_phone", "shipper_address",
     "origin_address", "destination_address",
+    "form_of_payment", "estimate_type", "valuation",
+    "agreed_pickup", "agreed_delivery",
     "inventory_verified", "inventory_note",
     "origin_signed_at", "dest_signed_at", "final_charges",
     "walkthrough_notes", "signed_pdf_url",
     "created_at", "updated_at",
 ]
+
+# Human labels for the coded BOL option fields, so the office sheet reads plainly.
+# Keep in sync with frontend/src/lib/bolContract.ts option maps.
+_BOL_FORM_OF_PAYMENT = {
+    "cash": "Cash", "check": "Check", "credit_card": "Credit card",
+    "cod": "Collect on delivery (COD)", "other": "Other",
+}
+_BOL_ESTIMATE_TYPE = {"binding": "Binding", "non_binding": "Non-binding"}
+_BOL_VALUATION = {
+    "full_value": "Full Value Protection",
+    "released": "Released Value (60 cents per pound, per article)",
+}
 
 BOL_ITEM_HEADERS = [
     "bol_id", "job_name", "job_date", "item_no", "item_name",
@@ -1805,10 +1820,28 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
         "job_date": bol.get("job_date", "") or "",
         "status": bol.get("status", "") or "",
         "item_count": sum(int(it.get("qty", 1) or 1) for it in items),
-        # Pickup + delivery addresses (from shipment_json). A DOT officer needs
-        # these on the BOL; surfacing them here keeps admin's view complete.
+        # FMCSA 375.505 fields (from shipment_json). Surfacing them here keeps
+        # admin's view complete; coded fields render as human labels (ADR 0023).
+        "shipment_number": (bol.get("shipment") or {}).get("shipment_number", "") or "",
+        "shipper_name": (bol.get("shipment") or {}).get("shipper_name", "") or "",
+        "shipper_phone": (bol.get("shipment") or {}).get("shipper_phone", "") or "",
+        "shipper_address": (bol.get("shipment") or {}).get("shipper_address", "") or "",
         "origin_address": (bol.get("shipment") or {}).get("origin_address", "") or "",
         "destination_address": (bol.get("shipment") or {}).get("dest_address", "") or "",
+        "form_of_payment": _BOL_FORM_OF_PAYMENT.get(
+            (bol.get("shipment") or {}).get("form_of_payment", ""),
+            (bol.get("shipment") or {}).get("form_of_payment", "") or "",
+        ),
+        "estimate_type": _BOL_ESTIMATE_TYPE.get(
+            (bol.get("shipment") or {}).get("estimate_type", ""),
+            (bol.get("shipment") or {}).get("estimate_type", "") or "",
+        ),
+        "valuation": _BOL_VALUATION.get(
+            (bol.get("shipment") or {}).get("valuation", ""),
+            (bol.get("shipment") or {}).get("valuation", "") or "",
+        ),
+        "agreed_pickup": (bol.get("shipment") or {}).get("agreed_pickup", "") or "",
+        "agreed_delivery": (bol.get("shipment") or {}).get("agreed_delivery", "") or "",
         "inventory_verified": (
             "yes" if bol.get("inventory_verified") is True
             else "no" if bol.get("inventory_verified") is False

@@ -88,9 +88,15 @@ Digital Bill of Lading:
   "Signed Bill of Lading" card lets you pull up the signed document on demand to
   show it (for example at a border crossing) - it works offline - or email a copy
   straight to the client from your phone.
-- Pickup and delivery addresses are now on the BOL. You enter the origin and
-  destination address at origin signing, they print on the document, and you can
-  correct them later from the same card if needed.
+- The BOL now collects the details federal law requires, in short fill-in cards,
+  instead of leaning on the estimate (which you cannot open in the field). Before
+  signing at origin you enter the shipper's name/phone/address, the pickup and
+  delivery addresses, form of payment, binding vs non-binding, agreed dates, and
+  the customer's valuation choice (Full Value Protection or Released Value). Look
+  these up in the job's calendar description. The app will not let you sign until
+  the required fields are filled, so the finished BOL is complete for a DOT check.
+- Pickup and delivery addresses are now on the BOL and print on the document; you
+  can also correct them later from the "Signed Bill of Lading" card if needed.
 
 Estimator:
 - Attach site photos with notes, and use the richer shared furniture catalogue.

@@ -99,6 +99,25 @@ export type BOLDraft = {
   // origin signing, editable afterwards, and rendered on the PDF.
   origin_address?: string;
   dest_address?: string;
+  // ── FMCSA 49 CFR 375.505 required BOL fields (crew-entered, not from an
+  // estimate the crew cannot see - ADR 0023). All ride shipment_json, no
+  // migration. See bolContract.ts for the option/label maps. ──
+  shipper_name?: string;          // 375.505(b)(3)
+  shipper_phone?: string;         // 375.505(b)(3)
+  shipper_address?: string;       // 375.505(b)(3) - shipper's own address
+  shipment_number?: string;       // 375.505(b)(16) - our shipment/job reference
+  form_of_payment?: string;       // 375.505(b)(4) - option value (see FORM_OF_PAYMENT_OPTIONS)
+  estimate_type?: string;         // 375.505(b)(15) - "binding" | "non_binding"
+  valuation?: string;             // 375.505(b)(12) - "full_value" | "released"
+  agreed_pickup?: string;         // 375.505(b)(6) - agreed pickup date or window
+  agreed_delivery?: string;       // 375.505(b)(6) - agreed delivery date or window
+  // COD-only (375.505(b)(5),(11)); shown only when form_of_payment == "cod".
+  cod_notify?: string;
+  cod_max?: string;
+  // Conditional declarations, default "None"/"N/A" (375.505(b)(2),(13),(14)).
+  additional_carriers?: string;
+  third_party_insurance?: string;
+  accessorial_services?: string;
   dest_shipper_sig?: string;
   dest_carrier_sig?: string;
   dest_signed_at?: string;
@@ -480,6 +499,20 @@ function draftFromServer(s: any, job: { job_uuid: string; job_name: string; job_
     vehicle: shipment.vehicle || undefined,
     origin_address: shipment.origin_address || undefined,
     dest_address: shipment.dest_address || undefined,
+    shipper_name: shipment.shipper_name || undefined,
+    shipper_phone: shipment.shipper_phone || undefined,
+    shipper_address: shipment.shipper_address || undefined,
+    shipment_number: shipment.shipment_number || undefined,
+    form_of_payment: shipment.form_of_payment || undefined,
+    estimate_type: shipment.estimate_type || undefined,
+    valuation: shipment.valuation || undefined,
+    agreed_pickup: shipment.agreed_pickup || undefined,
+    agreed_delivery: shipment.agreed_delivery || undefined,
+    cod_notify: shipment.cod_notify || undefined,
+    cod_max: shipment.cod_max || undefined,
+    additional_carriers: shipment.additional_carriers || undefined,
+    third_party_insurance: shipment.third_party_insurance || undefined,
+    accessorial_services: shipment.accessorial_services || undefined,
     dest_shipper_sig: s.dest_shipper_sig || undefined,
     dest_carrier_sig: s.dest_carrier_sig || undefined,
     dest_signed_at: s.dest_signed_at || undefined,
@@ -652,6 +685,22 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
   if (d.vehicle) shipment.vehicle = d.vehicle;
   if (d.origin_shipper_name) shipment.origin_shipper_name = d.origin_shipper_name;
   if (d.dest_shipper_name) shipment.dest_shipper_name = d.dest_shipper_name;
+  // FMCSA required fields (ADR 0023). Truthy-only, so a blank does not clobber a
+  // value the server already holds.
+  if (d.shipper_name) shipment.shipper_name = d.shipper_name;
+  if (d.shipper_phone) shipment.shipper_phone = d.shipper_phone;
+  if (d.shipper_address) shipment.shipper_address = d.shipper_address;
+  if (d.shipment_number) shipment.shipment_number = d.shipment_number;
+  if (d.form_of_payment) shipment.form_of_payment = d.form_of_payment;
+  if (d.estimate_type) shipment.estimate_type = d.estimate_type;
+  if (d.valuation) shipment.valuation = d.valuation;
+  if (d.agreed_pickup) shipment.agreed_pickup = d.agreed_pickup;
+  if (d.agreed_delivery) shipment.agreed_delivery = d.agreed_delivery;
+  if (d.cod_notify) shipment.cod_notify = d.cod_notify;
+  if (d.cod_max) shipment.cod_max = d.cod_max;
+  if (d.additional_carriers) shipment.additional_carriers = d.additional_carriers;
+  if (d.third_party_insurance) shipment.third_party_insurance = d.third_party_insurance;
+  if (d.accessorial_services) shipment.accessorial_services = d.accessorial_services;
   return {
     id: d.bol_id,
     created_at: d.updated_at,

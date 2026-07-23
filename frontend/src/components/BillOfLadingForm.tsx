@@ -36,7 +36,12 @@ import {
   syncQueue,
   BolStorageFullError,
 } from "../lib/bolStore";
-import { BOL_CONTRACT_SECTIONS } from "../lib/bolContract";
+import {
+  BOL_CONTRACT_SECTIONS,
+  FORM_OF_PAYMENT_OPTIONS,
+  ESTIMATE_TYPE_OPTIONS,
+  VALUATION_OPTIONS,
+} from "../lib/bolContract";
 import SuggestInput from "./SuggestInput";
 
 /** Hand the shipper their dated copy: Web Share (with file) if available,
@@ -371,6 +376,21 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     setDraft((prev) => ({ ...prev, ...patch, updated_at: new Date().toISOString() }));
   }
 
+  // Generic setter for the FMCSA BOL detail fields (shipper, payment, valuation,
+  // dates, declarations). All ride the draft -> shipment_json (ADR 0023).
+  function setField(patch: Partial<BOLDraft>) {
+    setDraft((prev) => ({ ...prev, ...patch, updated_at: new Date().toISOString() }));
+  }
+
+  // Prefill the shipment / job reference from the job once, so the crew is not
+  // retyping what the app already knows (still editable).
+  useEffect(() => {
+    if (draft.status === "draft" && !draft.shipment_number && (draft.job_name || draft.job_date)) {
+      setField({ shipment_number: [draft.job_name, draft.job_date].filter(Boolean).join(" - ") });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Signed-BOL retrieval + send-to-client card state (shown once signed).
   const [clientEmail, setClientEmail] = useState("");
   const [emailBusy, setEmailBusy] = useState(false);
@@ -584,10 +604,21 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     if (carrierSigRef.current?.isEmpty()) return setSignErr("Carrier representative signature is required.");
     if (!consent) return setSignErr("Both parties must accept the electronic signature consent.");
     if (phase === "origin") {
-      // Addresses are DOT-required on the printed BOL - block origin signing
-      // until both are entered so no BOL leaves origin without them.
-      if (!(draft.origin_address || "").trim()) return setSignErr("Enter the origin (pickup) address.");
-      if (!(draft.dest_address || "").trim()) return setSignErr("Enter the destination (delivery) address.");
+      // FMCSA 375.505 required fields - block origin signing until each is filled
+      // so no BOL leaves origin incomplete (ADR 0023). Entered in the detail cards.
+      const need = (v: string | undefined) => !(v || "").trim();
+      if (need(draft.shipper_name)) return setSignErr("Enter the shipper (customer) name in Shipper & shipment.");
+      if (need(draft.shipper_phone)) return setSignErr("Enter the shipper phone (or N/A) in Shipper & shipment.");
+      if (need(draft.origin_address)) return setSignErr("Enter the origin (pickup) address in Shipper & shipment.");
+      if (need(draft.dest_address)) return setSignErr("Enter the destination (delivery) address in Shipper & shipment.");
+      if (need(draft.shipper_address)) return setSignErr("Enter the shipper address in Shipper & shipment.");
+      if (need(draft.shipment_number)) return setSignErr("Enter the shipment / job reference in Shipper & shipment.");
+      if (need(draft.form_of_payment)) return setSignErr("Select the form of payment in Payment & estimate.");
+      if (draft.form_of_payment === "cod" && need(draft.cod_notify)) return setSignErr("Enter who to notify for COD in Payment & estimate.");
+      if (need(draft.estimate_type)) return setSignErr("Select the estimate type in Payment & estimate.");
+      if (need(draft.valuation)) return setSignErr("Have the shipper choose a valuation option in Valuation.");
+      if (need(draft.agreed_pickup)) return setSignErr("Enter the agreed pickup date in Agreed dates.");
+      if (need(draft.agreed_delivery)) return setSignErr("Enter the agreed delivery date in Agreed dates.");
     }
     if (phase === "destination") {
       if (finalCharges.trim() && !Number.isFinite(Number(finalCharges))) return setSignErr("Final charges must be a number.");
@@ -825,6 +856,174 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
           <span style={{ color: "var(--muted)" }}>U.S. DOT {CARRIER.dot} · MC {CARRIER.mc}</span>
         </div>
       </div>
+
+      {/* ── FMCSA-required BOL detail cards (crew-entered; ADR 0023). Shown only
+          while building the BOL, before it is signed at origin. Bite-size like
+          the Job Report tab: one card per group, * marks a field required to
+          sign. ── */}
+      {draft.status === "draft" && (
+        <>
+          {/* Card 1: Shipper & shipment */}
+          <div className="card">
+            <div className="sectionTitle">Shipper &amp; shipment</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+              Look these up in the job's Google Calendar description and type them in.
+              They print on the Bill of Lading and are required to sign at origin.
+            </div>
+            <div className="col" style={{ gap: 10 }}>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipper (customer) name *</span>
+                <input value={draft.shipper_name || ""} onChange={(e) => setField({ shipper_name: e.target.value })} placeholder="Full name" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipper phone *</span>
+                <input type="tel" inputMode="tel" value={draft.shipper_phone || ""} onChange={(e) => setField({ shipper_phone: e.target.value })} placeholder="(406) 555-0100" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Origin (pickup) address *</span>
+                <input value={draft.origin_address || ""} onChange={(e) => setAddress({ origin_address: e.target.value })} placeholder="Street, City, ST ZIP" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Destination (delivery) address *</span>
+                <input value={draft.dest_address || ""} onChange={(e) => setAddress({ dest_address: e.target.value })} placeholder="Street, City, ST ZIP" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="row small" style={{ color: "var(--muted)", justifyContent: "space-between", alignItems: "center" }}>
+                  <span>Shipper address *</span>
+                  <button
+                    type="button"
+                    onClick={() => setField({ shipper_address: draft.origin_address || "" })}
+                    disabled={!draft.origin_address}
+                    style={{ fontSize: 12, padding: "2px 8px" }}
+                  >
+                    Same as pickup
+                  </button>
+                </span>
+                <input value={draft.shipper_address || ""} onChange={(e) => setField({ shipper_address: e.target.value })} placeholder="Shipper's own address" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipment / job reference *</span>
+                <input value={draft.shipment_number || ""} onChange={(e) => setField({ shipment_number: e.target.value })} placeholder="Job / shipment number" />
+              </label>
+            </div>
+          </div>
+
+          {/* Card 2: Payment & estimate */}
+          <div className="card">
+            <div className="sectionTitle">Payment &amp; estimate</div>
+            <div className="col" style={{ gap: 10 }}>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Form of payment honored at delivery *</span>
+                <select value={draft.form_of_payment || ""} onChange={(e) => setField({ form_of_payment: e.target.value })}>
+                  <option value="">Select&hellip;</option>
+                  {FORM_OF_PAYMENT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+              {draft.form_of_payment === "cod" && (
+                <div className="col" style={{ gap: 10, borderLeft: "2px solid var(--border)", paddingLeft: 10 }}>
+                  <label className="col" style={{ gap: 4 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>COD - who to notify about charges *</span>
+                    <input value={draft.cod_notify || ""} onChange={(e) => setField({ cod_notify: e.target.value })} placeholder="Name + phone/email, or 'same as shipper'" />
+                  </label>
+                  <label className="col" style={{ gap: 4 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>COD - maximum amount demanded at delivery</span>
+                    <input value={draft.cod_max || ""} onChange={(e) => setField({ cod_max: e.target.value })} inputMode="decimal" placeholder="$" />
+                  </label>
+                </div>
+              )}
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Estimate type *</span>
+                <select value={draft.estimate_type || ""} onChange={(e) => setField({ estimate_type: e.target.value })}>
+                  <option value="">Select&hellip;</option>
+                  {ESTIMATE_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
+
+          {/* Card 3: Valuation election */}
+          <div className="card">
+            <div className="sectionTitle">Valuation *</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+              Federal law requires the shipper to choose one liability option, freely
+              and in writing. Have the shipper pick one before signing.
+            </div>
+            <div className="col" style={{ gap: 10 }}>
+              {VALUATION_OPTIONS.map((o) => {
+                const selected = draft.valuation === o.value;
+                return (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => setField({ valuation: o.value })}
+                    style={{
+                      textAlign: "left",
+                      padding: 12,
+                      borderRadius: "var(--btn-r)",
+                      border: `2px solid ${selected ? "var(--brand)" : "var(--border)"}`,
+                      background: selected ? "rgba(90,140,180,0.12)" : "transparent",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                      <span
+                        style={{
+                          width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
+                          border: `2px solid ${selected ? "var(--brand)" : "var(--muted)"}`,
+                          background: selected ? "var(--brand)" : "transparent",
+                        }}
+                      />
+                      <span style={{ fontWeight: 700, color: "var(--text)" }}>{o.label}</span>
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 6 }}>{o.blurb}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Card 4: Agreed dates */}
+          <div className="card">
+            <div className="sectionTitle">Agreed dates</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+              The pickup and delivery dates or windows agreed with the shipper. A single
+              date or a range is fine.
+            </div>
+            <div className="row wrap" style={{ gap: 10 }}>
+              <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Agreed pickup *</span>
+                <input value={draft.agreed_pickup || ""} onChange={(e) => setField({ agreed_pickup: e.target.value })} placeholder="e.g. Jul 25, or week of Jul 25" />
+              </label>
+              <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Agreed delivery *</span>
+                <input value={draft.agreed_delivery || ""} onChange={(e) => setField({ agreed_delivery: e.target.value })} placeholder="e.g. Jul 27, or Jul 27 to 30" />
+              </label>
+            </div>
+          </div>
+
+          {/* Card 5: Other required declarations (default None / N/A) */}
+          <div className="card">
+            <div className="sectionTitle">Other required declarations</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+              Leave blank if none - the Bill of Lading records None / N/A.
+            </div>
+            <div className="col" style={{ gap: 10 }}>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Additional motor carriers</span>
+                <input value={draft.additional_carriers || ""} onChange={(e) => setField({ additional_carriers: e.target.value })} placeholder="None" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Third-party insurance (insurer + premium)</span>
+                <input value={draft.third_party_insurance || ""} onChange={(e) => setField({ third_party_insurance: e.target.value })} placeholder="None" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Special / accessorial services</span>
+                <input value={draft.accessorial_services || ""} onChange={(e) => setField({ accessorial_services: e.target.value })} placeholder="N/A" />
+              </label>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Add item */}
       <div className="card">
@@ -1086,27 +1285,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
             </>
           ) : (
             <>
-              {/* Origin + destination addresses are required on the printed BOL
-                  (a DOT officer at a border crossing asks for them). Captured
-                  here at origin signing; also editable later from the Signed
-                  Bill of Lading card above. */}
-              <div className="col" style={{ gap: 10, marginBottom: 12 }}>
-                <label className="col" style={{ gap: 4 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Origin (pickup) address *</span>
-                  <input
-                    value={draft.origin_address || ""}
-                    onChange={(e) => setAddress({ origin_address: e.target.value })}
-                    placeholder="Street, City, ST ZIP"
-                  />
-                </label>
-                <label className="col" style={{ gap: 4 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Destination (delivery) address *</span>
-                  <input
-                    value={draft.dest_address || ""}
-                    onChange={(e) => setAddress({ dest_address: e.target.value })}
-                    placeholder="Street, City, ST ZIP"
-                  />
-                </label>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+                The shipper, addresses, payment, valuation, and dates are entered in
+                the BOL detail cards above. Record the loading-time facts below, then
+                sign.
               </div>
               <div className="row wrap" style={{ gap: 10, marginBottom: 12 }}>
                 <label className="col" style={{ gap: 4, flex: "1 1 150px" }}>

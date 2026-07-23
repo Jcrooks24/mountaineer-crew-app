@@ -271,10 +271,16 @@ as the BOL is signed at origin. See [ADR 0022](decisions/0022-signed-bol-is-retr
    regenerates the PDF on-device from the local draft (signatures + addresses are
    all local). If it does not appear, the BOL is still in `draft` (not signed at
    origin yet) - the card only shows past `draft`.
-2. **Addresses missing on the document.** They are entered at origin signing and
-   are editable on the same card. For a BOL signed before this feature, open it,
-   enter the origin/destination address, tap **Save addresses** (regenerates the
-   Drive copy), then View / download to present the corrected copy.
+2. **Addresses / details missing on the document.** The FMCSA-required fields
+   (shipper, addresses, payment, valuation, estimate type, agreed dates) are
+   entered in the BOL detail cards *before* origin signing, and origin signing is
+   blocked until they are filled (ADR 0023). For a BOL signed before this feature,
+   the addresses are still editable on the "Signed Bill of Lading" card: enter
+   them, tap **Save addresses** (regenerates the Drive copy), then View / download
+   to present the corrected copy.
+2b. **"Can't sign at origin."** The app names the missing card in the error
+   ("Enter the shipper name in Shipper & shipment", etc.). Fill that field and
+   retry; this is a required-field gate, not a bug.
 3. **"Send to client" fails.** It needs connectivity (email cannot be sent
    offline) - the crew should use View / download to hand over a copy instead, and
    email later. A bad address returns a clear "valid email" message; a mail-send
