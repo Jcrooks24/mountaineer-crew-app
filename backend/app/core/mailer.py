@@ -4,12 +4,30 @@ import os
 import json
 import urllib.request
 import urllib.error
+from typing import List, Optional, TypedDict
 
 
-def send_email(to_email: str, subject: str, text: str) -> None:
+class EmailAttachment(TypedDict):
+    """One Postmark attachment: a base64-encoded file plus its metadata.
+    `content` is the raw file bytes already base64-encoded (str)."""
+    name: str
+    content: str          # base64-encoded file bytes
+    content_type: str     # MIME type, e.g. "application/pdf"
+
+
+def send_email(
+    to_email: str,
+    subject: str,
+    text: str,
+    attachments: Optional[List[EmailAttachment]] = None,
+) -> None:
     """
     Sends transactional email via Postmark HTTP API (preferred).
     Falls back to DEV print if token missing.
+
+    `attachments` (optional) are Postmark attachments - used to send the signed
+    Bill of Lading PDF to a client from the field. Each is
+    {name, content(base64), content_type}.
     """
     token = os.getenv("POSTMARK_SERVER_TOKEN", "").strip()
     from_email = os.getenv("SMTP_FROM", "").strip()  # reuse your existing env var
@@ -19,6 +37,8 @@ def send_email(to_email: str, subject: str, text: str) -> None:
         print("TO:", to_email)
         print("SUBJECT:", subject)
         print(text)
+        if attachments:
+            print("ATTACHMENTS:", [a.get("name") for a in attachments])
         print("MISSING:", {
             "POSTMARK_SERVER_TOKEN": bool(token),
             "SMTP_FROM": bool(from_email),
@@ -33,6 +53,15 @@ def send_email(to_email: str, subject: str, text: str) -> None:
         "TextBody": text,
         "MessageStream": "outbound",  # default transactional stream
     }
+    if attachments:
+        payload["Attachments"] = [
+            {
+                "Name": a["name"],
+                "Content": a["content"],
+                "ContentType": a.get("content_type", "application/octet-stream"),
+            }
+            for a in attachments
+        ]
 
     req = urllib.request.Request(
         url="https://api.postmarkapp.com/email",

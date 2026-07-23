@@ -40,8 +40,8 @@ Set on **both** the prod and the staging service, with different values.
 | `JWT_SECRET` | Yes | Nobody can log in. The app **refuses to boot** if `DATABASE_URL` is set and this is not, which is intentional (fail closed rather than sign tokens with a dev default). Rotating it logs every crew member out. |
 | `FRONTEND_URL` | Yes | Password-reset and mechanic-signature links. A stale value here points crew at the wrong environment's frontend and they get "invalid or expired reset link", because the token is in the other database. This has actually happened after a promotion. |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | Yes | The office sees nothing. The target spreadsheet for every export. |
-| `POSTMARK_SERVER_TOKEN` | Yes in deploys | Password-reset email. With it unset the mailer prints to stdout in dev mode and sends nothing, silently. |
-| `SMTP_FROM` | Yes in deploys | The from-address on Postmark sends. Must be a verified Postmark sender. Name is legacy; no SMTP is involved. |
+| `POSTMARK_SERVER_TOKEN` | Yes in deploys | Password-reset email **and** the "Send to client" email of a signed BOL. With it unset the mailer prints to stdout in dev mode and sends nothing, silently. |
+| `SMTP_FROM` | Yes in deploys | The from-address on Postmark sends (password reset + signed-BOL email). Must be a verified Postmark sender. Name is legacy; no SMTP is involved. |
 | `ADMIN_EMAIL` | Recommended | The user auto-promoted to admin on every startup. Your way back in if you lose admin. |
 | `GOOGLE_MAPS_API_KEY` | Optional | Drive-time, mileage auto-calc, and address lookup. Degrades gracefully: routes return `ok: false` and the UI falls back to manual entry or free OSM routing. `MAPS_API_KEY` is accepted as a fallback name in `routing.py` only. |
 | `GOOGLE_OAUTH_TOKEN_JSON` | Fallback only | Google API access. **The primary source is the `system_config` table** (key `google_oauth_token`), pasted in via Admin. This env var is only consulted if that row is absent. See rotation below. |

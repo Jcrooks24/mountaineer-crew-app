@@ -118,9 +118,14 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
   drawText(`${CARRIER.name}\n${CARRIER.address}\n${CARRIER.phone} · ${CARRIER.email}\nU.S. DOT ${CARRIER.dot} · MC ${CARRIER.mc}`, { gap: 6 });
 
   // ── Shipment / job summary ──
+  // Origin + destination addresses are load-bearing on an interstate BOL: a DOT
+  // officer at a border crossing asks for the pickup and delivery addresses, so
+  // they print here explicitly rather than being implied by the job name.
   heading("Shipment Summary");
   drawText(
     `Job: ${draft.job_name || "-"}\nMove date: ${fmtDate(draft.job_date) || "-"}\nCrew representative: ${draft.crew_rep || "-"}` +
+      `\nOrigin (pickup) address: ${draft.origin_address || "-"}` +
+      `\nDestination (delivery) address: ${draft.dest_address || "-"}` +
       (draft.actual_pickup_date ? `\nActual pickup date: ${fmtDate(draft.actual_pickup_date)}` : "") +
       (draft.vehicle ? `\nVehicle: ${draft.vehicle}` : ""),
     { gap: 6 },

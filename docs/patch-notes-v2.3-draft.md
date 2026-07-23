@@ -84,6 +84,13 @@ Digital Bill of Lading:
   and delivered when they can be. It can no longer say "sent" without actually
   landing in the office sheet and the signed-PDF folder, and a background check
   re-sends anything that slipped through.
+- Present or send the signed BOL any time. Once a BOL is signed at origin, a
+  "Signed Bill of Lading" card lets you pull up the signed document on demand to
+  show it (for example at a border crossing) - it works offline - or email a copy
+  straight to the client from your phone.
+- Pickup and delivery addresses are now on the BOL. You enter the origin and
+  destination address at origin signing, they print on the document, and you can
+  correct them later from the same card if needed.
 
 Estimator:
 - Attach site photos with notes, and use the richer shared furniture catalogue.

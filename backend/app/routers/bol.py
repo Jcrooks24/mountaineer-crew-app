@@ -13,12 +13,14 @@ Mirrors the materials / long-distance idempotency pattern; the export is fired
 on the bounded background pool so a slow Google call never blocks the request.
 """
 
+import base64
 import json
+import re
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -28,7 +30,15 @@ from app.db.models.bol import DigitalBOL
 from app.integrations.sheets_export import schedule_bol_export
 from app.integrations.drive_upload import upload_bol_pdf_to_drive
 from app.core.deps import get_current_user
+from app.core.mailer import send_email
 from app.db.models.user import User
+
+# Deliberately permissive - just enough to reject an obvious typo before we hand
+# the address to Postmark. Real deliverability is Postmark's job.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Cap the attachment so one request can't blow the worker's memory (the global
+# BodySizeLimitMiddleware allows up to 100 MB; a BOL PDF is a few hundred KB).
+_MAX_BOL_PDF_BYTES = 25 * 1024 * 1024
 
 router = APIRouter(prefix="/api/bol", tags=["bol"])
 
@@ -226,6 +236,12 @@ class BOLSignIn(BaseModel):
     # origin extras (stored in shipment_json)
     actual_pickup_date: Optional[str] = None
     vehicle: Optional[str] = None
+    # Origin + destination addresses. A DOT officer at a border crossing needs
+    # the pickup and delivery addresses printed ON the BOL (they are not derivable
+    # from the job name), so they are captured at origin signing and rendered on
+    # the PDF. Stored in shipment_json alongside the other shipment details.
+    origin_address: Optional[str] = None
+    dest_address: Optional[str] = None
     # destination extras
     walkthrough_notes: Optional[str] = None
     final_charges: Optional[float] = None
@@ -255,6 +271,14 @@ def sign_bol(
         shipment = json.loads(row.shipment_json) if row.shipment_json else {}
     except Exception:
         shipment = {}
+
+    # Addresses belong to the shipment as a whole, so accept them in either
+    # signing phase (they are collected at origin). Empty strings do not
+    # overwrite a previously-captured address.
+    if payload.origin_address:
+        shipment["origin_address"] = payload.origin_address
+    if payload.dest_address:
+        shipment["dest_address"] = payload.dest_address
 
     if payload.phase == "origin":
         # PODS is tracked per-driver on the Report tab (see the "As the
@@ -346,3 +370,73 @@ def upload_bol_pdf(
     schedule_bol_export(row.bol_id)
     print(f"[bol] pdf uploaded bol_id={row.bol_id} url={row.signed_pdf_url}")
     return {"ok": True, "drive_url": result["url"]}
+
+
+@router.post("/{bol_id}/email")
+def email_bol_to_client(
+    bol_id: str,
+    to_email: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Email the signed BOL PDF to the client from the field.
+
+    The crew generates the signed PDF on-device (it holds the signatures) and
+    posts it here with the client's email. We attach it and send via Postmark.
+    Requires connectivity - unlike building/signing a BOL, sending mail cannot
+    be done offline - so the client handles the offline case before calling this.
+
+    Fails honestly (4xx for a bad address, 502 for a mail-send failure) rather
+    than a 200-with-ok:false, so a caller can tell the crew the truth.
+    """
+    to = (to_email or "").strip()
+    if not _EMAIL_RE.match(to):
+        raise HTTPException(status_code=400, detail="Enter a valid client email address.")
+
+    row = db.query(DigitalBOL).filter(DigitalBOL.bol_id == bol_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="BOL not found")
+
+    data = file.file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The BOL PDF was empty.")
+    if len(data) > _MAX_BOL_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="The BOL PDF is too large to email.")
+
+    job_name = (row.job_name or "Bill of Lading").strip()
+    job_date = (row.job_date or "").strip()
+    safe_name = re.sub(r'[\\/:*?"<>|]', "-", job_name) or "Bill of Lading"
+    filename = f"{(job_date + ' - ') if job_date else ''}{safe_name}.pdf"
+
+    # NOTE: subject and body are intentionally em-dash free (company invariant).
+    subject = f"Your signed Bill of Lading - {job_name}"
+    body = (
+        f"Hello,\n\n"
+        f"Attached is the signed Bill of Lading for your move"
+        f"{(' on ' + job_date) if job_date else ''}.\n\n"
+        f"Please keep a copy for your records. If you have any questions, "
+        f"reply to this email or call us at (406) 201-9580.\n\n"
+        f"Thank you,\n"
+        f"Mountaineer Moving LLC"
+    )
+
+    try:
+        send_email(
+            to_email=to,
+            subject=subject,
+            text=body,
+            attachments=[{
+                "name": filename,
+                "content": base64.b64encode(data).decode("ascii"),
+                "content_type": "application/pdf",
+            }],
+        )
+    except Exception as e:
+        traceback.print_exc()
+        # 502: a mail-provider failure is upstream and retryable, not a silent
+        # success. The crew sees a clear "could not send" and can retry.
+        raise HTTPException(status_code=502, detail=f"Could not send the email: {e}")
+
+    print(f"[bol] emailed bol_id={bol_id} to={to} by={current_user.email}")
+    return {"ok": True, "sent_to": to}

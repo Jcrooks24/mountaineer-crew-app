@@ -1522,6 +1522,7 @@ ESTIMATE_ITEM_HEADERS = [
 BOL_HEADERS = [
     "bol_id", "created_by", "job_uuid", "job_name", "job_date",
     "status", "item_count",
+    "origin_address", "destination_address",
     "inventory_verified", "inventory_note",
     "origin_signed_at", "dest_signed_at", "final_charges",
     "walkthrough_notes", "signed_pdf_url",
@@ -1804,6 +1805,10 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
         "job_date": bol.get("job_date", "") or "",
         "status": bol.get("status", "") or "",
         "item_count": sum(int(it.get("qty", 1) or 1) for it in items),
+        # Pickup + delivery addresses (from shipment_json). A DOT officer needs
+        # these on the BOL; surfacing them here keeps admin's view complete.
+        "origin_address": (bol.get("shipment") or {}).get("origin_address", "") or "",
+        "destination_address": (bol.get("shipment") or {}).get("dest_address", "") or "",
         "inventory_verified": (
             "yes" if bol.get("inventory_verified") is True
             else "no" if bol.get("inventory_verified") is False
@@ -2370,6 +2375,10 @@ def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
         items = json.loads(row.items_json or "[]")
     except (ValueError, TypeError):
         items = []
+    try:
+        shipment = json.loads(row.shipment_json) if row.shipment_json else {}
+    except (ValueError, TypeError):
+        shipment = {}
     return {
         "bol_id": row.bol_id,
         "created_by": row.created_by or "",
@@ -2378,6 +2387,7 @@ def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
         "job_date": row.job_date or "",
         "status": row.status or "",
         "items": items,
+        "shipment": shipment,
         "inventory_verified": (
             True if row.inventory_verified == 1
             else False if row.inventory_verified == 0

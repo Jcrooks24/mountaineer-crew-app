@@ -94,6 +94,11 @@ export type BOLDraft = {
   origin_signed_at?: string;
   actual_pickup_date?: string;
   vehicle?: string;
+  // Pickup + delivery addresses, printed ON the BOL. A DOT officer at a border
+  // crossing needs these (they are not derivable from the job name). Captured at
+  // origin signing, editable afterwards, and rendered on the PDF.
+  origin_address?: string;
+  dest_address?: string;
   dest_shipper_sig?: string;
   dest_carrier_sig?: string;
   dest_signed_at?: string;
@@ -116,6 +121,8 @@ export type SignInput = {
   signed_at: string;
   actual_pickup_date?: string;
   vehicle?: string;
+  origin_address?: string;
+  dest_address?: string;
   walkthrough_notes?: string;
   final_charges?: number | null;
 };
@@ -471,6 +478,8 @@ function draftFromServer(s: any, job: { job_uuid: string; job_name: string; job_
     origin_shipper_name: shipment.origin_shipper_name || undefined,
     actual_pickup_date: shipment.actual_pickup_date || undefined,
     vehicle: shipment.vehicle || undefined,
+    origin_address: shipment.origin_address || undefined,
+    dest_address: shipment.dest_address || undefined,
     dest_shipper_sig: s.dest_shipper_sig || undefined,
     dest_carrier_sig: s.dest_carrier_sig || undefined,
     dest_signed_at: s.dest_signed_at || undefined,
@@ -629,6 +638,20 @@ function saveQueue(q: QueueOp[]): boolean {
 /** Only uploaded photos (with a drive_url) are sent to the server; pending ones
  * backfill on a later re-enqueue after retryPendingPhotos(). */
 function draftToPayload(d: BOLDraft): Record<string, unknown> {
+  // Echo the full known shipment so a plain submit / autosync carries the
+  // addresses to the server (the sign PATCH is not the only path that sets
+  // them - they can be edited on an already-signed BOL). The server replaces
+  // shipment_json wholesale when `shipment` is present, so we include every
+  // shipment field the draft holds - all of them round-trip via draftFromServer
+  // - and omit `shipment` entirely when nothing is set, so an early autosync on
+  // a fresh draft does not wipe a value the server already has.
+  const shipment: Record<string, string> = {};
+  if (d.origin_address) shipment.origin_address = d.origin_address;
+  if (d.dest_address) shipment.dest_address = d.dest_address;
+  if (d.actual_pickup_date) shipment.actual_pickup_date = d.actual_pickup_date;
+  if (d.vehicle) shipment.vehicle = d.vehicle;
+  if (d.origin_shipper_name) shipment.origin_shipper_name = d.origin_shipper_name;
+  if (d.dest_shipper_name) shipment.dest_shipper_name = d.dest_shipper_name;
   return {
     id: d.bol_id,
     created_at: d.updated_at,
@@ -636,6 +659,7 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
     job_name: d.job_name,
     job_date: d.job_date,
     status: d.status,
+    ...(Object.keys(shipment).length ? { shipment } : {}),
     items: d.items.map((it) => ({
       item_no: it.item_no,
       id: it.id,
@@ -697,6 +721,17 @@ function enqueuePdf(bolId: string, jobUuid: string): boolean {
   return saveQueue(q);
 }
 
+/** Re-push an already-created BOL after a non-signature edit - specifically,
+ * correcting the origin/destination address on a signed BOL. Queues the submit
+ * (updates the row + sheet) and, once the BOL is past draft, a PDF regeneration
+ * so the copy stored in Drive reflects the corrected addresses. Returns false if
+ * the queue could not be persisted (quota). */
+export function enqueueBolResync(d: BOLDraft): boolean {
+  const okSubmit = enqueueSubmit(d);
+  const okPdf = d.status === "draft" ? true : enqueuePdf(d.bol_id, d.job_uuid);
+  return okSubmit && okPdf;
+}
+
 export function pendingSubmitCount(): number {
   return loadQueue().filter((o) => !o.failed_at).length;
 }
@@ -746,6 +781,30 @@ async function uploadBolPdfBlob(bolId: string, blob: Blob): Promise<void> {
   if (!res.ok || !json.ok) {
     const err = new ApiError(res.status, json);
     throw err;
+  }
+}
+
+/** Email the signed BOL PDF to the client. Sending mail needs connectivity
+ * (unlike building / signing / presenting a BOL, which are offline-capable), so
+ * this throws if offline - the caller surfaces a clear message rather than
+ * pretending it sent. The PDF is generated on-device and posted with the
+ * client's address; the server attaches it and sends via Postmark. */
+export async function emailBolToClient(bolId: string, blob: Blob, toEmail: string): Promise<void> {
+  if (!navigator.onLine) {
+    throw new ApiError(0, { detail: "You are offline. Connect to the internet to email the client." });
+  }
+  const form = new FormData();
+  form.append("to_email", toEmail);
+  form.append("file", blob, "bol.pdf");
+  const token = getToken() || "";
+  const res = await fetch(`${API}/api/bol/${encodeURIComponent(bolId)}/email`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    throw new ApiError(res.status, json);
   }
 }
 
@@ -877,6 +936,8 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
       origin_shipper_name: input.shipper_name || draft.origin_shipper_name,
       actual_pickup_date: input.actual_pickup_date || draft.actual_pickup_date,
       vehicle: input.vehicle || draft.vehicle,
+      origin_address: input.origin_address ?? draft.origin_address,
+      dest_address: input.dest_address ?? draft.dest_address,
       status: "origin_signed",
       updated_at: now,
     };
@@ -911,6 +972,8 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
   if (input.phase === "origin") {
     signPayload.actual_pickup_date = input.actual_pickup_date || "";
     signPayload.vehicle = input.vehicle || "";
+    if (input.origin_address) signPayload.origin_address = input.origin_address;
+    if (input.dest_address) signPayload.dest_address = input.dest_address;
   } else {
     signPayload.walkthrough_notes = input.walkthrough_notes || "";
     if (input.final_charges != null) signPayload.final_charges = input.final_charges;

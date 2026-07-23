@@ -258,6 +258,37 @@ and is retried the next night.
 
 ---
 
+## Crew can't present or email a signed BOL
+
+Symptoms: a driver needs the signed Bill of Lading in the field (for example a
+DOT officer at a border wants the signed contract with addresses), or "Send to
+client" on the BOL fails.
+
+The signed BOL card ("Signed Bill of Lading") appears in the BOL editor as soon
+as the BOL is signed at origin. See [ADR 0022](decisions/0022-signed-bol-is-retrievable-and-emailable.md).
+
+1. **Presenting the signed BOL never needs signal.** "View / download signed BOL"
+   regenerates the PDF on-device from the local draft (signatures + addresses are
+   all local). If it does not appear, the BOL is still in `draft` (not signed at
+   origin yet) - the card only shows past `draft`.
+2. **Addresses missing on the document.** They are entered at origin signing and
+   are editable on the same card. For a BOL signed before this feature, open it,
+   enter the origin/destination address, tap **Save addresses** (regenerates the
+   Drive copy), then View / download to present the corrected copy.
+3. **"Send to client" fails.** It needs connectivity (email cannot be sent
+   offline) - the crew should use View / download to hand over a copy instead, and
+   email later. A bad address returns a clear "valid email" message; a mail-send
+   failure returns "Could not send." If every send fails, the mailer is the likely
+   cause: verify `POSTMARK_SERVER_TOKEN` and `SMTP_FROM` (a verified Postmark
+   sender) on the backend - the same credentials password-reset email uses. Grep
+   Render logs for `[bol] emailed`.
+4. **"BOL not found" on send.** The signed row had not reached the server yet; the
+   send drains the queue first, so retrying once online usually clears it.
+
+Data impact: none. Retrieval is read-only; email sends a copy and changes nothing.
+
+---
+
 ## Known defects
 
 Live bugs that are known and not yet fixed. If you hit one of these, you have found
