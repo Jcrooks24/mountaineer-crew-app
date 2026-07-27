@@ -166,7 +166,7 @@ Symptoms: the office says a job is missing. The crew swear they logged it.
    - **Last sync = red `error …`** means the *most recent* attempt failed. A grey
      timestamp with "recovered from an error …" underneath means it failed once and
      has synced fine since; that is not something to chase. See
-     [ADR 0025](decisions/0025-sheet-writes-retry-quota-and-cache-tab-metadata.md).
+     [ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md).
    - A `429 RATE_LIMIT_EXCEEDED` or an SSL `EOF occurred` in the error text is a
      transient Google failure. Those are retried with backoff now, so a *current*
      one means the retries were exhausted (a sustained burst, not a blip) - re-save

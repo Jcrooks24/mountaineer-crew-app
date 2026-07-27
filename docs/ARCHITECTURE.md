@@ -178,6 +178,15 @@ All of it is in-process threads. No Celery, no cron, no queue service.
   (`bol_reconcile.py`) - a scheduled BOL export whose pool thread died leaves the
   BOL in Postgres but not the sheet (ADR 0020). Holds a Postgres advisory lock so
   only one worker does it.
+- **Sheet backfill** (`sheet_backfill.py`), admin-triggered, not scheduled. The
+  reconciler above covers events and BOLs; the other seventeen syncs fire once at
+  write time and nothing re-drives them, so an export that died leaves a record in
+  Postgres with no sheet row and no trace of which record it was (`sheet_sync_status`
+  tracks one state per export *function*). This module diffs the two sides - source
+  query per sync vs. the tab's key column read back - and re-drives the real export
+  for whatever is missing. Three Sheets reads total for the whole audit, batched, so
+  the audit cannot itself trip the quota that caused the gap
+  ([ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md)).
 - **Crew-resources loop**, hourly, **off unless `CREW_RESOURCES_ENABLED=true`**.
   Maintains a daily availability summary event on Google Calendar.
 

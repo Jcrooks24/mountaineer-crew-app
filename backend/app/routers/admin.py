@@ -1181,3 +1181,40 @@ def system_check_sheets(
     vars that aren't set). Covers all syncs via SHEET_SYNC_REGISTRY."""
     from app.integrations.sheets_export import check_sheets_sync
     return check_sheets_sync(db)
+
+
+@router.get("/system-check/sheet-backfill")
+def system_check_sheet_backfill(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Read-only audit: which records are in Postgres but never reached the
+    Sheet. `check_sheets_sync` reports whether a sync is healthy *now*; this
+    reports what the outages left behind, which that check cannot - it stores
+    one status row per export function, not per record."""
+    from app.integrations.sheet_backfill import audit_sheet_backfill
+    return audit_sheet_backfill(db)
+
+
+class SheetBackfillRequest(BaseModel):
+    key: str
+    # Omit to re-export everything the audit currently reports missing for this
+    # sync; pass explicit ids to re-drive only those.
+    ids: Optional[List[str]] = None
+
+
+@router.post("/system-check/sheet-backfill")
+def run_sheet_backfill(
+    body: SheetBackfillRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Re-drive the real export for records the audit found missing. Idempotent:
+    every export in the registry is replace- or dedupe-style, so re-running one
+    for a record that is actually present overwrites in place rather than
+    duplicating."""
+    from app.integrations.sheet_backfill import reexport_missing
+    result = reexport_missing(db, body.key, body.ids)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Backfill failed")
+    return result
