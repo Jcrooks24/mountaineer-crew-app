@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500&display=swap');
 
 :root{
   --bg: #0b1220;
@@ -120,8 +120,29 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
   background: rgba(255,255,255,0.05);
 }
 
-.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+/* Data typography: DM Mono for IDs, times, hours, counts, measurements - so
+   figures align and read as data, not prose. Falls back to system mono. */
+.mono{ font-family: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-feature-settings: "tnum" 1; }
 .sectionTitle{ font-size: 14px; font-weight: 900; margin-bottom: 10px; }
+
+/* Enterprise micro-label: small, uppercase, tracked, muted - the section-header
+   pattern from the Figma exploration. A separate utility (not a change to the
+   widely-used .label) so it can be adopted screen by screen. */
+.microLabel{
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Status as a colored dot + neutral text (color only on the dot, never a
+   filled pill). `--dot` sets the dot color per status. */
+.statusDot{ display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); }
+.statusDot::before{
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--dot, var(--muted)); flex-shrink: 0;
+}
 
 .topbar{
   display:flex;
