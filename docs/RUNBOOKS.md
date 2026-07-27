@@ -457,6 +457,12 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
 
 ### Recently fixed (kept briefly so you do not re-report them)
 
+- BOL self-overwrite when a job ran with two trucks. Fixed 2026-07-27 (staging,
+  [ADR 0024](decisions/0024-bol-guards-against-self-overwrite.md)): the manual-job
+  start path (`startManual`) blanked the local draft and, on save, the server replaced
+  the first truck's inventory with an empty list. Both start paths now confirm before
+  opening an existing BOL (continue, don't blank), and the server refuses an
+  empty-over-non-empty item save with a 409.
 - Job photos not auto-retrying on reconnect. Fixed 2026-07-13: the `online` handler
   now drains them like every other queue.
 - Estimator and job-inventory item queues not being idempotent. Fixed 2026-07-13:

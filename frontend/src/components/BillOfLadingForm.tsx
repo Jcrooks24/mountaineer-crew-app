@@ -22,6 +22,7 @@ import {
   listOpenBols,
   loadDraft,
   loadForJob,
+  loadForJobWithInfo,
   manualJobToJobUuid,
   newDraft,
   newUUID,
@@ -94,6 +95,10 @@ const STATUS_LABEL: Record<string, string> = {
 // ─────────────────────────────────────────────────────────────────────────
 export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => void; openBolId?: string }) {
   const [editing, setEditing] = useState<BOLDraft | null>(null);
+  // When the crew picks a job that ALREADY has a BOL, we don't open it silently
+  // (that let a second truck's crew blank the first's items). We stage it here
+  // and make them confirm "open the existing one" first - one BOL per job.
+  const [pendingBol, setPendingBol] = useState<{ draft: BOLDraft; itemCount: number; signed: boolean } | null>(null);
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -173,14 +178,17 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
       const job_uuid = await resolveJobUuid(value);
       const job = { job_uuid, job_name: ev.summary, job_date: selDate };
       rememberJob(job);
-      const draft = await loadForJob(job); // continue existing, or start fresh
-      setEditing(draft);
+      // Continue existing, or start fresh. If one already exists, make the crew
+      // confirm before entering so they don't overwrite the other truck's work.
+      const info = await loadForJobWithInfo(job);
+      if (info.existed) setPendingBol({ draft: info.draft, itemCount: info.itemCount, signed: info.signed });
+      else setEditing(info.draft);
     } finally {
       setBusy(false);
     }
   }
 
-  function startManual() {
+  async function startManual() {
     const name = manualName.trim();
     if (!name) return;
     // Derive job_uuid from the name+date the same way the Timeline and PODS do,
@@ -189,9 +197,52 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
     // its own BOL for the one job (defeats ADR 0018 on the manual path).
     const job = { job_uuid: manualJobToJobUuid(name, selDate), job_name: name, job_date: selDate };
     rememberJob(job);
-    const draft = newDraft(job);
-    saveDraft(draft);
-    setEditing(draft);
+    setBusy(true);
+    try {
+      // Was `newDraft(job)` unconditionally - that blanked the local draft and,
+      // on save, the server replaced the existing items with an empty list (a
+      // second truck's crew wiped the first's inventory). Go through the same
+      // existence check as the calendar path: continue the existing BOL, and
+      // make the crew confirm first so the overwrite is never silent.
+      const info = await loadForJobWithInfo(job);
+      if (info.existed) setPendingBol({ draft: info.draft, itemCount: info.itemCount, signed: info.signed });
+      else setEditing(info.draft);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (pendingBol) {
+    const { itemCount, signed } = pendingBol;
+    return (
+      <div className="container">
+        <div className="topbar" style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Bill of Lading</div>
+          <button onClick={() => setPendingBol(null)} style={backBtnStyle}>← Back</button>
+        </div>
+        <div
+          className="card"
+          style={{ padding: 16, borderLeft: "4px solid var(--warn, #b7791f)", display: "flex", flexDirection: "column", gap: 12 }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 15 }}>This job already has a Bill of Lading</div>
+          <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+            There is already a BOL for this job{itemCount > 0 ? ` with ${itemCount} item${itemCount === 1 ? "" : "s"}` : ""}
+            {signed ? ", and it has been signed" : ""}. A job has <strong>one</strong> Bill of Lading, so if you
+            used two trucks, put both trucks' items on this same BOL. Open it and keep adding, so you don't overwrite
+            what's already there.
+          </div>
+          <button
+            onClick={() => { setEditing(pendingBol.draft); setPendingBol(null); }}
+            style={{ padding: "12px 16px", fontWeight: 700, borderRadius: 8, border: "none", background: "var(--accent, #2b6cb0)", color: "#fff", cursor: "pointer" }}
+          >
+            Open existing BOL
+          </button>
+          <button onClick={() => setPendingBol(null)} style={{ ...backBtnStyle, padding: "6px 0" }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (editing) {

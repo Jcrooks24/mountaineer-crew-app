@@ -115,6 +115,16 @@ def _to_dict(row: DigitalBOL) -> Dict[str, Any]:
     }
 
 
+def _existing_item_count(row: DigitalBOL) -> int:
+    """How many items the stored BOL currently has. Used to refuse a save that
+    would blank a non-empty inventory (see the blank-over-full guard below)."""
+    try:
+        items = json.loads(row.items_json or "[]")
+        return len(items) if isinstance(items, list) else 0
+    except Exception:
+        return 0
+
+
 @router.post("")
 def submit_bol(
     payload: BOLIn,
@@ -171,7 +181,28 @@ def submit_bol(
             row.carrier_json = json.dumps(payload.carrier)
         if payload.shipment is not None:
             row.shipment_json = json.dumps(payload.shipment)
-        row.items_json = json.dumps(payload.items or [])
+        # Blank-over-full guard: never let a save REPLACE a non-empty inventory
+        # with an empty one. A second truck's crew who started a fresh (blank)
+        # BOL for a job that already has items would otherwise wipe the first
+        # crew's inventory on submit. The client routes every "start" through
+        # loadForJobWithInfo (which unions items first), so a legitimate save
+        # always carries the full list; an empty payload against a non-empty row
+        # means a stale/blank device. Refuse it with 409 - a permanent rejection
+        # (isPermanentRejection) so the offline queue surfaces it to the crew as
+        # a failed op to retry/discard, instead of silently dropping their work
+        # or retrying a doomed write. items being None (field omitted, e.g. a
+        # photo-link backfill) is NOT a wipe - only an explicit empty list is.
+        incoming_items = payload.items
+        if incoming_items is not None:
+            if len(incoming_items) == 0 and _existing_item_count(row) > 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This job's Bill of Lading already has items. Open the existing "
+                        "BOL and add to it instead of replacing it with an empty one."
+                    ),
+                )
+            row.items_json = json.dumps(incoming_items)
         if payload.inventory_verified is not None:
             row.inventory_verified = 1 if payload.inventory_verified else 0
         if payload.inventory_note is not None:

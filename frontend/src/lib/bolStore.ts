@@ -541,16 +541,41 @@ function queueHasOpsForBol(bolId: string): boolean {
   return loadQueue().some((o) => o.bol_id === bolId);
 }
 
+/** What `loadForJobWithInfo` returns: the resolved draft, plus whether a BOL
+ * ALREADY existed for this job (so the caller can warn the crew that they are
+ * continuing one document, not creating a second - there is one BOL per job). */
+export type LoadForJobResult = {
+  draft: BOLDraft;
+  /** A BOL already exists for this job (on the server, or a local draft that
+   * already has items / has been signed). A fresh, empty draft is `false`. */
+  existed: boolean;
+  itemCount: number;
+  signed: boolean;
+};
+
 /** Resolve the working draft for a job: adopt the server BOL as the source of
  * truth (so any rep/device can continue a job's BOL at any stage, with the
  * earlier signatures intact) UNLESS there is unsynced local work, or the local
- * draft is newer than the server (autosaved edits not yet pushed). */
-export async function loadForJob(job: { job_uuid: string; job_name: string; job_date: string }): Promise<BOLDraft> {
+ * draft is newer than the server (autosaved edits not yet pushed).
+ *
+ * Also reports whether a BOL already existed for the job. A job has exactly ONE
+ * BOL (id derived from job_uuid), so a crew who picks the same job again is
+ * continuing the existing document, not making a new one - the caller uses
+ * `existed` to make that explicit and stop an accidental self-overwrite. */
+export async function loadForJobWithInfo(job: { job_uuid: string; job_name: string; job_date: string }): Promise<LoadForJobResult> {
   const local = loadDraft(job.job_uuid);
   const pendingLocal = local ? queueHasOpsForBol(local.bol_id) : false;
   const server = await fetchRemoteBol(job.job_uuid);
 
-  if (!server) return local || newDraft(job);
+  // A local draft "counts" as an existing BOL only if it holds real work
+  // (items or a signature) - an empty autosaved shell is not something the crew
+  // needs warning about overwriting.
+  const localHasWork = !!local && (local.items.length > 0 || local.status !== "draft");
+
+  if (!server) {
+    const draft = local || newDraft(job);
+    return { draft, existed: localHasWork, itemCount: draft.items.length, signed: draft.status !== "draft" };
+  }
   const serverDraft = draftFromServer(server, job, local?.crew_rep);
 
   // No un-synced local edits: the local draft is fully synced, so the SERVER is
@@ -559,7 +584,7 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
   // the reason a second device never saw the first's items.
   if (!local || !pendingLocal) {
     saveDraft(serverDraft);
-    return serverDraft;
+    return { draft: serverDraft, existed: true, itemCount: serverDraft.items.length, signed: serverDraft.status !== "draft" };
   }
 
   // Un-synced local edits exist AND the server has a copy. Because the id is now
@@ -570,7 +595,13 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
   // stay local while a signing op is queued, else take the server's.
   const merged = mergeBolDrafts(local, serverDraft);
   saveDraft(merged);
-  return merged;
+  return { draft: merged, existed: true, itemCount: merged.items.length, signed: merged.status !== "draft" };
+}
+
+/** Thin wrapper: the resolved draft only (callers that don't need the
+ * existed/warn signal - e.g. reopening a BOL the crew explicitly picked). */
+export async function loadForJob(job: { job_uuid: string; job_name: string; job_date: string }): Promise<BOLDraft> {
+  return (await loadForJobWithInfo(job)).draft;
 }
 
 /** Union two drafts' items by item id (local wins per-item), preserving both
