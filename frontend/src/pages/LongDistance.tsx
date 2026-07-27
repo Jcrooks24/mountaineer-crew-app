@@ -91,7 +91,7 @@ export default function LongDistance() {
       </div>
 
       <div className="card" data-component="LdHosReference">
-        <div className="sectionTitle">Hours of Service - Quick Reference</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Hours of Service - Quick Reference</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             <li><strong>11-hour driving limit</strong> after 10 consecutive hours off-duty.</li>
@@ -108,7 +108,7 @@ export default function LongDistance() {
       </div>
 
       <div className="card" data-component="LdFormsSection">
-        <div className="sectionTitle">Forms</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Forms</div>
         <div className="col" style={{ gap: 8 }}>
           <button onClick={() => setSection("prior")} style={{ textAlign: "left" }}>
             <div style={{ fontWeight: 700 }}>Prior On-Duty Hours Statement</div>
@@ -127,7 +127,7 @@ export default function LongDistance() {
       </div>
 
       <div className="card" data-component="LdTralaExemption">
-        <div className="sectionTitle">TRALA Rental-Truck Exemption - 82 FR 47306</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>TRALA Rental-Truck Exemption - 82 FR 47306</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           Published by FMCSA in the Federal Register (Oct 11, 2017), this exemption covers
           drivers operating a rental truck on our behalf during out-of-state moves. Carry a
@@ -341,7 +341,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
           <div style={{ fontSize: 40, marginBottom: 12 }}>✓</div>
           <div style={{ fontWeight: 700, fontSize: 18, color: "var(--ok)", marginBottom: 6 }}>Statement on File</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 20 }}>
-            Total on-duty hours in the prior 7 days: <strong>{totalLast7.toFixed(2)}</strong>
+            Total on-duty hours in the prior 7 days: <strong className="mono">{totalLast7.toFixed(2)}</strong>
           </div>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
             <button className="btnPrimary" onClick={onBack}>Back to menu</button>
@@ -384,7 +384,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
               Job{" "}
               <span className="small" style={{ marginLeft: 4 }}>
-                {calLoading ? "(loading…)" : calEvents.length > 0 ? `(${calEvents.length} found)` : "(none found)"}
+                {calLoading ? "(loading…)" : calEvents.length > 0 ? <>(<span className="mono">{calEvents.length}</span> found)</> : "(none found)"}
               </span>
             </div>
             <select value={pickerValue} onChange={(e) => onPickJob(e.target.value)} disabled={calLoading}>
@@ -452,7 +452,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {priorDates.map((d) => (
                 <div key={d} className="row" style={{ gap: 10, justifyContent: "space-between" }}>
-                  <span className="small" style={{ color: "var(--text)", minWidth: 110 }}>{d}</span>
+                  <span className="small mono" style={{ color: "var(--text)", minWidth: 110 }}>{d}</span>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -468,7 +468,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
               ))}
             </div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 8, textAlign: "right" }}>
-              7-day total: <strong style={{ color: "var(--text)" }}>{totalLast7.toFixed(2)} hrs</strong>
+              7-day total: <strong className="mono" style={{ color: "var(--text)" }}>{totalLast7.toFixed(2)} hrs</strong>
             </div>
           </div>
 
@@ -515,7 +515,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
           </label>
 
           {err && (
-            <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+            <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "color-mix(in srgb, var(--danger) 10%, transparent)", borderRadius: 8 }}>
               {err}
             </div>
           )}

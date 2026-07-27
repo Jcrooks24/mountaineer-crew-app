@@ -157,7 +157,7 @@ function RodsDriverSection({
 
   return (
     <div data-component="RodsSignoff" style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
-      <div style={{ fontWeight: 800, fontSize: 14 }}>RODS - {driver || "driver"}</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>RODS - {driver || "driver"}</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Edit the duty log on the Timeline; review the summary, add trip details, and sign.{day.signature ? "  Signed." : ""}
       </div>
@@ -166,11 +166,10 @@ function RodsDriverSection({
         {periods.map((p, i) => (
           <div key={i} className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
             <span className="row" style={{ gap: 8, alignItems: "center", minWidth: 0 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLORS[p.status], flexShrink: 0 }} />
-              <span style={{ fontWeight: 600, fontSize: 13 }}>{STATUS_LABELS[p.status]}</span>
-              <span className="small" style={{ color: "var(--muted)" }}>{fmt12(p.start)} &rarr; {p.end ? fmt12(p.end) : "now"}</span>
+              <span className="statusDot" style={{ ["--dot" as any]: STATUS_COLORS[p.status] }}>{STATUS_LABELS[p.status]}</span>
+              <span className="small" style={{ color: "var(--muted)" }}><span className="mono">{fmt12(p.start)}</span> &rarr; {p.end ? <span className="mono">{fmt12(p.end)}</span> : "now"}</span>
             </span>
-            <span className="small" style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>{minutesToHHMM(p.dur)}{p.isLast ? " so far" : ""}</span>
+            <span className="small" style={{ color: "var(--muted)", whiteSpace: "nowrap" }}><span className="mono">{minutesToHHMM(p.dur)}</span>{p.isLast ? " so far" : ""}</span>
           </div>
         ))}
       </div>
@@ -178,7 +177,7 @@ function RodsDriverSection({
         {DUTY_STATUSES.map((s) => (
           <div key={s} className="col" style={{ gap: 2, flex: "1 1 110px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>{STATUS_LABELS[s]}</span>
-            <span style={{ fontWeight: 700, color: STATUS_COLORS[s] }}>{minutesToHHMM(totals[s])}</span>
+            <span className="mono" style={{ fontWeight: 700, color: STATUS_COLORS[s] }}>{minutesToHHMM(totals[s])}</span>
           </div>
         ))}
       </div>
@@ -214,7 +213,7 @@ function RodsDriverSection({
           <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Miles today</span>
             <div className="row" style={{ gap: 6 }}>
-              <input value={day.total_miles || ""} onChange={(e) => patch({ total_miles: e.target.value })} inputMode="numeric" style={{ flex: 1, minWidth: 0 }} />
+              <input className="mono" value={day.total_miles || ""} onChange={(e) => patch({ total_miles: e.target.value })} inputMode="numeric" style={{ flex: 1, minWidth: 0 }} />
               <button type="button" onClick={calcMiles} style={{ fontSize: 12, padding: "6px 10px", whiteSpace: "nowrap" }}>Auto</button>
             </div>
             {calcMsg && <span className="small" style={{ color: "var(--muted)" }}>{calcMsg}</span>}
@@ -224,7 +223,7 @@ function RodsDriverSection({
           <span className="small" style={{ color: "var(--muted)" }}>Bill of Lading</span>
           {bolLink ? (
             <button type="button" onClick={bolLink.onOpen} style={{ alignSelf: "flex-start", fontSize: 13, padding: "6px 12px", border: "1px solid var(--brand)", color: "var(--brand)", background: "transparent", borderRadius: 8, cursor: "pointer" }}>
-              View {bolLink.ref} &rsaquo;
+              View <span className="mono">{bolLink.ref}</span> &rsaquo;
             </button>
           ) : (
             <span className="small" style={{ color: "var(--muted)" }}>Attach a BOL in the documents above.</span>

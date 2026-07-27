@@ -186,7 +186,7 @@ export default function OffJob() {
 
       <div className="card">
         <div className="row" style={{ alignItems: "center", gap: 8 }}>
-          <div className="sectionTitle" style={{ marginBottom: 0 }}>Off-job hours</div>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Off-job hours</div>
           <BetaTag feature="offJobHours" style={{ marginTop: 0 }} />
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 4 }}>
@@ -217,15 +217,14 @@ export default function OffJob() {
 
           <div className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Pay structure * (management-approved)</span>
-            <div className="row wrap" style={{ gap: 6 }}>
+            <div className="seg">
               {PAY_OPTIONS.map((p) => {
                 const on = pay === p;
                 return (
-                  <button key={p} type="button" onClick={() => setPay(p)}
-                    style={{ flex: "1 1 100px", padding: "8px 0", borderRadius: 8, fontSize: 13, cursor: "pointer",
-                      border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: on ? "rgba(93,214,194,0.18)" : "transparent",
-                      color: on ? "var(--brand)" : "var(--muted)", fontWeight: on ? 700 : 400 }}>
+                  <button key={p} type="button" aria-pressed={on}
+                    className={"segBtn" + (on ? " on" : "")}
+                    style={{ ["--seg" as any]: "var(--brand)" }}
+                    onClick={() => setPay(p)}>
                     {PAY_STRUCTURE_LABELS[p]}
                   </button>
                 );
@@ -253,7 +252,7 @@ export default function OffJob() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">Your off-job entries</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Your off-job entries</div>
         {rows.length === 0 ? (
           <div className="small" style={{ color: "var(--muted)" }}>No off-job hours logged.</div>
         ) : (
@@ -270,21 +269,22 @@ export default function OffJob() {
               >
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>
-                    {r.hours}h
+                    <span className="mono">{r.hours}h</span>
                     <span className="small" style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}>
                       {PAY_STRUCTURE_LABELS[r.pay_structure]}{r.pay_structure === "other" && r.pay_other_note ? ` - ${r.pay_other_note}` : ""}
                     </span>
                   </span>
-                  <span
-                    className="small"
-                    style={{ color: r.failed_at ? "var(--danger)" : "var(--muted)", fontWeight: r.failed_at ? 700 : 400 }}
-                  >
-                    {r.failed_at ? "Not sent" : r.pending ? "Syncing…" : (r.work_date || formatMountainDateTime(r.created_at))}
-                  </span>
+                  {r.failed_at ? (
+                    <span className="statusDot" style={{ ["--dot" as any]: "var(--danger)", fontWeight: 600 }}>Not sent</span>
+                  ) : r.pending ? (
+                    <span className="statusDot" style={{ ["--dot" as any]: "var(--muted)" }}>Syncing…</span>
+                  ) : (
+                    <span className="small mono" style={{ color: "var(--muted)" }}>{r.work_date || formatMountainDateTime(r.created_at)}</span>
+                  )}
                 </div>
                 <div style={{ fontSize: 14, marginTop: 4 }}>{r.notes}</div>
                 {(r.start_time || r.end_time) && (
-                  <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                  <div className="small mono" style={{ color: "var(--muted)", marginTop: 2 }}>
                     {r.start_time || "?"}–{r.end_time || "?"}
                   </div>
                 )}

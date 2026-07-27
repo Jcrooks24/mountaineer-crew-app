@@ -123,7 +123,7 @@ export default function DocumentLibrary() {
 
       {isAdmin && (
         <div className="card">
-          <div className="sectionTitle">Upload Document (admin)</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Upload Document (admin)</div>
           <form onSubmit={handleUpload} className="col" style={{ gap: 10 }}>
             <div>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Title *</div>
@@ -132,20 +132,15 @@ export default function DocumentLibrary() {
 
             <div>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Category</div>
-              <div className="row wrap" style={{ gap: 6, marginBottom: 6 }}>
+              <div className="seg" style={{ marginBottom: 6 }}>
                 {CATEGORY_SUGGESTIONS.map((c) => (
                   <button
                     key={c}
                     type="button"
+                    aria-pressed={category === c}
+                    className={"segBtn" + (category === c ? " on" : "")}
+                    style={{ ["--seg" as any]: "var(--brand)" }}
                     onClick={() => setCategory(c)}
-                    style={{
-                      fontSize: 12,
-                      padding: "4px 10px",
-                      borderRadius: 999,
-                      border: `1px solid ${category === c ? "var(--brand)" : "var(--border)"}`,
-                      color: category === c ? "var(--brand)" : "var(--muted)",
-                      background: category === c ? "rgba(93,214,194,0.1)" : "transparent",
-                    }}
                   >
                     {c}
                   </button>
@@ -184,7 +179,7 @@ export default function DocumentLibrary() {
 
       {grouped.map(([category, list]) => (
         <div key={category} className="card">
-          <div className="sectionTitle">{category}</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>{category}</div>
           <div className="col" style={{ gap: 8 }}>
             {list.map((d) => (
               <div
@@ -202,7 +197,7 @@ export default function DocumentLibrary() {
                     {d.title}
                   </div>
                   <div className="small" style={{ color: "var(--muted)" }}>
-                    {d.filename} · {new Date(d.created_at).toLocaleDateString()}
+                    {d.filename} · <span className="mono">{new Date(d.created_at).toLocaleDateString()}</span>
                     {d.uploaded_by_name ? ` · ${d.uploaded_by_name}` : ""}
                   </div>
                 </div>
