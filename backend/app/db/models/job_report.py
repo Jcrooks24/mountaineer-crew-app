@@ -92,6 +92,24 @@ class JobReport(Base):
     hours_verified = Column(Boolean, nullable=True, default=False)
 
     # Timestamps
+    # ── Close-out (added 2026-07-27) ────────────────────────────────────────
+    # Why the job differed from the quote: one cause from a fixed list, plus a
+    # note for what the list cannot say. Nullable throughout - every report
+    # submitted before this existed has none, and a crew member who cannot
+    # answer is not blocked.
+    variance_cause = Column(String, nullable=True)
+    variance_note = Column(Text, nullable=True)
+
+    # How ready the client was on arrival, plus what specifically was not ready
+    # (JSON list of keys from CLIENT_UNREADY_REASONS).
+    client_readiness = Column(String, nullable=True)
+    client_unready_json = Column(Text, nullable=True)
+
+    # One entry per on-site scope change: {kind, hours, note}. JSON for the
+    # same reason employee_hours_json is: it is a per-report list nobody
+    # queries relationally, and the sheet is where it gets analysed.
+    scope_changes_json = Column(Text, nullable=True)
+
     created_at = Column(DateTime, nullable=False)
     # Indexed: the worked-hours query filters on it to bound its scan to the
     # last two weeks (see routers/hours.py).

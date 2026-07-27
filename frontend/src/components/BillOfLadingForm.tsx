@@ -44,6 +44,7 @@ import {
 } from "../lib/bolContract";
 import { getCompanyInfoCached, refreshCompanyInfo, type CompanyInfo } from "../lib/companyInfo";
 import SuggestInput from "./SuggestInput";
+import NumberField from "./NumberField";
 
 /** Hand the shipper their dated copy: Web Share (with file) if available,
  * otherwise a download. Works offline. */
@@ -1119,12 +1120,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
           </label>
           <label className="col" style={{ gap: 4, width: 90 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
-            <input
-              type="number"
+            <NumberField
               min={1}
               step={1}
+              integer
               value={itemQty}
-              onChange={(e) => setItemQty(Math.max(1, Math.floor(Number(e.target.value || 1))))}
+              onChange={setItemQty}
             />
           </label>
           <button type="button" className="btnPrimary" onClick={addItem} style={{ minWidth: 90 }}>
@@ -1185,11 +1186,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                   <div className="row" style={{ gap: 6, alignItems: "center" }}>
                     <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
                     <button type="button" onClick={() => adjustQty(it.item_no, -1)} style={qtyBtnStyle} aria-label="Decrease quantity">−</button>
-                    <input
-                      type="number"
+                    <NumberField
                       min={1}
+                      integer
                       value={it.qty}
-                      onChange={(e) => updateItem(it.item_no, { qty: Math.max(1, Math.floor(Number(e.target.value || 1))) })}
+                      onChange={(qty) => updateItem(it.item_no, { qty })}
+                      aria-label={"Quantity for " + it.name}
                       style={{ width: 56, textAlign: "center" }}
                     />
                     <button type="button" onClick={() => adjustQty(it.item_no, 1)} style={qtyBtnStyle} aria-label="Increase quantity">+</button>

@@ -101,8 +101,20 @@ import type { EmployeeHoursEntry } from "../lib/employeeHours";
 import { roundBillableQuarter } from "../lib/employeeHours";
 import {
   TRUCK_IDS,
+  filledCuFt,
+  truckCapacityCuFt,
   type TruckFullnessEntry,
 } from "../lib/jobTypes";
+import TruckDeckGauge from "./TruckDeckGauge";
+import {
+  CLIENT_READINESS,
+  CLIENT_UNREADY_REASONS,
+  SCOPE_CHANGE_KINDS,
+  VARIANCE_CAUSES,
+  readinessNeedsDetail,
+  type ScopeChangeEntry,
+} from "../lib/closeout";
+import NumberField from "./NumberField";
 import { useJobTypes } from "../lib/jobTypesStore";
 import { useSkills, skillsForJobTypes, type Skill } from "../lib/skillsStore";
 
@@ -164,6 +176,12 @@ type ReportData = {
   truck_fullness: TruckFullnessEntry[];
   // Crew's note when actual inventory ran over the linked estimate.
   overage_note: string;
+  // Close-out: why the job differed, how ready the client was, what changed.
+  variance_cause: string | null;
+  variance_note: string;
+  client_readiness: string | null;
+  client_unready: string[];
+  scope_changes: ScopeChangeEntry[];
   // Crew-lead sign-off that the per-employee hours are correct.
   hours_verified: boolean;
   employee_hours: EmployeeHoursEntry[];
@@ -230,6 +248,11 @@ function normalizeDraftData(d: ReportData): ReportData {
     hours_mismatch_reason: d.hours_mismatch_reason ?? "",
     crew_feedback: d.crew_feedback ?? "",
     overage_note: d.overage_note ?? "",
+    variance_cause: d.variance_cause ?? null,
+    variance_note: d.variance_note ?? "",
+    client_readiness: d.client_readiness ?? null,
+    client_unready: Array.isArray(d.client_unready) ? d.client_unready : [],
+    scope_changes: Array.isArray(d.scope_changes) ? d.scope_changes : [],
     hours_verified: !!d.hours_verified,
     job_type_tags: Array.isArray(d.job_type_tags) ? d.job_type_tags : [],
     truck_fullness: Array.isArray(d.truck_fullness) ? d.truck_fullness : [],
@@ -467,6 +490,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     job_type_tags: [],
     truck_fullness: [],
     overage_note: "",
+    variance_cause: null,
+    variance_note: "",
+    client_readiness: null,
+    client_unready: [],
+    scope_changes: [],
     hours_verified: false,
     employee_hours: [],
   });
@@ -553,6 +581,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           job_type_tags: (r as any).job_type_tags ?? [],
           truck_fullness: (r as any).truck_fullness ?? [],
           overage_note: (r as any).overage_note ?? "",
+          variance_cause: (r as any).variance_cause ?? null,
+          variance_note: (r as any).variance_note ?? "",
+          client_readiness: (r as any).client_readiness ?? null,
+          client_unready: (r as any).client_unready ?? [],
+          scope_changes: (r as any).scope_changes ?? [],
           hours_verified: !!(r as any).hours_verified,
           employee_hours: r.employee_hours ?? [],
         });
@@ -584,6 +617,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             job_type_tags: [],
             truck_fullness: [],
             overage_note: "",
+            variance_cause: null,
+            variance_note: "",
+            client_readiness: null,
+            client_unready: [],
+            scope_changes: [],
             hours_verified: false,
             employee_hours: [],
           });
@@ -1085,6 +1123,23 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             (t) => t.truck && t.vertical_pct > 0 && t.horizontal_pct > 0,
           ),
           overage_note: data.overage_note.trim() || null,
+          variance_cause: data.variance_cause || null,
+          variance_note: data.variance_note.trim() || null,
+          client_readiness: data.client_readiness || null,
+          // Only meaningful when something was NOT ready; sending the list
+          // alongside "fully ready" would contradict itself in the sheet.
+          client_unready: readinessNeedsDetail(data.client_readiness)
+            ? data.client_unready
+            : [],
+          // Drop rows where the crew picked nothing - an empty row is an
+          // accidental tap on "Add", not a scope change.
+          scope_changes: data.scope_changes
+            .filter((c) => c.kind)
+            .map((c) => ({
+              kind: c.kind,
+              hours: c.hours ?? null,
+              note: (c.note || "").trim() || null,
+            })),
           hours_verified: !!data.hours_verified,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
@@ -1698,6 +1753,92 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       </div>
       )}
 
+      {/* Close-out. Three things the office cannot reconstruct after the fact:
+          why the day differed from the quote, whether the client was ready, and
+          what got added on site. All optional - a crew member who cannot answer
+          must still be able to submit, so nothing here gates Save. */}
+      {!driveOnly && (
+      <div className="card">
+        <div className="row" style={{ alignItems: "center", gap: 8 }}>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Close-out</div>
+          <BetaTag feature="closeout" style={{ marginTop: 0 }} />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 14 }}>
+          Optional, but this is what tells the office why a job ran the way it did.
+          Skip anything you cannot answer.
+        </div>
+
+        <div style={{ fontWeight: 700, fontSize: 13 }}>Did the job run differently than quoted?</div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 8 }}>
+          Pick the biggest single reason. The note is for anything the list misses.
+        </div>
+        <ChipPicker
+          options={VARIANCE_CAUSES}
+          selected={data.variance_cause ? [data.variance_cause] : []}
+          onToggle={(key) => {
+            set("variance_cause", data.variance_cause === key ? null : key);
+            setSaved(false);
+          }}
+        />
+        {data.variance_cause && (
+          <textarea
+            value={data.variance_note}
+            onChange={(e) => { set("variance_note", e.target.value); setSaved(false); }}
+            placeholder="What happened? (optional)"
+            rows={2}
+            style={{ width: "100%", marginTop: 8, resize: "vertical" }}
+          />
+        )}
+
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+          Was the client ready when you arrived?
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <ChipPicker
+            options={CLIENT_READINESS}
+            selected={data.client_readiness ? [data.client_readiness] : []}
+            onToggle={(key) => {
+              const next = data.client_readiness === key ? null : key;
+              set("client_readiness", next);
+              // Clearing back to ready (or to no answer) drops the detail, so the
+              // two answers can never contradict each other in the sheet.
+              if (!readinessNeedsDetail(next)) set("client_unready", []);
+              setSaved(false);
+            }}
+          />
+        </div>
+        {readinessNeedsDetail(data.client_readiness) && (
+          <div style={{ marginTop: 12 }}>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+              What was not ready? Tick all that applied.
+            </div>
+            <ChipPicker
+              options={CLIENT_UNREADY_REASONS}
+              selected={data.client_unready}
+              onToggle={(key) => {
+                const has = data.client_unready.includes(key);
+                set("client_unready", has
+                  ? data.client_unready.filter((k) => k !== key)
+                  : [...data.client_unready, key]);
+                setSaved(false);
+              }}
+            />
+          </div>
+        )}
+
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+          Anything added or changed on site?
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 8 }}>
+          One entry per change. Hours are a rough guess at what it cost you, not a bill.
+        </div>
+        <ScopeChangeEditor
+          value={data.scope_changes}
+          onChange={(next) => { set("scope_changes", next); setSaved(false); }}
+        />
+      </div>
+      )}
+
       {/* Drive-only LD days skip auto-populate review, billing method,
           personal vehicles, review candidate, and hours reconciliation. */}
       {!driveOnly && (
@@ -2233,6 +2374,121 @@ function SkillRatingRow({
 // Truck fullness: add one reading per truck used, each a composite of a
 // vertical and a horizontal 25%-step fill estimate. Estimated fill is
 // vertical×horizontal/100, matching the interior marks.
+// Single- or multi-select chips, shared by every fixed-vocabulary close-out
+// question so they all behave the same: tap to pick, tap again to clear.
+// Clearing matters - a crew member who taps the wrong chip has to be able to
+// get back to "no answer", which a radio group cannot do.
+function ChipPicker({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: { key: string; label: string }[];
+  selected: string[];
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <div className="row wrap" style={{ gap: 8 }}>
+      {options.map((o) => {
+        const on = selected.includes(o.key);
+        return (
+          <button
+            key={o.key}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onToggle(o.key)}
+            style={{
+              padding: "7px 13px",
+              borderRadius: 999,
+              fontSize: 13,
+              cursor: "pointer",
+              border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+              background: on ? "var(--brand)" : "transparent",
+              color: on ? "var(--on-brand, #fff)" : "var(--text)",
+              fontWeight: on ? 700 : 400,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Repeating list of on-site scope changes. Rows are keyed and edited by index,
+// not by kind: two "Added items" entries on one job are legitimate and must not
+// collide.
+function ScopeChangeEditor({
+  value,
+  onChange,
+}: {
+  value: ScopeChangeEntry[];
+  onChange: (next: ScopeChangeEntry[]) => void;
+}) {
+  const patchAt = (i: number, patch: Partial<ScopeChangeEntry>) =>
+    onChange(value.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  const removeAt = (i: number) => onChange(value.filter((_, idx) => idx !== i));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {value.map((c, i) => (
+        <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>
+              Change {i + 1}
+            </span>
+            <button type="button" onClick={() => removeAt(i)} style={{ color: "var(--danger)" }}>
+              Remove
+            </button>
+          </div>
+          <ChipPicker
+            options={SCOPE_CHANGE_KINDS}
+            selected={c.kind ? [c.kind] : []}
+            onToggle={(key) => patchAt(i, { kind: c.kind === key ? "" : key })}
+          />
+          <div className="row wrap" style={{ gap: 10, alignItems: "flex-end", marginTop: 10 }}>
+            <label className="col" style={{ gap: 2, width: 130 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Extra hours</span>
+              <NumberField
+                min={0}
+                max={48}
+                step={0.25}
+                allowEmpty
+                value={c.hours ?? null}
+                onEmpty={() => patchAt(i, { hours: null })}
+                onChange={(hours) => patchAt(i, { hours })}
+                placeholder="optional"
+                aria-label={"Extra hours for change " + (i + 1)}
+              />
+            </label>
+            <label className="col" style={{ gap: 2, flex: 1, minWidth: 160 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Note</span>
+              <input
+                value={c.note || ""}
+                onChange={(e) => patchAt(i, { note: e.target.value })}
+                placeholder="e.g. client added garage shelving"
+              />
+            </label>
+          </div>
+        </div>
+      ))}
+      <div>
+        <button
+          type="button"
+          onClick={() => onChange([...value, { kind: "", hours: null, note: "" }])}
+          style={{
+            padding: "6px 12px", borderRadius: 999, border: "1px dashed var(--border)",
+            background: "transparent", color: "var(--text)", fontSize: 13, cursor: "pointer",
+          }}
+        >
+          + Add scope change
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TruckFullnessEditor({
   value,
   onChange,
@@ -2257,7 +2513,6 @@ function TruckFullnessEditor({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {value.map((t, i) => {
-        const combined = Math.round((t.vertical_pct * t.horizontal_pct) / 100);
         return (
           <div key={t.is_rental ? `rental-${i}` : t.truck} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -2282,33 +2537,28 @@ function TruckFullnessEditor({
             {t.is_rental && (
               <label className="col" style={{ gap: 2, marginTop: 8 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Truck length (ft)</span>
-                <input
-                  type="number"
+                <NumberField
                   min={0}
                   step={1}
-                  inputMode="numeric"
-                  value={t.length_ft ?? ""}
-                  onChange={(e) => patchAt(i, { length_ft: e.target.value === "" ? undefined : Number(e.target.value) })}
+                  integer
+                  allowEmpty
+                  value={t.length_ft ?? null}
+                  onEmpty={() => patchAt(i, { length_ft: undefined })}
+                  onChange={(length_ft) => patchAt(i, { length_ft })}
                   placeholder="e.g. 26"
+                  aria-label="Rental truck length in feet"
                   style={{ width: 120 }}
                 />
               </label>
             )}
-            <FullnessSlider
-              label="Vertical fill"
-              value={t.vertical_pct}
-              onChange={(p) => patchAt(i, { vertical_pct: p })}
+            <TruckDeckGauge
+              verticalPct={t.vertical_pct}
+              horizontalPct={t.horizontal_pct}
+              capacityCuFt={truckCapacityCuFt(t)}
+              filledCuFt={filledCuFt(t)}
+              isRental={t.is_rental}
+              onChange={(patch) => patchAt(i, patch)}
             />
-            <FullnessSlider
-              label="Horizontal fill"
-              value={t.horizontal_pct}
-              onChange={(p) => patchAt(i, { horizontal_pct: p })}
-            />
-            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-              {t.vertical_pct > 0 && t.horizontal_pct > 0
-                ? `Estimated fill: ${combined}% (V${t.vertical_pct} × H${t.horizontal_pct})${t.is_rental ? " · best guess" : ""}`
-                : "Pick vertical and horizontal fill"}
-            </div>
             {t.is_rental && (
               <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
                 Rental trucks have no interior 25% markers - estimate the fill as best you can.
@@ -2340,41 +2590,6 @@ function TruckFullnessEditor({
         >
           + Rental truck
         </button>
-      </div>
-    </div>
-  );
-}
-
-// Continuous slider for truck fill, matching the M1 dumpster/recycling sliders
-// (PctSlider). Replaces the old 25/50/75/100 button row.
-function FullnessSlider({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (pct: number) => void;
-}) {
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span className="small" style={{ color: "var(--muted)" }}>{label}</span>
-        <span style={{ fontWeight: 700, fontSize: 15, color: "var(--brand)" }}>{value}%</span>
-      </div>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        step={5}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ width: "100%", accentColor: "var(--brand)" }}
-      />
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 10, color: "var(--muted)" }}>Empty</span>
-        <span style={{ fontSize: 10, color: "var(--muted)" }}>Half</span>
-        <span style={{ fontSize: 10, color: "var(--muted)" }}>Full</span>
       </div>
     </div>
   );

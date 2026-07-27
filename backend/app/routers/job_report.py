@@ -21,6 +21,7 @@ from app.schemas.job_report import (
     EmployeeHoursEntry,
     JobReportResponse,
     JobReportUpsert,
+    ScopeChangeEntry,
     TruckFullnessEntry,
 )
 
@@ -63,6 +64,39 @@ def _decode_truck_fullness(raw: Optional[str]) -> Optional[list[TruckFullnessEnt
         return None
 
 
+def _decode_str_list(raw: Optional[str]) -> Optional[list[str]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        return [str(t) for t in data]
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _decode_scope_changes(raw: Optional[str]) -> Optional[list[ScopeChangeEntry]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        out: list[ScopeChangeEntry] = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            try:
+                out.append(ScopeChangeEntry(**row))
+            except ValueError:
+                # A row whose `kind` was retired from the vocabulary should not
+                # make the whole report unreadable. Drop it and keep the rest.
+                continue
+        return out
+    except (json.JSONDecodeError, ValueError):
+        return None
+
 def _to_response(r: JobReport) -> JobReportResponse:
     return JobReportResponse(
         id=r.id,
@@ -83,6 +117,11 @@ def _to_response(r: JobReport) -> JobReportResponse:
         job_type_tags=_decode_job_type_tags(r.job_type_tags_json),
         truck_fullness=_decode_truck_fullness(r.truck_fullness_json),
         overage_note=r.overage_note,
+        variance_cause=r.variance_cause,
+        variance_note=r.variance_note,
+        client_readiness=r.client_readiness,
+        client_unready=_decode_str_list(r.client_unready_json),
+        scope_changes=_decode_scope_changes(r.scope_changes_json),
         hours_verified=bool(r.hours_verified),
         employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
@@ -142,6 +181,11 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "furniture_count": "" if furniture_count is None else furniture_count,
         "box_count": "" if box_count is None else box_count,
         "overage_note": report.overage_note or "",
+        "variance_cause": report.variance_cause or "",
+        "variance_note": report.variance_note or "",
+        "client_readiness": report.client_readiness or "",
+        "client_unready": _decode_str_list(report.client_unready_json) or [],
+        "scope_changes": [c.model_dump() for c in (_decode_scope_changes(report.scope_changes_json) or [])],
         "hours_verified": bool(report.hours_verified),
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
@@ -225,6 +269,15 @@ def upsert_job_report(
         else None
     )
 
+    client_unready_json = (
+        json.dumps(body.client_unready) if body.client_unready else None
+    )
+    scope_changes_json = (
+        json.dumps([c.model_dump() for c in body.scope_changes])
+        if body.scope_changes
+        else None
+    )
+
     if existing:
         existing.submitted_by_id = current_user.id
         existing.submitted_by_name = current_user.name or current_user.email
@@ -242,6 +295,11 @@ def upsert_job_report(
         existing.job_type_tags_json = job_type_tags_json
         existing.truck_fullness_json = truck_fullness_json
         existing.overage_note = body.overage_note
+        existing.variance_cause = body.variance_cause
+        existing.variance_note = body.variance_note
+        existing.client_readiness = body.client_readiness
+        existing.client_unready_json = client_unready_json
+        existing.scope_changes_json = scope_changes_json
         existing.hours_verified = body.hours_verified
         existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
@@ -268,6 +326,11 @@ def upsert_job_report(
         job_type_tags_json=job_type_tags_json,
         truck_fullness_json=truck_fullness_json,
         overage_note=body.overage_note,
+        variance_cause=body.variance_cause,
+        variance_note=body.variance_note,
+        client_readiness=body.client_readiness,
+        client_unready_json=client_unready_json,
+        scope_changes_json=scope_changes_json,
         hours_verified=body.hours_verified,
         employee_hours_json=employee_hours_json,
         created_at=now,

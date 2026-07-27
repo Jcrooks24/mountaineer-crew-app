@@ -223,13 +223,14 @@ Step 10: Submit Job Report (Crew Lead)
 The crew lead completes the Job Report before logging off. Fields include:
 Job type: pick the tag(s) that describe this job (Local, Long-distance, Packing, etc.) from the list admin configures. See Section 7.5.
 Personal vehicles: Count of personal vehicles on site.
-Truck fullness: for each truck used, set how full it ended up with the vertical and horizontal fill sliders. Each truck also adds a per-hour truck line to the bill (Section 7.1). See Section 7.6.
+Truck fullness: for each truck used, mark how full it ended up on the truck-deck diagram. It shows the fill percentage and the cubic feet at the same time. Each truck also adds a per-hour truck line to the bill (Section 7.1). See Section 7.6.
 Dumpster %: Percentage of a full dumpster used (0-100 slider).
 Recycling %: Percentage of recycling capacity used (0-100 slider).
 Billing method: invoice, cash, etc.
 Review candidate: Whether or not we should seek a review from the client. Yes, No, or N/A.
 Hours match: Confirm whether the timeline reflects actual hours billed and paid. If not, explain in the text field.
 Employee Hours: Per-person hours for everyone on the job, chosen from the roster. See Section 7.4 for the full editor.
+Close-out: three optional questions at the bottom of the report - why the job ran differently than quoted, whether the client was ready, and anything added or changed on site. See Section 7.9.
 Skill ratings: admins and designated Skill raters rate each mover on the skills a job actually called for. See Section 7.7.
 Wrap-up estimator: a projected finish time (your remaining work plus the drive back to the yard) you can pick as an End time, and a drive-time estimate for the trip home. See Section 7.8.
 Crew Feedback: Optional general feedback or job-specific feedback to send to the office.
@@ -302,11 +303,30 @@ Saving an entry here also updates that person's auto-generated labor line in the
 ### 7.5 Job Type
 The Job Report captures the job type: one or more tags (Local, Long-distance, Labor-only, Packing, Unpacking, Commercial, Delivery, Storage) picked from the list admin configures. Tap the tags that apply. This is descriptive data for the office and drives which skills are rated (Section 7.7); collect it on every job.
 ### 7.6 Truck Fullness
-Record how full each truck ended up. Add each truck used (pick from the fleet, or add a rental with a free-text name and length), then set two sliders per truck: Vertical fill and Horizontal fill. The app combines them into an estimated fill percentage. Each truck you add also creates a "Truck (per hour)" line on the bill (Section 7.1).
+Record how full each truck ended up. Add each truck used (pick from the fleet, or add a rental with a free-text name and its length), then mark the fill on the truck-deck diagram.
+
+The diagram is the deck seen from the side, cab on the left. Tap where the load reaches and it sets both directions at once: how deep it goes from the headboard toward the door, and how high it stacks off the floor. The gridlines are the interior 25% marks the fleet trucks are striped with. The two sliders underneath do the same thing if you would rather fine-tune, or if you are wearing gloves.
+
+Under the diagram you get both numbers at once: the fill percentage and roughly how many cubic feet that is. Read them together for a few jobs and you will start being able to call cubic feet by eye, which is the point.
+
+A rental only shows cubic feet once you have entered its length, since we do not know the box otherwise. Cubic feet are an estimate from the truck's interior dimensions - nothing bills off them.
+
+Each truck you add also creates a "Truck (per hour)" line on the bill (Section 7.1).
 ### 7.7 Skill Ratings
 Admins and anyone an admin designates as a Skill rater can rate each mover on the skills a job actually called for, on a 1-to-5 star scale (1 = held the job up, 5 = seasoned-lead level), or mark a skill N/A when it did not apply. Which skills appear depends on the job type. If you are not a designated rater, the skill rows do not show for you, and the ratings a rater already set are preserved. Ratings are display-only; they never change the hours or the bill.
 ### 7.8 Wrap-Up Estimator
 On the Job Report, tap to calculate a projected job wrap-up time: the drive time from where you are now back to the yard (plus a buffer) added to any billable work still left to do once you are there. You can pick the projected time as an employee's End time in the hours editor. A separate return-trip drive estimate gives the time home. If GPS or signal is unavailable, enter the drive minutes by hand; the estimate still works.
+### 7.9 Close-out
+Three questions at the bottom of the Job Report. All of them are optional and none of them block Save - if you cannot answer one, skip it.
+
+Did the job run differently than quoted? Pick the single biggest reason (underestimated volume, access or stairs, client not ready, crew size or skill, scope added on site, travel or traffic, damage or repack, other). A note box appears once you pick one, for anything the list does not cover. Tap the same chip again to clear it.
+
+Was the client ready when you arrived? Fully, mostly, partly, or not ready. If you pick anything other than Fully ready, a second row appears asking what specifically was not ready - tick all that applied. Changing your answer back to Fully ready clears those ticks, so the two answers never contradict each other.
+
+Anything added or changed on site? Add one entry per change: what kind it was, roughly how many extra hours it cost you, and a short note. The hours are a rough guess so the office can see which kinds of change actually eat a day; they are not a bill and they do not feed the invoice. Add as many entries as you need.
+
+None of this changes the bill. It exists so the office can tell why a job went the way it did without having to phone you the next morning.
+
 ## 8. PHOTOS
 Document jobs with photos. Storage is per-job in Google Drive.
 ### 8.1 Taking and Uploading Photos

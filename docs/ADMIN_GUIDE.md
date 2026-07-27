@@ -26,6 +26,7 @@ FMCSA compliance paperwork and the Digital Bill of Lading.
 - Submit materials used on a job
 - Log actual inventory on long-distance jobs: furniture and boxes with pack type, plus a loose-item "chow" volume estimate
 - Fill out the Job Report and Bill at the end of a job, including the job type, how full each truck ended up, employee hours pulled from the roster, and skill ratings (entered by admins and designated Skill raters)
+- Answer three optional close-out questions on the Job Report: why the job ran differently than quoted, whether the client was ready, and anything added or changed on site
 - Get a projected wrap-up finish time and a return-trip drive estimate on the Job Report
 - File interstate compliance paperwork: Prior On Duty Hours Statement, Record of Duty Status, per-diem and drive days, and the Digital Bill of Lading
 - Submit mileage and expense / reimbursement requests
@@ -180,6 +181,18 @@ with one tap.
 - **System Check:** a one-tap health snapshot. Confirms the database, the Google Sheets connection, the Google Drive connection, and required settings are working; checks that every app-to-sheet sync points at the right worksheet; and flags any records that have drifted out of the sheet (events or signed BOLs). Copy and send to Jacob if something looks wrong. In the Sheet Syncs table, `not yet` under Exists is normal (nothing has used that feature, so the worksheet has not been created); `missing` is not. A red `error` date means the last attempt failed; a grey date with "recovered from an error" underneath means it failed once and has been fine since.
 - **Sheet Backfill - what never made it:** answers a different question than System Check. System Check tells you whether a sync is working *now*; this compares the app's records against the Sheet and lists the ones that were saved but whose sheet row never landed, usually the leftovers of an outage. Nothing is lost when this happens - the app is the system of record and the Sheet is a mirror. "Run audit" only reads. "Re-send" queues those records through the normal export, up to 100 at a time; it is safe to press twice, because a re-send overwrites the row in place rather than duplicating it. Timeline events and BOLs are not listed here - the background reconciler already re-sends those on its own.
 - **Diagnostics:** read-only checks confirming the Crew Resources calendar connection is wired up correctly.
+
+### Close-out data on the job report
+
+Three columns groups arrive on the JobReports tab from every report submitted after this deploy. All three are optional for crew, so a blank cell means "not answered", not "nothing happened" - worth remembering the first time you chart them.
+
+- `variance_cause` / `variance_note` - the single biggest reason the job ran differently than quoted, from a fixed list, plus free text. The fixed list is what makes this countable; sort by it to see which causes actually recur.
+- `client_readiness` / `client_unready` - how ready the client was on arrival, and (when they were not fully ready) a comma-separated list of what specifically was not ready.
+- `scope_change_count` / `scope_change_hours` / `scope_changes` - how many things changed on site, the crew's rough total of hours those changes cost, and one readable line per change. `scope_change_hours` is blank rather than 0 when nobody estimated, so "not estimated" stays distinguishable from "cost nothing".
+
+Reports submitted before this deploy have these columns empty and will stay that way; there is nothing to backfill, because the crew was never asked.
+
+The `truck_fullness` cell now also carries cubic feet, e.g. `26Int: V75×H50 (38%, 672 cu ft)`. That volume is derived from the truck's interior dimensions in `backend/app/schemas/job_report.py` (`TRUCK_SPECS`), which are **estimated from box length and typical interior width and height - measure the fleet and correct them**. The percentage is what the crew observed and is stored; the cubic feet are computed at export time, so fixing a spec fixes future exports rather than rewriting history.
 
 ## 4. Troubleshooting Common Issues
 

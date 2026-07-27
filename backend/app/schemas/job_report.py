@@ -17,6 +17,53 @@ BILLING_METHODS = {
 
 ReviewCandidate = Literal["yes", "no", "na"]
 
+# ── Close-out vocabulary ─────────────────────────────────────────────────────
+# Fixed lists so the sheet stays groupable. Free text lives alongside them in a
+# note field rather than replacing them: a cause you can count is worth more to
+# the office than a paragraph, and the paragraph catches what the list misses.
+# Mirrored on the frontend in frontend/src/lib/closeout.ts - keep in sync.
+
+# Why the job differed from what was estimated. Single-select.
+VARIANCE_CAUSES = {
+    "underestimated_volume",
+    "access_stairs_carry",
+    "client_not_ready",
+    "crew_size_or_skill",
+    "scope_added_on_site",
+    "travel_or_traffic",
+    "damage_or_repack",
+    "other",
+}
+
+# How ready the client was on arrival. Single-select, ordered worst to best in
+# meaning but stored as opaque keys.
+CLIENT_READINESS = {"fully_ready", "mostly_ready", "partly_ready", "not_ready"}
+
+# What specifically was not ready. Multi-select, only meaningful when readiness
+# is anything other than fully_ready.
+CLIENT_UNREADY_REASONS = {
+    "packing_incomplete",
+    "parking_not_reserved",
+    "elevator_not_reserved",
+    "access_blocked",
+    "utilities_off",
+    "pets_or_kids",
+    "paperwork_or_payment",
+    "other",
+}
+
+# One row per thing that changed on site.
+SCOPE_CHANGE_KINDS = {
+    "added_items",
+    "extra_stop",
+    "packing_added",
+    "storage_added",
+    "disposal_added",
+    "address_changed",
+    "reduced_scope",
+    "other",
+}
+
 # Fixed job-type vocabulary (multi-select). Mirrored on the frontend in
 # frontend/src/lib/jobTypes.ts - keep the two lists in sync.
 JOB_TYPE_TAGS = {
@@ -33,6 +80,43 @@ JOB_TYPE_TAGS = {
 # The four trucks; a fullness reading is captured per truck used on the job.
 # Mirrored on the frontend in frontend/src/lib/jobTypes.ts.
 TRUCK_IDS = {"16Ford", "26Int", "24FR8", "26FR8"}
+
+# Interior dimensions, used only to turn a fill percentage into a cubic-foot
+# figure on the sheet. Nothing bills off these.
+#
+# ** Estimates from the box length and typical interior width/height. Measure the
+# real fleet and correct them. ** What is stored on the report is the percentage
+# the crew observed; the volume is derived from these numbers at export time, so
+# correcting a spec changes future exports and re-exports, not the observation.
+#
+# Mirrored on the frontend in frontend/src/lib/jobTypes.ts (TRUCK_SPECS) so the
+# crew and the sheet see the same number. Keep the two in sync.
+TRUCK_SPECS = {
+    "16Ford": {"length_ft": 16.0, "width_ft": 7.5, "height_ft": 7.0},
+    "26Int": {"length_ft": 26.0, "width_ft": 8.0, "height_ft": 8.5},
+    "24FR8": {"length_ft": 24.0, "width_ft": 8.0, "height_ft": 8.5},
+    "26FR8": {"length_ft": 26.0, "width_ft": 8.0, "height_ft": 8.5},
+}
+
+# A rental isn't in the fleet: crew give its length, we assume a standard box.
+RENTAL_INTERIOR = {"width_ft": 8.0, "height_ft": 8.0}
+
+
+def truck_capacity_cuft(entry: dict) -> Optional[int]:
+    """Interior volume for one truck-fullness entry, or None when unknowable
+    (a rental whose length the crew did not enter)."""
+    if entry.get("is_rental"):
+        try:
+            length = float(entry.get("length_ft") or 0)
+        except (TypeError, ValueError):
+            return None
+        if length <= 0:
+            return None
+        return round(length * RENTAL_INTERIOR["width_ft"] * RENTAL_INTERIOR["height_ft"])
+    spec = TRUCK_SPECS.get((entry.get("truck") or "").strip())
+    if not spec:
+        return None
+    return round(spec["length_ft"] * spec["width_ft"] * spec["height_ft"])
 
 
 class TruckFullnessEntry(BaseModel):
@@ -117,6 +201,46 @@ class EmployeeHoursEntry(BaseModel):
         return v
 
 
+class ScopeChangeEntry(BaseModel):
+    """One thing that changed on site after the job was quoted.
+
+    `hours` is the crew's rough estimate of the time the change cost, not a
+    billing figure - it is there so the office can see which kinds of change
+    actually eat the day. Left optional because a crew member who cannot
+    estimate it should still be able to log that the change happened.
+    """
+    kind: str
+    hours: Optional[float] = None
+    note: Optional[str] = None
+
+    @field_validator("kind")
+    @classmethod
+    def kind_known(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v not in SCOPE_CHANGE_KINDS:
+            raise ValueError(f"kind must be one of {sorted(SCOPE_CHANGE_KINDS)}")
+        return v
+
+    @field_validator("hours")
+    @classmethod
+    def hours_sane(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if not (0 <= v <= 48):
+            raise ValueError("hours must be between 0 and 48")
+        return round(float(v), 2)
+
+    @field_validator("note")
+    @classmethod
+    def note_bounded(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 1000:
+            raise ValueError("note too long")
+        return v
+
+
 class JobReportUpsert(BaseModel):
     job_uuid: str
     personal_vehicles: int = 0
@@ -134,6 +258,12 @@ class JobReportUpsert(BaseModel):
     truck_fullness: Optional[List[TruckFullnessEntry]] = None
     overage_note: Optional[str] = None
     hours_verified: bool = False
+    # Close-out: why the job differed, how ready the client was, what changed.
+    variance_cause: Optional[str] = None
+    variance_note: Optional[str] = None
+    client_readiness: Optional[str] = None
+    client_unready: Optional[List[str]] = None
+    scope_changes: Optional[List[ScopeChangeEntry]] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
 
     @field_validator("job_type_tags")
@@ -151,6 +281,57 @@ class JobReportUpsert(BaseModel):
             raise ValueError("job_type_tag too long")
         return cleaned
 
+
+    @field_validator("variance_cause")
+    @classmethod
+    def variance_cause_known(cls, v: Optional[str]) -> Optional[str]:
+        if v in (None, ""):
+            return None
+        if v not in VARIANCE_CAUSES:
+            raise ValueError(f"variance_cause must be one of {sorted(VARIANCE_CAUSES)}")
+        return v
+
+    @field_validator("variance_note")
+    @classmethod
+    def variance_note_clean(cls, v: Optional[str]) -> Optional[str]:
+        # Trim here, not only on the client. A whitespace-only note arriving from
+        # an older build (or a re-export) would otherwise be stored non-null and
+        # read as "the crew wrote something" in a cell that looks empty.
+        if v is None:
+            return None
+        v = v.strip()
+        if len(v) > 2000:
+            raise ValueError("variance_note too long")
+        return v or None
+
+    @field_validator("client_readiness")
+    @classmethod
+    def client_readiness_known(cls, v: Optional[str]) -> Optional[str]:
+        if v in (None, ""):
+            return None
+        if v not in CLIENT_READINESS:
+            raise ValueError(f"client_readiness must be one of {sorted(CLIENT_READINESS)}")
+        return v
+
+    @field_validator("client_unready")
+    @classmethod
+    def client_unready_known(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        cleaned = [t.strip() for t in v if isinstance(t, str) and t.strip()]
+        unknown = [t for t in cleaned if t not in CLIENT_UNREADY_REASONS]
+        if unknown:
+            raise ValueError(f"unknown client_unready reason(s): {unknown}")
+        # De-duplicate but keep the order the crew ticked them in.
+        seen: set = set()
+        return [t for t in cleaned if not (t in seen or seen.add(t))]
+
+    @field_validator("scope_changes")
+    @classmethod
+    def scope_changes_bounded(cls, v):
+        if v is not None and len(v) > 50:
+            raise ValueError("too many scope_changes")
+        return v
     @field_validator("personal_vehicles")
     @classmethod
     def vehicles_non_negative(cls, v: int) -> int:
@@ -193,6 +374,12 @@ class JobReportResponse(BaseModel):
     truck_fullness: Optional[List[TruckFullnessEntry]] = None
     overage_note: Optional[str] = None
     hours_verified: bool = False
+    # Close-out: why the job differed, how ready the client was, what changed.
+    variance_cause: Optional[str] = None
+    variance_note: Optional[str] = None
+    client_readiness: Optional[str] = None
+    client_unready: Optional[List[str]] = None
+    scope_changes: Optional[List[ScopeChangeEntry]] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
     created_at: datetime
     updated_at: datetime

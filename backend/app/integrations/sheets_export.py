@@ -998,6 +998,12 @@ JOB_REPORT_HEADERS = [
     "overage_note",
     "created_at", "updated_at",
     "entered_by", "entered_on",
+    # Close-out (added 2026-07-27). New columns land to the RIGHT of the
+    # existing header row - _ensure_tab appends, it never reorders - so they
+    # are listed last here to match where the sheet actually puts them.
+    "variance_cause", "variance_note",
+    "client_readiness", "client_unready",
+    "scope_change_count", "scope_change_hours", "scope_changes",
 ]
 
 
@@ -1072,9 +1078,104 @@ def _format_truck_fullness(entries: Optional[list]) -> str:
                 if length:
                     label = f"{truck} {length}ft"
             label = f"{label} (rental)"
-        parts.append(f"{label}: V{v}×H{h} ({combined}%)")
+        # Cubic feet loaded, derived from the truck's interior at export time
+        # (see TRUCK_SPECS). The percentage is the crew's observation; the
+        # volume is what the office actually reasons about, so put both in the
+        # cell rather than making admin do the multiplication.
+        try:
+            from app.schemas.job_report import truck_capacity_cuft
+            capacity = truck_capacity_cuft(e)
+        except Exception:  # noqa: BLE001 - never let a spec lookup kill an export
+            capacity = None
+        volume = f", {round(capacity * combined / 100):,} cu ft" if capacity else ""
+        parts.append(f"{label}: V{v}×H{h} ({combined}%{volume})")
     return "; ".join(parts)
 
+
+# Close-out vocabularies render as sentence case in the sheet: admin reads this,
+# not code. Unknown keys fall back to the raw key rather than an empty cell, so a
+# vocabulary that grows without this map being updated degrades to something
+# readable instead of silently blank.
+_CLOSEOUT_LABELS = {
+    "underestimated_volume": "Underestimated volume",
+    "access_stairs_carry": "Access / stairs / long carry",
+    "client_not_ready": "Client not ready",
+    "crew_size_or_skill": "Crew size or skill",
+    "scope_added_on_site": "Scope added on site",
+    "travel_or_traffic": "Travel / traffic",
+    "damage_or_repack": "Damage or repack",
+    "fully_ready": "Fully ready",
+    "mostly_ready": "Mostly ready",
+    "partly_ready": "Partly ready",
+    "not_ready": "Not ready",
+    "packing_incomplete": "Packing incomplete",
+    "parking_not_reserved": "Parking not reserved",
+    "elevator_not_reserved": "Elevator not reserved",
+    "access_blocked": "Access blocked",
+    "utilities_off": "Utilities off",
+    "pets_or_kids": "Pets / kids underfoot",
+    "paperwork_or_payment": "Paperwork or payment",
+    "added_items": "Added items",
+    "extra_stop": "Extra stop",
+    "packing_added": "Packing added",
+    "storage_added": "Storage added",
+    "disposal_added": "Disposal added",
+    "address_changed": "Address changed",
+    "reduced_scope": "Reduced scope",
+    "other": "Other",
+}
+
+
+def _closeout_label(key: Any) -> str:
+    key = (key or "")
+    return _CLOSEOUT_LABELS.get(key, str(key))
+
+
+def _format_closeout_list(values: Optional[list]) -> str:
+    if not values:
+        return ""
+    return ", ".join(_closeout_label(v) for v in values if v)
+
+
+def _format_scope_changes(changes: Optional[list]) -> str:
+    """One line per change, e.g. "Added items (+1.5h): client added shelving".
+    Semicolon-joined so it stays one readable cell."""
+    if not changes:
+        return ""
+    parts: list[str] = []
+    for c in changes:
+        if not isinstance(c, dict):
+            continue
+        label = _closeout_label(c.get("kind"))
+        hours = c.get("hours")
+        try:
+            hours = float(hours) if hours not in (None, "") else None
+        except (TypeError, ValueError):
+            hours = None
+        head = f"{label} (+{hours:g}h)" if hours else label
+        note = (c.get("note") or "").strip()
+        parts.append(f"{head}: {note}" if note else head)
+    return "; ".join(parts)
+
+
+def _scope_change_hours(changes: Optional[list]) -> Any:
+    """Total estimated hours the on-site changes cost. Blank rather than 0 when
+    no change carried an estimate, so "nobody estimated" reads differently from
+    "the changes cost nothing"."""
+    if not changes:
+        return ""
+    total = 0.0
+    seen = False
+    for c in changes:
+        if not isinstance(c, dict):
+            continue
+        try:
+            h = float(c.get("hours"))
+        except (TypeError, ValueError):
+            continue
+        total += h
+        seen = True
+    return round(total, 2) if seen else ""
 
 def _per_diem_total(report: Dict[str, Any]) -> Any:
     """Total per-diem owed for this report: $50 per crew member when the report's
@@ -1230,6 +1331,13 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         # Total billable man-hours for the job (standalone metric).
         "actual_man_hours": _actual_man_hours,
         "overage_note": report.get("overage_note", "") or "",
+        "variance_cause": _closeout_label(report.get("variance_cause")),
+        "variance_note": report.get("variance_note", "") or "",
+        "client_readiness": _closeout_label(report.get("client_readiness")),
+        "client_unready": _format_closeout_list(report.get("client_unready")),
+        "scope_change_count": len(report.get("scope_changes") or []) or "",
+        "scope_change_hours": _scope_change_hours(report.get("scope_changes")),
+        "scope_changes": _format_scope_changes(report.get("scope_changes")),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,
