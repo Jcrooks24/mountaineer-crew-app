@@ -1,4 +1,4 @@
-# 0025. Sheet writes retry the quota, and tab metadata is cached
+# 0026. Sheet writes retry the quota, and tab metadata is cached
 
 **Status:** Active. Added 2026-07-27 after the Advanced Settings system check
 reported 11 of 19 syncs "need attention", two of them with
@@ -87,6 +87,31 @@ now returns `failing` (the *last* attempt failed: `last_error_at` with no newer
 - The system check went from flagging 11 of 19 syncs to flagging only what is
   currently broken. `Long-distance pay` and any future unused sync read
   "not yet" instead of red "missing".
+
+## The backfill audit reads the sheet, not the marker table
+
+The retry stops *new* losses. It does nothing for what the outages already left
+behind, and `sheet_sync_status` cannot tell you what that is - one row per export
+function means a later success for some other record overwrites the evidence. So
+`sheet_backfill.py` compares the two sides directly and re-drives the real export
+for whatever is missing.
+
+There is an obvious cheaper way to do that, and it is wrong: `sheet_generic_exports`
+already holds a per-record marker for nine of the syncs. A marker records that we
+*believed* we wrote a row. If the write died after the marker was inserted, or a row
+was later deleted by hand in the sheet, the marker lies - and it lies in the
+dangerous direction, reporting a clean bill of health over a real gap. Reading the
+tab's key column back costs one batched API call and cannot be wrong. **Do not
+"optimize" the audit onto the marker table.**
+
+Two further constraints worth keeping:
+
+- **The audit is batched to a flat three Sheets calls** (metadata, all header rows,
+  all key columns) no matter how many syncs are registered. A per-tab loop would be
+  ~40 reads and would trip the very quota it exists to clean up after.
+- **Re-export re-drives the production export path** for each record rather than
+  writing rows itself. A backfilled row is therefore identical to a live one, and
+  there is no second serializer to drift out of sync when a column is added.
 
 ## What would break if you undid this
 
