@@ -178,24 +178,25 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
     label: "Enterprise Dark",
     emoji: "🏢",
     vars: {
-      // Legibility-tuned: cards sit clearly above the bg, text/muted are
-      // bright enough to pass contrast on the card, borders are visible
-      // hairlines (not near-invisible), and the blue is bright enough to read
-      // as an accent while still carrying white button ink.
-      "--bg": "#0d1017",
-      "--card": "#1a1f2b",
-      "--card2": "#1a1f2b",
-      "--text": "#e2e8f2",
-      "--muted": "#a2b0c6",
-      "--border": "#37425a",
-      "--brand": "#3f6fd0",
-      "--brand2": "#3f6fd0",
-      "--danger": "#f26a6a",
-      "--ok": "#35c07a",
-      "--warn": "#e2953a",
-      "--warn-bg": "rgba(226,149,58,0.16)",
-      "--scheduled": "#ecc23f",
-      "--scheduled-bg": "rgba(236,194,63,0.26)",
+      // Field-robust dark: surfaces are lifted off near-black so cards
+      // separate clearly and the screen stays readable in sunlight (a pure
+      // black field app washes out and reads as a murky blur outdoors).
+      // Text/muted are high-contrast, borders are visible hairlines, and the
+      // blue is bright enough to read as an accent while carrying white ink.
+      "--bg": "#12151d",
+      "--card": "#1e2532",
+      "--card2": "#1e2532",
+      "--text": "#edf1f7",
+      "--muted": "#aebaca",
+      "--border": "#3d4762",
+      "--brand": "#4574d6",
+      "--brand2": "#4574d6",
+      "--danger": "#f4726f",
+      "--ok": "#3ac583",
+      "--warn": "#e89a3c",
+      "--warn-bg": "rgba(232,154,60,0.16)",
+      "--scheduled": "#eec53f",
+      "--scheduled-bg": "rgba(238,197,63,0.26)",
       "--on-brand": "#ffffff",
     },
   },

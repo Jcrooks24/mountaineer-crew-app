@@ -267,30 +267,20 @@ export default function Reimbursement() {
       </div>
 
       <div className="card">
-        <div className="row" style={{ gap: 8 }}>
+        <div className="seg">
           <button
             type="button"
+            className={"segBtn" + (mode === "mileage" ? " on" : "")}
+            aria-pressed={mode === "mileage"}
             onClick={() => setMode("mileage")}
-            style={{
-              flex: 1, padding: "10px 12px", borderRadius: 8,
-              background: mode === "mileage" ? "var(--brand)" : "transparent",
-              color: mode === "mileage" ? "var(--on-brand)" : "var(--text)",
-              border: "1px solid var(--brand)",
-              fontWeight: 700,
-            }}
           >
             Mileage
           </button>
           <button
             type="button"
+            className={"segBtn" + (mode === "expense" ? " on" : "")}
+            aria-pressed={mode === "expense"}
             onClick={() => setMode("expense")}
-            style={{
-              flex: 1, padding: "10px 12px", borderRadius: 8,
-              background: mode === "expense" ? "var(--brand)" : "transparent",
-              color: mode === "expense" ? "var(--on-brand)" : "var(--text)",
-              border: "1px solid var(--brand)",
-              fontWeight: 700,
-            }}
           >
             Business expense
           </button>
@@ -298,7 +288,7 @@ export default function Reimbursement() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">
+        <div className="microLabel" style={{ marginBottom: 10 }}>
           {mode === "mileage" ? "Mileage reimbursement" : "Business expense"}
         </div>
         <form onSubmit={handleSubmit} className="col" style={{ gap: 10 }}>
@@ -323,6 +313,7 @@ export default function Reimbursement() {
                 <div style={{ flex: 1 }}>
                   <div className="label">Start odometer</div>
                   <input
+                    className="mono"
                     type="number"
                     inputMode="numeric"
                     value={odoStart}
@@ -333,6 +324,7 @@ export default function Reimbursement() {
                 <div style={{ flex: 1 }}>
                   <div className="label">End odometer</div>
                   <input
+                    className="mono"
                     type="number"
                     inputMode="numeric"
                     value={odoEnd}
@@ -373,6 +365,7 @@ export default function Reimbursement() {
                 <div style={{ flex: 1 }}>
                   <div className="label">Amount ($)</div>
                   <input
+                    className="mono"
                     type="number"
                     inputMode="decimal"
                     step={0.01}
@@ -598,5 +591,10 @@ function StatusBadge({ status }: { status: string }) {
     : status === "failed" ? "Not sent"
     : status === "pending" ? "Pending sync"
     : status;
-  return <span style={{ color, fontWeight: 700 }}>{label}</span>;
+  // Dot + neutral text (color lives on the dot, not the whole word).
+  return (
+    <span className="statusDot" style={{ ["--dot" as any]: color, fontSize: "inherit", fontWeight: 600 }}>
+      {label}
+    </span>
+  );
 }
