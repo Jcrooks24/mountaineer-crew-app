@@ -406,6 +406,20 @@ function loadSettings(): ThemeSettings {
   }
 }
 
+/** WCAG relative luminance (0 = black, 1 = white) of a "#rrggbb" color.
+ * Returns 0.5 (neutral) for anything unparseable, so a bad value never
+ * triggers the dark/light-text conflict guard. */
+function relLuminance(hex: string | undefined): number {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec((hex ?? "").trim());
+  if (!m) return 0.5;
+  const n = parseInt(m[1], 16);
+  const chan = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * chan((n >> 16) & 255) + 0.7152 * chan((n >> 8) & 255) + 0.0722 * chan(n & 255);
+}
+
 function applySettings(settings: ThemeSettings) {
   const preset = THEME_PRESETS[settings.themeId] ?? THEME_PRESETS["dark-ocean"];
   const root = document.documentElement;
@@ -422,17 +436,26 @@ function applySettings(settings: ThemeSettings) {
   // Text contrast override. Also drives `--on-brand`, the color used for
   // text on bright brand-coloured surfaces (primary buttons, active tabs),
   // so the whole app follows the setting end-to-end.
-  if (settings.textMode === "light") {
+  //
+  // The override is CONFLICT-AWARE: forcing "dark text" on a dark-background
+  // theme (or "light text" on a light one) renders text-on-same-shade and is
+  // never readable - it is always a mistake, not a preference. So we apply a
+  // forced mode only when it matches the theme's background polarity; on a
+  // conflict we keep the preset's own text (already set above). This is what
+  // made Enterprise Dark unreadable when Text-Color was left on "Dark text".
+  const bgIsDark = relLuminance(preset.vars["--bg"]) < 0.5;
+  if (settings.textMode === "light" && bgIsDark) {
     root.style.setProperty("--text", "#f5f7fa");
     root.style.setProperty("--muted", "#c6cedb");
     root.style.setProperty("--on-brand", "#f5f7fa");
-  } else if (settings.textMode === "dark") {
+  } else if (settings.textMode === "dark" && !bgIsDark) {
     root.style.setProperty("--text", "#1a2030");
     root.style.setProperty("--muted", "#5a6a7e");
     root.style.setProperty("--on-brand", "#0b1220");
   } else {
-    // "preset": brand buttons use the preset's own ink if it declares one
-    // (e.g. the enterprise blue needs white), else the default dark navy.
+    // "preset" mode, OR a conflicting forced mode we refuse to apply: keep the
+    // preset's --text / --muted (set above) and use the preset's brand ink if
+    // it declares one (e.g. the enterprise blue needs white), else dark navy.
     root.style.setProperty("--on-brand", preset.vars["--on-brand"] ?? "#0b1220");
   }
 
