@@ -26,6 +26,12 @@ export interface ThemeVars {
   // can tell at a glance whether yellow means scheduled vs conditional.
   "--scheduled": string;
   "--scheduled-bg": string;
+  // Ink color for text on bright brand surfaces (primary buttons, active
+  // tabs). Optional: when a preset omits it, the default Text-Color setting
+  // drives `--on-brand` as before. A preset sets it when its brand color needs
+  // a specific ink (e.g. the enterprise blue needs white, not the default dark
+  // navy) so the button reads correctly without the user touching Text-Color.
+  "--on-brand"?: string;
 }
 
 export interface ThemePreset {
@@ -159,6 +165,55 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       // yellow background. yellow-700 with a 18% tint.
       "--scheduled": "#a16207",
       "--scheduled-bg": "rgba(161,98,7,0.18)",
+    },
+  },
+  // ── Enterprise (extracted from the Figma Make "PWA Improvement Workflow"
+  // exploration): 95% neutral, corporate blue as the ONLY interactive color,
+  // no gradients. The flat look is delivered purely through these values:
+  // --card2 == --card collapses the .card gradient, --brand2 == --brand
+  // collapses the .btnPrimary gradient, and --on-brand forces white button ink.
+  // For the fullest effect also pick "Sharp" button radius in theme settings
+  // (tighter corners); Card Glow is already off by default (hairline borders).
+  "enterprise-dark": {
+    label: "Enterprise Dark",
+    emoji: "🏢",
+    vars: {
+      "--bg": "#0d0f14",
+      "--card": "#161923",
+      "--card2": "#161923",
+      "--text": "#c9d3e0",
+      "--muted": "#8898ad",
+      "--border": "#2b3347",
+      "--brand": "#3366cc",
+      "--brand2": "#3366cc",
+      "--danger": "#dc2626",
+      "--ok": "#16a34a",
+      "--warn": "#d97706",
+      "--warn-bg": "rgba(217,119,6,0.16)",
+      "--scheduled": "#eab308",
+      "--scheduled-bg": "rgba(234,179,8,0.26)",
+      "--on-brand": "#ffffff",
+    },
+  },
+  "enterprise-light": {
+    label: "Enterprise Light",
+    emoji: "🏛️",
+    vars: {
+      "--bg": "#eef1f6",
+      "--card": "#ffffff",
+      "--card2": "#ffffff",
+      "--text": "#0f1724",
+      "--muted": "#5a6b82",
+      "--border": "#d1d9e6",
+      "--brand": "#1a44b8",
+      "--brand2": "#1a44b8",
+      "--danger": "#b91c1c",
+      "--ok": "#15803d",
+      "--warn": "#b45309",
+      "--warn-bg": "rgba(180,83,9,0.12)",
+      "--scheduled": "#a16207",
+      "--scheduled-bg": "rgba(161,98,7,0.18)",
+      "--on-brand": "#ffffff",
     },
   },
 };
@@ -371,8 +426,9 @@ function applySettings(settings: ThemeSettings) {
     root.style.setProperty("--muted", "#5a6a7e");
     root.style.setProperty("--on-brand", "#0b1220");
   } else {
-    // "preset": brand buttons stay on their default dark ink.
-    root.style.setProperty("--on-brand", "#0b1220");
+    // "preset": brand buttons use the preset's own ink if it declares one
+    // (e.g. the enterprise blue needs white), else the default dark navy.
+    root.style.setProperty("--on-brand", preset.vars["--on-brand"] ?? "#0b1220");
   }
 
   // Font
