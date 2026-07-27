@@ -222,7 +222,7 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
         </div>
         <div
           className="card"
-          style={{ padding: 16, borderLeft: "4px solid var(--warn, #b7791f)", display: "flex", flexDirection: "column", gap: 12 }}
+          style={{ padding: 16, borderLeft: "4px solid var(--danger)", display: "flex", flexDirection: "column", gap: 12 }}
         >
           <div style={{ fontWeight: 700, fontSize: 15 }}>This job already has a Bill of Lading</div>
           <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
@@ -232,8 +232,8 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
             what's already there.
           </div>
           <button
+            className="btnPrimary"
             onClick={() => { setEditing(pendingBol.draft); setPendingBol(null); }}
-            style={{ padding: "12px 16px", fontWeight: 700, borderRadius: 8, border: "none", background: "var(--accent, #2b6cb0)", color: "#fff", cursor: "pointer" }}
           >
             Open existing BOL
           </button>
