@@ -4376,6 +4376,9 @@ type SyncCheck = {
   env_var: string;
   env_set: boolean;
   tab_exists: boolean;
+  never_synced?: boolean;
+  failing?: boolean;
+  needs_attention?: boolean;
   last_ok_at: string | null;
   last_error_at: string | null;
   last_error: string | null;
@@ -4402,7 +4405,14 @@ function SheetSyncHealthCard() {
     } finally { setBusy(false); }
   }
 
-  const problems = data?.syncs.filter((s) => !s.tab_exists || s.last_error_at) ?? [];
+  // Current state only. A sync that failed once and has succeeded since is not a
+  // problem, and a tab that doesn't exist yet because the feature has never been
+  // used isn't either (_ensure_tab creates it on the first write). Flagging both
+  // made the panel cry wolf on ~half the registry.
+  const problems = data?.syncs.filter(
+    (s) => s.needs_attention ?? (!s.tab_exists || !!s.last_error_at),
+  ) ?? [];
+  const pending = data?.syncs.filter((s) => !s.tab_exists && s.never_synced) ?? [];
 
   return (
     <div className="card">
@@ -4444,16 +4454,36 @@ function SheetSyncHealthCard() {
                     <tr key={s.key} style={{ borderTop: "1px solid var(--border)" }}>
                       <td style={{ padding: "4px 6px" }}>{s.label}</td>
                       <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{s.tab}</td>
-                      <td style={{ padding: "4px 6px", color: s.tab_exists ? "var(--ok)" : "var(--danger)", fontWeight: 700 }}>
-                        {s.tab_exists ? "✓" : "missing"}
+                      <td
+                        style={{
+                          padding: "4px 6px",
+                          fontWeight: 700,
+                          color: s.tab_exists
+                            ? "var(--ok)"
+                            : s.never_synced ? "var(--muted)" : "var(--danger)",
+                        }}
+                        title={
+                          s.tab_exists
+                            ? ""
+                            : s.never_synced
+                              ? "Nothing has synced here yet - the tab is created automatically on the first write."
+                              : "This sync has written before but its tab is gone - check the tab name in the sheet."
+                        }
+                      >
+                        {s.tab_exists ? "✓" : s.never_synced ? "not yet" : "missing"}
                       </td>
                       <td style={{ padding: "4px 6px", color: s.env_set ? "var(--text)" : "var(--warn)" }} title={s.env_set ? "" : `${s.env_var} not set - using default tab`}>
                         {s.env_set ? "yes" : "default"}
                       </td>
-                      <td style={{ padding: "4px 6px", color: s.last_error_at ? "var(--danger)" : "var(--muted)" }}>
-                        {s.last_error_at
+                      <td style={{ padding: "4px 6px", color: s.failing ? "var(--danger)" : "var(--muted)" }}>
+                        {s.failing && s.last_error_at
                           ? `error ${new Date(s.last_error_at).toLocaleString()}`
                           : s.last_ok_at ? new Date(s.last_ok_at).toLocaleString() : "-"}
+                        {!s.failing && s.last_error_at && (
+                          <div style={{ fontSize: 11, opacity: 0.7 }}>
+                            recovered from an error {new Date(s.last_error_at).toLocaleDateString()}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -4462,10 +4492,18 @@ function SheetSyncHealthCard() {
             </div>
           )}
           {problems.some((s) => s.last_error) && (
+            // Every failing sync, not the first three - the truncated list used to
+            // hide the error of whichever sync you were actually chasing.
             <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>
-              {problems.filter((s) => s.last_error).slice(0, 3).map((s) => (
-                <div key={s.key}>{s.label}: {s.last_error}</div>
+              {problems.filter((s) => s.last_error).map((s) => (
+                <div key={s.key} style={{ marginBottom: 4 }}>{s.label}: {s.last_error}</div>
               ))}
+            </div>
+          )}
+          {pending.length > 0 && (
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+              Not created yet (normal - the tab is added on the first sync):{" "}
+              {pending.map((s) => s.label).join(", ")}
             </div>
           )}
         </div>
