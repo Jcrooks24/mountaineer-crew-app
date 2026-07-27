@@ -1293,7 +1293,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           below. */}
       {!driveOnly && (
       <div className="card">
-        <div className="sectionTitle">Job data</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Job data</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Hours, equipment, and vehicles - the data used to build the invoice line items.
         </div>
@@ -1484,10 +1484,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               {editorPreview.kind === "ok" && (
                 <div className="small" style={{ color: "var(--muted)" }}>
                   Worked:{" "}
-                  <strong style={{ color: "var(--text)" }}>
+                  <strong className="mono" style={{ color: "var(--text)" }}>
                     {editorPreview.hours.toFixed(2)} hrs
                   </strong>{" "}
-                  <span style={{ color: "var(--muted)" }}>
+                  <span className="mono" style={{ color: "var(--muted)" }}>
                     (span {editorPreview.spanHours.toFixed(2)}
                     {editorPreview.breakHours > 0 ? ` − break ${editorPreview.breakHours.toFixed(2)}` : ""})
                   </span>
@@ -1609,11 +1609,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 fontWeight: 700,
               }}
             >
-              <span>Total man-hours</span>
+              <span className="microLabel">Total man-hours</span>
               <span>
-                {totalBillableHours.toFixed(2)}h
+                <span className="mono">{totalBillableHours.toFixed(2)}h</span>
                 <span
-                  className="small"
+                  className="small mono"
                   style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}
                 >
                   (actual {totalActualHours.toFixed(2)}h)
@@ -1704,7 +1704,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       <>
       {/* ── Billing (bill helper + totals + notes + review + method in one tile) ── */}
       <div className="card">
-        <div className="sectionTitle">Billing</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Billing</div>
         <div style={{ marginBottom: 12 }}>
           {billSlots.billHelper}
           {billSlots.totals}
@@ -1755,7 +1755,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
       {/* ── Personal vehicles ── */}
       <div className="card">
-        <div className="sectionTitle">Job wrap-up</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Job wrap-up</div>
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
@@ -1838,7 +1838,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           required to submit. */}
       {longDistance && (
         <div className="card" style={{ borderColor: "var(--brand)" }}>
-          <div className="sectionTitle">Long-distance</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Long-distance</div>
 
           <div data-component="ReportDocuments" style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
@@ -2048,33 +2048,21 @@ function ThreeWay<T extends string>({
   options: { value: T; label: string; tone: "ok" | "danger" | "muted" }[];
 }) {
   return (
-    <div style={{ display: "flex", gap: 10 }}>
+    <div className="seg">
       {options.map(({ value: v, label, tone }) => {
         const active = value === v;
-        const accent =
-          tone === "ok" ? "var(--brand)" :
+        const seg =
           tone === "danger" ? "var(--danger)" :
-          "var(--muted)";
-        const accentBg =
-          tone === "ok" ? "rgba(93,214,194,0.18)" :
-          tone === "danger" ? "rgba(255,107,107,0.16)" :
-          "rgba(148,163,184,0.12)";
+          tone === "muted" ? "var(--muted)" :
+          "var(--ok)";
         return (
           <button
             key={String(v)}
             type="button"
+            aria-pressed={active}
+            className={"segBtn" + (active ? " on" : "")}
+            style={{ ["--seg" as any]: seg }}
             onClick={() => onChange(v)}
-            style={{
-              flex: 1,
-              padding: "10px 0",
-              borderRadius: 10,
-              border: active ? `2px solid ${accent}` : "1px solid var(--border)",
-              background: active ? accentBg : "transparent",
-              color: active ? accent : "var(--muted)",
-              fontWeight: active ? 700 : 400,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
           >
             {label}
           </button>
@@ -2096,34 +2084,20 @@ function YesNo({
   noLabel: string;
 }) {
   return (
-    <div style={{ display: "flex", gap: 10 }}>
+    <div className="seg">
       {[
-        { v: true, label: yesLabel },
-        { v: false, label: noLabel },
-      ].map(({ v, label }) => {
+        { v: true, label: yesLabel, seg: "var(--ok)" },
+        { v: false, label: noLabel, seg: "var(--danger)" },
+      ].map(({ v, label, seg }) => {
         const active = value === v;
         return (
           <button
             key={String(v)}
             type="button"
+            aria-pressed={active}
+            className={"segBtn" + (active ? " on" : "")}
+            style={{ ["--seg" as any]: seg }}
             onClick={() => onChange(v)}
-            style={{
-              flex: 1,
-              padding: "10px 0",
-              borderRadius: 10,
-              border: active
-                ? `2px solid ${v ? "var(--brand)" : "var(--danger)"}`
-                : "1px solid var(--border)",
-              background: active
-                ? v ? "rgba(93,214,194,0.18)" : "rgba(255,107,107,0.16)"
-                : "transparent",
-              color: active
-                ? v ? "var(--brand)" : "var(--danger)"
-                : "var(--muted)",
-              fontWeight: active ? 700 : 400,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
           >
             {label}
           </button>
