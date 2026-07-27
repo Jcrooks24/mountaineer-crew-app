@@ -372,7 +372,10 @@ const STORAGE_KEY = "crew_theme_settings";
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export const DEFAULT_SETTINGS: ThemeSettings = {
-  themeId: "dark-ocean",
+  // Enterprise Dark is the app's default identity (the facelift). Existing
+  // users keep whatever they already saved in localStorage; only new users and
+  // anyone who never picked a theme land here. See ADR 0025.
+  themeId: "enterprise-dark",
   brandOverride: null,
   brand2Override: null,
   textMode: "preset",
