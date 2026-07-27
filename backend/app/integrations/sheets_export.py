@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.google_cal_oauth import _build_authorized_http, _ssl_retry, _get_creds
+from app.core.google_cal_oauth import (
+    _build_authorized_http,
+    _get_creds,
+    _SSL_ERRORS,
+)
 
 # Bounded pool - at most 2 export threads run concurrently. Additional tasks
 # queue internally and drain as workers free up. Prevents a sync burst from
@@ -247,6 +251,111 @@ def _col_letter(n: int) -> str:
     return result
 
 
+# ── Transient-failure retry ──────────────────────────────────────────────────
+# The shared `_ssl_retry` covers dropped TLS connections only. The other way a write
+# dies for no lasting reason is Google's per-minute quota: Sheets allows 60 read
+# and 60 write requests per minute per user, and a burst of syncs answers with
+# `HttpError 429 ... RATE_LIMIT_EXCEEDED`. That used to strand the row - the
+# export raised, the record kept no retry state, and the data only reached the
+# sheet if someone happened to edit and re-save it. 5xx (backendError) is the
+# same story.
+#
+# Retry is applied per API request, never per export: a request that returned
+# 429/5xx did not apply, so re-issuing it is idempotent by construction. Wrapping
+# a whole multi-step export would not be - the append-style writes would double.
+_TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
+
+# A dropped TLS connection can be re-tried immediately; quota is a per-minute
+# bucket, so that backoff has to be long enough to actually clear it. Keeping the
+# two schedules separate matters because these run on a 2-worker pool - waiting
+# 26s on an SSL blip would stall exports that had nothing wrong with them.
+_SSL_BACKOFF_SECONDS = (0.5, 1.0, 2.0)
+_QUOTA_BACKOFF_SECONDS = (5.0, 15.0, 30.0)
+
+
+def _google_error_kind(exc: Exception) -> Optional[str]:
+    """Classify an exception as "quota" (429/5xx - wait it out), "ssl" (dropped
+    connection - retry promptly), or None (permanent, do not retry)."""
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    try:
+        if status is not None and int(status) in _TRANSIENT_STATUSES:
+            return "quota"
+    except (TypeError, ValueError):
+        pass
+    msg = str(exc)
+    if "RATE_LIMIT_EXCEEDED" in msg or "Quota exceeded" in msg:
+        return "quota"
+    if any(marker in msg for marker in _SSL_ERRORS):
+        return "ssl"
+    return None
+
+
+def _api(fn, max_attempts: int = 4):
+    """Execute a single Google API request, retrying transient failures with
+    backoff. Use for every Sheets call; `fn` must issue exactly one request."""
+    last_err: Optional[Exception] = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - re-raised unless transient
+            kind = _google_error_kind(exc)
+            if kind is None or attempt >= max_attempts - 1:
+                raise
+            last_err = exc
+            schedule = _QUOTA_BACKOFF_SECONDS if kind == "quota" else _SSL_BACKOFF_SECONDS
+            delay = schedule[min(attempt, len(schedule) - 1)]
+            print(f"[sheets] transient {kind} error, retry in {delay}s: {exc}")
+            time.sleep(delay)
+    raise last_err  # type: ignore[misc]
+
+
+# ── Spreadsheet metadata cache ───────────────────────────────────────────────
+# Every export used to issue at least two full `spreadsheets().get()` calls - one
+# in `_ensure_tab`, one in `_write_rows_top` - purely to learn tab names and
+# numeric sheet ids. On a sheet with ~20 tabs that is the single biggest consumer
+# of the 60-reads/min quota, and it is what puts bursts over the line into 429.
+# The tab layout only changes when we create a tab (or an admin renames one in
+# the sheet), so a short TTL is safe: stale-metadata failures self-heal because
+# every consumer refreshes and retries once before giving up.
+_META_TTL_SECONDS = 30.0
+_meta_cache: Dict[str, tuple] = {}  # spreadsheet_id -> (expires_at, {title: sheetId})
+_meta_cache_lock = threading.Lock()
+
+
+def _sheet_ids(svc: Any, spreadsheet_id: str, refresh: bool = False) -> Dict[str, int]:
+    """Return {tab title: numeric sheetId} for the spreadsheet, cached briefly.
+    Pass `refresh=True` to force a live read (used by the health check and by
+    the retry path when a cached id turns out to be stale)."""
+    now = time.monotonic()
+    if not refresh:
+        with _meta_cache_lock:
+            entry = _meta_cache.get(spreadsheet_id)
+        if entry and entry[0] > now:
+            return entry[1]
+
+    meta = _api(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    ids = {
+        s["properties"]["title"]: s["properties"]["sheetId"]
+        for s in meta.get("sheets", [])
+        if "properties" in s
+    }
+    with _meta_cache_lock:
+        _meta_cache[spreadsheet_id] = (time.monotonic() + _META_TTL_SECONDS, ids)
+    return ids
+
+
+def _invalidate_meta_cache(spreadsheet_id: Optional[str] = None) -> None:
+    """Drop cached tab metadata - called right after we create a tab so the new
+    tab is visible immediately rather than after the TTL."""
+    with _meta_cache_lock:
+        if spreadsheet_id is None:
+            _meta_cache.clear()
+        else:
+            _meta_cache.pop(spreadsheet_id, None)
+
+
 def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> List[str]:
     """
     Ensure the sheet tab exists and contains all expected header columns.
@@ -258,41 +367,47 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
     Returns the final ordered list of headers as they appear in the sheet
     (existing columns first, any newly-added columns at the end).
     """
-    meta = svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    existing_tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+    existing_tabs = _sheet_ids(svc, spreadsheet_id)
+
+    if tab not in existing_tabs:
+        # Cached metadata can be up to _META_TTL_SECONDS stale; confirm against a
+        # live read before creating, so we never try to add a tab that exists
+        # (Sheets answers that with a hard 400, which is not retryable).
+        existing_tabs = _sheet_ids(svc, spreadsheet_id, refresh=True)
 
     if tab not in existing_tabs:
         # Create the tab
-        svc.spreadsheets().batchUpdate(
+        _api(lambda: svc.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": tab}}}]},
-        ).execute()
+        ).execute())
+        _invalidate_meta_cache(spreadsheet_id)
         # Write full header row
-        svc.spreadsheets().values().update(
+        _api(lambda: svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!A1",
             valueInputOption="RAW",
             body={"values": [headers]},
-        ).execute()
+        ).execute())
         return list(headers)
 
     # Tab exists - read current header row
-    result = svc.spreadsheets().values().get(
+    result = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=f"{tab}!1:1",
-    ).execute()
+    ).execute())
     current = result.get("values", [[]])[0] if result.get("values") else []
 
     # Find any columns we want but that aren't in the sheet yet
     missing = [h for h in headers if h not in current]
     if missing:
         start_letter = _col_letter(len(current))
-        svc.spreadsheets().values().update(
+        _api(lambda: svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!{start_letter}1",
             valueInputOption="RAW",
             body={"values": [missing]},
-        ).execute()
+        ).execute())
         current = current + missing
 
     return current
@@ -325,14 +440,13 @@ def _write_rows_top(
     if not rows:
         return
 
-    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
-    sheet_numeric_id: Optional[int] = None
-    for s in meta.get("sheets", []):
-        if s["properties"]["title"] == tab:
-            sheet_numeric_id = s["properties"]["sheetId"]
-            break
+    sheet_numeric_id = _sheet_ids(svc, spreadsheet_id).get(tab)
     if sheet_numeric_id is None:
-        _ssl_retry(lambda: svc.spreadsheets().values().append(
+        # Not in cached metadata - confirm with a live read before falling back
+        # to a plain append (which would put the row at the bottom).
+        sheet_numeric_id = _sheet_ids(svc, spreadsheet_id, refresh=True).get(tab)
+    if sheet_numeric_id is None:
+        _api(lambda: svc.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!A1",
             valueInputOption="RAW",
@@ -342,28 +456,41 @@ def _write_rows_top(
         return
 
     n = len(rows)
-    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body={"requests": [{
-            "insertDimension": {
-                "range": {
-                    "sheetId": sheet_numeric_id,
-                    "dimension": "ROWS",
-                    "startIndex": 1,        # row 2 (0-based) - directly below header
-                    "endIndex": 1 + n,
-                },
-                # Don't pull header formatting (bold, frozen, etc.) onto the
-                # data rows we're about to write.
-                "inheritFromBefore": False,
-            }
-        }]},
-    ).execute())
+
+    def _insert(sid: int) -> None:
+        _api(lambda: svc.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{
+                "insertDimension": {
+                    "range": {
+                        "sheetId": sid,
+                        "dimension": "ROWS",
+                        "startIndex": 1,        # row 2 (0-based) - directly below header
+                        "endIndex": 1 + n,
+                    },
+                    # Don't pull header formatting (bold, frozen, etc.) onto the
+                    # data rows we're about to write.
+                    "inheritFromBefore": False,
+                }
+            }]},
+        ).execute())
+
+    try:
+        _insert(sheet_numeric_id)
+    except Exception:
+        # A cached sheetId that no longer resolves (tab deleted/recreated in the
+        # sheet) fails with a hard 400 that retrying can't fix. Refresh once and
+        # try again before surfacing the failure.
+        fresh = _sheet_ids(svc, spreadsheet_id, refresh=True).get(tab)
+        if fresh is None or fresh == sheet_numeric_id:
+            raise
+        _insert(fresh)
 
     width = max((len(r) for r in rows), default=0)
     if width <= 0:
         return
     end_col = _col_letter(width - 1)
-    _ssl_retry(lambda: svc.spreadsheets().values().update(
+    _api(lambda: svc.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
         range=f"{tab}!A2:{end_col}{1 + n}",
         valueInputOption="RAW",
@@ -516,7 +643,7 @@ def export_materials_to_sheets(db: Session, submission: dict) -> int:
     #    certifi CA bundle) for both _ensure_tab and append.
     svc = _get_sheets_svc(db)
 
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS))
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, MATERIALS_HEADERS)
     rows = [_build_row(r, actual_headers) for r in new_rows]
 
     _write_rows_top(svc, spreadsheet_id, tab, rows)
@@ -564,7 +691,7 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
         tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
 
         svc = _get_sheets_svc(db)
-        hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        hdr = _api(lambda: svc.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!1:1",
         ).execute())
@@ -575,7 +702,7 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
         event_col_letter = _col_letter(headers_row.index("event_id"))
         note_col_letter = _col_letter(headers_row.index("note"))
 
-        col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        col = _api(lambda: svc.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!{event_col_letter}:{event_col_letter}",
         ).execute())
@@ -597,7 +724,7 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
         if target_row is None:
             return 0
 
-        _ssl_retry(lambda: svc.spreadsheets().values().update(
+        _api(lambda: svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!{note_col_letter}{target_row}",
             valueInputOption="RAW",
@@ -616,22 +743,17 @@ def delete_event_from_sheets(db: Session, event_id: str) -> int:
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
     tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
     svc = _get_sheets_svc(db)
-    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
-    props = next(
-        (s["properties"] for s in meta.get("sheets", []) if s["properties"]["title"] == tab),
-        None,
-    )
-    if not props:
+    sheet_numeric_id = _sheet_numeric_id(svc, spreadsheet_id, tab)
+    if sheet_numeric_id is None:
         return 0
-    sheet_numeric_id = props["sheetId"]
-    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    hdr = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"{tab}!1:1",
     ).execute())
     headers_row = (hdr.get("values") or [[]])[0]
     if "event_id" not in headers_row:
         return 0
     col_letter = _col_letter(headers_row.index("event_id"))
-    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    col = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}",
     ).execute())
     col_values = col.get("values") or []
@@ -644,7 +766,7 @@ def delete_event_from_sheets(db: Session, event_id: str) -> int:
         }}}
         for idx in sorted(target_indices, reverse=True)
     ]
-    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+    _api(lambda: svc.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id, body={"requests": requests},
     ).execute())
     return len(target_indices)
@@ -671,7 +793,7 @@ def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str)
         tab = os.getenv("SHEETS_EVENTS_TAB", "Events").strip() or "Events"
 
         svc = _get_sheets_svc(db)
-        hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        hdr = _api(lambda: svc.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!1:1",
         ).execute())
@@ -682,7 +804,7 @@ def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str)
         event_col_letter = _col_letter(headers_row.index("event_id"))
         ts_col_letter = _col_letter(headers_row.index("timestamp"))
 
-        col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+        col = _api(lambda: svc.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!{event_col_letter}:{event_col_letter}",
         ).execute())
@@ -702,7 +824,7 @@ def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str)
         if target_row is None:
             return 0
 
-        _ssl_retry(lambda: svc.spreadsheets().values().update(
+        _api(lambda: svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
             range=f"{tab}!{ts_col_letter}{target_row}",
             valueInputOption="RAW",
@@ -728,17 +850,12 @@ def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
     svc = _get_sheets_svc(db)
 
     # Resolve the numeric sheetId for deleteDimension
-    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
-    props = next(
-        (s["properties"] for s in meta.get("sheets", []) if s["properties"]["title"] == tab),
-        None,
-    )
-    if not props:
+    sheet_numeric_id = _sheet_numeric_id(svc, spreadsheet_id, tab)
+    if sheet_numeric_id is None:
         return 0
-    sheet_numeric_id = props["sheetId"]
 
     # Locate the submission_id column
-    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    hdr = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=f"{tab}!1:1",
     ).execute())
@@ -748,7 +865,7 @@ def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
     col_letter = _col_letter(headers_row.index("submission_id"))
 
     # Pull just that column to find matching row indices
-    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    col = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=f"{tab}!{col_letter}:{col_letter}",
     ).execute())
@@ -773,7 +890,7 @@ def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
             }}}
             for idx in sorted(target_indices, reverse=True)
         ]
-        _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+        _api(lambda: svc.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": requests},
         ).execute())
@@ -829,7 +946,7 @@ def _append_rows(
 
     svc = _get_sheets_svc(db)
 
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, headers))
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, headers)
     rows = [_build_row(r, actual_headers) for r in rows_data]
 
     _write_rows_top(svc, spreadsheet_id, tab, rows)
@@ -1126,7 +1243,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
     # Ensure the tab + headers exist before deleting (a fresh staging
     # spreadsheet may not have the JobReports tab yet) so the lookup in
     # _delete_sheet_rows_by_value finds the job_uuid column.
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, JOB_REPORT_HEADERS))
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, JOB_REPORT_HEADERS)
     _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "job_uuid", job_uuid)
 
     rows = [_build_row(row, actual_headers)]
@@ -1140,7 +1257,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
             body={"values": rows},
         ).execute()
 
-    _ssl_retry(_append)
+    _api(_append)
     return 1
 
 
@@ -1244,7 +1361,7 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
     marker = _job_materials_marker(job_uuid)
 
     svc = _get_sheets_svc(db)
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, BILL_HEADERS))
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, BILL_HEADERS)
     _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", marker)
 
     if total <= 0:
@@ -1282,7 +1399,7 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
             body={"values": sheet_rows},
         ).execute()
 
-    _ssl_retry(_append)
+    _api(_append)
     return 1
 
 
@@ -1450,7 +1567,7 @@ def export_rods_to_sheets(db: Session, rods: Dict[str, Any]) -> int:
     )
     db.commit()
 
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, RODS_HEADERS))
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, RODS_HEADERS)
     _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, actual_headers)])
     _generic_mark_exported(db, "rods", [key])
     return 1
@@ -1493,7 +1610,7 @@ def export_ld_day_to_sheets(db: Session, day: Dict[str, Any]) -> int:
     )
     db.commit()
 
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, LD_DAY_HEADERS))
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, LD_DAY_HEADERS)
     _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, actual_headers)])
     _generic_mark_exported(db, "ld_day", [key])
     return 1
@@ -1548,13 +1665,14 @@ def _delete_sheet_rows_by_value(
 
     Returns the number of rows deleted. No-op if the tab doesn't exist
     yet, the column isn't present, or no rows match."""
-    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
-    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
+    sheet_ids = _sheet_ids(svc, spreadsheet_id)
     if tab not in sheet_ids:
-        return 0
+        sheet_ids = _sheet_ids(svc, spreadsheet_id, refresh=True)
+        if tab not in sheet_ids:
+            return 0
     sheet_numeric_id = sheet_ids[tab]
 
-    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    hdr = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
     ).execute())
     headers_row = (hdr.get("values") or [[]])[0]
@@ -1562,7 +1680,7 @@ def _delete_sheet_rows_by_value(
         return 0
     col_letter = _col_letter(headers_row.index(col_name))
 
-    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    col = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
     ).execute())
     col_values = col.get("values") or []
@@ -1583,7 +1701,7 @@ def _delete_sheet_rows_by_value(
         }}}
         for idx in sorted(target_indices, reverse=True)
     ]
-    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+    _api(lambda: svc.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id, body={"requests": requests}
     ).execute())
     return len(target_indices)
@@ -1604,13 +1722,11 @@ def _delete_bol_stale_rows(
     0020): the freshly-written rows carry `keep_ts` and are preserved; older rows
     for the same bol_id are removed. Reading only the two key columns keeps this
     off the whole-tab read path. No-op if the tab / columns are absent."""
-    meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
-    sheet_ids = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta.get("sheets", [])}
-    if tab not in sheet_ids:
+    sheet_numeric_id = _sheet_numeric_id(svc, spreadsheet_id, tab)
+    if sheet_numeric_id is None:
         return 0
-    sheet_numeric_id = sheet_ids[tab]
 
-    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    hdr = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"{tab}!1:1"
     ).execute())
     headers_row = (hdr.get("values") or [[]])[0]
@@ -1619,7 +1735,7 @@ def _delete_bol_stale_rows(
     id_idx = headers_row.index(id_col)
     ts_idx = headers_row.index(ts_col)
     lo, hi = min(id_idx, ts_idx), max(id_idx, ts_idx)
-    res = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    res = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}"
     ).execute())
     values = res.get("values") or []
@@ -1645,7 +1761,7 @@ def _delete_bol_stale_rows(
         }}}
         for idx in sorted(stale, reverse=True)
     ]
-    _ssl_retry(lambda: svc.spreadsheets().batchUpdate(
+    _api(lambda: svc.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id, body={"requests": requests}
     ).execute())
     return len(stale)
@@ -1720,7 +1836,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
         "created_at": _iso(estimate.get("created_at")),
         "updated_at": updated_at,
     }
-    actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, ESTIMATE_HEADERS))
+    actual_summary_headers = _ensure_tab(svc, spreadsheet_id, summary_tab, ESTIMATE_HEADERS)
     rows = [_build_row(summary_row, actual_summary_headers)]
 
     _write_rows_top(svc, spreadsheet_id, summary_tab, rows)
@@ -1754,7 +1870,7 @@ def export_estimate_to_sheets(db: Session, estimate: Dict[str, Any]) -> int:
             })
             item_keys.append(f"{estimate_uuid}:{item_id}:{updated_at}")
 
-        actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, ESTIMATE_ITEM_HEADERS))
+        actual_item_headers = _ensure_tab(svc, spreadsheet_id, items_tab, ESTIMATE_ITEM_HEADERS)
         item_sheet_rows = [_build_row(r, actual_item_headers) for r in item_rows]
 
         _write_rows_top(svc, spreadsheet_id, items_tab, item_sheet_rows)
@@ -1818,7 +1934,7 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
         "created_at": _iso(bol.get("created_at")),
         "updated_at": updated_at,
     }
-    actual_summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, BOL_HEADERS))
+    actual_summary_headers = _ensure_tab(svc, spreadsheet_id, summary_tab, BOL_HEADERS)
 
     # Build item rows up front so all writes happen together, before any delete.
     item_rows: List[Dict[str, Any]] = []
@@ -1852,7 +1968,7 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
                 "exported_at": updated_at,
             })
             item_keys.append(f"{bol_id}:{item_id}:{updated_at}")
-        actual_item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, BOL_ITEM_HEADERS))
+        actual_item_headers = _ensure_tab(svc, spreadsheet_id, items_tab, BOL_ITEM_HEADERS)
 
     # WRITE FIRST, delete stale after (bug 4 / ADR 0020). The old ordering deleted
     # every row for this bol_id BEFORE writing, so an exception in between left
@@ -2067,7 +2183,7 @@ def export_job_inventory_to_sheets(db: Session, inv: Dict[str, Any]) -> int:
     svc = _get_sheets_svc(db)
 
     # Summary row (replace by job_uuid).
-    summary_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, summary_tab, JOB_INVENTORY_HEADERS))
+    summary_headers = _ensure_tab(svc, spreadsheet_id, summary_tab, JOB_INVENTORY_HEADERS)
     _delete_sheet_rows_by_value(svc, spreadsheet_id, summary_tab, "job_uuid", job_uuid)
     summary_row = {
         "job_uuid": job_uuid,
@@ -2081,7 +2197,7 @@ def export_job_inventory_to_sheets(db: Session, inv: Dict[str, Any]) -> int:
     _write_rows_top(svc, spreadsheet_id, summary_tab, [_build_row(summary_row, summary_headers)])
 
     # Item rows (replace by job_uuid).
-    item_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, items_tab, JOB_INVENTORY_ITEM_HEADERS))
+    item_headers = _ensure_tab(svc, spreadsheet_id, items_tab, JOB_INVENTORY_ITEM_HEADERS)
     _delete_sheet_rows_by_value(svc, spreadsheet_id, items_tab, "job_uuid", job_uuid)
     if items:
         item_rows = [
@@ -2247,7 +2363,7 @@ def export_incident_to_sheets(db: Session, inc: Dict[str, Any]) -> int:
         return 0
 
     svc = _get_sheets_svc(db)
-    headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, INCIDENT_HEADERS))
+    headers = _ensure_tab(svc, spreadsheet_id, tab, INCIDENT_HEADERS)
     _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "incident_uuid", uuid)
 
     row = {
@@ -2463,7 +2579,7 @@ def _sweep_sheet_entry_status(
     (entered_by, entered_on) into its trailing entry-status columns.
     Returns rows updated. No-op if the sheet doesn't have the entry-status
     columns yet (next regular export will append them via _ensure_tab)."""
-    hdr = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    hdr = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=f"{tab}!1:1",
     ).execute())
@@ -2476,7 +2592,7 @@ def _sweep_sheet_entry_status(
     entered_on_idx = headers_row.index("entered_on")
 
     job_uuid_letter = _col_letter(job_uuid_idx)
-    col = _ssl_retry(lambda: svc.spreadsheets().values().get(
+    col = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=f"{tab}!{job_uuid_letter}:{job_uuid_letter}",
     ).execute())
@@ -2509,7 +2625,7 @@ def _sweep_sheet_entry_status(
             data.append({"range": f"{tab}!{entered_by_letter}{r}", "values": [[entered_by]]})
             data.append({"range": f"{tab}!{entered_on_letter}{r}", "values": [[entered_on]]})
 
-    _ssl_retry(lambda: svc.spreadsheets().values().batchUpdate(
+    _api(lambda: svc.spreadsheets().values().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"valueInputOption": "RAW", "data": data},
     ).execute())
@@ -2595,7 +2711,7 @@ def export_office_hours_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
     }
 
     svc = _get_sheets_svc(db)
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, OFFICE_HOURS_HEADERS))
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, OFFICE_HOURS_HEADERS)
     _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", entry_uuid)
     rows = [_build_row(row, actual_headers)]
 
@@ -2608,7 +2724,7 @@ def export_office_hours_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
             body={"values": rows},
         ).execute()
 
-    _ssl_retry(_append)
+    _api(_append)
     return 1
 
 
@@ -2674,7 +2790,7 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
     }
 
     svc = _get_sheets_svc(db)
-    actual_headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, REIMBURSEMENT_HEADERS))
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, REIMBURSEMENT_HEADERS)
     _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "reimbursement_uuid", reimbursement_uuid)
     rows = [_build_row(row, actual_headers)]
 
@@ -2687,7 +2803,7 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
             body={"values": rows},
         ).execute()
 
-    _ssl_retry(_append)
+    _api(_append)
     return 1
 
 
@@ -2714,15 +2830,10 @@ def _format_availability_cell(day: str, status: str, note: str) -> str:
 def _sheet_numeric_id(svc: Any, spreadsheet_id: str, tab: str) -> Optional[int]:
     """Resolve a tab name to its numeric sheetId - required for
     deleteDimension batchUpdate requests."""
-    meta = _ssl_retry(
-        lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    )
-    for s in meta.get("sheets", []):
-        props = s.get("properties", {})
-        if props.get("title") == tab:
-            sid = props.get("sheetId")
-            return int(sid) if sid is not None else None
-    return None
+    sid = _sheet_ids(svc, spreadsheet_id).get(tab)
+    if sid is None:
+        sid = _sheet_ids(svc, spreadsheet_id, refresh=True).get(tab)
+    return int(sid) if sid is not None else None
 
 
 def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
@@ -2784,9 +2895,7 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
             row[f"day_{i+1:02d}"] = ""
 
     svc = _get_sheets_svc(db)
-    actual_headers = _ssl_retry(
-        lambda: _ensure_tab(svc, spreadsheet_id, tab, AVAILABILITY_HEADERS)
-    )
+    actual_headers = _ensure_tab(svc, spreadsheet_id, tab, AVAILABILITY_HEADERS)
 
     # Compound dedupe key - _delete_sheet_rows_by_value only takes one column
     # so we walk the values manually and delete rows that match both
@@ -2805,7 +2914,7 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
         # delete; reading just their span (A:B in practice) is ~13x lighter and the
         # absolute row indices are unchanged, so the delete stays correct.
         lo, hi = min(user_col, win_col), max(user_col, win_col)
-        result = _ssl_retry(
+        result = _api(
             lambda: svc.spreadsheets()
             .values()
             .get(
@@ -2843,7 +2952,7 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
                     }
                     for i in sorted(rows_to_delete, reverse=True)
                 ]
-                _ssl_retry(
+                _api(
                     lambda: svc.spreadsheets()
                     .batchUpdate(
                         spreadsheetId=spreadsheet_id,
@@ -2863,7 +2972,7 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
             body={"values": rows_out},
         ).execute()
 
-    _ssl_retry(_append_avail)
+    _api(_append_avail)
     return 1
 
 
@@ -2985,6 +3094,13 @@ def check_sheets_sync(db: Session) -> Dict[str, Any]:
     its tab env var is explicitly set (unset = using the default, which on
     staging silently targets the prod tab), and the last success/failure time.
 
+    Reports *current* state, not history. `failing` is true only when the last
+    attempt failed - a sync that hit a transient 429 last week and has synced
+    fine since is healthy, and saying otherwise trains admins to ignore the
+    panel. `never_synced` separates "tab isn't there because nothing has ever
+    used this feature" (normal; `_ensure_tab` creates it on first write) from
+    "tab is gone but this sync has data" (a real problem).
+
     Returns a JSON-able dict for the Advanced Settings system check. New syncs
     are covered automatically by adding to SHEET_SYNC_REGISTRY."""
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
@@ -2997,7 +3113,7 @@ def check_sheets_sync(db: Session) -> Dict[str, Any]:
 
     try:
         svc = _get_sheets_svc(db)
-        meta = _ssl_retry(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+        meta = _api(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
         titles = {s["properties"]["title"] for s in meta.get("sheets", [])}
         result["connected"] = True
     except Exception as e:  # noqa: BLE001 - surface the failure to the admin
@@ -3014,19 +3130,30 @@ def check_sheets_sync(db: Session) -> Dict[str, Any]:
         raw = (os.getenv(entry["env"]) or "").strip()
         tab = raw or entry["default"]
         st = statuses.get(entry.get("fn") or "")
+        ok_at = st.last_ok_at if st else None
+        err_at = st.last_error_at if st else None
+        # Failing = the most recent attempt failed. An error older than the last
+        # success has already been recovered from.
+        failing = bool(err_at) and (ok_at is None or err_at > ok_at)
+        never_synced = ok_at is None and err_at is None
+        tab_exists = tab in titles
         result["syncs"].append({
             "key": entry["key"],
             "label": entry["label"],
             "tab": tab,
             "env_var": entry["env"],
             "env_set": bool(raw),
-            "tab_exists": tab in titles,
-            "last_ok_at": st.last_ok_at.isoformat() if st and st.last_ok_at else None,
-            "last_error_at": st.last_error_at.isoformat() if st and st.last_error_at else None,
+            "tab_exists": tab_exists,
+            "never_synced": never_synced,
+            "failing": failing,
+            # A missing tab only matters once something has tried to write to it.
+            "needs_attention": failing or (not tab_exists and not never_synced),
+            "last_ok_at": ok_at.isoformat() if ok_at else None,
+            "last_error_at": err_at.isoformat() if err_at else None,
             "last_error": (st.last_error if st else None),
         })
 
-    result["ok"] = all(s["tab_exists"] for s in result["syncs"])
+    result["ok"] = not any(s["needs_attention"] for s in result["syncs"])
     return result
 
 
@@ -3048,7 +3175,7 @@ def export_off_job_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         return 0
 
     svc = _get_sheets_svc(db)
-    headers = _ssl_retry(lambda: _ensure_tab(svc, spreadsheet_id, tab, OFF_JOB_HEADERS))
+    headers = _ensure_tab(svc, spreadsheet_id, tab, OFF_JOB_HEADERS)
     _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", uuid)
 
     row = {
