@@ -61,12 +61,54 @@ switch, mono money/odo, dot status badge).
 - **Beta features:** keep the `<BetaTag feature="..." />` until the next
   `APP_VERSION` bump (unchanged by the facelift).
 
-## Layout (phase 2 — not yet built)
+## Reconciliation with the external Figma spec
 
-Crew = mobile-first bottom-nav shell; admin = desktop sidebar + data-tables.
-These ship per screen, verified on device, after the restyle. Do not start a
-layout restructure without confirming the nav information architecture first —
-crew muscle memory is safety-critical.
+An external design doc (Figma) specified this look in full. We adopt its
+**direction and concrete values**, but deliberately did **not** adopt two things
+(they would break real functionality — see ADR 0025):
+
+- **We keep `ThemeContext` and the 8-preset system.** The Figma doc proposed
+  ripping it out for a two-theme `data-theme` rewrite. The presets +
+  user customization (brand, text-mode, density, radius) are a real feature.
+  Enterprise ships **as a preset**; its values already match the doc.
+- **We keep the existing token names.** Map Figma → ours: `--surface`→`--card`,
+  `--raised`→`--card2`, `--sub`→`--muted`, `--primary`→`--brand`,
+  `--primary-fg`→`--on-brand`, `--status-active`→`--brand2`,
+  `--status-danger`→`--danger`, `--status-done`→`--ok`, `--status-sched`/`--status-warn`→`--scheduled`/`--warn`.
+  Enterprise-dark uses **legibility-tuned** values (bg `#12151d`, card `#1e2532`,
+  text `#edf1f7`), NOT the doc's darker originals — those were unreadable.
+
+Enterprise flat/tight is enforced in `applySettings` (radius 4px, btn 3px, no
+shadow, hairline border) whenever an `enterprise-*` preset is active. Button
+label weight is capped at 600 globally.
+
+## Layout — crew mobile shell (Phase B, not yet built)
+
+- **Top bar:** 44px. Wordmark (Inter 600, 0.875rem) left; online/offline dot +
+  "Online"/"Offline" in `.mono` right. No hamburger, no avatar.
+- **Bottom tab bar:** 4 tabs — **Jobs / Active / DVIR / Profile**. Active =
+  a 24×3px `var(--brand)` bar above the label + `var(--brand)` label (weight
+  600); inactive = `var(--muted)`. No background fill on the active tab.
+- **Job list item:** a card with a `border-bottom` status strip (`.statusDot`
+  left, time in `.mono` right) — NOT a colored card header. Then customer name
+  (Inter 600, 0.9375rem), address (`--muted`, 0.8125rem), then a `.mono`
+  metadata row (job id · crew · type). Never color the status row background.
+- Page container 12px horizontal padding; 8px gap between cards; 14px card
+  padding; 48px min interactive-row height; 36px min button height.
+
+## Layout — admin desktop shell (Phase C, not yet built)
+
+- **Sidebar:** 200px fixed, `var(--card)` bg, `border-right`. Active nav item =
+  `border-left: 3px solid var(--brand)` + `background: var(--hover→--card2)`,
+  NOT a fill.
+- **Data tables** over cards; header row `var(--card2)` with `.mono` column
+  labels; row hover = background shift only (`--card2`), no border/scale/shadow.
+  Cell padding 11px 14px (data) / 8px 14px (header).
+- **Metrics** = one bordered row split into columns (`.microLabel` + a large
+  `.mono` value), NOT individual KPI boxes.
+
+Do not start the layout restructure without confirming the nav IA first — crew
+muscle memory is safety-critical.
 
 ## Rollout status
 
