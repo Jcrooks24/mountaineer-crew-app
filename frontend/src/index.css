@@ -127,7 +127,7 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
 /* Data typography: DM Mono for IDs, times, hours, counts, measurements - so
    figures align and read as data, not prose. Falls back to system mono. */
 .mono{ font-family: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-feature-settings: "tnum" 1; }
-.sectionTitle{ font-size: 14px; font-weight: 900; margin-bottom: 10px; }
+.sectionTitle{ font-size: 14px; font-weight: 600; margin-bottom: 10px; }
 
 /* Enterprise micro-label: small, uppercase, tracked, muted - the section-header
    pattern from the Figma exploration. A separate utility (not a change to the
@@ -175,7 +175,7 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
 .logo{ width: 34px; height: 34px; border-radius: 10px; object-fit: contain; }
 
 .title{
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: 0.2px;
   font-size: 15px;
 }
@@ -194,7 +194,7 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
   background: rgba(255,255,255,0.03);
   color: var(--text);
   font-family: inherit;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .tab.active{
