@@ -95,7 +95,7 @@ button{
   background: linear-gradient(180deg, var(--btn-bg-from), var(--btn-bg-to));
   color: var(--text);
   font-family: inherit;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0.2px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -108,7 +108,7 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
   background: linear-gradient(90deg, var(--brand), var(--brand2));
   border: none;
   color: var(--on-brand);
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .chip{

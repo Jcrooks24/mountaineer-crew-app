@@ -493,6 +493,18 @@ function applySettings(settings: ThemeSettings) {
       ? `${brand}44`
       : preset.vars["--border"]
   );
+
+  // Enterprise presets are intentionally FLAT and tight (per the design system):
+  // 4px cards, 3px buttons, no shadow, hairline borders - the look must not
+  // depend on the user's radius / shadow / glow settings, so force these last
+  // (they win over the settings applied above). Other presets keep honoring the
+  // user's choices. Undo this block to let enterprise follow the radius setting.
+  if (settings.themeId.startsWith("enterprise")) {
+    root.style.setProperty("--r", "4px");
+    root.style.setProperty("--btn-r", "3px");
+    root.style.setProperty("--shadow", "none");
+    root.style.setProperty("--border", preset.vars["--border"]);
+  }
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
