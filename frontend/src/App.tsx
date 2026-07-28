@@ -2008,22 +2008,17 @@ export default function App() {
         </div>
 
         <div className="row wrap" style={{ justifyContent: "flex-end" }}>
-          <span className="chip" style={{ color: isOnline ? "var(--ok)" : "var(--danger)" }}>
+          <span className="statusDot mono" style={{ ["--dot" as any]: isOnline ? "var(--ok)" : "var(--danger)", fontSize: 12 }}>
             {isOnline ? "Online" : "Offline"}
           </span>
           <span className="chip" style={queueLen > 0 ? { color: "var(--brand2)", borderColor: "color-mix(in srgb, var(--brand2) 35%, transparent)" } : {}}>
-            Queue {queueLen}
+            Queue <span className="mono">{queueLen}</span>
           </span>
-          <span className="chip" style={{ color: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize" }}>
+          <span className="statusDot" style={{ ["--dot" as any]: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize", fontSize: 12 }}>
             {jobStatus}
           </span>
-          <button
-            className="chip"
-            onClick={() => nav("/dvir")}
-            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
-          >
-            DVIR
-          </button>
+          {/* DVIR moved to the persistent bottom nav; button removed here to
+              cut the redundancy. Admin stays (not in the crew bottom nav). */}
           {user?.role === "admin" && (
             <button
               className="chip"
