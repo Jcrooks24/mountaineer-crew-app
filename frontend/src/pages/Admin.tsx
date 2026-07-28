@@ -285,7 +285,7 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
   ];
   return (
     <div className="card">
-      <div className="sectionTitle">Tools</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Tools</div>
       <div className="col" style={{ gap: 8 }}>
         {tools.map((t) => (
           <button
@@ -353,7 +353,7 @@ function IncidentsAdminTab() {
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <div className="sectionTitle" style={{ marginBottom: 0 }}>Incidents</div>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Incidents</div>
         <label className="row small" style={{ gap: 6, alignItems: "center", cursor: "pointer" }}>
           <input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
           Show resolved
@@ -838,7 +838,7 @@ function SkillMatrixPicker({
     <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="card" style={{ maxWidth: 520, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-        <div className="sectionTitle">Skills - {user.name || user.email}</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Skills - {user.name || user.email}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           0 = none/very poor · 5 = mastery · blank (0) = not yet assessed.
         </div>
@@ -1261,7 +1261,7 @@ function AvailabilityUnlocksPicker({
 
         <div style={{ height: 1, background: "var(--border)" }} />
 
-        <div className="sectionTitle" style={{ marginBottom: 0 }}>Existing unlocks</div>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Existing unlocks</div>
         {loading ? (
           <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
         ) : unlocks.length === 0 ? (
@@ -2110,7 +2110,7 @@ function MonthScheduleView({
           submitted availability for the visible window so admin knows who to
           nudge. No em dashes (per house style). */}
       <div className="card">
-        <div className="sectionTitle">Availability reminder</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Availability reminder</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
           Copy this into Google Voice to remind crew to set their availability.
         </div>
@@ -2510,7 +2510,7 @@ function CalendarTab() {
     <div>
       {/* Status card */}
       <div className="card">
-        <div className="sectionTitle">Google Calendar OAuth</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Google Calendar OAuth</div>
 
         <div className="row" style={{ marginBottom: 12 }}>
           <span style={{
@@ -2538,7 +2538,7 @@ function CalendarTab() {
 
       {/* Update token card */}
       <div className="card">
-        <div className="sectionTitle">Update OAuth Token</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Update OAuth Token</div>
         <p className="small" style={{ marginBottom: 12 }}>
           If the calendar stops working, regenerate <code>token.json</code> locally then paste its contents below.
           This saves the token to the database so it persists across restarts.
@@ -2730,7 +2730,7 @@ function EmployeeTagsManagerCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Employee Tags</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Employee Tags</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Tag list shown when assigning tags on the Employees tab (e.g. Driver,
         Has CC, Tier I). Renaming a tag updates it everywhere it's already
@@ -2886,7 +2886,7 @@ function JobTypesManagerCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Job Types</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Job Types</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         The "Job type" tags crew pick on the Job Report. These also drive which
         skills are shown to rate on a job (Crew Skills). Deactivate to hide a
@@ -3063,7 +3063,7 @@ function FurnitureCatalogCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Furniture Catalog</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Furniture Catalog</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Maintain the catalog in a spreadsheet: <strong>Export CSV</strong>, fill in
         dimensions and other data, then <strong>Upload CSV</strong> to push it back.
@@ -3216,7 +3216,7 @@ function SkillsManagerCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Crew Skills</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Crew Skills</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         The skill types crew get rated on. "Core" skills are rated on every job;
         others only appear on the Job Report when the job's type matches. Set
@@ -3363,7 +3363,7 @@ function SkillEditModal({
     <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
       <div className="card" style={{ maxWidth: 460, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-        <div className="sectionTitle">Edit skill</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Edit skill</div>
         <div className="col" style={{ gap: 10 }}>
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Name</span>
@@ -3430,7 +3430,7 @@ function SettingsNavCard({
 }) {
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div className="sectionTitle" style={{ marginBottom: 0 }}>{title}</div>
+      <div className="microLabel" style={{ marginBottom: 0 }}>{title}</div>
       <div className="small" style={{ color: "var(--muted)" }}>{desc}</div>
       <button
         onClick={onClick}
@@ -3547,7 +3547,7 @@ function ThemeAppearancePage() {
     <div>
       {/* ── Theme templates ── */}
       <div className="card">
-        <div className="sectionTitle">Theme Template</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Theme Template</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
           {Object.entries(THEME_PRESETS).map(([id, p]) => {
             const active = !activeCustomId && settings.themeId === id;
@@ -3675,7 +3675,7 @@ function ThemeAppearancePage() {
 
       {/* ── Text contrast + logo variant ── */}
       <div className="card">
-        <div className="sectionTitle">Text Color</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Text Color</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Override body text for readability on customized themes.
         </div>
@@ -3709,7 +3709,7 @@ function ThemeAppearancePage() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">Logo Variant</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Logo Variant</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           "Auto" picks the light logo for dark themes and the dark logo for the
           Light preset. Drop replacements at <code>frontend/src/assets/logo_light.png</code>
@@ -3743,7 +3743,7 @@ function ThemeAppearancePage() {
 
       {/* ── Button colors ── */}
       <div className="card">
-        <div className="sectionTitle">Button Colors</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Button Colors</div>
         <div className="col" style={{ gap: 16 }}>
           <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
             <div className="col" style={{ gap: 6, flex: 1, minWidth: 140 }}>
@@ -3783,7 +3783,7 @@ function ThemeAppearancePage() {
 
       {/* ── Button style ── */}
       <div className="card">
-        <div className="sectionTitle">Button Style</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Button Style</div>
         <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
           {RADIUS_OPTIONS.map((opt) => (
             <button key={opt.value} onClick={() => update({ btnRadius: opt.value })}
@@ -3802,7 +3802,7 @@ function ThemeAppearancePage() {
 
       {/* ── Button background & size ── */}
       <div className="card">
-        <div className="sectionTitle">Button Background</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Button Background</div>
         <div className="col" style={{ gap: 16 }}>
           <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
             <div className="col" style={{ gap: 6, flex: 1, minWidth: 140 }}>
@@ -3859,7 +3859,7 @@ function ThemeAppearancePage() {
 
       {/* ── Font ── */}
       <div className="card">
-        <div className="sectionTitle">Font Family</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Font Family</div>
         <div className="col" style={{ gap: 10 }}>
           {FONT_OPTIONS.map((opt) => {
             const active = settings.fontValue === opt.value;
@@ -3882,7 +3882,7 @@ function ThemeAppearancePage() {
 
       {/* ── Appearance ── */}
       <div className="card">
-        <div className="sectionTitle">Appearance</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Appearance</div>
         <div className="col" style={{ gap: 18 }}>
 
           {/* Shadow */}
@@ -3947,7 +3947,7 @@ function ThemeAppearancePage() {
 
       {/* ── Map Pins ── */}
       <div className="card">
-        <div className="sectionTitle">Map Pins</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Map Pins</div>
         <div className="col" style={{ gap: 16 }}>
 
           {/* Pin size */}
@@ -4064,7 +4064,7 @@ function SheetSyncCard() {
 
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div className="sectionTitle">Sheet Sync</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Sheet Sync</div>
       <div className="small" style={{ color: "var(--muted)" }}>
         Re-export any events that are durable in the app database but missing from the Google Sheet.
         Safe to run any time - duplicates are skipped automatically.
@@ -4133,7 +4133,7 @@ function AppHealthCard() {
 
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div className="sectionTitle">App Health</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>App Health</div>
       <div className="small" style={{ color: "var(--muted)" }}>
         Snapshot of critical functions - sync state, network, Google API access, data drift. Plain text so you can copy/paste it.
       </div>
@@ -4298,7 +4298,7 @@ function AdvancedSettingsPage() {
   return (
     <div>
       <div className="card">
-        <div className="sectionTitle">Google Calendar</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Google Calendar</div>
         <CalendarTab />
       </div>
 
@@ -4417,7 +4417,7 @@ function SheetSyncHealthCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">System Check - Sheet Syncs</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>System Check - Sheet Syncs</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Verifies the Google Sheets connection and that every app→sheet sync has its
         worksheet tab and a valid config. Run this after adding a feature that
@@ -4580,7 +4580,7 @@ function SheetBackfillCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Sheet Backfill - what never made it</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Sheet Backfill - what never made it</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Compares the database against the Sheet and lists records that were saved
         but whose sheet row is missing - usually the leftovers of a sync outage.
@@ -4737,7 +4737,7 @@ function CrewResourcesCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Crew Resources events</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Crew Resources events</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
         Force a refresh of the daily 5–6 AM "Crew Resources" events on the
         Resources calendar. Events for today through today + N are created
@@ -4845,7 +4845,7 @@ function DiagnosticsCard() {
         }}
       >
         <div style={{ flex: 1 }}>
-          <div className="sectionTitle" style={{ marginBottom: 0 }}>Diagnostics</div>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Diagnostics</div>
           <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
             Read-only checks of integrations wired through env vars or OAuth.
             Useful when a feature looks "set up" but isn't behaving.
@@ -5032,7 +5032,7 @@ function HelpTextCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Field Help Text</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Field Help Text</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
         Placeholder and hint text shown to crew, grouped by the page it appears on.
       </div>
@@ -5146,7 +5146,7 @@ function CompanyInfoCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Company information</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Company information</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
         Your company details, shown as the carrier on the Bill of Lading and used
         anywhere the company address appears. Blank fields fall back to defaults.
@@ -5220,7 +5220,7 @@ function DVIRUnitsCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">DVIR Vehicle Units</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>DVIR Vehicle Units</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
         Vehicle unit options shown in the DVIR form dropdown.
       </div>
@@ -5427,7 +5427,7 @@ function DataManagementCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Data Management</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Data Management</div>
       <div className="col" style={{ gap: 8 }}>
         {rows.map((r) => (
           <div key={r.key} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
@@ -5917,7 +5917,7 @@ function NotesTab() {
   return (
     <div style={{ marginTop: 16 }}>
       <div className="card">
-        <div className="sectionTitle">{editingId == null ? "New Patch Note" : "Edit Patch Note"}</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>{editingId == null ? "New Patch Note" : "Edit Patch Note"}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Shows up on every crew member's Profile tab. Updating a note re-triggers the
           "new patch notes" indicator on the home screen.
@@ -5947,7 +5947,7 @@ function NotesTab() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">Published Patch Notes</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Published Patch Notes</div>
         {loading && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
         {!loading && notes.length === 0 && (
           <div className="small" style={{ color: "var(--muted)" }}>No patch notes yet.</div>
@@ -6137,7 +6137,7 @@ function AdminNotesSection() {
   return (
     <>
       <div className="card">
-        <div className="sectionTitle">{editingId == null ? "New Admin Note" : "Edit Admin Note"}</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>{editingId == null ? "New Admin Note" : "Edit Admin Note"}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Leave "Attached job" empty for a global note (shown to every crew member).
           Attach a job to scope the note - it only surfaces when that job is selected.
@@ -6262,7 +6262,7 @@ function AdminNotesSection() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">Published Admin Notes</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Published Admin Notes</div>
         {loading && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
         {!loading && notes.length === 0 && (
           <div className="small" style={{ color: "var(--muted)" }}>No admin notes yet.</div>
@@ -6646,7 +6646,7 @@ function JobSummaryTab() {
   return (
     <div style={{ marginTop: 16 }}>
       <div className="card">
-        <div className="sectionTitle">Look up job</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Look up job</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Search by date and/or customer name. Results below link through to
           the full summary.
@@ -6680,7 +6680,7 @@ function JobSummaryTab() {
 
       {candidates != null && !summary && (
         <div className="card">
-          <div className="sectionTitle">
+          <div className="microLabel" style={{ marginBottom: 10 }}>
             Matches ({candidates.length})
           </div>
           {candidates.length === 0 ? (
@@ -6739,7 +6739,7 @@ function JobSummaryTab() {
             >
               ← Back to matches
             </button>
-            <div className="sectionTitle">{summary.job_name || "Unnamed job"}</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>{summary.job_name || "Unnamed job"}</div>
             <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace" }}>{summary.job_uuid}</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
               {summary.events.length} event{summary.events.length === 1 ? "" : "s"} ·
@@ -6752,7 +6752,7 @@ function JobSummaryTab() {
 
           {summary.admin_notes.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Admin Notes</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Admin Notes</div>
               <div className="col" style={{ gap: 10 }}>
                 {summary.admin_notes.map((n) => (
                   <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
@@ -6769,7 +6769,7 @@ function JobSummaryTab() {
           )}
 
           <div className="card">
-            <div className="sectionTitle">Timeline ({summary.events.length})</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Timeline ({summary.events.length})</div>
             {summary.events.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>No events logged.</div>
             ) : (
@@ -6801,7 +6801,7 @@ function JobSummaryTab() {
           </div>
 
           <div className="card">
-            <div className="sectionTitle">
+            <div className="microLabel" style={{ marginBottom: 10 }}>
               Materials ({summary.materials.length})
               <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
                 Total ${materialsTotal.toFixed(2)}
@@ -6847,7 +6847,7 @@ function JobSummaryTab() {
               const totalBillable = roundBillableQuarter(totalActual);
               return (
                 <>
-                  <div className="sectionTitle">
+                  <div className="microLabel" style={{ marginBottom: 10 }}>
                     Employee Hours
                     {summary.job_report && rows.length > 0 && (
                       <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
@@ -6983,7 +6983,7 @@ function JobSummaryTab() {
           </div>
 
           <div className="card">
-            <div className="sectionTitle">DVIRs ({summary.dvirs.length})</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>DVIRs ({summary.dvirs.length})</div>
             {summary.dvirs.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
             ) : (
@@ -7016,7 +7016,7 @@ function JobSummaryTab() {
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Invoice copy-paste</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Invoice copy-paste</div>
               <button onClick={copyInvoice} disabled={!invoiceText} style={{ fontSize: 12 }}>
                 {invoiceCopied ? "✓ Copied" : "Copy"}
               </button>
@@ -7040,7 +7040,7 @@ function JobSummaryTab() {
           </div>
 
           <div className="card">
-            <div className="sectionTitle">Job Report</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Job Report</div>
             {!summary.job_report ? (
               <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
             ) : (
@@ -7110,7 +7110,7 @@ function JobSummaryTab() {
               A liability record. It was reaching the sheet and not this page, so the
               one screen called "every source for a job" omitted the damage claims. */}
           <div className="card" style={{ borderColor: summary.incidents.length ? "var(--danger)" : undefined }}>
-            <div className="sectionTitle">Incidents ({summary.incidents.length})</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Incidents ({summary.incidents.length})</div>
             {summary.incidents.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>None reported.</div>
             ) : (
@@ -7158,7 +7158,7 @@ function JobSummaryTab() {
 
           {/* ── Inventory ── */}
           <div className="card">
-            <div className="sectionTitle">
+            <div className="microLabel" style={{ marginBottom: 10 }}>
               Inventory ({summary.inventory.furniture_count} furniture · {summary.inventory.box_count} boxes)
             </div>
             {summary.inventory.items.length === 0 ? (
@@ -7184,7 +7184,7 @@ function JobSummaryTab() {
           {/* ── Bill of lading ── */}
           {summary.bol && (
             <div className="card">
-              <div className="sectionTitle">Bill of Lading</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Bill of Lading</div>
               <div className="col" style={{ gap: 4 }}>
                 <div className="small"><strong>Status:</strong> {summary.bol.status}</div>
                 <div className="small"><strong>Items:</strong> {summary.bol.item_count}</div>
@@ -7207,7 +7207,7 @@ function JobSummaryTab() {
               $50 per person per out-of-town day, so admin needs the count, not the flag. */}
           {summary.ld_days.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Long-distance days</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Long-distance days</div>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
                 Per-diem is owed per out-of-town day, per person.
               </div>
@@ -7232,7 +7232,7 @@ function JobSummaryTab() {
           {/* ── Reimbursements tied to this job ── */}
           {summary.reimbursements.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Reimbursements ({summary.reimbursements.length})</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Reimbursements ({summary.reimbursements.length})</div>
               <div className="col" style={{ gap: 4 }}>
                 {summary.reimbursements.map((r) => (
                   <div key={r.reimbursement_uuid} className="small">
@@ -7247,7 +7247,7 @@ function JobSummaryTab() {
           )}
 
           <div className="card">
-            <div className="sectionTitle">
+            <div className="microLabel" style={{ marginBottom: 10 }}>
               Bill
               {summary.bill && (
                 <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
@@ -7275,7 +7275,7 @@ function JobSummaryTab() {
           </div>
 
           <div className="card">
-            <div className="sectionTitle">Photos ({summary.photos.length})</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Photos ({summary.photos.length})</div>
             {summary.photos.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>No photos uploaded.</div>
             ) : (
@@ -7304,7 +7304,7 @@ function JobSummaryTab() {
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Data entry</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Data entry</div>
               <span
                 className="chip"
                 style={{
