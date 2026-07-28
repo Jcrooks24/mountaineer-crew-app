@@ -211,7 +211,7 @@ export default function Profile() {
 
         {/* Account - read-only identity plus editable display name */}
         <div className="card">
-          <div className="sectionTitle">Account</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Account</div>
           <div className="col" style={{ gap: 14 }}>
             <div className="row" style={{ gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
               <div style={{ flex: 1, minWidth: 150 }}>
@@ -291,7 +291,7 @@ export default function Profile() {
       {/* Tools & resources - nav links grouped into one card with consistent
           flat rows, so the page reads as a short list. */}
       <div className="card">
-        <div className="sectionTitle">Tools & Resources</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Tools & Resources</div>
         <div className="col" style={{ gap: 8 }}>
           <ProfileNavRow
             label="Scheduling Availability"
@@ -334,7 +334,7 @@ export default function Profile() {
           onClick={handleSignOut}
           style={{
             width: "100%", padding: 12,
-            background: "rgba(255,107,107,0.08)",
+            background: "color-mix(in srgb, var(--danger) 8%, transparent)",
             color: "var(--danger)",
             border: "1px solid var(--danger)",
             borderRadius: 12, cursor: "pointer", fontSize: 15, fontWeight: 700,
@@ -471,10 +471,10 @@ function AppRefreshButton() {
       ) : (
         <div style={{ textAlign: "center" }}>
           <div className="small" style={{ color: "var(--muted)" }}>
-            Version <strong style={{ color: "var(--text)" }}>{APP_VERSION_NAME}</strong>
+            Version <strong className="mono" style={{ color: "var(--text)" }}>{APP_VERSION_NAME}</strong>
           </div>
           <div style={{ fontSize: 10, color: "var(--muted)", opacity: 0.65, marginTop: 1 }}>
-            build {APP_BUILD_ID}
+            build <span className="mono">{APP_BUILD_ID}</span>
           </div>
         </div>
       )}
@@ -518,7 +518,7 @@ function fmtWeek(iso: string): string {
 function HoursTile({ label, value, accent }: { label: string; value: number; accent?: string }) {
   return (
     <div style={{ flex: "1 1 70px", minWidth: 70, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px", textAlign: "center" }}>
-      <div style={{ fontSize: 20, fontWeight: 800, color: accent || "var(--text)" }}>{value.toFixed(1)}</div>
+      <div className="mono" style={{ fontSize: 20, fontWeight: 800, color: accent || "var(--text)" }}>{value.toFixed(1)}</div>
       <div className="small" style={{ color: "var(--muted)" }}>{label}</div>
     </div>
   );
@@ -542,7 +542,7 @@ function WorkedHoursCard() {
   return (
     <div className="card">
       <div className="row" style={{ alignItems: "center", gap: 8 }}>
-        <div className="sectionTitle" style={{ marginBottom: 0 }}>Worked Hours</div>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Worked Hours</div>
         <BetaTag feature="workedHours" style={{ marginTop: 0 }} />
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
@@ -571,10 +571,10 @@ function WorkedHoursCard() {
               </div>
               {weeks.map((w) => (
                 <div key={w.week_start} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
-                  <span style={{ flex: "1 1 auto" }}>{fmtWeek(w.week_start)}</span>
-                  <span style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
-                  <span style={{ width: 42, textAlign: "right", color: w.ot_hours > 0 ? "var(--warn)" : "var(--muted)", fontWeight: w.ot_hours > 0 ? 700 : 400 }}>{w.ot_hours.toFixed(1)}</span>
-                  <span style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
+                  <span className="mono" style={{ flex: "1 1 auto" }}>{fmtWeek(w.week_start)}</span>
+                  <span className="mono" style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
+                  <span className="mono" style={{ width: 42, textAlign: "right", color: w.ot_hours > 0 ? "var(--warn)" : "var(--muted)", fontWeight: w.ot_hours > 0 ? 700 : 400 }}>{w.ot_hours.toFixed(1)}</span>
+                  <span className="mono" style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
                 </div>
               ))}
             </div>
@@ -612,7 +612,7 @@ function PatchNoteItem({ note }: { note: PatchNote }) {
     <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
       <div style={{ fontWeight: 700, fontSize: 14 }}>{note.title}</div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-        {new Date(note.updated_at).toLocaleDateString()}
+        <span className="mono">{new Date(note.updated_at).toLocaleDateString()}</span>
         {note.created_by_name ? ` · ${note.created_by_name}` : ""}
       </div>
       <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>
@@ -650,7 +650,7 @@ function PatchNotesCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Patch Notes</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Patch Notes</div>
       {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
       {notes == null && !err && (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>

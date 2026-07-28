@@ -2011,7 +2011,7 @@ export default function App() {
           <span className="chip" style={{ color: isOnline ? "var(--ok)" : "var(--danger)" }}>
             {isOnline ? "Online" : "Offline"}
           </span>
-          <span className="chip" style={queueLen > 0 ? { color: "var(--brand2)", borderColor: "rgba(106,167,255,0.35)" } : {}}>
+          <span className="chip" style={queueLen > 0 ? { color: "var(--brand2)", borderColor: "color-mix(in srgb, var(--brand2) 35%, transparent)" } : {}}>
             Queue {queueLen}
           </span>
           <span className="chip" style={{ color: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize" }}>
@@ -2092,7 +2092,7 @@ export default function App() {
       {tab === "timeline" && (
         <>
           <div className="card">
-            <div className="sectionTitle">Job</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Job</div>
 
             <div className="col" style={{ gap: 12 }}>
               {/* 1 - Date */}
@@ -2257,7 +2257,7 @@ export default function App() {
             if (!longDistance || ldLabor.length > 0) {
               return (
                 <div className="card" data-component="TimelineActionsTile">
-                  <div className="sectionTitle">Actions</div>
+                  <div className="microLabel" style={{ marginBottom: 10 }}>Actions</div>
                   {longDistance && (
                     <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
                       Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is handled by the RODS on drive days.
@@ -2272,7 +2272,7 @@ export default function App() {
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Notes</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Notes</div>
               {jobUuid.trim() ? (
                 <span
                   className="small"
@@ -2302,7 +2302,7 @@ export default function App() {
           </div>
 
           <div className="card">
-            <div className="sectionTitle">Activity</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Activity</div>
 
             {mergedLog.length === 0 ? (
               <div className="small">{jobUuid ? "No events yet." : "Select a job to see activity."}</div>
@@ -2324,7 +2324,7 @@ export default function App() {
                             padding: "3px 8px",
                             fontSize: 11,
                             color: e.sync_status === "synced" ? "var(--ok)" : "var(--brand2)",
-                            borderColor: e.sync_status === "synced" ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                            borderColor: e.sync_status === "synced" ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
                           }}
                         >
                           {iconForStatus(e.sync_status)}
@@ -2583,7 +2583,7 @@ export default function App() {
           {/* Capture: take one at a time and/or multi-select from the library,
               accumulating a batch before submitting. */}
           <div className="card">
-            <div className="sectionTitle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="microLabel" style={{ display: "flex", alignItems: "center", gap: 8 }}>
               Photos<BetaTag feature="multiPhoto" />
             </div>
             {ht.photosHint && (
@@ -2627,7 +2627,7 @@ export default function App() {
           {/* Pending batch - review, note each photo, then submit together. */}
           {pendingPhotos.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Ready to save ({pendingPhotos.length})</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Ready to save ({pendingPhotos.length})</div>
 
               {/* Attach target: tag this batch to an incident's claim, or leave
                   as plain job photos. Only shown when the job has incidents. */}
@@ -2646,7 +2646,7 @@ export default function App() {
                           title={inc.description}
                           style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, cursor: "pointer",
                             border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                            background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                            background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                             color: on ? "var(--brand)" : "var(--text)", fontWeight: on ? 700 : 400 }}>
                           {label}
                         </button>
@@ -2692,7 +2692,7 @@ export default function App() {
           )}
 
           <div className="card">
-            <div className="sectionTitle">Saved</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Saved</div>
 
             {photos.length === 0 && serverPhotos.filter(sp => !photos.some(lp => lp.id === sp.id)).length === 0 ? (
               <div className="small">{jobUuid ? "No photos yet." : "Select a job to see photos."}</div>
@@ -2766,7 +2766,7 @@ export default function App() {
                           )}
                           {driveOk && p.drive_url ? (
                             <a href={p.drive_url} target="_blank" rel="noopener noreferrer"
-                              style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
+                              style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)", padding: "2px 8px", borderRadius: 999 }}>
                               View in Drive
                             </a>
                           ) : driveFail ? (
@@ -2851,7 +2851,7 @@ export default function App() {
                           </button>
                         )}
                         <a href={sp.drive_url} target="_blank" rel="noopener noreferrer"
-                          style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
+                          style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)", padding: "2px 8px", borderRadius: 999 }}>
                           View in Drive
                         </a>
                       </div>
