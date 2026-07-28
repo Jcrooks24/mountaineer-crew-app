@@ -555,12 +555,12 @@ function EmployeesTab() {
         {/* Clean, consistent ghost-pill action buttons. */}
         <style>{`
           .roster-btn { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; transition: background .12s, border-color .12s; }
-          .roster-btn:hover:not(:disabled) { background: rgba(93,214,194,0.10); border-color: var(--brand); }
+          .roster-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--brand) 10%, transparent); border-color: var(--brand); }
           .roster-btn:disabled { opacity: .45; cursor: default; }
-          .roster-btn.danger { color: var(--danger); border-color: rgba(255,107,107,0.35); }
-          .roster-btn.danger:hover:not(:disabled) { background: rgba(255,107,107,0.12); border-color: var(--danger); }
-          .roster-btn.ok { color: var(--ok); border-color: rgba(45,212,191,0.35); }
-          .roster-btn.ok:hover:not(:disabled) { background: rgba(45,212,191,0.12); border-color: var(--ok); }
+          .roster-btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+          .roster-btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: var(--danger); }
+          .roster-btn.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+          .roster-btn.ok:hover:not(:disabled) { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: var(--ok); }
         `}</style>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
@@ -615,7 +615,7 @@ function EmployeesTab() {
                 <td style={{ padding: "10px 14px" }}>
                   <span style={{
                     fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
-                    background: u.is_active ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+                    background: u.is_active ? "color-mix(in srgb, var(--ok) 15%, transparent)" : "color-mix(in srgb, var(--danger) 15%, transparent)",
                     color: u.is_active ? "var(--ok)" : "var(--danger)",
                   }}>
                     {u.is_active ? "Active" : "Disabled"}
@@ -637,7 +637,7 @@ function EmployeesTab() {
                               fontSize: 11, fontWeight: 700,
                               padding: "2px 8px", borderRadius: 999,
                               // Theme-text label keeps tags legible on light themes.
-                              background: "var(--tag-bg, rgba(93,214,194,0.16))",
+                              background: "var(--tag-bg, color-mix(in srgb, var(--brand) 16%, transparent))",
                               color: "var(--text)",
                               border: "1px solid var(--brand)",
                             }}
@@ -862,7 +862,7 @@ function SkillMatrixPicker({
                               <button key={v} type="button" onClick={() => setLevel(s.id, v)}
                                 style={{ padding: "4px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
                                   border: lvl === v ? "2px solid var(--brand)" : "1px solid var(--border)",
-                                  background: lvl === v ? "rgba(93,214,194,0.18)" : "transparent",
+                                  background: lvl === v ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                                   color: lvl === v ? "var(--brand)" : "var(--muted)" }}>
                                 {v === 0 ? "No" : "Yes"}
                               </button>
@@ -874,7 +874,7 @@ function SkillMatrixPicker({
                               <button key={v} type="button" onClick={() => setLevel(s.id, v)}
                                 style={{ width: 28, height: 28, borderRadius: 6, fontSize: 12, cursor: "pointer",
                                   border: lvl === v ? "2px solid var(--brand)" : "1px solid var(--border)",
-                                  background: lvl === v ? "rgba(93,214,194,0.18)" : "transparent",
+                                  background: lvl === v ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                                   color: lvl === v ? "var(--brand)" : "var(--muted)", fontWeight: lvl === v ? 700 : 400 }}>
                                 {v}
                               </button>
@@ -1028,7 +1028,7 @@ function EmailAliasesPicker({
               alignItems: "center", gap: 8,
               padding: "8px 10px", borderRadius: 8,
               border: "1px solid var(--brand)",
-              background: "rgba(93,214,194,0.08)",
+              background: "color-mix(in srgb, var(--brand) 8%, transparent)",
             }}
           >
             <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{primaryEmail}</span>
@@ -1355,8 +1355,8 @@ type MonthStatusPalette = Record<AvailabilityRangeRow["status"], StatusColor>;
 type MonthScheduledPalette = { bg: string; fg: string; label: string };
 
 const MONTH_STATUS_COLORS: MonthStatusPalette = {
-  available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
-  unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
+  available:   { bg: "color-mix(in srgb, var(--ok) 18%, transparent)",  fg: "var(--ok)",     label: "Available" },
+  unavailable: { bg: "color-mix(in srgb, var(--danger) 18%, transparent)", fg: "var(--danger)", label: "Unavailable" },
   conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
 };
 
@@ -1815,8 +1815,8 @@ function MonthScheduleView({
                             style={{
                               fontSize: 9,
                               color: "var(--brand)",
-                              border: "1px solid rgba(93,214,194,0.35)",
-                              background: "rgba(93,214,194,0.12)",
+                              border: "1px solid color-mix(in srgb, var(--brand) 35%, transparent)",
+                              background: "color-mix(in srgb, var(--brand) 12%, transparent)",
                               borderRadius: 3,
                               padding: "0 4px",
                               lineHeight: "13px",
@@ -1857,7 +1857,7 @@ function MonthScheduleView({
                               style={{
                                 fontSize: 9, fontWeight: 700,
                                 padding: "1px 5px", borderRadius: 3,
-                                background: "var(--tag-bg, rgba(93,214,194,0.16))",
+                                background: "var(--tag-bg, color-mix(in srgb, var(--brand) 16%, transparent))",
                                 color: "var(--text)",
                                 border: "1px solid var(--brand)",
                                 overflowWrap: "anywhere",
@@ -1906,7 +1906,7 @@ function MonthScheduleView({
                         background: isSelected
                           ? "var(--card2)"
                           : isToday
-                            ? "rgba(93,214,194,0.10)"
+                            ? "color-mix(in srgb, var(--brand) 10%, transparent)"
                             : "var(--card)",
                         borderBottom: "1px solid var(--border)",
                         borderRight: "1px solid var(--border)",
@@ -2227,7 +2227,7 @@ function EmployeeTagsPicker({
                   onClick={() => toggle(t.id)}
                   style={{
                     fontSize: 13, padding: "6px 12px", borderRadius: 999,
-                    background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                    background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                     color: on ? "var(--brand)" : "var(--text)",
                     border: `1px solid ${on ? "var(--brand)" : "var(--border)"}`,
                     fontWeight: 600, cursor: "pointer",
@@ -2424,7 +2424,7 @@ function MapTab() {
                 onClick={() => toggleJob(j.uuid)}
                 style={{
                   fontSize: 11, padding: "3px 9px", borderRadius: 999,
-                  background: active ? "rgba(93,214,194,0.15)" : "rgba(255,255,255,0.04)",
+                  background: active ? "color-mix(in srgb, var(--brand) 15%, transparent)" : "rgba(255,255,255,0.04)",
                   border: `1px solid ${active ? "var(--brand)" : "var(--border)"}`,
                   color: active ? "var(--brand)" : "var(--muted)",
                   fontWeight: 600, cursor: "pointer",
@@ -2515,7 +2515,7 @@ function CalendarTab() {
         <div className="row" style={{ marginBottom: 12 }}>
           <span style={{
             fontSize: 12, fontWeight: 700, padding: "4px 10px", borderRadius: 999,
-            background: status?.ok && status?.valid ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+            background: status?.ok && status?.valid ? "color-mix(in srgb, var(--ok) 15%, transparent)" : "color-mix(in srgb, var(--danger) 15%, transparent)",
             color: statusColor,
           }}>
             {statusLabel}
@@ -3271,7 +3271,7 @@ function SkillsManagerCard() {
                 <button key={label} type="button" onClick={() => setNewBinary(bin)}
                   style={{ padding: "3px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
                     border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                    background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                    background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                     color: on ? "var(--brand)" : "var(--muted)" }}>
                   {label}
                 </button>
@@ -3310,7 +3310,7 @@ function SkillsManagerCard() {
                         fontSize: 12,
                         cursor: "pointer",
                         border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                        background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                        background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                         color: on ? "var(--brand)" : "var(--muted)",
                       }}
                     >
@@ -3395,7 +3395,7 @@ function SkillEditModal({
                   <button key={t} type="button" onClick={() => toggleRel(t)}
                     style={{ padding: "4px 10px", borderRadius: 99, fontSize: 12, cursor: "pointer",
                       border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                      background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                       color: on ? "var(--brand)" : "var(--text)" }}>
                     {t}
                   </button>
@@ -5231,7 +5231,7 @@ function DVIRUnitsCard() {
           <span key={u} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
             padding: "4px 10px", borderRadius: 999,
-            background: "rgba(93,214,194,0.12)", border: "1px solid var(--brand)",
+            background: "color-mix(in srgb, var(--brand) 12%, transparent)", border: "1px solid var(--brand)",
             color: "var(--brand)", fontSize: 13, fontWeight: 600,
           }}>
             {u}
@@ -5361,7 +5361,7 @@ function DVIRTab() {
                 <span
                   className="chip"
                   style={{
-                    background: d.condition === "satisfactory" ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+                    background: d.condition === "satisfactory" ? "color-mix(in srgb, var(--ok) 15%, transparent)" : "color-mix(in srgb, var(--danger) 15%, transparent)",
                     color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
                   }}
                 >
@@ -5375,7 +5375,7 @@ function DVIRTab() {
                     : awaiting
                       ? "Awaiting Mechanic"
                       : "No Review Needed";
-                  const bg = awaiting ? "rgba(255,200,50,0.12)" : "rgba(45,212,191,0.15)";
+                  const bg = awaiting ? "rgba(255,200,50,0.12)" : "color-mix(in srgb, var(--ok) 15%, transparent)";
                   const color = awaiting ? "#f0c040" : "var(--ok)";
                   return (
                     <span className="chip" style={{ background: bg, color }}>
@@ -5577,7 +5577,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
           <span
             className="chip"
             style={{
-              background: dvir.condition === "satisfactory" ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+              background: dvir.condition === "satisfactory" ? "color-mix(in srgb, var(--ok) 15%, transparent)" : "color-mix(in srgb, var(--danger) 15%, transparent)",
               color: dvir.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
             }}
           >
@@ -5590,7 +5590,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Defects:</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {dvir.defects.map((d) => (
-                <span key={d} className="chip" style={{ background: "rgba(255,107,107,0.12)", color: "var(--danger)" }}>
+                <span key={d} className="chip" style={{ background: "color-mix(in srgb, var(--danger) 12%, transparent)", color: "var(--danger)" }}>
                   {d}
                 </span>
               ))}
@@ -5763,7 +5763,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
                       padding: "10px 0",
                       borderRadius: 10,
                       border: repairsMade === value ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: repairsMade === value ? "rgba(93,214,194,0.12)" : "var(--card)",
+                      background: repairsMade === value ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
                       color: repairsMade === value ? "var(--brand)" : "var(--muted)",
                       cursor: "pointer",
                       fontWeight: repairsMade === value ? 700 : 400,
@@ -5800,7 +5800,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             </div>
 
             {err && (
-              <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+              <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "color-mix(in srgb, var(--danger) 10%, transparent)", borderRadius: 8 }}>
                 {err}
               </div>
             )}
@@ -6178,7 +6178,7 @@ function AdminNotesSection() {
             {pickerOpen && (
               <div
                 className="card"
-                style={{ marginTop: 6, padding: 12, border: "1px solid var(--brand)", background: "rgba(93,214,194,0.05)" }}
+                style={{ marginTop: 6, padding: 12, border: "1px solid var(--brand)", background: "color-mix(in srgb, var(--brand) 5%, transparent)" }}
               >
                 <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
                   Search by date and/or customer name. Pick one to attach.
@@ -6705,7 +6705,7 @@ function JobSummaryTab() {
                         fontSize: 10,
                         padding: "2px 8px",
                         color: c.entered ? "var(--ok)" : "var(--brand2)",
-                        borderColor: c.entered ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                        borderColor: c.entered ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
                       }}
                     >
                       {c.entered ? "✓ Entered" : "Pending entry"}
@@ -7311,7 +7311,7 @@ function JobSummaryTab() {
                   fontSize: 10,
                   padding: "2px 8px",
                   color: summary.entry_status ? "var(--ok)" : "var(--brand2)",
-                  borderColor: summary.entry_status ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                  borderColor: summary.entry_status ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
                 }}
               >
                 {summary.entry_status ? "✓ Entered" : "Pending entry"}
