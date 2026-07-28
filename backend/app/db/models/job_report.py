@@ -93,11 +93,19 @@ class JobReport(Base):
 
     # Timestamps
     # ── Close-out (added 2026-07-27) ────────────────────────────────────────
-    # Why the job differed from the quote: one cause from a fixed list, plus a
-    # note for what the list cannot say. Nullable throughout - every report
-    # submitted before this existed has none, and a crew member who cannot
-    # answer is not blocked.
+    # Why the job differed from the quote, plus a note for what the list cannot
+    # say. Nullable throughout - every report submitted before this existed has
+    # none, and a crew member who cannot answer is not blocked.
+    #
+    # `variance_cause` (singular String) was the original column and holds one
+    # key for every report written 07-27 through 07-28. It is READ-ONLY now:
+    # writes go to `variance_causes_json` and the router falls back to this
+    # column when the JSON one is null. Backfilling it away would have been a
+    # data migration over live reports to save one nullable column; the fallback
+    # is cheaper and cannot lose a row. See ADR 0028.
     variance_cause = Column(String, nullable=True)
+    # JSON list of keys from VARIANCE_CAUSES. Current write target.
+    variance_causes_json = Column(Text, nullable=True)
     variance_note = Column(Text, nullable=True)
 
     # How ready the client was on arrival, plus what specifically was not ready
@@ -105,9 +113,13 @@ class JobReport(Base):
     client_readiness = Column(String, nullable=True)
     client_unready_json = Column(Text, nullable=True)
 
-    # One entry per on-site scope change: {kind, hours, note}. JSON for the
-    # same reason employee_hours_json is: it is a per-report list nobody
-    # queries relationally, and the sheet is where it gets analysed.
+    # One entry per on-site scope change: {kinds[], direction, hours, note}.
+    # JSON for the same reason employee_hours_json is: it is a per-report list
+    # nobody queries relationally, and the sheet is where it gets analysed.
+    #
+    # Rows written before 2026-07-28 hold the older {kind, hours, note} shape.
+    # No migration rewrites them - ScopeChangeEntry upgrades on read (ADR 0028),
+    # so the two shapes coexist in this column indefinitely.
     scope_changes_json = Column(Text, nullable=True)
 
     created_at = Column(DateTime, nullable=False)

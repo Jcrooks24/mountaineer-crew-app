@@ -111,7 +111,10 @@ import {
   CLIENT_UNREADY_REASONS,
   SCOPE_CHANGE_KINDS,
   VARIANCE_CAUSES,
+  normalizeScopeChanges,
+  normalizeVarianceCauses,
   readinessNeedsDetail,
+  type Option as CloseoutOption,
   type ScopeChangeEntry,
 } from "../lib/closeout";
 import NumberField from "./NumberField";
@@ -177,7 +180,8 @@ type ReportData = {
   // Crew's note when actual inventory ran over the linked estimate.
   overage_note: string;
   // Close-out: why the job differed, how ready the client was, what changed.
-  variance_cause: string | null;
+  // Multi-select since 2026-07-28 - a long day usually has more than one cause.
+  variance_causes: string[];
   variance_note: string;
   client_readiness: string | null;
   client_unready: string[];
@@ -248,11 +252,14 @@ function normalizeDraftData(d: ReportData): ReportData {
     hours_mismatch_reason: d.hours_mismatch_reason ?? "",
     crew_feedback: d.crew_feedback ?? "",
     overage_note: d.overage_note ?? "",
-    variance_cause: d.variance_cause ?? null,
+    // Both close-out fields changed shape on 2026-07-28. A draft written by the
+    // previous build is still sitting in localStorage on crew devices, so these
+    // upgrade rather than assume - see normalize* in lib/closeout.
+    variance_causes: normalizeVarianceCauses(d.variance_causes, d.variance_cause),
     variance_note: d.variance_note ?? "",
     client_readiness: d.client_readiness ?? null,
     client_unready: Array.isArray(d.client_unready) ? d.client_unready : [],
-    scope_changes: Array.isArray(d.scope_changes) ? d.scope_changes : [],
+    scope_changes: normalizeScopeChanges(d.scope_changes),
     hours_verified: !!d.hours_verified,
     job_type_tags: Array.isArray(d.job_type_tags) ? d.job_type_tags : [],
     truck_fullness: Array.isArray(d.truck_fullness) ? d.truck_fullness : [],
@@ -490,7 +497,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     job_type_tags: [],
     truck_fullness: [],
     overage_note: "",
-    variance_cause: null,
+    variance_causes: [],
     variance_note: "",
     client_readiness: null,
     client_unready: [],
@@ -581,11 +588,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           job_type_tags: (r as any).job_type_tags ?? [],
           truck_fullness: (r as any).truck_fullness ?? [],
           overage_note: (r as any).overage_note ?? "",
-          variance_cause: (r as any).variance_cause ?? null,
+          // Server may still answer with a pre-2026-07-28 report (singular
+          // cause, {kind}-shaped changes); normalize both to the new shape.
+          variance_causes: normalizeVarianceCauses(
+            (r as any).variance_causes,
+            (r as any).variance_cause,
+          ),
           variance_note: (r as any).variance_note ?? "",
           client_readiness: (r as any).client_readiness ?? null,
           client_unready: (r as any).client_unready ?? [],
-          scope_changes: (r as any).scope_changes ?? [],
+          scope_changes: normalizeScopeChanges((r as any).scope_changes),
           hours_verified: !!(r as any).hours_verified,
           employee_hours: r.employee_hours ?? [],
         });
@@ -617,7 +629,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             job_type_tags: [],
             truck_fullness: [],
             overage_note: "",
-            variance_cause: null,
+            variance_causes: [],
             variance_note: "",
             client_readiness: null,
             client_unready: [],
@@ -1123,7 +1135,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             (t) => t.truck && t.vertical_pct > 0 && t.horizontal_pct > 0,
           ),
           overage_note: data.overage_note.trim() || null,
-          variance_cause: data.variance_cause || null,
+          variance_causes: data.variance_causes,
           variance_note: data.variance_note.trim() || null,
           client_readiness: data.client_readiness || null,
           // Only meaningful when something was NOT ready; sending the list
@@ -1132,11 +1144,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             ? data.client_unready
             : [],
           // Drop rows where the crew picked nothing - an empty row is an
-          // accidental tap on "Add", not a scope change.
+          // accidental tap on "Add", not a scope change. The server rejects a
+          // kinds:[] entry outright, so this filter is load-bearing, not tidying.
           scope_changes: data.scope_changes
-            .filter((c) => c.kind)
+            .filter((c) => c.kinds.length > 0)
             .map((c) => ({
-              kind: c.kind,
+              kinds: c.kinds,
+              direction: c.direction,
               hours: c.hours ?? null,
               note: (c.note || "").trim() || null,
             })),
@@ -1770,17 +1784,23 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
         <div style={{ fontWeight: 700, fontSize: 13 }}>Did the job run differently than quoted?</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 8 }}>
-          Pick the biggest single reason. The note is for anything the list misses.
+          Tick every reason that applied, in either direction. The note is for
+          anything the list misses.
         </div>
-        <ChipPicker
+        <GroupedChipPicker
           options={VARIANCE_CAUSES}
-          selected={data.variance_cause ? [data.variance_cause] : []}
+          selected={data.variance_causes}
+          moreLabel="Ran longer than quoted"
+          lessLabel="Ran shorter than quoted"
           onToggle={(key) => {
-            set("variance_cause", data.variance_cause === key ? null : key);
+            const has = data.variance_causes.includes(key);
+            set("variance_causes", has
+              ? data.variance_causes.filter((k) => k !== key)
+              : [...data.variance_causes, key]);
             setSaved(false);
           }}
         />
-        {data.variance_cause && (
+        {data.variance_causes.length > 0 && (
           <textarea
             value={data.variance_note}
             onChange={(e) => { set("variance_note", e.target.value); setSaved(false); }}
@@ -1830,7 +1850,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           Anything added or changed on site?
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 8 }}>
-          One entry per change. Hours are a rough guess at what it cost you, not a bill.
+          One entry per change, added or dropped. Tick every reason that fits it.
+          Hours are a rough guess at the time it cost you or gave back, not a bill.
         </div>
         <ScopeChangeEditor
           value={data.scope_changes}
@@ -2416,9 +2437,117 @@ function ChipPicker({
   );
 }
 
+// ChipPicker split into "more work" / "less work" halves with a heading over
+// each. Both close-out lists run in two directions now, and a flat 13-chip wrap
+// on a phone makes the crew read every label to find the one they want. Options
+// with no `group` (i.e. "Other") fall through to an ungrouped row at the bottom,
+// since they belong to neither side.
+function GroupedChipPicker({
+  options,
+  selected,
+  onToggle,
+  moreLabel,
+  lessLabel,
+}: {
+  options: CloseoutOption[];
+  selected: string[];
+  onToggle: (key: string) => void;
+  moreLabel: string;
+  lessLabel: string;
+}) {
+  const more = options.filter((o) => o.group === "more");
+  const less = options.filter((o) => o.group === "less");
+  const ungrouped = options.filter((o) => !o.group);
+
+  const heading = (text: string) => (
+    <div
+      className="small"
+      style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6, marginTop: 2 }}
+    >
+      {text}
+    </div>
+  );
+
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      {more.length > 0 && (
+        <div>
+          {heading(moreLabel)}
+          <ChipPicker options={more} selected={selected} onToggle={onToggle} />
+        </div>
+      )}
+      {less.length > 0 && (
+        <div>
+          {heading(lessLabel)}
+          <ChipPicker options={less} selected={selected} onToggle={onToggle} />
+        </div>
+      )}
+      {ungrouped.length > 0 && (
+        <ChipPicker options={ungrouped} selected={selected} onToggle={onToggle} />
+      )}
+    </div>
+  );
+}
+
+// Two-state segmented control for a scope change's direction. A checkbox would
+// be smaller, but "Saved time" has to be as visible as "Added time" or crew
+// will never notice a job CAN report a reduction - which is the whole point of
+// the field.
+function DirectionToggle({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: ScopeChangeEntry["direction"];
+  onChange: (next: ScopeChangeEntry["direction"]) => void;
+  ariaLabel: string;
+}) {
+  const opts: { key: ScopeChangeEntry["direction"]; label: string }[] = [
+    { key: "added", label: "Added time" },
+    { key: "saved", label: "Saved time" },
+  ];
+  return (
+    <div role="radiogroup" aria-label={ariaLabel} className="row" style={{ gap: 0 }}>
+      {opts.map((o, idx) => {
+        const on = value === o.key;
+        return (
+          <button
+            key={o.key}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(o.key)}
+            style={{
+              padding: "7px 14px",
+              fontSize: 13,
+              cursor: "pointer",
+              border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+              // Collapse the shared edge so the pair reads as one control.
+              marginLeft: idx === 0 ? 0 : -1,
+              borderRadius: idx === 0 ? "999px 0 0 999px" : "0 999px 999px 0",
+              background: on ? "var(--brand)" : "transparent",
+              color: on ? "var(--on-brand, #fff)" : "var(--text)",
+              fontWeight: on ? 700 : 400,
+              // The selected half must paint over its neighbour's border.
+              position: "relative",
+              zIndex: on ? 1 : 0,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // Repeating list of on-site scope changes. Rows are keyed and edited by index,
 // not by kind: two "Added items" entries on one job are legitimate and must not
 // collide.
+//
+// Each row carries MULTIPLE kinds and a direction (2026-07-28). One real change
+// is often two reasons at once, and a change can give time back as easily as it
+// can take it - `hours` is the magnitude, `direction` is the sign.
 function ScopeChangeEditor({
   value,
   onChange,
@@ -2442,14 +2571,38 @@ function ScopeChangeEditor({
               Remove
             </button>
           </div>
-          <ChipPicker
+          <GroupedChipPicker
             options={SCOPE_CHANGE_KINDS}
-            selected={c.kind ? [c.kind] : []}
-            onToggle={(key) => patchAt(i, { kind: c.kind === key ? "" : key })}
+            selected={c.kinds}
+            moreLabel="Added / more work"
+            lessLabel="Dropped / less work"
+            onToggle={(key) => {
+              const has = c.kinds.includes(key);
+              const kinds = has ? c.kinds.filter((k) => k !== key) : [...c.kinds, key];
+              // Picking the first reason from a side is a strong hint at which
+              // way this change went, so set the direction to match - but only
+              // on the first pick, never overriding a deliberate later change.
+              const picked = SCOPE_CHANGE_KINDS.find((o) => o.key === key);
+              const patch: Partial<ScopeChangeEntry> = { kinds };
+              if (!has && c.kinds.length === 0 && picked?.group) {
+                patch.direction = picked.group === "less" ? "saved" : "added";
+              }
+              patchAt(i, patch);
+            }}
           />
-          <div className="row wrap" style={{ gap: 10, alignItems: "flex-end", marginTop: 10 }}>
+          <div className="row wrap" style={{ gap: 10, alignItems: "flex-end", marginTop: 12 }}>
+            <label className="col" style={{ gap: 4 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Impact</span>
+              <DirectionToggle
+                value={c.direction}
+                onChange={(direction) => patchAt(i, { direction })}
+                ariaLabel={"Impact for change " + (i + 1)}
+              />
+            </label>
             <label className="col" style={{ gap: 2, width: 130 }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Extra hours</span>
+              <span className="small" style={{ color: "var(--muted)" }}>
+                {c.direction === "saved" ? "Hours saved" : "Extra hours"}
+              </span>
               <NumberField
                 min={0}
                 max={48}
@@ -2459,7 +2612,10 @@ function ScopeChangeEditor({
                 onEmpty={() => patchAt(i, { hours: null })}
                 onChange={(hours) => patchAt(i, { hours })}
                 placeholder="optional"
-                aria-label={"Extra hours for change " + (i + 1)}
+                aria-label={
+                  (c.direction === "saved" ? "Hours saved on change " : "Extra hours for change ") +
+                  (i + 1)
+                }
               />
             </label>
             <label className="col" style={{ gap: 2, flex: 1, minWidth: 160 }}>
@@ -2467,7 +2623,11 @@ function ScopeChangeEditor({
               <input
                 value={c.note || ""}
                 onChange={(e) => patchAt(i, { note: e.target.value })}
-                placeholder="e.g. client added garage shelving"
+                placeholder={
+                  c.direction === "saved"
+                    ? "e.g. garage was already empty"
+                    : "e.g. client added garage shelving"
+                }
               />
             </label>
           </div>
@@ -2476,7 +2636,9 @@ function ScopeChangeEditor({
       <div>
         <button
           type="button"
-          onClick={() => onChange([...value, { kind: "", hours: null, note: "" }])}
+          onClick={() =>
+            onChange([...value, { kinds: [], direction: "added", hours: null, note: "" }])
+          }
           style={{
             padding: "6px 12px", borderRadius: 999, border: "1px dashed var(--border)",
             background: "transparent", color: "var(--text)", fontSize: 13, cursor: "pointer",

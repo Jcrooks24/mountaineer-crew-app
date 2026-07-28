@@ -1122,6 +1122,18 @@ _CLOSEOUT_LABELS = {
     "disposal_added": "Disposal added",
     "address_changed": "Address changed",
     "reduced_scope": "Reduced scope",
+    # Reduction-side scope changes and variance causes (added 2026-07-28).
+    "fewer_items": "Fewer items",
+    "stop_dropped": "Stop dropped",
+    "packing_not_needed": "Packing not needed",
+    "storage_not_needed": "Storage not needed",
+    "client_already_packed": "Client already packed",
+    "less_volume_than_estimated": "Less volume than estimated",
+    "overestimated_volume": "Overestimated volume",
+    "easier_access": "Easier access than expected",
+    "client_ahead_of_prep": "Client further along than expected",
+    "scope_reduced_on_site": "Scope reduced on site",
+    "crew_faster_than_expected": "Crew faster than expected",
     "other": "Other",
 }
 
@@ -1137,31 +1149,62 @@ def _format_closeout_list(values: Optional[list]) -> str:
     return ", ".join(_closeout_label(v) for v in values if v)
 
 
+def _scope_change_kinds(c: Dict[str, Any]) -> list:
+    """The kinds on one scope change, in either stored shape.
+
+    Reports written before 2026-07-28 have a single `kind`; newer ones have a
+    `kinds` list. The sheet has to render both, because the export re-runs over
+    old reports whenever an admin edits one.
+    """
+    kinds = c.get("kinds")
+    if isinstance(kinds, list) and kinds:
+        return [k for k in kinds if k]
+    single = c.get("kind")
+    return [single] if single else []
+
+
+def _scope_change_signed_hours(c: Dict[str, Any]) -> Optional[float]:
+    """One change's hours, negative when the change SAVED time.
+
+    None (not 0.0) when the crew logged the change without estimating hours -
+    the caller needs to tell "no estimate" from "estimated at zero".
+    """
+    try:
+        h = float(c.get("hours"))
+    except (TypeError, ValueError):
+        return None
+    return -h if (c.get("direction") or "added") == "saved" else h
+
+
 def _format_scope_changes(changes: Optional[list]) -> str:
-    """One line per change, e.g. "Added items (+1.5h): client added shelving".
-    Semicolon-joined so it stays one readable cell."""
+    """One line per change, e.g. "Added items (+1.5h): client added shelving" or
+    "Fewer items, Stop dropped (-2h): garage already empty". Semicolon-joined so
+    it stays one readable cell. The sign is the crew's added/saved answer."""
     if not changes:
         return ""
     parts: list[str] = []
     for c in changes:
         if not isinstance(c, dict):
             continue
-        label = _closeout_label(c.get("kind"))
-        hours = c.get("hours")
-        try:
-            hours = float(hours) if hours not in (None, "") else None
-        except (TypeError, ValueError):
-            hours = None
-        head = f"{label} (+{hours:g}h)" if hours else label
+        label = ", ".join(_closeout_label(k) for k in _scope_change_kinds(c))
+        hours = _scope_change_signed_hours(c)
+        # {:+g} prints the leading + or - itself, so a saved-time change reads
+        # as "(-2h)" without any extra string surgery.
+        head = f"{label} ({hours:+g}h)" if hours else label
         note = (c.get("note") or "").strip()
         parts.append(f"{head}: {note}" if note else head)
     return "; ".join(parts)
 
 
 def _scope_change_hours(changes: Optional[list]) -> Any:
-    """Total estimated hours the on-site changes cost. Blank rather than 0 when
-    no change carried an estimate, so "nobody estimated" reads differently from
-    "the changes cost nothing"."""
+    """NET estimated hours the on-site changes moved the day by: additions minus
+    the time reductions gave back. Blank rather than 0 when no change carried an
+    estimate, so "nobody estimated" reads differently from "the changes netted
+    out to nothing".
+
+    Net, not gross, as of 2026-07-28. A job that added a stop and dropped two
+    others used to report the addition alone; the column is meant to answer "how
+    far did the day move from the quote", and only a signed sum does that."""
     if not changes:
         return ""
     total = 0.0
@@ -1169,9 +1212,8 @@ def _scope_change_hours(changes: Optional[list]) -> Any:
     for c in changes:
         if not isinstance(c, dict):
             continue
-        try:
-            h = float(c.get("hours"))
-        except (TypeError, ValueError):
+        h = _scope_change_signed_hours(c)
+        if h is None:
             continue
         total += h
         seen = True
@@ -1331,7 +1373,16 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         # Total billable man-hours for the job (standalone metric).
         "actual_man_hours": _actual_man_hours,
         "overage_note": report.get("overage_note", "") or "",
-        "variance_cause": _closeout_label(report.get("variance_cause")),
+        # Multi-select since 2026-07-28. The sheet COLUMN keeps its singular
+        # header - _ensure_tab appends columns but never renames them, and a
+        # year of formulas point at "variance_cause". Only the cell contents
+        # changed, from one label to a comma-joined list.
+        "variance_cause": _format_closeout_list(
+            report.get("variance_causes")
+            # A caller still on the old payload shape (or a queued export
+            # serialized before this deploy) sends the singular key.
+            or ([report["variance_cause"]] if report.get("variance_cause") else [])
+        ),
         "variance_note": report.get("variance_note", "") or "",
         "client_readiness": _closeout_label(report.get("client_readiness")),
         "client_unready": _format_closeout_list(report.get("client_unready")),

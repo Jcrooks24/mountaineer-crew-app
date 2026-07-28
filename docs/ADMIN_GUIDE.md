@@ -26,7 +26,7 @@ FMCSA compliance paperwork and the Digital Bill of Lading.
 - Submit materials used on a job
 - Log actual inventory on long-distance jobs: furniture and boxes with pack type, plus a loose-item "chow" volume estimate
 - Fill out the Job Report and Bill at the end of a job, including the job type, how full each truck ended up, employee hours pulled from the roster, and skill ratings (entered by admins and designated Skill raters)
-- Answer three optional close-out questions on the Job Report: why the job ran differently than quoted, whether the client was ready, and anything added or changed on site
+- Answer three optional close-out questions on the Job Report: why the job ran differently than quoted (tick every reason, in either direction), whether the client was ready, and anything added or changed on site
 - Get a projected wrap-up finish time and a return-trip drive estimate on the Job Report
 - File interstate compliance paperwork: Prior On Duty Hours Statement, Record of Duty Status, per-diem and drive days, and the Digital Bill of Lading
 - Submit mileage and expense / reimbursement requests
@@ -186,9 +186,9 @@ with one tap.
 
 Three columns groups arrive on the JobReports tab from every report submitted after this deploy. All three are optional for crew, so a blank cell means "not answered", not "nothing happened" - worth remembering the first time you chart them.
 
-- `variance_cause` / `variance_note` - the single biggest reason the job ran differently than quoted, from a fixed list, plus free text. The fixed list is what makes this countable; sort by it to see which causes actually recur.
-- `client_readiness` / `client_unready` - how ready the client was on arrival, and (when they were not fully ready) a comma-separated list of what specifically was not ready.
-- `scope_change_count` / `scope_change_hours` / `scope_changes` - how many things changed on site, the crew's rough total of hours those changes cost, and one readable line per change. `scope_change_hours` is blank rather than 0 when nobody estimated, so "not estimated" stays distinguishable from "cost nothing".
+- `variance_cause` / `variance_note` - every reason the job ran differently than quoted, from a fixed list, plus free text. **Multi-select since 2026-07-28**, so the cell holds a comma-separated list and the causes across all reports will out-number the reports. Count selections, not rows, when you chart it. The column header stays singular so existing formulas keep resolving. The list runs in both directions: `Overestimated volume`, `Easier access than expected`, `Client further along than expected`, `Scope reduced on site`, and `Crew faster than expected` mean the job beat its estimate. Those are the ones worth watching - a job that runs long generates a complaint, a job that runs short quietly overcharges the client and never does.
+- `client_readiness` / `client_unready` - how ready the client was on arrival, and (when they were not fully ready) a comma-separated list of what specifically was not ready. Readiness stays single-select; it is one answer about one moment.
+- `scope_change_count` / `scope_change_hours` / `scope_changes` - how many things changed on site, the **net** hours those changes moved the day by, and one readable line per change. Each change can now carry several reasons and a direction, so a line reads `Fewer items, Stop dropped (-2.5h): garage already empty`. `scope_change_hours` nets additions against reductions (it was a gross total of additions before 2026-07-28), and is blank rather than 0 when nobody estimated, so "not estimated" stays distinguishable from "netted out to nothing". `scope_change_count` counts changes, not reasons: a change with three reasons is still one change.
 
 Reports submitted before this deploy have these columns empty and will stay that way; there is nothing to backfill, because the crew was never asked.
 

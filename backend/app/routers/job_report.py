@@ -88,14 +88,29 @@ def _decode_scope_changes(raw: Optional[str]) -> Optional[list[ScopeChangeEntry]
             if not isinstance(row, dict):
                 continue
             try:
+                # Rows stored before 2026-07-28 carry {kind, ...}; the entry
+                # model upgrades them to {kinds[], direction} on construction.
                 out.append(ScopeChangeEntry(**row))
             except ValueError:
-                # A row whose `kind` was retired from the vocabulary should not
+                # A row whose kind was retired from the vocabulary should not
                 # make the whole report unreadable. Drop it and keep the rest.
                 continue
         return out
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+def _decode_variance_causes(r: JobReport) -> Optional[list[str]]:
+    """Close-out variance causes, from whichever column holds them.
+
+    The JSON column is the current write target. Reports written 2026-07-27 to
+    2026-07-28 only have the singular string column, which is never written
+    again but is still the only record of their cause (ADR 0028).
+    """
+    from_json = _decode_str_list(r.variance_causes_json)
+    if from_json is not None:
+        return from_json
+    return [r.variance_cause] if r.variance_cause else None
 
 def _to_response(r: JobReport) -> JobReportResponse:
     return JobReportResponse(
@@ -117,7 +132,7 @@ def _to_response(r: JobReport) -> JobReportResponse:
         job_type_tags=_decode_job_type_tags(r.job_type_tags_json),
         truck_fullness=_decode_truck_fullness(r.truck_fullness_json),
         overage_note=r.overage_note,
-        variance_cause=r.variance_cause,
+        variance_causes=_decode_variance_causes(r),
         variance_note=r.variance_note,
         client_readiness=r.client_readiness,
         client_unready=_decode_str_list(r.client_unready_json),
@@ -181,7 +196,7 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "furniture_count": "" if furniture_count is None else furniture_count,
         "box_count": "" if box_count is None else box_count,
         "overage_note": report.overage_note or "",
-        "variance_cause": report.variance_cause or "",
+        "variance_causes": _decode_variance_causes(report) or [],
         "variance_note": report.variance_note or "",
         "client_readiness": report.client_readiness or "",
         "client_unready": _decode_str_list(report.client_unready_json) or [],
@@ -272,6 +287,9 @@ def upsert_job_report(
     client_unready_json = (
         json.dumps(body.client_unready) if body.client_unready else None
     )
+    variance_causes_json = (
+        json.dumps(body.variance_causes) if body.variance_causes else None
+    )
     scope_changes_json = (
         json.dumps([c.model_dump() for c in body.scope_changes])
         if body.scope_changes
@@ -295,7 +313,12 @@ def upsert_job_report(
         existing.job_type_tags_json = job_type_tags_json
         existing.truck_fullness_json = truck_fullness_json
         existing.overage_note = body.overage_note
-        existing.variance_cause = body.variance_cause
+        # Write the list; clear the legacy singular column so a report that
+        # predates multi-select cannot keep answering from two places at once
+        # (_decode_variance_causes prefers the JSON, but leaving a stale string
+        # behind is a trap for the next person reading the table directly).
+        existing.variance_causes_json = variance_causes_json
+        existing.variance_cause = None
         existing.variance_note = body.variance_note
         existing.client_readiness = body.client_readiness
         existing.client_unready_json = client_unready_json
@@ -326,7 +349,7 @@ def upsert_job_report(
         job_type_tags_json=job_type_tags_json,
         truck_fullness_json=truck_fullness_json,
         overage_note=body.overage_note,
-        variance_cause=body.variance_cause,
+        variance_causes_json=variance_causes_json,
         variance_note=body.variance_note,
         client_readiness=body.client_readiness,
         client_unready_json=client_unready_json,

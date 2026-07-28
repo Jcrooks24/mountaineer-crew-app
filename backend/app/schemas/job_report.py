@@ -23,8 +23,15 @@ ReviewCandidate = Literal["yes", "no", "na"]
 # the office than a paragraph, and the paragraph catches what the list misses.
 # Mirrored on the frontend in frontend/src/lib/closeout.ts - keep in sync.
 
-# Why the job differed from what was estimated. Single-select.
+# Why the job differed from what was estimated. Multi-select as of 2026-07-28
+# (ADR 0028): a day that ran long usually ran long for more than one reason, and
+# forcing "the biggest single reason" threw the rest away.
+#
+# The list runs in BOTH directions. The original vocabulary only described a job
+# that ran LONG, so a job that finished well under the estimate had nothing
+# truthful to pick and the office lost the signal that its estimate was high.
 VARIANCE_CAUSES = {
+    # Ran longer than estimated
     "underestimated_volume",
     "access_stairs_carry",
     "client_not_ready",
@@ -32,6 +39,12 @@ VARIANCE_CAUSES = {
     "scope_added_on_site",
     "travel_or_traffic",
     "damage_or_repack",
+    # Ran shorter than estimated
+    "overestimated_volume",
+    "easier_access",
+    "client_ahead_of_prep",
+    "scope_reduced_on_site",
+    "crew_faster_than_expected",
     "other",
 }
 
@@ -52,17 +65,35 @@ CLIENT_UNREADY_REASONS = {
     "other",
 }
 
-# One row per thing that changed on site.
+# One row per thing that changed on site. Multi-select per row as of 2026-07-28
+# (ADR 0028) - a single change is often two of these at once ("client dropped the
+# storage unit AND the second stop"), and one row per reason overstated the count.
+#
+# Reduction-side keys were added at the same time. `reduced_scope` predates them
+# and is kept because historical reports carry it; new reports should reach for
+# the specific key instead.
 SCOPE_CHANGE_KINDS = {
+    # Added / more work
     "added_items",
     "extra_stop",
     "packing_added",
     "storage_added",
     "disposal_added",
     "address_changed",
-    "reduced_scope",
+    # Removed / less work
+    "fewer_items",
+    "stop_dropped",
+    "packing_not_needed",
+    "storage_not_needed",
+    "client_already_packed",
+    "less_volume_than_estimated",
+    "reduced_scope",  # legacy catch-all, retained for historical reports
     "other",
 }
+
+# Which way a scope change moved the day. Stored per entry so a report can carry
+# both an addition and a reduction and still net out to a truthful number.
+SCOPE_CHANGE_DIRECTIONS = {"added", "saved"}
 
 # Fixed job-type vocabulary (multi-select). Mirrored on the frontend in
 # frontend/src/lib/jobTypes.ts - keep the two lists in sync.
@@ -201,24 +232,81 @@ class EmployeeHoursEntry(BaseModel):
         return v
 
 
+SCOPE_REDUCTION_KINDS = {
+    "fewer_items",
+    "stop_dropped",
+    "packing_not_needed",
+    "storage_not_needed",
+    "client_already_packed",
+    "less_volume_than_estimated",
+    "reduced_scope",
+}
+
+
 class ScopeChangeEntry(BaseModel):
     """One thing that changed on site after the job was quoted.
 
-    `hours` is the crew's rough estimate of the time the change cost, not a
-    billing figure - it is there so the office can see which kinds of change
-    actually eat the day. Left optional because a crew member who cannot
-    estimate it should still be able to log that the change happened.
+    `hours` is the crew's rough estimate of the time the change moved the day by,
+    not a billing figure - it is there so the office can see which kinds of change
+    actually eat (or give back) the day. Left optional because a crew member who
+    cannot estimate it should still be able to log that the change happened.
+    `hours` is always a positive magnitude; `direction` carries the sign.
+
+    **Wire compatibility.** Reports written before 2026-07-28 carry a single
+    `kind` string and no `direction`. Both are upgraded in the pre-validator
+    below rather than at every read site, so a re-export or an admin edit of an
+    old report produces the same shape as a new one. Old rows keep flowing
+    through unchanged input: the client also still accepts them (see
+    frontend/src/lib/closeout.ts).
     """
-    kind: str
+    kinds: List[str]
+    direction: str = "added"
     hours: Optional[float] = None
     note: Optional[str] = None
 
-    @field_validator("kind")
+    @model_validator(mode="before")
     @classmethod
-    def kind_known(cls, v: str) -> str:
-        v = (v or "").strip()
-        if v not in SCOPE_CHANGE_KINDS:
+    def _upgrade_legacy(cls, data):
+        """Accept the pre-2026-07-28 `{kind, hours, note}` shape.
+
+        Direction is inferred from the kind: the only reduction-flavored key that
+        existed back then was `reduced_scope`. Everything else was an addition,
+        which is exactly why this change was needed.
+        """
+        if not isinstance(data, dict):
+            return data
+        if "kinds" not in data and "kind" in data:
+            data = dict(data)
+            kind = (data.pop("kind") or "").strip()
+            data["kinds"] = [kind] if kind else []
+            data.setdefault(
+                "direction", "saved" if kind in SCOPE_REDUCTION_KINDS else "added"
+            )
+        return data
+
+    @field_validator("kinds")
+    @classmethod
+    def kinds_known(cls, v: List[str]) -> List[str]:
+        cleaned = [k.strip() for k in (v or []) if isinstance(k, str) and k.strip()]
+        if not cleaned:
+            raise ValueError("a scope change needs at least one kind")
+        if len(cleaned) > len(SCOPE_CHANGE_KINDS):
+            raise ValueError("too many kinds on one scope change")
+        unknown = [k for k in cleaned if k not in SCOPE_CHANGE_KINDS]
+        if unknown:
             raise ValueError(f"kind must be one of {sorted(SCOPE_CHANGE_KINDS)}")
+        # De-duplicate, preserving the order the crew ticked them in.
+        seen: set = set()
+        return [k for k in cleaned if not (k in seen or seen.add(k))]
+
+    @field_validator("direction")
+    @classmethod
+    def direction_known(cls, v: str) -> str:
+        v = (v or "added").strip() or "added"
+        if v not in SCOPE_CHANGE_DIRECTIONS:
+            raise ValueError(
+                f"direction must be one of {sorted(SCOPE_CHANGE_DIRECTIONS)}"
+            )
         return v
 
     @field_validator("hours")
@@ -226,9 +314,17 @@ class ScopeChangeEntry(BaseModel):
     def hours_sane(cls, v: Optional[float]) -> Optional[float]:
         if v is None:
             return v
+        # Magnitude only - `direction` is what makes it add or subtract. A signed
+        # value here would double-encode the sign and the two could disagree.
         if not (0 <= v <= 48):
             raise ValueError("hours must be between 0 and 48")
         return round(float(v), 2)
+
+    def signed_hours(self) -> float:
+        """Hours as the office should sum them: negative when time was saved."""
+        if self.hours is None:
+            return 0.0
+        return -self.hours if self.direction == "saved" else self.hours
 
     @field_validator("note")
     @classmethod
@@ -259,12 +355,43 @@ class JobReportUpsert(BaseModel):
     overage_note: Optional[str] = None
     hours_verified: bool = False
     # Close-out: why the job differed, how ready the client was, what changed.
+    # `variance_causes` is the current field. `variance_cause` (singular) is
+    # accepted for a build of the app still sitting on a crew device and folded
+    # into the list by the validator below - dropping it would make close-out
+    # silently stop recording for anyone who has not refreshed.
+    variance_causes: Optional[List[str]] = None
     variance_cause: Optional[str] = None
     variance_note: Optional[str] = None
     client_readiness: Optional[str] = None
     client_unready: Optional[List[str]] = None
     scope_changes: Optional[List[ScopeChangeEntry]] = None
     employee_hours: Optional[List[EmployeeHoursEntry]] = None
+
+    @model_validator(mode="after")
+    def _fold_legacy_variance_cause(self) -> "JobReportUpsert":
+        """Collapse the singular field into the list.
+
+        Runs after field validation so both have already been checked against
+        VARIANCE_CAUSES. The list wins when a client sends both - a new build
+        sends only the list, and an old build only the string, so they overlap
+        exactly once: never.
+        """
+        if not self.variance_causes and self.variance_cause:
+            self.variance_causes = [self.variance_cause]
+        self.variance_cause = None
+        return self
+
+    @field_validator("variance_causes")
+    @classmethod
+    def variance_causes_known(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        cleaned = [t.strip() for t in v if isinstance(t, str) and t.strip()]
+        unknown = [t for t in cleaned if t not in VARIANCE_CAUSES]
+        if unknown:
+            raise ValueError(f"unknown variance cause(s): {unknown}")
+        seen: set = set()
+        return [t for t in cleaned if not (t in seen or seen.add(t))]
 
     @field_validator("job_type_tags")
     @classmethod
@@ -285,6 +412,8 @@ class JobReportUpsert(BaseModel):
     @field_validator("variance_cause")
     @classmethod
     def variance_cause_known(cls, v: Optional[str]) -> Optional[str]:
+        # Legacy singular field from an older client build. Validated on the same
+        # vocabulary, then folded into variance_causes by the model validator.
         if v in (None, ""):
             return None
         if v not in VARIANCE_CAUSES:
@@ -375,7 +504,9 @@ class JobReportResponse(BaseModel):
     overage_note: Optional[str] = None
     hours_verified: bool = False
     # Close-out: why the job differed, how ready the client was, what changed.
-    variance_cause: Optional[str] = None
+    # Always a list on the way out, even for reports stored under the old
+    # singular column - the router normalizes on read.
+    variance_causes: Optional[List[str]] = None
     variance_note: Optional[str] = None
     client_readiness: Optional[str] = None
     client_unready: Optional[List[str]] = None

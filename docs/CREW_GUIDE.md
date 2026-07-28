@@ -230,7 +230,7 @@ Billing method: invoice, cash, etc.
 Review candidate: Whether or not we should seek a review from the client. Yes, No, or N/A.
 Hours match: Confirm whether the timeline reflects actual hours billed and paid. If not, explain in the text field.
 Employee Hours: Per-person hours for everyone on the job, chosen from the roster. See Section 7.4 for the full editor.
-Close-out: three optional questions at the bottom of the report - why the job ran differently than quoted, whether the client was ready, and anything added or changed on site. See Section 7.9.
+Close-out: three optional questions at the bottom of the report - why the job ran differently than quoted (in either direction, tick all that apply), whether the client was ready, and anything added or changed on site. See Section 7.9.
 Skill ratings: admins and designated Skill raters rate each mover on the skills a job actually called for. See Section 7.7.
 Wrap-up estimator: a projected finish time (your remaining work plus the drive back to the yard) you can pick as an End time, and a drive-time estimate for the trip home. See Section 7.8.
 Crew Feedback: Optional general feedback or job-specific feedback to send to the office.
@@ -319,11 +319,13 @@ On the Job Report, tap to calculate a projected job wrap-up time: the drive time
 ### 7.9 Close-out
 Three questions at the bottom of the Job Report. All of them are optional and none of them block Save - if you cannot answer one, skip it.
 
-Did the job run differently than quoted? Pick the single biggest reason (underestimated volume, access or stairs, client not ready, crew size or skill, scope added on site, travel or traffic, damage or repack, other). A note box appears once you pick one, for anything the list does not cover. Tap the same chip again to clear it.
+Did the job run differently than quoted? Tick every reason that applied - you are not limited to one. The list is split into two halves. "Ran longer than quoted" covers underestimated volume, access or stairs, client not ready, crew size or skill, scope added on site, travel or traffic, and damage or repack. "Ran shorter than quoted" covers overestimated volume, easier access than expected, client further along than expected, scope reduced on site, and crew faster than expected. Use the second half. A job that beat its estimate is worth knowing about, and if nobody taps it the office cannot tell "we finished early" from "nobody filled this in". A note box appears once you pick anything, for what the list does not cover. Tap a chip again to clear it.
 
 Was the client ready when you arrived? Fully, mostly, partly, or not ready. If you pick anything other than Fully ready, a second row appears asking what specifically was not ready - tick all that applied. Changing your answer back to Fully ready clears those ticks, so the two answers never contradict each other.
 
-Anything added or changed on site? Add one entry per change: what kind it was, roughly how many extra hours it cost you, and a short note. The hours are a rough guess so the office can see which kinds of change actually eat a day; they are not a bill and they do not feed the invoice. Add as many entries as you need.
+Anything added or changed on site? Add one entry per change. Within an entry, tick every reason that fits it - one conversation on the driveway where the client dropped both the storage unit and the second stop is one change with two reasons, not two changes. Reasons are split into "Added / more work" and "Dropped / less work".
+
+Each entry has an Impact toggle: Added time or Saved time. It sets itself from the first reason you tick, and you can override it. Then enter roughly how many hours the change cost you or gave back - always a plain positive number, the toggle is what makes it add or subtract. The hours are a rough guess so the office can see which kinds of change actually move a day; they are not a bill and they do not feed the invoice. Add as many entries as you need.
 
 None of this changes the bill. It exists so the office can tell why a job went the way it did without having to phone you the next morning.
 
