@@ -18,8 +18,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 const TABS = [
   { label: "Jobs", path: "/", icon: BriefcaseIcon },
+  { label: "Tools", path: "/tools", icon: GridIcon },
   { label: "DVIR", path: "/dvir", icon: TruckIcon },
-  { label: "Docs", path: "/documents", icon: DocIcon },
   { label: "Profile", path: "/profile", icon: PersonIcon },
 ] as const;
 
@@ -89,8 +89,8 @@ function BriefcaseIcon() {
 function TruckIcon() {
   return (<svg {...svg}><path d="M2 5h11v10H2z" /><path d="M13 8h4l4 4v3h-8z" /><circle cx="6" cy="18" r="1.6" /><circle cx="17" cy="18" r="1.6" /></svg>);
 }
-function DocIcon() {
-  return (<svg {...svg}><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><path d="M13 3v5h5" /></svg>);
+function GridIcon() {
+  return (<svg {...svg}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>);
 }
 function PersonIcon() {
   return (<svg {...svg}><circle cx="12" cy="8" r="3.5" /><path d="M5 20a7 7 0 0 1 14 0" /></svg>);
