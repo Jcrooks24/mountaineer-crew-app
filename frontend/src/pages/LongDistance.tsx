@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import BillOfLadingForm from "../components/BillOfLadingForm";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
 import {
   fetchCalendarDay,
   fetchManualJobsForDate,
@@ -80,15 +81,8 @@ export default function LongDistance() {
 
   return (
     <div className="container">
-      <div className="topbar" style={{ marginBottom: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Long Distance Compliance</div>
-          <div className="small" style={{ color: "var(--muted)" }}>FMCSR interstate-trip resources</div>
-        </div>
-        <button onClick={() => nav(-1)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}>
-          ← Back
-        </button>
-      </div>
+      <AppHeader title="Long Distance Compliance" onBack={() => nav(-1)} />
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>FMCSR interstate-trip resources</div>
 
       <div className="card" data-component="LdHosReference">
         <div className="microLabel" style={{ marginBottom: 10 }}>Hours of Service - Quick Reference</div>
@@ -333,10 +327,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
   if (submitted) {
     return (
       <div className="container">
-        <div className="topbar" style={{ marginBottom: 16 }}>
-          <span style={{ fontWeight: 700, fontSize: 16 }}>Statement Submitted</span>
-          <button onClick={onBack} style={backBtnStyle}>← Back</button>
-        </div>
+        <AppHeader title="Statement Submitted" onBack={onBack} />
         <div className="card" style={{ textAlign: "center", padding: "32px 24px" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>✓</div>
           <div style={{ fontWeight: 700, fontSize: 18, color: "var(--ok)", marginBottom: 6 }}>Statement on File</div>
@@ -354,13 +345,8 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="container">
-      <div className="topbar" style={{ marginBottom: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Prior On-Duty Hours Statement</div>
-          <div className="small" style={{ color: "var(--muted)" }}>§395.8(j)(2)</div>
-        </div>
-        <button onClick={onBack} style={backBtnStyle}>← Menu</button>
-      </div>
+      <AppHeader title="Prior On-Duty Hours Statement" onBack={onBack} />
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>§395.8(j)(2)</div>
 
       <div className="card">
         <div className="small" style={{ color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
@@ -528,12 +514,3 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
     </div>
   );
 }
-
-
-const backBtnStyle: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  color: "var(--muted)",
-  cursor: "pointer",
-  fontSize: 13,
-};

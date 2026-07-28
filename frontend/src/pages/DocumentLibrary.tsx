@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { getToken } from "../auth/token";
+import AppHeader from "../components/AppHeader";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -108,18 +109,8 @@ export default function DocumentLibrary() {
 
   return (
     <div className="container">
-      <div className="topbar" style={{ marginBottom: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Document Library</div>
-          <div className="small" style={{ color: "var(--muted)" }}>Reference documents for the crew</div>
-        </div>
-        <button
-          onClick={() => nav(-1)}
-          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}
-        >
-          ← Back
-        </button>
-      </div>
+      <AppHeader title="Documents" onBack={() => nav(-1)} />
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>Reference documents for the crew</div>
 
       {isAdmin && (
         <div className="card">

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
 import { formatMountainDateTime } from "../lib/time";
 import {
   submitOffJob,
@@ -174,15 +175,7 @@ export default function OffJob() {
 
   return (
     <div className="container" style={{ maxWidth: 640 }}>
-      <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Log Off-Job Hours</div>
-        <button
-          onClick={() => nav(-1)}
-          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13, padding: "4px 8px" }}
-        >
-          &larr; Back
-        </button>
-      </div>
+      <AppHeader title="Off-job hours" onBack={() => nav(-1)} />
 
       <div className="card">
         <div className="row" style={{ alignItems: "center", gap: 8 }}>

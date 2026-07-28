@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
 import {
   discardFailed,
   enqueueExpense,
@@ -253,18 +254,7 @@ export default function Reimbursement() {
 
   return (
     <div className="container" style={{ maxWidth: 640 }}>
-      <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Log Expense / Request Reimbursement</div>
-        <button
-          onClick={() => nav(-1)}
-          style={{
-            background: "none", border: "none", color: "var(--muted)",
-            cursor: "pointer", fontSize: 13, padding: "4px 8px",
-          }}
-        >
-          &larr; Back
-        </button>
-      </div>
+      <AppHeader title="Reimbursement" onBack={() => nav(-1)} />
 
       <div className="card">
         <div className="seg">

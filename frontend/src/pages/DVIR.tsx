@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
+import AppHeader from "../components/AppHeader";
 
 // ── FMCSA 49 CFR §396.11 inspection items with descriptions ──────────────────
 const INSPECTION_ITEMS: { name: string; desc: string }[] = [
@@ -308,10 +309,7 @@ export default function DVIRPage() {
   if (submitted) {
     return (
       <div className="container">
-        <div className="topbar" style={{ marginBottom: 16 }}>
-          <span style={{ fontWeight: 700, fontSize: 16 }}>DVIR Submitted</span>
-          <button onClick={() => nav("/")} style={backBtnStyle}>← Back to Jobs</button>
-        </div>
+        <AppHeader title="DVIR Submitted" onBack={() => nav("/")} />
         <div className="card" style={{ textAlign: "center", padding: "32px 24px" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>✓</div>
           <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 6, color: "var(--ok)" }}>DVIR Recorded</div>
@@ -366,13 +364,8 @@ export default function DVIRPage() {
   if (vehicleNumber && !prevLoading && prevHasOpenDefect) {
     return (
       <div className="container">
-        <div className="topbar" style={{ marginBottom: 16 }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>Driver Vehicle Inspection Report</div>
-            <div className="small" style={{ color: "var(--muted)" }}>FMCSA 49 CFR §396.11</div>
-          </div>
-          <button onClick={() => nav("/")} style={backBtnStyle}>← Back</button>
-        </div>
+        <AppHeader title="DVIR" onBack={() => nav("/")} />
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>FMCSA 49 CFR §396.11</div>
 
         {/* Out-of-service warning */}
         <div style={{
@@ -431,13 +424,8 @@ export default function DVIRPage() {
   // ── Form ───────────────────────────────────────────────────────────────────
   return (
     <div className="container">
-      <div className="topbar" style={{ marginBottom: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Driver Vehicle Inspection Report</div>
-          <div className="small" style={{ color: "var(--muted)" }}>FMCSA 49 CFR §396.11</div>
-        </div>
-        <button onClick={() => nav("/")} style={backBtnStyle}>← Back</button>
-      </div>
+      <AppHeader title="DVIR" onBack={() => nav("/")} />
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>FMCSA 49 CFR §396.11</div>
 
       <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
@@ -928,14 +916,6 @@ const inputStyle: React.CSSProperties = {
 const selectStyle: React.CSSProperties = {
   ...inputStyle,
   appearance: "auto",
-};
-
-const backBtnStyle: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  color: "var(--muted)",
-  cursor: "pointer",
-  fontSize: 13,
 };
 
 const outlineBtnStyle: React.CSSProperties = {

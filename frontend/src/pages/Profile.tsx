@@ -12,6 +12,7 @@ import {
 } from "../lib/appUpdate";
 import { fetchState, isHorizonLow, loadCache } from "../lib/availabilityStore";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
@@ -154,21 +155,11 @@ export default function Profile() {
 
   const initials = user?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? "?";
 
-  const backBtnStyle: React.CSSProperties = {
-    background: "none", border: "none", color: "var(--muted)",
-    cursor: "pointer", fontSize: 13, padding: "4px 8px",
-  };
-
   // ── My Profile sub-page - photo + account config ──────────────────────────
   if (view === "profile") {
     return (
       <div className="container" style={{ maxWidth: 480 }}>
-        <div className="topbar" style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 900, fontSize: 15 }}>My Profile</div>
-          <button onClick={() => setView("main")} style={backBtnStyle}>
-            &larr; Profile
-          </button>
-        </div>
+        <AppHeader title="My Profile" onBack={() => setView("main")} />
 
         {/* Avatar */}
         <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
@@ -249,12 +240,7 @@ export default function Profile() {
   return (
     <div className="container" style={{ maxWidth: 480 }}>
       {/* Header */}
-      <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Profile</div>
-        <button onClick={() => nav(-1)} style={backBtnStyle}>
-          &larr; Back
-        </button>
-      </div>
+      <AppHeader title="Profile" />
 
       {/* My Profile entry - tap to open photo + account config */}
       <div

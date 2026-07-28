@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
@@ -421,18 +422,7 @@ export default function Availability() {
 
   return (
     <div className="container" style={{ maxWidth: 640 }}>
-      <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Scheduling Availability</div>
-        <button
-          onClick={() => nav(-1)}
-          style={{
-            background: "none", border: "none", color: "var(--muted)",
-            cursor: "pointer", fontSize: 13, padding: "4px 8px",
-          }}
-        >
-          &larr; Back
-        </button>
-      </div>
+      <AppHeader title="Scheduling Availability" onBack={() => nav(-1)} />
 
       {/* Admin view banner - this page is opened per-employee from the roster
           (Employees → Availability), so there's no in-page "view as" dropdown.
