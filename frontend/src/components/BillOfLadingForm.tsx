@@ -263,7 +263,7 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
 
       {/* Continue an open BOL */}
       <div className="card">
-        <div className="sectionTitle">Continue an open BOL</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Continue an open BOL</div>
         {loadingList ? (
           <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
         ) : openBols.length === 0 ? (
@@ -280,17 +280,14 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
                 <div className="row" style={{ justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontWeight: 700 }}>{o.job_name || "Untitled job"}</span>
                   <span
-                    className="small"
-                    style={{
-                      color: o.status === "origin_signed" ? "var(--brand)" : "var(--muted)",
-                      border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px", fontSize: 11,
-                    }}
+                    className="statusDot"
+                    style={{ ["--dot" as any]: o.status === "origin_signed" ? "var(--brand)" : "var(--muted)" }}
                   >
                     {STATUS_LABEL[o.status] || o.status}
                   </span>
                 </div>
                 <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                  {o.job_date || "no date"}
+                  <span className="mono">{o.job_date || "no date"}</span>
                   {o.source === "local" ? "  ·  not synced" : ""}
                 </div>
               </button>
@@ -301,7 +298,7 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
 
       {/* Start a new BOL */}
       <div className="card">
-        <div className="sectionTitle">Start a new BOL</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Start a new BOL</div>
         <div className="col" style={{ gap: 12 }}>
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Date</span>
@@ -819,10 +816,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
       {/* Job (selected in the chooser) + crew rep */}
       <div className="card">
-        <div className="sectionTitle">Job</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Job</div>
         <div style={{ fontWeight: 700 }}>{draft.job_name || "Untitled job"}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-          {draft.job_date || "no date"}
+          <span className="mono">{draft.job_date || "no date"}</span>
           {draft.status !== "draft" ? `  ·  ${draft.status === "origin_signed" ? "origin signed" : "delivered"}` : ""}
         </div>
         <label className="col" style={{ gap: 4 }}>
@@ -838,7 +835,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
           it is the first thing reachable when the BOL is opened in the field. */}
       {draft.status !== "draft" && (
         <div className="card" style={{ borderColor: "var(--brand)" }}>
-          <div className="sectionTitle">Signed Bill of Lading</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Signed Bill of Lading</div>
           <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
             {draft.status === "delivered"
               ? "Origin and destination signed."
@@ -863,9 +860,9 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
           {/* DOT-required addresses - editable so a BOL signed before this
               feature (or with a typo) can be corrected and re-issued. */}
           <div className="col" style={{ gap: 10, marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>
+            <div className="microLabel">
               Origin &amp; destination addresses (printed on the BOL)
-            </span>
+            </div>
             <label className="col" style={{ gap: 4 }}>
               <span className="small" style={{ color: "var(--muted)" }}>Origin (pickup) address</span>
               <input
@@ -891,7 +888,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
           {/* Send to client - emails the signed PDF. Needs connectivity. */}
           <div className="col" style={{ gap: 8, marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Send a copy to the client</span>
+            <div className="microLabel">Send a copy to the client</div>
             <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
               <label className="col" style={{ gap: 4, flex: "1 1 200px" }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Client email</span>
@@ -917,12 +914,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
       {/* Static carrier block */}
       <div className="card">
-        <div className="sectionTitle">Carrier</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Carrier</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           <strong>{carrier.name}</strong><br />
           {carrier.address}<br />
-          {carrier.phone} · {carrier.email}<br />
-          <span style={{ color: "var(--muted)" }}>U.S. DOT {carrier.dot} · MC {carrier.mc}</span>
+          <span className="mono">{carrier.phone}</span> · {carrier.email}<br />
+          <span style={{ color: "var(--muted)" }}>U.S. DOT <span className="mono">{carrier.dot}</span> · MC <span className="mono">{carrier.mc}</span></span>
         </div>
       </div>
 
@@ -934,7 +931,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         <>
           {/* Card 1: Shipper & shipment */}
           <div className="card">
-            <div className="sectionTitle">Shipper &amp; shipment</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Shipper &amp; shipment</div>
             <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
               Look these up in the job's Google Calendar description and type them in.
               They print on the Bill of Lading and are required to sign at origin.
@@ -946,7 +943,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
               </label>
               <label className="col" style={{ gap: 4 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Shipper phone *</span>
-                <input type="tel" inputMode="tel" value={draft.shipper_phone || ""} onChange={(e) => setField({ shipper_phone: e.target.value })} placeholder="(406) 555-0100" />
+                <input className="mono" type="tel" inputMode="tel" value={draft.shipper_phone || ""} onChange={(e) => setField({ shipper_phone: e.target.value })} placeholder="(406) 555-0100" />
               </label>
               <label className="col" style={{ gap: 4 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Origin (pickup) address *</span>
@@ -988,7 +985,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
           {/* Card 2: Payment. Estimate type is always Non-binding (we only do
               non-binding estimates), set on mount - no field needed. */}
           <div className="card">
-            <div className="sectionTitle">Payment</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Payment</div>
             <div className="col" style={{ gap: 10 }}>
               <label className="col" style={{ gap: 4 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Form of payment honored at delivery *</span>
@@ -1005,7 +1002,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                   </label>
                   <label className="col" style={{ gap: 4 }}>
                     <span className="small" style={{ color: "var(--muted)" }}>COD - maximum amount demanded at delivery</span>
-                    <input value={draft.cod_max || ""} onChange={(e) => setField({ cod_max: e.target.value })} inputMode="decimal" placeholder="$" />
+                    <input className="mono" value={draft.cod_max || ""} onChange={(e) => setField({ cod_max: e.target.value })} inputMode="decimal" placeholder="$" />
                   </label>
                 </div>
               )}
@@ -1014,7 +1011,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
           {/* Card 3: Valuation election */}
           <div className="card">
-            <div className="sectionTitle">Valuation *</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Valuation *</div>
             <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
               Federal law requires the shipper to choose one liability option, freely
               and in writing. Have the shipper pick one before signing.
@@ -1032,7 +1029,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                       padding: 12,
                       borderRadius: "var(--btn-r)",
                       border: `2px solid ${selected ? "var(--brand)" : "var(--border)"}`,
-                      background: selected ? "rgba(90,140,180,0.12)" : "transparent",
+                      background: selected ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "transparent",
                       cursor: "pointer",
                     }}
                   >
@@ -1055,7 +1052,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
           {/* Card 4: Agreed dates */}
           <div className="card">
-            <div className="sectionTitle">Agreed dates</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Agreed dates</div>
             <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
               The pickup and delivery dates or windows agreed with the shipper. A single
               date or a range is fine.
@@ -1074,7 +1071,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
           {/* Card 5: Other required declarations (default None / N/A) */}
           <div className="card">
-            <div className="sectionTitle">Other required declarations</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Other required declarations</div>
             <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
               Leave blank if none - the Bill of Lading records None / N/A.
             </div>
@@ -1098,7 +1095,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
       {/* Add item */}
       <div className="card">
-        <div className="sectionTitle">Add Item</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Add Item</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
           For boxes, indicate <strong>CP</strong> (Company Packed - carrier is
           responsible for loss / damage of contents) or <strong>PBO</strong>{" "}
@@ -1121,6 +1118,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
           <label className="col" style={{ gap: 4, width: 90 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
             <NumberField
+              className="mono"
               min={1}
               step={1}
               integer
@@ -1140,9 +1138,9 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       {/* Inventory */}
       <div className="card">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-          <div className="sectionTitle" style={{ marginBottom: 0 }}>Inventory</div>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Inventory</div>
           <span className="small" style={{ color: "var(--muted)" }}>
-            {draft.items.length} item{draft.items.length === 1 ? "" : "s"} · {totalPieces} pc
+            <span className="mono">{draft.items.length}</span> item{draft.items.length === 1 ? "" : "s"} · <span className="mono">{totalPieces}</span> pc
           </span>
         </div>
 
@@ -1169,7 +1167,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
               >
                 <div className="row" style={{ justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                   <div style={{ fontWeight: 700 }}>
-                    <span style={{ color: "var(--muted)", marginRight: 6 }}>#{it.item_no}</span>
+                    <span className="mono" style={{ color: "var(--muted)", marginRight: 6 }}>#{it.item_no}</span>
                     {it.name}
                   </div>
                   <button
@@ -1187,6 +1185,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                     <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
                     <button type="button" onClick={() => adjustQty(it.item_no, -1)} style={qtyBtnStyle} aria-label="Decrease quantity">−</button>
                     <NumberField
+                      className="mono"
                       min={1}
                       integer
                       value={it.qty}
@@ -1290,7 +1289,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       {/* Contract clauses + required disclosures - preview is always visible;
           expand to review the full 16 CFR §375.505 text before signing. */}
       <div className="card">
-        <div className="sectionTitle">Contract clauses &amp; required disclosures</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Contract clauses &amp; required disclosures</div>
         <div className="small" style={{ color: "var(--muted)", lineHeight: 1.6, marginBottom: 8 }}>
           This Bill of Lading incorporates the 16 CFR §375.505 clauses below (valuation,
           right to rescind, claims, arbitration, and required federal publications). By
@@ -1327,7 +1326,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       {/* Signing */}
       {draft.status === "delivered" ? (
         <div className="card">
-          <div className="sectionTitle">Signing Complete</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Signing Complete</div>
           <div className="small" style={{ color: "var(--ok)" }}>
             ✓ Origin and destination signed. The signed Bill of Lading has been delivered to the shipper and stored.
           </div>
@@ -1337,7 +1336,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         </div>
       ) : (
         <div className="card">
-          <div className="sectionTitle">
+          <div className="microLabel" style={{ marginBottom: 10 }}>
             {draft.status === "origin_signed" ? "Destination Signing - upon delivery" : "Origin Signing - before loading"}
           </div>
 
@@ -1352,7 +1351,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
               </label>
               <label className="col" style={{ gap: 4, marginBottom: 12, maxWidth: 200 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Final actual charges ($)</span>
-                <input value={finalCharges} onChange={(e) => setFinalCharges(e.target.value)} inputMode="decimal" placeholder="0.00" />
+                <input className="mono" value={finalCharges} onChange={(e) => setFinalCharges(e.target.value)} inputMode="decimal" placeholder="0.00" />
               </label>
             </>
           ) : (

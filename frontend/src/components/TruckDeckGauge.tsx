@@ -136,7 +136,7 @@ export default function TruckDeckGauge({
         gap: 8, marginTop: 8, flexWrap: "wrap",
       }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-          <span style={{ fontWeight: 700, fontSize: 20, color: "var(--brand)" }}>
+          <span className="mono" style={{ fontWeight: 700, fontSize: 20, color: "var(--brand)" }}>
             {combined}%
           </span>
           <span className="small" style={{ color: "var(--muted)" }}>
@@ -146,7 +146,7 @@ export default function TruckDeckGauge({
         <div style={{ textAlign: "right" }}>
           {filledCuFt !== null ? (
             <>
-              <span style={{ fontWeight: 700, fontSize: 20 }}>
+              <span className="mono" style={{ fontWeight: 700, fontSize: 20 }}>
                 {filledCuFt.toLocaleString()}
               </span>
               <span className="small" style={{ color: "var(--muted)" }}> cu ft loaded</span>
@@ -200,7 +200,7 @@ function DeckSlider({
     <div style={{ marginTop: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
         <span className="small" style={{ color: "var(--muted)" }}>{label}</span>
-        <span className="small" style={{ fontWeight: 700 }}>{value}%</span>
+        <span className="small mono" style={{ fontWeight: 700 }}>{value}%</span>
       </div>
       <input
         type="range"

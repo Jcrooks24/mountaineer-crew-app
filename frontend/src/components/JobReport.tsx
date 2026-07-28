@@ -1482,8 +1482,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   className="small"
                   style={{
                     color: "var(--brand2)",
-                    background: "rgba(106,167,255,0.08)",
-                    border: "1px solid rgba(106,167,255,0.3)",
+                    background: "color-mix(in srgb, var(--brand2) 8%, transparent)",
+                    border: "1px solid color-mix(in srgb, var(--brand2) 30%, transparent)",
                     borderRadius: 6,
                     padding: "6px 10px",
                   }}
@@ -1594,7 +1594,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                     padding: "8px 0",
                     borderBottom: "1px solid var(--border)",
                     opacity: emp.non_billable ? 0.7 : 1,
-                    background: isEditing ? "rgba(106,167,255,0.06)" : undefined,
+                    background: isEditing ? "color-mix(in srgb, var(--brand2) 6%, transparent)" : undefined,
                   }}
                 >
                   {/* Name + hours on the left, Edit/Remove on the right. Skill

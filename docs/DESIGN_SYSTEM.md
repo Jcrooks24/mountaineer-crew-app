@@ -70,7 +70,9 @@ crew muscle memory is safety-critical.
 
 ## Rollout status
 
-- Done: `DVIR`, `Reimbursement`.
-- Next (crew): Job Report, Materials, BOL, RODS, Long-distance, Off-job, hub.
+- Done (crew): `DVIR`, `Reimbursement`, `JobReport`, `BillOfLadingForm`,
+  `LongDistance`, `OffJob`, `DocumentLibrary`, `RodsRecorder`, `RodsSignoff`,
+  `TruckDeckGauge`.
+- Next (crew): Materials, Availability, Profile, the crew hub (`App.tsx`).
 - Then: Admin console.
 - Layout restructure: after the restyle, per ADR 0025.
