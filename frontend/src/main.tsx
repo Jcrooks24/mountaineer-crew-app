@@ -13,6 +13,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateBanner from "./components/UpdateBanner";
 import AvailabilityReminderBanner from "./components/AvailabilityReminderBanner";
 import RolePreviewSwitch from "./components/RolePreviewSwitch";
+import BottomNav from "./components/BottomNav";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -68,6 +69,8 @@ createRoot(document.getElementById("root")!).render(
             }
           />
         </Routes>
+        {/* Persistent crew bottom nav; self-hides on public + admin routes */}
+        <BottomNav />
         </ErrorBoundary>
       </BrowserRouter>
     </AuthProvider>

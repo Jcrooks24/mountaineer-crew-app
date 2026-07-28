@@ -110,7 +110,8 @@ export default function UpdateBanner() {
     <div
       role="status"
       style={{
-        position: "fixed", left: 12, right: 12, bottom: 12,
+        // Sit above the fixed crew bottom-nav (56px) so it never overlaps it.
+        position: "fixed", left: 12, right: 12, bottom: "calc(68px + env(safe-area-inset-bottom))",
         zIndex: 900, margin: "0 auto", maxWidth: 460,
         display: "flex", alignItems: "center", gap: 12,
         padding: "12px 14px",

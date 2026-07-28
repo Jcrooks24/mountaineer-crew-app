@@ -82,11 +82,18 @@ Enterprise flat/tight is enforced in `applySettings` (radius 4px, btn 3px, no
 shadow, hairline border) whenever an `enterprise-*` preset is active. Button
 label weight is capped at 600 globally.
 
-## Layout — crew mobile shell (Phase B, not yet built)
+## Layout — crew mobile shell (Phase B — bottom nav DONE)
 
-- **Top bar:** 44px. Wordmark (Inter 600, 0.875rem) left; online/offline dot +
-  "Online"/"Offline" in `.mono` right. No hamburger, no avatar.
-- **Bottom tab bar:** 4 tabs — **Jobs / Active / DVIR / Profile**. Active =
+- **Bottom tab bar — built** (`components/BottomNav.tsx`, mounted in `main.tsx`):
+  persistent, self-hides on public + `/admin` routes. Tabs are **Jobs / DVIR /
+  Docs / Profile** — the doc's "Active" tab was dropped because the hub (`/`) IS
+  the active-job view here; Docs took its slot, other tools stay under Profile.
+  Additive: every existing back-button / Tools-&-Resources path still works.
+  `body` gets `padding-bottom` and `UpdateBanner` sits above the nav.
+- **Top bar (still per-screen):** target is 44px, wordmark (Inter 600) left,
+  online/offline dot + `.mono` label right, no hamburger/avatar. Not yet unified
+  across screens - a follow-up.
+- **Bottom tab active state:** a 24×3px `var(--brand)` bar above the icon +
   a 24×3px `var(--brand)` bar above the label + `var(--brand)` label (weight
   600); inactive = `var(--muted)`. No background fill on the active tab.
 - **Job list item:** a card with a `border-bottom` status strip (`.statusDot`

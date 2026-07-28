@@ -37,6 +37,10 @@
    uses 100vw and the viewport has a vertical scrollbar. Vertical scrolling
    still works as normal because the body's natural overflow is auto. */
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font); overflow-x: clip; }
+/* Clear the fixed crew bottom-nav (56px) + iOS home indicator so the last of a
+   screen's content is never hidden behind it. Harmless on public routes where
+   the nav self-hides. */
+body { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
 
 .container{ max-width: 720px; margin: 0 auto; padding: 14px; }
 
