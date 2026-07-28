@@ -112,6 +112,38 @@ captured offline land on the same job even though neither has talked to the serv
 This is load-bearing and is described in
 [ADR 0005](decisions/0005-client-derived-job-uuid.md).
 
+## Payroll: a read-only view that never writes back
+
+`backend/app/routers/payroll.py` is the one admin feature that reads across every
+other feature's data and adds a source of its own. Worth knowing its shape before
+changing anything it depends on.
+
+**It aggregates, it does not own.** Per-employee job-report hours, off-job
+entries, office hours, long-distance out-of-town days and approved
+reimbursements are flattened into one list of contribution rows, bucketed
+(billable / non-billable / other / per-diem nights) and summed per employee.
+Nothing in that path writes. Change the shape of `employee_hours_json`, of
+`OffJobEntry.pay_structure`, or of `LdDay.out_of_town` and this is a caller you
+have to update.
+
+**The only thing it owns is `payroll_corrections`**: an admin override layer over
+the aggregate, applied at read time. Crew-submitted rows are never mutated
+([ADR 0029](decisions/0029-payroll-corrections-are-an-override-layer.md)). A
+correction replaces its target's contribution and is keyed by `(period, user,
+source, source_key, bucket)`, which is a loose pair rather than a foreign key
+because one of the four sources is a JSON blob with no row identity.
+
+**Query cost is bounded by the pay period, not by the age of the company.** Jobs
+in range are found by their events (indexed on `timestamp`) rather than by
+scanning job reports, the same lesson `routers/hours.py` was rewritten for. A
+second query catches jobs with no events at all, bounded to the period plus a
+14-day grace window. `MAX_PERIOD_DAYS` caps the range at 62 days so a mistyped
+year cannot read the whole database on a 512 MB worker.
+
+**It does not export to the Sheet.** Payroll is a view assembled on demand; the
+underlying records already sync on their own, and a payroll tab would be a second
+copy of numbers that can change when a correction is added.
+
 ## The offline layer, in detail
 
 This is the part a naive refactor breaks. There is **no central sync coordinator**
@@ -189,6 +221,10 @@ All of it is in-process threads. No Celery, no cron, no queue service.
   ([ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md)).
 - **Crew-resources loop**, hourly, **off unless `CREW_RESOURCES_ENABLED=true`**.
   Maintains a daily availability summary event on Google Calendar.
+- **Payroll finalize emails** are NOT background work. They are sent inline,
+  per-employee, inside the `POST /api/admin/payroll/finalize` request, because
+  the admin needs to be told which sends failed. A failed send is left unstamped
+  and retried on the next finalize (ADR 0029).
 
 ## Deployment shape
 

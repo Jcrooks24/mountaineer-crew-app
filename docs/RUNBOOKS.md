@@ -470,6 +470,33 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    `backend/scripts/recalc_estimate_totals.py --dry-run` (then without the flag) for
    that environment. It is idempotent and safe, just not required.
 
+5. **Payroll: hours belonging to a name that matches nobody on the roster are not
+   counted. The page warns; it does not guess.**
+
+   Per-employee hours on a job report written before the rows carried a `user_id`
+   have only a name string. The payroll aggregator matches those against the roster
+   by lowercased name, and anything that still does not match is surfaced in the
+   yellow "Check these first" panel by name.
+
+   **Those hours are excluded from the totals.** That is deliberate - inventing a
+   match would pay the wrong person - but it means an admin who ignores the warning
+   underpays somebody. Fix the name on the job report, or add the person to the
+   roster, then reload the period.
+
+6. **Payroll: a job with NO synced timeline events, whose report is first edited
+   more than 14 days after the pay period ends, is missed.**
+
+   Jobs are found by their events, which is what keeps the query bounded to the pay
+   period. A second query catches jobs that never synced an event, bounded to the
+   period plus `NO_EVENT_REPORT_GRACE_DAYS` (14) so it cannot degrade into a full
+   table scan. A manual job with no events at all, whose report nobody touched until
+   more than two weeks after the period closed, falls outside both.
+
+   Realistically unreachable: payroll runs within days of a period closing, and any
+   job the crew ran a timeline on is found precisely regardless of when its report was
+   edited. If it ever does bite, raise the constant in `routers/payroll.py` and note
+   the new scan cost here.
+
 ### Recently fixed (kept briefly so you do not re-report them)
 
 - BOL self-overwrite when a job ran with two trucks. Fixed 2026-07-27 (staging,

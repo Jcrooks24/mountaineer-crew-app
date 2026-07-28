@@ -40,8 +40,8 @@ Set on **both** the prod and the staging service, with different values.
 | `JWT_SECRET` | Yes | Nobody can log in. The app **refuses to boot** if `DATABASE_URL` is set and this is not, which is intentional (fail closed rather than sign tokens with a dev default). Rotating it logs every crew member out. |
 | `FRONTEND_URL` | Yes | Password-reset and mechanic-signature links. A stale value here points crew at the wrong environment's frontend and they get "invalid or expired reset link", because the token is in the other database. This has actually happened after a promotion. |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | Yes | The office sees nothing. The target spreadsheet for every export. |
-| `POSTMARK_SERVER_TOKEN` | Yes in deploys | Password-reset email **and** the "Send to client" email of a signed BOL. With it unset the mailer prints to stdout in dev mode and sends nothing, silently. |
-| `SMTP_FROM` | Yes in deploys | The from-address on Postmark sends (password reset + signed-BOL email). Must be a verified Postmark sender. Name is legacy; no SMTP is involved. |
+| `POSTMARK_SERVER_TOKEN` | Yes in deploys | Password-reset email, the "Send to client" email of a signed BOL, **and** the payroll correction emails sent by Admin -> Payroll -> Finalize. With it unset the mailer prints to stdout in dev mode and sends nothing, silently. Payroll finalize is the exception: it checks this token and `SMTP_FROM` up front and refuses with a 503 rather than silently "notifying" crew via stdout, because stamping a correction as sent when it was not is unrecoverable. |
+| `SMTP_FROM` | Yes in deploys | The from-address on Postmark sends (password reset, signed-BOL email, payroll corrections). Must be a verified Postmark sender. Name is legacy; no SMTP is involved. |
 | `ADMIN_EMAIL` | Recommended | The user auto-promoted to admin on every startup. Your way back in if you lose admin. |
 | `GOOGLE_MAPS_API_KEY` | Optional | Drive-time, mileage auto-calc, and address lookup. Degrades gracefully: routes return `ok: false` and the UI falls back to manual entry or free OSM routing. `MAPS_API_KEY` is accepted as a fallback name in `routing.py` only. |
 | `GOOGLE_OAUTH_TOKEN_JSON` | Fallback only | Google API access. **The primary source is the `system_config` table** (key `google_oauth_token`), pasted in via Admin. This env var is only consulted if that row is absent. See rotation below. |
@@ -139,6 +139,6 @@ people who would inherit the system, not with "anyone who has the link."**
 |---|---|
 | `JWT_SECRET` | Every crew member is logged out and must sign in again. Do it at night, not mid-move. |
 | `GOOGLE_MAPS_API_KEY` | Safe. Features degrade during the gap; nothing is lost. |
-| `POSTMARK_SERVER_TOKEN` | Safe, but nobody can reset a password until it is back. Verify the sender signature still matches `SMTP_FROM`. |
+| `POSTMARK_SERVER_TOKEN` | Safe, but nobody can reset a password until it is back, and payroll finalize refuses to run (by design, with a clear message). Verify the sender signature still matches `SMTP_FROM`. |
 | Google OAuth token | Must be repasted per environment. **Also update the `GOOGLE_OAUTH_TOKEN_JSON` GitHub Actions secret**, or the docs mirror keeps using the revoked token and its workflow starts failing. Sheets exports queue up in Postgres and the auto-reconciler backfills them once access returns, so a short outage is recoverable. |
 | Database password | Update `DATABASE_URL` on Render. The app will not boot without a valid one. |

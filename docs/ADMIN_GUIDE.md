@@ -43,6 +43,7 @@ FMCSA compliance paperwork and the Digital Bill of Lading.
 - Customize the app's appearance: theme presets, fonts, button styling, and pin colors, and save/apply custom presets
 - Sign off on defective DVIRs, in person or by emailing a mechanic a sign off link
 - Log non job Office Hours
+- Run Payroll for a pay period: hours by employee in the QuickBooks column shape, correct crew reporting errors without touching what they submitted, and email each affected crew member what changed
 - Review any job in full from Job Summary (timeline, DVIRs, materials, employee hours with skill ratings, incidents, actual inventory, BOL, long-distance per-diem, reimbursements, bill, photos, notes)
 - Review the Incident log: claim numbers, estimated cost, and whether each is resolved
 - Publish app Patch Notes to the crew, and global or per-job admin notes
@@ -89,7 +90,7 @@ picker will not appear for them.
 Tap the **Admin** chip in the top right (requires admin role). A **Desktop mode**
 toggle in the topbar widens every admin screen for a laptop or monitor, remembered
 per device. Tabs: Map, Employees, DVIR Review, Estimator, Patch Notes, Job
-Summary, Office Hours, Incidents, and Settings.
+Summary, Office Hours, Payroll, Incidents, and Settings.
 
 ### Employees
 All accounts with name, email, role, status. Per-row: toggle Active/Disabled,
@@ -138,6 +139,61 @@ block gives the office a plain-text summary for invoicing software.
 ### Office Hours
 Admin-only logging of non-job office/shop time: date, clock in/out, any number of
 break periods, notes. Net hours calculate automatically.
+
+### Payroll
+Every hour the app collected for a pay period, per employee, in the shape you
+type into QuickBooks. Nothing here is a new source of data; it is everything
+already in the app assembled onto one page.
+
+**What it reports.** One row per employee: Regular, Overtime, Non-billable,
+Other, Total hours, per-diem nights, approved reimbursement dollars, and
+mileage. **Copy for spreadsheet** puts the whole table on the clipboard as
+tab-separated text, so it pastes straight into a sheet or lines up next to the
+QuickBooks entry grid.
+
+**Where each number comes from.** Billable and non-billable hours come from the
+per-employee hours on job reports (dated by the job's first timeline event) plus
+off-job entries. Office hours land in non-billable. "Other" is an off-job entry
+on a pay structure management approved case by case. Per-diem counts nights
+flagged out-of-town, from the long-distance day log and the per-employee
+out-of-town flag, de-duplicated so a night marked in both places is owed once.
+Reimbursements are approved, personally-paid expenses only; company-card
+expenses are an expense log and are excluded.
+
+**No pay rates, on purpose.** The app has never stored an hourly rate and this
+tool does not add one, so it reports hours rather than dollars ([ADR
+0029](decisions/0029-payroll-corrections-are-an-override-layer.md)). Mileage is
+reported as **miles, not dollars**, for the same reason: you price it at
+whatever rate is current. Tips are not tracked per employee anywhere in the app,
+so they stay manual.
+
+**Overtime.** Billable hours over 40 in a Monday-to-Sunday week. Non-billable
+and Other do not count toward the 40. Run periods that start on a Monday and end
+on a Sunday: any week hanging outside the period gets flagged `partial`, because
+its overtime cannot be settled without the rest of that week.
+
+**Check these first.** A yellow panel at the top lists anything that would make
+the numbers wrong, most importantly a name on a job report that matches nobody
+on the roster. Those hours are **not counted**, so fix the name or add the
+person before you run payroll.
+
+**Correcting a crew mistake.** Open an employee's **Detail** to see their week
+by week overtime, hours by day, and every line the totals were built from. Hit
+**Correct** on a wrong line, enter what it should be, and write a reason.
+
+Corrections never change what the crew submitted. They are an override recorded
+against this pay period, and both numbers stay visible ("Corrected from 8:
+clocked out at 3:30"). **+ Add a line** records something with no underlying
+entry at all, e.g. a bonus. Overtime is recalculated after corrections, so
+moving hours out of billable can correctly remove someone's OT.
+
+**Finalizing.** When the corrections are right, **Finalize and notify** emails
+each affected crew member one summary of exactly what changed on their hours and
+why (your reason text is the body of that email, so write it for them). It is
+safe to run repeatedly: a correction is mailed once, so if you fix one more
+thing afterwards, only that one goes out. Tick anyone you have already spoken to
+in person to mark them done without an email. If a send fails, the page says so
+and that correction is left unsent, so finalizing again retries it.
 
 ### Incidents
 The log of every incident crew report from the field. Each carries an automatic

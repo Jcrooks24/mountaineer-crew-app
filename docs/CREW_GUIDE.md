@@ -101,6 +101,8 @@ Log Off-Job Hours: log hours for work not tied to a customer job (shop work, err
 Document Library: browse and download company reference documents. See Section 9.
 Worked Hours
 A "Worked Hours" card on the Profile tab shows your own logged hours by week: regular, overtime, and non-billable, pulled from the Employee Hours entered on job reports plus any off-job hours. It is your personal view of what you have logged; you do not edit it here.
+
+If the office finds a mistake in your reported hours while running payroll, they can correct it. When they do, you get an email before payday listing each change: the day, the job, what was reported, what it was changed to, and why. What you originally submitted is not erased, and the office can still see it. If a correction looks wrong to you, reply to that email or talk to the office before the next pay period closes.
 Patch Notes
 The bottom of the Profile tab lists what's changed in recent updates. Each note shows a short preview with a "Read more" link, so the Profile tab stays easy to scan even as the list grows.
 ## 3. FMCSA COMPLIANCE

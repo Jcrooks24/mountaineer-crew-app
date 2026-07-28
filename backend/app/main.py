@@ -81,6 +81,7 @@ from app.routers.skills import (
 from app.routers.furniture_catalog import router as furniture_catalog_router
 from app.routers.routing import router as routing_router
 from app.routers.hours import router as hours_router
+from app.routers.payroll import router as payroll_router
 from app.routers.incidents import (
     router as incidents_router,
     admin_router as incidents_admin_router,
@@ -271,3 +272,4 @@ app.include_router(off_job_router)               # /api/off-job-hours (crew log 
 app.include_router(off_job_admin_router)         # /api/admin/off-job-hours (admin log)
 app.include_router(routing_router)               # /api/routing/return-trip (drive time to dispatch)
 app.include_router(hours_router)                 # /api/hours/worked-history (per-user weekly hours)
+app.include_router(payroll_router)               # /api/admin/payroll/* (admin payroll summary + corrections)

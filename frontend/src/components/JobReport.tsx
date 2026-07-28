@@ -700,6 +700,23 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setSaved(false);
   }
 
+  /** `set`, but the new value is derived from the CURRENT value rather than
+   *  from whatever the render closure captured.
+   *
+   *  Use this for anything that reads the old value to compute the new one -
+   *  every multi-select toggle, and the repeating-row editors. `set("x", [...data.x, k])`
+   *  reads a captured `data`, so two updates that land in the same React batch
+   *  both start from the same snapshot and the first one is lost. Discrete
+   *  click events normally flush one at a time, which is why this has not bitten
+   *  anyone, but the correct form costs nothing and does not depend on that. */
+  function setWith<K extends keyof ReportData>(
+    key: K,
+    fn: (prev: ReportData[K]) => ReportData[K],
+  ) {
+    setData((prev) => ({ ...prev, [key]: fn(prev[key]) }));
+    setSaved(false);
+  }
+
   // ── Employee Hours helpers ─────────────────────────────────────────────────
   // Sort timeline events ascending so the dropdowns read like a day. App.tsx
   // supplies events newest-first. JOB_NOTES sentinels are already filtered
@@ -1792,13 +1809,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           selected={data.variance_causes}
           moreLabel="Ran longer than quoted"
           lessLabel="Ran shorter than quoted"
-          onToggle={(key) => {
-            const has = data.variance_causes.includes(key);
-            set("variance_causes", has
-              ? data.variance_causes.filter((k) => k !== key)
-              : [...data.variance_causes, key]);
-            setSaved(false);
-          }}
+          onToggle={(key) =>
+            setWith("variance_causes", (prev) =>
+              prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
+          }
         />
         {data.variance_causes.length > 0 && (
           <textarea
@@ -1835,13 +1849,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             <ChipPicker
               options={CLIENT_UNREADY_REASONS}
               selected={data.client_unready}
-              onToggle={(key) => {
-                const has = data.client_unready.includes(key);
-                set("client_unready", has
-                  ? data.client_unready.filter((k) => k !== key)
-                  : [...data.client_unready, key]);
-                setSaved(false);
-              }}
+              onToggle={(key) =>
+                setWith("client_unready", (prev) =>
+                  prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
+              }
             />
           </div>
         )}
@@ -1855,7 +1866,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
         <ScopeChangeEditor
           value={data.scope_changes}
-          onChange={(next) => { set("scope_changes", next); setSaved(false); }}
+          onChange={(fn) => setWith("scope_changes", fn)}
         />
       </div>
       )}
@@ -2553,11 +2564,14 @@ function ScopeChangeEditor({
   onChange,
 }: {
   value: ScopeChangeEntry[];
-  onChange: (next: ScopeChangeEntry[]) => void;
+  /** Takes an UPDATER, not a value. Every edit in here derives the next list
+   *  from the current one, so passing a pre-computed array would reintroduce
+   *  the stale-snapshot problem `setWith` exists to avoid. */
+  onChange: (fn: (prev: ScopeChangeEntry[]) => ScopeChangeEntry[]) => void;
 }) {
   const patchAt = (i: number, patch: Partial<ScopeChangeEntry>) =>
-    onChange(value.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
-  const removeAt = (i: number) => onChange(value.filter((_, idx) => idx !== i));
+    onChange((prev) => prev.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  const removeAt = (i: number) => onChange((prev) => prev.filter((_, idx) => idx !== i));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -2576,19 +2590,27 @@ function ScopeChangeEditor({
             selected={c.kinds}
             moreLabel="Added / more work"
             lessLabel="Dropped / less work"
-            onToggle={(key) => {
-              const has = c.kinds.includes(key);
-              const kinds = has ? c.kinds.filter((k) => k !== key) : [...c.kinds, key];
-              // Picking the first reason from a side is a strong hint at which
-              // way this change went, so set the direction to match - but only
-              // on the first pick, never overriding a deliberate later change.
-              const picked = SCOPE_CHANGE_KINDS.find((o) => o.key === key);
-              const patch: Partial<ScopeChangeEntry> = { kinds };
-              if (!has && c.kinds.length === 0 && picked?.group) {
-                patch.direction = picked.group === "less" ? "saved" : "added";
-              }
-              patchAt(i, patch);
-            }}
+            onToggle={(key) =>
+              onChange((prev) =>
+                prev.map((row, idx) => {
+                  if (idx !== i) return row;
+                  const has = row.kinds.includes(key);
+                  const kinds = has
+                    ? row.kinds.filter((k) => k !== key)
+                    : [...row.kinds, key];
+                  // Picking the first reason from a side is a strong hint at
+                  // which way this change went, so set the direction to match -
+                  // but only on the first pick, never overriding a deliberate
+                  // later change.
+                  const picked = SCOPE_CHANGE_KINDS.find((o) => o.key === key);
+                  const direction =
+                    !has && row.kinds.length === 0 && picked?.group
+                      ? picked.group === "less" ? "saved" : "added"
+                      : row.direction;
+                  return { ...row, kinds, direction };
+                }),
+              )
+            }
           />
           <div className="row wrap" style={{ gap: 10, alignItems: "flex-end", marginTop: 12 }}>
             <label className="col" style={{ gap: 4 }}>
@@ -2637,7 +2659,10 @@ function ScopeChangeEditor({
         <button
           type="button"
           onClick={() =>
-            onChange([...value, { kinds: [], direction: "added", hours: null, note: "" }])
+            onChange((prev) => [
+              ...prev,
+              { kinds: [], direction: "added", hours: null, note: "" },
+            ])
           }
           style={{
             padding: "6px 12px", borderRadius: 999, border: "1px dashed var(--border)",

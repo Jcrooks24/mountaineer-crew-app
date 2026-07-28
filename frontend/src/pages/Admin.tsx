@@ -27,6 +27,7 @@ import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePa
 import EstimatorTab from "../components/EstimatorTab";
 import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
 import OfficeHoursPanel from "./OfficeHours";
+import PayrollTool from "../components/PayrollTool";
 import { roundBillableQuarter } from "../components/JobReport";
 import {
   formatMountainDate,
@@ -80,7 +81,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents";
+type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents" | "payroll";
 
 const TAB_TITLES: Record<Tab, string> = {
   map: "Admin Dashboard",
@@ -90,6 +91,7 @@ const TAB_TITLES: Record<Tab, string> = {
   notes: "Notes",
   summary: "Job Summary",
   office: "Office Hours",
+  payroll: "Payroll",
   settings: "Settings",
   advanced: "Advanced Settings",
   appearance: "Theme & Appearance",
@@ -199,6 +201,7 @@ export default function Admin() {
       {tab === "notes" && <NotesTab />}
       {tab === "summary" && <JobSummaryTab />}
       {tab === "office" && <OfficeHoursPanel />}
+      {tab === "payroll" && <PayrollTool />}
       {tab === "incidents" && <IncidentsAdminTab />}
       {tab === "settings" && (
         <SettingsTab
@@ -280,6 +283,7 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
     { tab: "notes",     label: "Patch Notes",  hint: "Publish app update notes to the crew" },
     { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
     { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
+    { tab: "payroll",   label: "Payroll",      hint: "Hours by employee for a pay period" },
     { tab: "incidents", label: "Incidents",    hint: "Crew-reported incident log" },
     { tab: "settings",  label: "Settings",     hint: "Theme, field config, and advanced options" },
   ];
