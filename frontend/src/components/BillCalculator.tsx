@@ -728,7 +728,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
           minWidth: 430,
           gap: 6, padding: "10px 12px",
-          background: "rgba(93,214,194,0.06)",
+          background: "color-mix(in srgb, var(--brand) 6%, transparent)",
           borderBottom: "1px solid var(--border)",
           borderTop: bill.items.length > 0 ? "1px solid var(--border)" : undefined,
           alignItems: "center",

@@ -421,7 +421,7 @@ export default function Reimbursement() {
                       style={{
                         flex: 1, padding: "8px 10px", borderRadius: 8, textAlign: "left",
                         border: paymentMethod === opt.v ? "2px solid var(--brand)" : "1px solid var(--border)",
-                        background: paymentMethod === opt.v ? "rgba(93,214,194,0.12)" : "var(--card)",
+                        background: paymentMethod === opt.v ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
                         color: "var(--text)", cursor: "pointer",
                       }}
                     >

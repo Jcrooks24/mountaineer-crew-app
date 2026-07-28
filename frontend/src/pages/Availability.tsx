@@ -550,7 +550,7 @@ export default function Availability() {
                 className="small"
                 style={{
                   marginTop: 10, padding: "8px 10px", borderRadius: 8,
-                  background: "rgba(93,214,194,0.10)",
+                  background: "color-mix(in srgb, var(--brand) 10%, transparent)",
                   border: "1px solid var(--brand)",
                   color: "var(--text)",
                 }}
@@ -916,7 +916,7 @@ function CaughtUpView({
         <div
           className="card"
           style={{
-            background: "rgba(93,214,194,0.08)",
+            background: "color-mix(in srgb, var(--brand) 8%, transparent)",
             border: "1px solid var(--brand)",
           }}
         >

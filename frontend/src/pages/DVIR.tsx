@@ -536,7 +536,7 @@ export default function DVIRPage() {
                       padding: "9px 6px",
                       borderRadius: 10,
                       border: inspectionType === t ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: inspectionType === t ? "rgba(93,214,194,0.12)" : "var(--card)",
+                      background: inspectionType === t ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
                       color: inspectionType === t ? "var(--brand)" : "var(--muted)",
                       cursor: "pointer",
                       fontWeight: inspectionType === t ? 700 : 400,

@@ -1383,7 +1383,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   padding: "8px 12px",
                   borderRadius: 999,
                   border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 400,
                   fontSize: 13,
@@ -1877,7 +1877,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   padding: "11px 14px",
                   borderRadius: 10,
                   border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 400,
                   fontSize: 13,
@@ -2336,7 +2336,7 @@ function SkillRatingRow({
               <button key={label} type="button" disabled={disabled} onClick={() => onChange(on ? null : num)}
                 style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: disabled ? "not-allowed" : "pointer",
                   border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                  background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                   color: on ? "var(--brand)" : "var(--muted)" }}>
                 {label}
               </button>

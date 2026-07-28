@@ -21,7 +21,7 @@ export function BetaTag({ feature, style }: Props) {
         letterSpacing: "0.1em",
         padding: "1px 6px",
         borderRadius: 4,
-        background: "rgba(93,214,194,0.14)",
+        background: "color-mix(in srgb, var(--brand) 14%, transparent)",
         border: "1px solid var(--brand)",
         lineHeight: "14px",
         whiteSpace: "nowrap",

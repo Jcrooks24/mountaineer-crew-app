@@ -287,7 +287,7 @@ export default function WrapUpEstimator({ jobUuid, onWrapUpChange }: Props) {
             padding: "10px 12px",
             borderRadius: 10,
             border: "1px solid var(--border)",
-            background: "rgba(93,214,194,0.10)",
+            background: "color-mix(in srgb, var(--brand) 10%, transparent)",
           }}
         >
           <div style={{ fontSize: 22, fontWeight: 800, color: "var(--brand)" }}>
