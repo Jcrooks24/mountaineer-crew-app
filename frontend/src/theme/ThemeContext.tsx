@@ -32,6 +32,10 @@ export interface ThemeVars {
   // a specific ink (e.g. the enterprise blue needs white, not the default dark
   // navy) so the button reads correctly without the user touching Text-Color.
   "--on-brand"?: string;
+  // Optional "raised" surface (secondary buttons) distinct from the card.
+  // Enterprise sets it so flat secondary buttons read on-theme instead of the
+  // legacy navy button gradient. Presets that omit it are unaffected.
+  "--raised"?: string;
 }
 
 export interface ThemePreset {
@@ -198,6 +202,7 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--scheduled": "#eec53f",
       "--scheduled-bg": "rgba(238,197,63,0.26)",
       "--on-brand": "#ffffff",
+      "--raised": "#262d3d",
     },
   },
   "enterprise-light": {
@@ -219,6 +224,7 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       "--scheduled": "#a16207",
       "--scheduled-bg": "rgba(161,98,7,0.18)",
       "--on-brand": "#ffffff",
+      "--raised": "#e8ecf4",
     },
   },
 };
@@ -462,6 +468,14 @@ function applySettings(settings: ThemeSettings) {
     root.style.setProperty("--on-brand", preset.vars["--on-brand"] ?? "#0b1220");
   }
 
+  // A preset that declares its own brand ink always wins for --on-brand, even
+  // under an explicit Text-Color choice: the enterprise blue button needs white
+  // regardless of the body text mode. Without this, "Dark text" put dark ink on
+  // the blue button (unreadable, esp. on Enterprise Light).
+  if (preset.vars["--on-brand"]) {
+    root.style.setProperty("--on-brand", preset.vars["--on-brand"]!);
+  }
+
   // Font
   root.style.setProperty("--font", settings.fontValue);
 
@@ -504,6 +518,14 @@ function applySettings(settings: ThemeSettings) {
     root.style.setProperty("--btn-r", "3px");
     root.style.setProperty("--shadow", "none");
     root.style.setProperty("--border", preset.vars["--border"]);
+    // Secondary/base buttons: a flat "raised" surface instead of the legacy
+    // navy button gradient (which read as the old palette on enterprise, e.g.
+    // the Photos "Refresh" button). --btn-r/border keep them tight + hairline.
+    const raised = preset.vars["--raised"];
+    if (raised) {
+      root.style.setProperty("--btn-bg-from", raised);
+      root.style.setProperty("--btn-bg-to", raised);
+    }
   }
 }
 
