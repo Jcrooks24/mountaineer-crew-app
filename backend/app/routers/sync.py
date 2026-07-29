@@ -276,7 +276,11 @@ def patch_event(
         "ok": True,
         "event_id": event_id,
         "note": (new_note or "") if note_changed else None,
-        "timestamp": new_ts.isoformat() if timestamp_changed and new_ts else None,
+        # new_ts is naive UTC; tag it "Z" so clients parse it as UTC, exactly
+        # like GET /events (line ~183). Without the suffix a client reads the
+        # edited time in LOCAL tz and shifts it - corrupting the RODS duty-time
+        # math that reconstructs HH:MM from this timestamp.
+        "timestamp": (new_ts.isoformat() + "Z") if timestamp_changed and new_ts else None,
         "sheet_error": sheet_error,
     }
 
