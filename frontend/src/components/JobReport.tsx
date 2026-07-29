@@ -255,7 +255,7 @@ function normalizeDraftData(d: ReportData): ReportData {
     // Both close-out fields changed shape on 2026-07-28. A draft written by the
     // previous build is still sitting in localStorage on crew devices, so these
     // upgrade rather than assume - see normalize* in lib/closeout.
-    variance_causes: normalizeVarianceCauses(d.variance_causes, d.variance_cause),
+    variance_causes: normalizeVarianceCauses(d.variance_causes, (d as any).variance_cause),
     variance_note: d.variance_note ?? "",
     client_readiness: d.client_readiness ?? null,
     client_unready: Array.isArray(d.client_unready) ? d.client_unready : [],
