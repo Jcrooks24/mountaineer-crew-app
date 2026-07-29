@@ -130,7 +130,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "report" | "inventory";
+type Tab = "home" | "timeline" | "photos" | "report" | "inventory";
 
 type EventRecord = {
   event_id: string;
@@ -340,7 +340,7 @@ export default function App() {
   const { settings: themeSettings } = useTheme();
   const { src: logo, variant: logoVariant } = useResolvedLogo();
   const ht = themeSettings.helpTexts;
-  const [tab, setTab] = useState<Tab>("timeline");
+  const [tab, setTab] = useState<Tab>("home");
 
   const [jobUuid, setJobUuid] = useState<string>(() => localStorage.getItem(JOB_KEY) || "");
   const [jobStatus, setJobStatus] = useState<"active" | "closed">(
@@ -363,7 +363,7 @@ export default function App() {
   // button is gone and whose body renders nothing: a blank screen with no way
   // back. Cheap insurance.
   useEffect(() => {
-    if (!longDistance && tab === "inventory") setTab("timeline");
+    if (!longDistance && tab === "inventory") setTab("home");
   }, [longDistance, tab]);
 
   // Long-distance day plan - drives whether the timeline shows the labor Actions
@@ -2067,55 +2067,8 @@ export default function App() {
       <AdminNotesBanner scope="global" />
       {jobUuid && <AdminNotesBanner key={jobUuid} scope={jobUuid} />}
 
-      {/* Job actions - tile grid (design-system action grid). The active task's
-          content renders below. Inventory is long-distance only (ADR 0015);
-          DVIR is a shortcut out to its own screen. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8, marginTop: 12 }}>
-        {([
-          { key: "timeline", label: "Timeline", icon: HubIcons.timeline },
-          { key: "photos", label: "Photos", icon: HubIcons.photos },
-          ...(longDistance ? [{ key: "inventory", label: "Inventory", icon: HubIcons.box }] : []),
-          { key: "report", label: "Report", icon: HubIcons.report },
-        ] as { key: Tab; label: string; icon: () => ReactNode }[]).map((t) => {
-          const active = tab === t.key;
-          const Icon = t.icon;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              aria-pressed={active}
-              onClick={() => setTab(t.key)}
-              style={{
-                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
-                minHeight: 68, padding: "10px 6px", borderRadius: 4,
-                border: active ? "1px solid var(--brand)" : "1px solid var(--border)",
-                background: active ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
-                color: active ? "var(--brand)" : "var(--text)", cursor: "pointer",
-              }}
-            >
-              <span style={{ color: active ? "var(--brand)" : "var(--muted)", display: "inline-flex" }}><Icon /></span>
-              <span style={{ fontSize: 12, fontWeight: active ? 600 : 500 }}>{t.label}</span>
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => nav("/dvir")}
-          style={{
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
-            minHeight: 68, padding: "10px 6px", borderRadius: 4,
-            border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", cursor: "pointer",
-          }}
-        >
-          <span style={{ color: "var(--muted)", display: "inline-flex" }}><HubIcons.truck /></span>
-          <span style={{ fontSize: 12, fontWeight: 500 }}>DVIR</span>
-        </button>
-      </div>
-
-      {/* Timeline */}
-      {tab === "timeline" && (
-        <>
-          <div className="card">
+      {/* Job selector + core actions: always visible (drill-in home context). */}
+      <div className="card">
             <div className="microLabel" style={{ marginBottom: 10 }}>Job</div>
 
             <div className="col" style={{ gap: 12 }}>
@@ -2294,6 +2247,40 @@ export default function App() {
             return null;
           })()}
 
+      {/* Home: the action-tile grid. Drilled into a task: a back-to-actions bar. */}
+      {tab === "home" ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8, marginTop: 12 }}>
+          {([
+            { key: "timeline", label: "Timeline", icon: HubIcons.timeline },
+            { key: "photos", label: "Photos", icon: HubIcons.photos },
+            ...(longDistance ? [{ key: "inventory", label: "Inventory", icon: HubIcons.box }] : []),
+            { key: "report", label: "Report", icon: HubIcons.report },
+          ] as { key: Tab; label: string; icon: () => ReactNode }[]).map((t) => {
+            const Icon = t.icon;
+            return (
+              <button key={t.key} type="button" onClick={() => setTab(t.key)}
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 68, padding: "10px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", cursor: "pointer" }}>
+                <span style={{ color: "var(--muted)", display: "inline-flex" }}><Icon /></span>
+                <span style={{ fontSize: 12, fontWeight: 500 }}>{t.label}</span>
+              </button>
+            );
+          })}
+          <button type="button" onClick={() => nav("/dvir")}
+            style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 68, padding: "10px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", cursor: "pointer" }}>
+            <span style={{ color: "var(--muted)", display: "inline-flex" }}><HubIcons.truck /></span>
+            <span style={{ fontSize: 12, fontWeight: 500 }}>DVIR</span>
+          </button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setTab("home")}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 12, background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontSize: 14, fontWeight: 600, padding: "6px 0" }}>
+          <span style={{ fontSize: 18, lineHeight: 1 }}>&lsaquo;</span> Actions
+        </button>
+      )}
+
+      {/* Timeline detail (Notes + Activity): the "Timeline" drill-in task. */}
+      {tab === "timeline" && (
+        <>
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
               <div className="microLabel" style={{ marginBottom: 10 }}>Notes</div>
