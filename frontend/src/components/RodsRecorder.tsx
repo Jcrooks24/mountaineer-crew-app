@@ -11,6 +11,7 @@ import {
   changesForDriver,
   currentStatus,
   dutyEventNote,
+  todayLocal,
 } from "../lib/rodsStore";
 
 type MinEvent = { type: string; note?: string | null; timestamp: string };
@@ -49,7 +50,10 @@ export default function RodsRecorder({
   }, [me]);
 
   const driver = (loggingFor || "").trim() || me;
-  const cur = useMemo(() => currentStatus(changesForDriver(events, driver, me)), [events, driver, me]);
+  // Filter to TODAY: on a multi-day trip, an un-dated reconstruction sorts all
+  // days by time-of-day, so a prior night's last "Off Duty" tap wins and the
+  // status shows stuck on Off Duty. today = the local RODS day.
+  const cur = useMemo(() => currentStatus(changesForDriver(events, driver, me, todayLocal())), [events, driver, me]);
 
   function tap(status: DutyStatus) {
     if (cur === status) return;

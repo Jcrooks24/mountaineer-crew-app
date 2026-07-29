@@ -166,10 +166,24 @@ export function rodsDriverNames(events: MinEvent[], fallbackDriver = ""): string
  * event's time in the activity log edits the RODS. Begins off-duty at
  * midnight. Within a single minute, the LAST tap wins - lets the crew fix
  * a misclick without leaving a stale earlier entry stuck on the log. */
-export function changesForDriver(events: MinEvent[], driver: string, fallbackDriver = ""): DutyChange[] {
+/** Local calendar date ("YYYY-MM-DD", device tz) of an ISO timestamp. */
+function localDateFromTs(ts: string): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+export function changesForDriver(events: MinEvent[], driver: string, fallbackDriver = "", date?: string): DutyChange[] {
   const duty = events
     .filter((e) => {
       if (e.type !== "DUTY") return false;
+      // Per-day RODS: an FMCSA duty log is ONE calendar day. Without this
+      // filter a multi-day LD trip collapses EVERY day's duty events into a
+      // single 24h timeline sorted by time-of-day - jumbling the duty-time
+      // totals and making currentStatus pick a prior night's last tap (the
+      // crew-reported "stuck on Off Duty" on day 2, and wrong totals in the
+      // Report). When `date` is omitted, behavior is unchanged (single day).
+      if (date && localDateFromTs(e.timestamp) !== date) return false;
       const p = parseDutyNote(e.note || "");
       return !!p.status && (p.driver || fallbackDriver) === driver;
     })

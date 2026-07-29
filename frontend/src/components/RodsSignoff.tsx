@@ -106,7 +106,7 @@ function RodsDriverSection({
   const [calcMsg, setCalcMsg] = useState<string | null>(null);
   const sigRef = useRef<SignaturePadHandle>(null);
 
-  const changes = useMemo(() => changesForDriver(events, driver, fallback), [events, driver, fallback]);
+  const changes = useMemo(() => changesForDriver(events, driver, fallback, date), [events, driver, fallback, date]);
   const totals = useMemo(() => computeTotals(changes), [changes]);
   const periods = useMemo(() => {
     const nowMin = minutesOfDay(nowHHMM());
