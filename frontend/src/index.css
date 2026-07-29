@@ -127,7 +127,9 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--muted);
-  background: rgba(255,255,255,0.05);
+  /* Raised surface so the chip reads on a light-theme white card (the flat
+     rgba overlay was invisible there); legacy overlay as the fallback. */
+  background: var(--raised, rgba(255,255,255,0.05));
 }
 
 /* Data typography: DM Mono for IDs, times, hours, counts, measurements - so
