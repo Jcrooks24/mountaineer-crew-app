@@ -17,6 +17,7 @@ import {
   minutesToHHMM,
   newDay,
   nowHHMM,
+  rodsDatesFromEvents,
   rodsDriverNames,
   saveDay,
   syncQueue,
@@ -26,6 +27,13 @@ import { loadPodsOverride, savePodsOverride } from "./JobReport";
 
 type MinEvent = { type: string; note?: string | null; timestamp: string };
 type BolLink = { ref: string; onOpen: () => void } | null;
+
+/** "2026-07-28" -> "Tue, Jul 28" for the RODS-day selector. */
+function fmtDayLabel(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
 
 function fmt12(hhmm: string): string {
   const mins = minutesOfDay(hhmm);
@@ -270,7 +278,22 @@ export default function RodsSignoff({
 }) {
   const { user } = useAuth();
   const me = user?.name || user?.email || "";
-  const date = todayLocal();
+  const today = todayLocal();
+  // Every calendar day the trip has duty events for, plus today - a multi-day
+  // LD trip needs one RODS per day, each reviewable/signable here.
+  const dutyDates = useMemo(() => {
+    const ds = rodsDatesFromEvents(events);
+    return ds.includes(today) ? ds : [...ds, today].sort();
+  }, [events, today]);
+  const [selectedDate, setSelectedDate] = useState(today);
+  // Keep the selection valid as events load in.
+  useEffect(() => {
+    if (!dutyDates.includes(selectedDate)) {
+      setSelectedDate(dutyDates.includes(today) ? today : dutyDates[dutyDates.length - 1] || today);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dutyDates]);
+  const date = selectedDate;
   const [units, setUnits] = useState<string[]>([]);
   const [dir, setDir] = useState<DirectoryEntry[]>([]);
 
@@ -305,7 +328,7 @@ export default function RodsSignoff({
     ensureDirectory().then(setDir).catch(() => {});
   }, []);
 
-  const driversWithEvents = useMemo(() => rodsDriverNames(events, me), [events, me]);
+  const driversWithEvents = useMemo(() => rodsDriverNames(events, me, date), [events, me, date]);
   const drivers = useMemo(() => Array.from(new Set([...driversWithEvents, ...manual])), [driversWithEvents, manual]);
   const addable = dir.map((d) => d.name || d.email).filter((n) => n && !drivers.includes(n));
 
@@ -318,9 +341,30 @@ export default function RodsSignoff({
 
   return (
     <>
+      {/* Per-day selector for multi-day trips: one RODS per calendar day. */}
+      {dutyDates.length > 1 && (
+        <div className="col" style={{ gap: 6, marginBottom: 12 }}>
+          <div className="microLabel">RODS day</div>
+          <div className="seg" style={{ flexWrap: "wrap" }}>
+            {dutyDates.map((d) => (
+              <button
+                key={d}
+                type="button"
+                aria-pressed={d === date}
+                className={"segBtn" + (d === date ? " on" : "")}
+                style={{ ["--seg" as any]: "var(--brand)" }}
+                onClick={() => setSelectedDate(d)}
+              >
+                {fmtDayLabel(d)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {drivers.map((dr) => (
         <RodsDriverSection
-          key={dr}
+          key={`${date}:${dr}`}
           date={date}
           driver={dr}
           fallback={me}
