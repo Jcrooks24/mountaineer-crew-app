@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
@@ -323,6 +323,16 @@ function getDeviceId(): string {
   }
   return id;
 }
+
+// Hub action-grid icons: 22px line icons, stroke = currentColor.
+const _hi = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+const HubIcons = {
+  timeline: () => (<svg {..._hi}><path d="M4 6h16M4 12h16M4 18h10" /><circle cx="20" cy="18" r="1.6" /></svg>),
+  photos: () => (<svg {..._hi}><rect x="3" y="6" width="18" height="14" rx="2" /><path d="M8 6l1.5-2h5L16 6" /><circle cx="12" cy="13" r="3.2" /></svg>),
+  box: () => (<svg {..._hi}><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" /><path d="M4 7.5l8 4.5 8-4.5M12 12v9" /></svg>),
+  report: () => (<svg {..._hi}><path d="M7 3h8l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><path d="M9 12h6M9 16h6M9 8h3" /></svg>),
+  truck: () => (<svg {..._hi}><path d="M2 5h11v10H2z" /><path d="M13 8h4l4 4v3h-8z" /><circle cx="6" cy="18" r="1.6" /><circle cx="17" cy="18" r="1.6" /></svg>),
+};
 
 export default function App() {
   const nav = useNavigate();
@@ -2057,29 +2067,48 @@ export default function App() {
       <AdminNotesBanner scope="global" />
       {jobUuid && <AdminNotesBanner key={jobUuid} scope={jobUuid} />}
 
-      {/* Tabs */}
-      <div className="tabbar">
-        <button className={"tab " + (tab === "timeline" ? "active" : "")} onClick={() => setTab("timeline")}>
-          Timeline
-        </button>
-        <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
-          Photos
-        </button>
-        {/* Inventory is long-distance only: item-by-item logging was too slow to
-            be worth it on a local job, and it is paused there until there's a
-            faster capture flow (ADR 0015). LD keeps it - the BOL needs it. */}
-        {longDistance && (
-          <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
-            Inventory
-          </button>
-        )}
+      {/* Job actions - tile grid (design-system action grid). The active task's
+          content renders below. Inventory is long-distance only (ADR 0015);
+          DVIR is a shortcut out to its own screen. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8, marginTop: 12 }}>
+        {([
+          { key: "timeline", label: "Timeline", icon: HubIcons.timeline },
+          { key: "photos", label: "Photos", icon: HubIcons.photos },
+          ...(longDistance ? [{ key: "inventory", label: "Inventory", icon: HubIcons.box }] : []),
+          { key: "report", label: "Report", icon: HubIcons.report },
+        ] as { key: Tab; label: string; icon: () => ReactNode }[]).map((t) => {
+          const active = tab === t.key;
+          const Icon = t.icon;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setTab(t.key)}
+              style={{
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
+                minHeight: 68, padding: "10px 6px", borderRadius: 4,
+                border: active ? "1px solid var(--brand)" : "1px solid var(--border)",
+                background: active ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
+                color: active ? "var(--brand)" : "var(--text)", cursor: "pointer",
+              }}
+            >
+              <span style={{ color: active ? "var(--brand)" : "var(--muted)", display: "inline-flex" }}><Icon /></span>
+              <span style={{ fontSize: 12, fontWeight: active ? 600 : 500 }}>{t.label}</span>
+            </button>
+          );
+        })}
         <button
-          className={"tab " + (tab === "report" ? "active" : "")}
-          onClick={() => setTab("report")}
-          style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.1, gap: 2 }}
+          type="button"
+          onClick={() => nav("/dvir")}
+          style={{
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
+            minHeight: 68, padding: "10px 6px", borderRadius: 4,
+            border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", cursor: "pointer",
+          }}
         >
-          <span>Report</span>
-          <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>{longDistance ? "Complete at end of trip" : "Complete at end of job"}</span>
+          <span style={{ color: "var(--muted)", display: "inline-flex" }}><HubIcons.truck /></span>
+          <span style={{ fontSize: 12, fontWeight: 500 }}>DVIR</span>
         </button>
       </div>
 
