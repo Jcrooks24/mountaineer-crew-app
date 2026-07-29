@@ -189,28 +189,35 @@ export default function Admin() {
         </div>
       </div>
 
-      {tab === "map" && (
-        <>
-          <AdminToolMenu onPick={setTab} />
-          <MapTab />
-        </>
-      )}
-      {tab === "employees" && <EmployeesTab />}
-      {tab === "dvir" && <DVIRTab />}
-      {tab === "estimator" && <EstimatorTab />}
-      {tab === "notes" && <NotesTab />}
-      {tab === "summary" && <JobSummaryTab />}
-      {tab === "office" && <OfficeHoursPanel />}
-      {tab === "payroll" && <PayrollTool />}
-      {tab === "incidents" && <IncidentsAdminTab />}
-      {tab === "settings" && (
-        <SettingsTab
-          onOpenAdvanced={() => setTab("advanced")}
-          onOpenAppearance={() => setTab("appearance")}
-        />
-      )}
-      {tab === "advanced" && <AdvancedSettingsPage />}
-      {tab === "appearance" && <ThemeAppearancePage />}
+      {/* Desktop: persistent left sidebar + content. Mobile: the drill-in
+          tool menu (rendered inside the map tab) with a back button. */}
+      <div style={desktopMode ? { display: "flex", gap: 16, alignItems: "flex-start" } : undefined}>
+        {desktopMode && <AdminSidebar current={tab} onPick={setTab} />}
+        <div style={desktopMode ? { flex: 1, minWidth: 0 } : undefined}>
+          {tab === "map" && (
+            <>
+              {!desktopMode && <AdminToolMenu onPick={setTab} />}
+              <MapTab />
+            </>
+          )}
+          {tab === "employees" && <EmployeesTab />}
+          {tab === "dvir" && <DVIRTab />}
+          {tab === "estimator" && <EstimatorTab />}
+          {tab === "notes" && <NotesTab />}
+          {tab === "summary" && <JobSummaryTab />}
+          {tab === "office" && <OfficeHoursPanel />}
+          {tab === "payroll" && <PayrollTool />}
+          {tab === "incidents" && <IncidentsAdminTab />}
+          {tab === "settings" && (
+            <SettingsTab
+              onOpenAdvanced={() => setTab("advanced")}
+              onOpenAppearance={() => setTab("appearance")}
+            />
+          )}
+          {tab === "advanced" && <AdvancedSettingsPage />}
+          {tab === "appearance" && <ThemeAppearancePage />}
+        </div>
+      </div>
     </div>
     </>
   );
@@ -275,6 +282,54 @@ function DesktopModeToggle({
 
 // Dashboard home menu - list-style links to each admin tool. The Map is the
 // home itself, so it isn't listed here.
+// Desktop admin sidebar: 200px, left-border active nav (design system). Shown
+// only in desktopMode; mobile keeps the drill-in AdminToolMenu.
+function AdminSidebar({ current, onPick }: { current: Tab; onPick: (t: Tab) => void }) {
+  const items: { tab: Tab; label: string }[] = [
+    { tab: "map", label: "Map" },
+    { tab: "employees", label: "Employees" },
+    { tab: "dvir", label: "DVIR Review" },
+    { tab: "estimator", label: "Estimator" },
+    { tab: "notes", label: "Patch Notes" },
+    { tab: "summary", label: "Job Summary" },
+    { tab: "office", label: "Office Hours" },
+    { tab: "payroll", label: "Payroll" },
+    { tab: "incidents", label: "Incidents" },
+    { tab: "settings", label: "Settings" },
+  ];
+  return (
+    <nav
+      style={{
+        width: 200, flexShrink: 0, alignSelf: "flex-start",
+        background: "var(--card)", border: "1px solid var(--border)", borderRadius: 4, overflow: "hidden",
+      }}
+    >
+      {items.map((t) => {
+        const active =
+          current === t.tab || (t.tab === "settings" && (current === "advanced" || current === "appearance"));
+        return (
+          <button
+            key={t.tab}
+            type="button"
+            aria-current={active ? "page" : undefined}
+            onClick={() => onPick(t.tab)}
+            style={{
+              display: "block", width: "100%", textAlign: "left",
+              padding: "10px 14px", fontSize: 14, fontWeight: active ? 600 : 500,
+              background: active ? "var(--card2)" : "transparent",
+              color: active ? "var(--brand)" : "var(--text)",
+              border: "none", borderLeft: active ? "3px solid var(--brand)" : "3px solid transparent",
+              borderRadius: 0, cursor: "pointer",
+            }}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
   const tools: { tab: Tab; label: string; hint: string }[] = [
     { tab: "employees", label: "Employees",    hint: "Crew access and roles" },
