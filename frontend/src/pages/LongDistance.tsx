@@ -6,6 +6,7 @@ import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePa
 import BillOfLadingForm from "../components/BillOfLadingForm";
 import { BetaTag } from "../components/BetaTag";
 import AppHeader from "../components/AppHeader";
+import LdDocuments from "../components/LdDocuments";
 import {
   fetchCalendarDay,
   fetchManualJobsForDate,
@@ -17,7 +18,7 @@ import {
   type OpenBol,
 } from "../lib/bolStore";
 
-type Section = "menu" | "prior" | "hos" | "trala" | "bol";
+type Section = "menu" | "prior" | "hos" | "trala" | "bol" | "docs";
 
 function todayLocal() {
   const d = new Date();
@@ -48,7 +49,7 @@ export default function LongDistance() {
   const [params, setParams] = useSearchParams();
   const initialSection: Section = (() => {
     const raw = params.get("section");
-    if (raw === "prior" || raw === "bol" || raw === "hos" || raw === "trala") return raw;
+    if (raw === "prior" || raw === "bol" || raw === "hos" || raw === "trala" || raw === "docs") return raw;
     return "menu";
   })();
   const [section, setSectionState] = useState<Section>(initialSection);
@@ -76,6 +77,22 @@ export default function LongDistance() {
         onBack={() => setSection("menu")}
         openBolId={wantBolId || undefined}
       />
+    );
+  }
+  if (section === "docs") {
+    return (
+      <div className="container">
+        <AppHeader title="LD Documents" onBack={() => setSection("menu")} />
+        <LdDocuments
+          onOpenBol={(bolId) => {
+            const p = new URLSearchParams(params);
+            p.set("section", "bol");
+            p.set("bol_id", bolId);
+            setParams(p, { replace: true });
+            setSectionState("bol");
+          }}
+        />
+      </div>
     );
   }
 
@@ -115,6 +132,18 @@ export default function LongDistance() {
             <BetaTag feature="digitalBOL" />
             <div className="small" style={{ color: "var(--muted)" }}>
               Build the declared inventory in the field - photos, condition notes, offline.
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <div className="card" data-component="LdDocumentsSection">
+        <div className="microLabel" style={{ marginBottom: 10 }}>Documents</div>
+        <div className="col" style={{ gap: 8 }}>
+          <button onClick={() => setSection("docs")} style={{ textAlign: "left" }}>
+            <div style={{ fontWeight: 700 }}>View all LD documents</div>
+            <div className="small" style={{ color: "var(--muted)" }}>
+              Browse your RODS logs, Prior On-Duty statements, and Bills of Lading across every day and job.
             </div>
           </button>
         </div>
