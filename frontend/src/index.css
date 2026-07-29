@@ -68,7 +68,10 @@ input, select, textarea{
   padding: 10px 12px;
   border-radius: var(--btn-r);
   border: 1px solid var(--border);
-  background: rgba(255,255,255,0.08);
+  /* A raised surface distinct from the card so the field reads as an input.
+     rgba(255,255,255,0.08) vanished on light-theme white cards; --raised (set
+     by enterprise) fixes that, with the old overlay as the legacy fallback. */
+  background: var(--raised, rgba(255,255,255,0.08));
   color: var(--text);
   font-family: inherit;
   /* iOS Safari auto-zooms on focus when the input's computed font-size is
@@ -76,6 +79,9 @@ input, select, textarea{
      leaving it zoomed after navigation. */
   font-size: 16px;
   outline: none;
+}
+input:focus, select:focus, textarea:focus{
+  border-color: var(--border-hi, var(--brand));
 }
 
 /* Strip the native iOS styling on date/time inputs so they respect
