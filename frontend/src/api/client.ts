@@ -1,6 +1,8 @@
 import { getToken, clearToken } from "../auth/token";
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+// `?.` so the module is importable outside Vite (dev-tools / node checks),
+// where import.meta.env is undefined. In the app Vite always defines it.
+const API = (import.meta as any).env?.VITE_API_URL || "http://127.0.0.1:8000";
 
 export class ApiError extends Error {
   status: number;
