@@ -151,15 +151,28 @@ function parseDutyNote(note: string): { status: DutyStatus | null; driver: strin
 
 /** Distinct driver names that have DUTY events in the log (old notes without a
  * driver fall back to `fallbackDriver`). */
-export function rodsDriverNames(events: MinEvent[], fallbackDriver = ""): string[] {
+export function rodsDriverNames(events: MinEvent[], fallbackDriver = "", date?: string): string[] {
   const set = new Set<string>();
   for (const e of events) {
     if (e.type !== "DUTY") continue;
+    if (date && localDateFromTs(e.timestamp) !== date) continue;
     const p = parseDutyNote(e.note || "");
     if (!p.status) continue;
     set.add(p.driver || fallbackDriver);
   }
   return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+/** Sorted unique local calendar dates ("YYYY-MM-DD") that have DUTY events -
+ * the days a multi-day trip needs a RODS for. */
+export function rodsDatesFromEvents(events: MinEvent[]): string[] {
+  const set = new Set<string>();
+  for (const e of events) {
+    if (e.type !== "DUTY") continue;
+    const d = localDateFromTs(e.timestamp);
+    if (d) set.add(d);
+  }
+  return [...set].sort();
 }
 
 /** Duty changes for ONE driver, derived from the DUTY events. Editing an
