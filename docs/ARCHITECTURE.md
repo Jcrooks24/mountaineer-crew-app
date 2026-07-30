@@ -141,6 +141,15 @@ to drain, and `pruneStale` deleting it 14 days later. It now exposes `drainAll()
 `App.tsx` calls on boot and on reconnect regardless of tab or mode. Any queue whose UI
 can be feature-flagged off needs the same treatment.
 
+**Actual Inventory and the BOL are two stores, now bridged one way.** The Inventory tab
+(`ActualInventory`) writes `job_inventory_items` keyed by `job_uuid`; the BOL's declared
+items live in `digital_bols.items_json` keyed by `bol_id`. They are written independently.
+Because a crew could log inventory in one and sign an empty BOL from the other,
+`bolStore.loadForJob` now seeds an **unsigned, empty** BOL from that job's Actual
+Inventory (`GET /api/job-inventory/{job_uuid}`), best-effort and online-only. The BOL
+reads from inventory; inventory does not read from the BOL
+([ADR 0026](decisions/0026-bol-inherits-actual-inventory.md), amending ADR 0015).
+
 **Why retries are safe:** every payload carries a client-generated UUID, and the
 backend upserts on it. This is the single invariant that makes the whole offline
 design work, and as of 2026-07-13 every queue honors it (the estimator and
