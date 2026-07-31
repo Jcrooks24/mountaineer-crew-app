@@ -13,10 +13,17 @@ not done twice.
 them has been ratified. Where they conflict with the SOP, the ADRs, or the
 code, those win.
 
+> **Read [CONTRADICTIONS.md](CONTRADICTIONS.md) before either export.** The two
+> exports disagree with each other, with this repo, and in places with
+> themselves. That file lists all fifteen conflicts, says which need a human
+> decision, and ends with the short list of answers that are actually worth
+> carrying forward.
+
 ## The files
 
 | File | Original name | Turns | Free-text answers |
 |---|---|---|---|
+| [CONTRADICTIONS.md](CONTRADICTIONS.md) | written here, not exported | | |
 | [export-A-crew-app-framing.md](export-A-crew-app-framing.md) | `mms-field-app-dialogue.md` | 47 | 6 |
 | [export-B-m1-install-framing.md](export-B-m1-install-framing.md) | `mms-feild-ap-dialogue.md` | 49 | 12 |
 | [meeting-notes-2026-07-29.md](meeting-notes-2026-07-29.md) | Gemini notes, Roger and Jacob, 2026-07-29 | | |
@@ -43,24 +50,27 @@ Export B also carries the merger constraints in the owner's own words: a
 December 31 close, with app and data migration off msWhse needed before close so
 staff can be trained for January 1 use.
 
-## Figures in these exports that need verification before they are treated as settled
+## Why they diverged
 
-The platform's AI recorded assumptions that do not obviously match reality.
-Anything in this list should be confirmed by a human before it is carried into
-the new project:
+The exports were not two attempts at the same brief. The project was
+under-specified at the outset and the objective drifted during the interviews:
+the stated goal is to **harden the existing field app**, but many answers were
+given as though the goal were to **build the unified business brain**. The
+platform's AI could not tell those apart, so it kept widening scope, and each
+project widened in a different direction.
 
-- The product name "FieldSync". This app has never been called that.
-- Roughly 50 field installers and 8 office staff. Check against the actual
-  roster and the SOP's roles section.
-- A September 1, 2026 hard launch, an August 8 alpha gate, and an August 16 beta
-  rollout. No such dates exist anywhere else in this project.
-- An admin labour cost of $23,400 per year.
-- A claim that installers currently capture job data in a phone notes app and
-  by SMS. This app has been in field use for months; that describes the
-  pre-app state, not the present one.
+Compounding it, neither project was told the app already exists and is in daily
+field use. Both interviewed from a standing start, so both describe the pre-app
+world as the present one and re-specify shipped features as new MVP scope.
 
-This list is itself the clearest argument for the discipline the meeting landed
-on: load the reference documents first, and let the AI ask questions second.
+[CONTRADICTIONS.md](CONTRADICTIONS.md) works through all of it: invented product
+names and launch dates, a native-versus-PWA split that the repo already settles,
+a genuine unresolved requirement conflict on remote wipe, a factually wrong
+FMCSA rationale, and two full commercial legs that ran after the owner had twice
+said go-to-market work was out of scope.
+
+That last one is the clearest argument for the discipline the meeting landed on:
+load the reference documents first, and let the AI ask questions second.
 
 ## What the reset decided
 
