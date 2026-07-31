@@ -20,9 +20,15 @@ The platform's AI had no way to tell those apart, so it kept widening scope, and
 each project widened in a different direction.
 
 A second root cause compounds it: neither project was told the app already
-exists and is in daily field use. Both interviewed as if from a standing start,
-so both describe the pre-app world as the present one and re-specify shipped
-features as new MVP scope.
+exists and is in daily field use. Both were set up as delta releases, but with
+no baseline connected there was nothing to be a delta against, so both
+interviewed as if from a standing start. That is why both describe the pre-app
+world as the present one and re-specify shipped features as new MVP scope.
+
+Both root causes are fixable at setup rather than during the dialogue. Connect
+the repository before questioning begins, and skip the aspects that do not
+apply. Several entries below note where the platform's own structure, rather
+than a careless answer, produced the conflict.
 
 ## How each entry is classified
 
@@ -58,11 +64,20 @@ artifact inherits it.
 
 The only date with an actual external source is the **December 31 close**, with
 msWhse migration needed before it so staff can train for **January 1** use
-(B:253, and the M1 assessment). Both September dates appear to be artifacts of
-the interview.
+(B:253, and the M1 assessment). Both September dates are artifacts of the
+interview.
 
-**Decide:** whether any September date is real. If not, say so explicitly, or the
-next project will inherit a phantom deadline and triage against it.
+**Why this happened, and why it is not simple hallucination.** The platform
+models every release as alpha, then beta, then production, so alpha and beta
+dates are structural fields it has to fill. Asked for dates that did not exist,
+the interview proposed some, and unchallenged proposals get recorded as settled.
+Two projects filling the same empty field independently produced two different
+answers.
+
+**Decide:** whether any September date is real. If not, say so explicitly at
+setup, or the next project will inherit a phantom deadline and triage against
+it. If the release model requires dates, derive them backwards from the only
+real one, December 31.
 
 ## 3. Native app versus PWA. CONFLICT, and the answer is already in the repo
 
@@ -212,12 +227,19 @@ per-seat with a five-seat floor and a $50 to $100 per month field-app line in B,
 free-trial shape, discount policy by company size, and external-monetization
 triggers.
 
-This is the clearest instance of the drift. It is also the easiest to prevent:
-say once, at project setup, that this is an internal tool with no external
-customer and no GTM leg, and that pricing questions are out of scope until an
-explicit future decision reopens them.
+This is the clearest instance of the drift.
 
-**Decide:** nothing. State it as a boundary at setup.
+**Why saying "no" twice did not stop it.** The platform organizes its interview
+into fixed topics, and a Coverage Auditor scores how completely each one has
+been answered before allowing the dialogue to move on. Business Model and Market
+Landscape are topics. An in-scope topic will be pursued until it is covered,
+regardless of an answer inside it saying the topic does not apply. The refusals
+were recorded as content, not as scope changes.
+
+**Decide:** nothing, but the fix is mechanical, not conversational. **Skip those
+aspects outright at setup.** Asking the agents to go easy on commercial
+questions will not work, because the auditor is measuring coverage, not
+enthusiasm.
 
 ## 13. Tenancy. Minor CONFLICT
 
