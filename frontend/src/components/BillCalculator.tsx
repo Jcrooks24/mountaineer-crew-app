@@ -447,27 +447,23 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   useEffect(() => {
     if (!loaded || truckCount === undefined) return;
     // Longest billable shift, as the default truck-hours proxy.
-    const billableShift = (employeeHours ?? []).reduce(
+    const defaultTruckHours = (employeeHours ?? []).reduce(
       (max, e) => (e.non_billable ? max : Math.max(max, roundBillableQuarter(e.hours || 0))),
       0,
-    );
-    const defaultTruckHours = billableShift > 0 ? billableShift : 1;
+    ) || 1;
     setBill((prev) => {
       const desired = [] as LineItem[];
       for (let i = 1; i <= truckCount; i++) {
         const label = `Truck #${i} (per hour)`;
         const existing = prev.items.find((it) => it.source === "truck" && it.label === label);
-        // Don't seed a NEW truck line at the placeholder 1h before employee
-        // hours have populated: `existing.qty` is preserved on every later
-        // render, so a line created at 1h stays frozen at 1h and silently
-        // under-bills the truck (crew-reported low totals). Defer creation
-        // until the real shift length is known; this effect re-runs when
-        // employeeHours changes. An already-created line is always preserved.
-        if (!existing && billableShift <= 0) continue;
         desired.push({
           id: existing?.id ?? uuid(),
           label,
-          // Preserve an admin-edited value; only default on first creation.
+          // Preserve an admin-edited value; only default on first creation. A
+          // line created before employee hours populate defaults to 1h and is
+          // then preserved (can stay frozen at 1h) - the bill-totals warning
+          // flags that as a suspected under-bill rather than silently changing
+          // an admin-visible value here.
           qty: existing ? existing.qty : defaultTruckHours,
           rate: existing ? existing.rate : 90,
           unit: "hr",

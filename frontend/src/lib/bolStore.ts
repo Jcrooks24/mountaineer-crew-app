@@ -509,6 +509,14 @@ function queueHasOpsForBol(bolId: string): boolean {
  * duplicating. Best-effort + online-only: a failure or offline just returns []
  * and the BOL is unchanged. Amends ADR 0015's strict separation - see ADR
  * 0026. */
+// One seed attempt per BOL per session. loadForJob re-runs on every tab
+// focus / visibilitychange, so without this an empty BOL would re-fetch
+// inventory on every refocus, and items the crew deliberately deleted would
+// keep reappearing. Seeding once per session leaves the crew in control after
+// the first fill. Cleared on reload (a Set, not persisted), so a genuinely new
+// session re-checks.
+const _seedAttempted = new Set<string>();
+
 async function seedItemsFromInventory(jobUuid: string): Promise<BOLItem[]> {
   if (!jobUuid || !navigator.onLine) return [];
   try {
@@ -545,6 +553,12 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
   const server = await fetchRemoteBol(job.job_uuid);
 
   let draft: BOLDraft;
+  // Persist only what the pre-bridge code persisted (an adopted/merged server
+  // draft), plus a draft the seed actually populated. A bare newDraft in the
+  // no-server path is left UNSAVED, exactly as before - otherwise merely opening
+  // a BOL would persist an empty draft that then shows as a blank entry in the
+  // open-BOL chooser (listOpenBols enumerates local drafts).
+  let shouldPersist = false;
   if (!server) {
     draft = local || newDraft(job);
   } else {
@@ -564,6 +578,7 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
       // Signatures/status stay local while a signing op is queued, else server.
       draft = mergeBolDrafts(local, serverDraft);
     }
+    shouldPersist = true; // prior behavior saved the adopted/merged server draft
   }
 
   // Bridge (ADR 0026): an UNSIGNED BOL with no items of its own inherits the
@@ -572,12 +587,16 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
   // so a signed BOL is never re-seeded, and on an empty item list so crew-added
   // BOL items are never duplicated. Best-effort: offline / no inventory / a
   // fetch error just leaves the draft untouched.
-  if (draft.items.length === 0 && draft.status === "draft") {
+  if (draft.items.length === 0 && draft.status === "draft" && !_seedAttempted.has(draft.bol_id)) {
+    _seedAttempted.add(draft.bol_id); // once per BOL per session, whatever the result
     const seeded = await seedItemsFromInventory(job.job_uuid);
-    if (seeded.length) draft = { ...draft, items: seeded, updated_at: new Date().toISOString() };
+    if (seeded.length) {
+      draft = { ...draft, items: seeded, updated_at: new Date().toISOString() };
+      shouldPersist = true; // a populated draft is worth persisting; a blank one is not
+    }
   }
 
-  saveDraft(draft);
+  if (shouldPersist) saveDraft(draft);
   return draft;
 }
 

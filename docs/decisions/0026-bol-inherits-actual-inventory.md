@@ -43,6 +43,11 @@ Guards that keep this safe:
 - **Best-effort, online-only.** Offline, no inventory, or a fetch error leaves the draft
   exactly as it was. The seed is not queued as a write; it rides the crew's natural
   save/sign, so a viewed-but-untouched BOL persists nothing.
+- **Once per BOL per session.** `loadForJob` re-runs on every tab focus /
+  visibilitychange. The seed is attempted at most once per `bol_id` per session (an
+  in-memory Set, cleared on reload), so an empty BOL does not re-fetch inventory on every
+  refocus, and items the crew deliberately deletes after the first fill do not keep
+  reappearing. A genuinely new session re-checks.
 - **Stable ids.** Seeded items get id `inv-<item_uuid|id>` so a re-open or the two-device
   merge dedupes instead of duplicating.
 
