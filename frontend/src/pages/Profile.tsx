@@ -206,11 +206,11 @@ export default function Profile() {
           <div className="col" style={{ gap: 14 }}>
             <div className="row" style={{ gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
               <div style={{ flex: 1, minWidth: 150 }}>
-                <div className="label">Email</div>
+                <div className="microLabel">Email</div>
                 <div style={{ marginTop: 4 }}>{user?.email}</div>
               </div>
               <div style={{ flex: 1, minWidth: 100 }}>
-                <div className="label">Role</div>
+                <div className="microLabel">Role</div>
                 <div style={{ marginTop: 4, textTransform: "capitalize" }}>{user?.role ?? "user"}</div>
               </div>
             </div>
@@ -219,7 +219,7 @@ export default function Profile() {
               className="col"
               style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}
             >
-              <label className="label">Display name</label>
+              <label className="microLabel">Display name</label>
               <input
                 value={name}
                 onChange={(e) => { setName(e.target.value); setSaved(false); }}

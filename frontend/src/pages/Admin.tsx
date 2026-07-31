@@ -620,13 +620,15 @@ function EmployeesTab() {
           .roster-btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: var(--danger); }
           .roster-btn.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
           .roster-btn.ok:hover:not(:disabled) { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: var(--ok); }
+          /* Phase C data-table: row hover is a background shift only (no border/scale/shadow). */
+          .roster-table tbody tr:hover { background: var(--card2); }
         `}</style>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+        <table className="roster-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
           <thead>
-            <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+            <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--card2)" }}>
               {["Name", "Contacts", "Role", "Status", "Tags", "Actions"].map((h) => (
-                <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
+                <th key={h} className="mono" style={{ padding: "8px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600, fontSize: 11, letterSpacing: "0.03em" }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -672,11 +674,7 @@ function EmployeesTab() {
                 </td>
                 <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
                 <td style={{ padding: "10px 14px" }}>
-                  <span style={{
-                    fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
-                    background: u.is_active ? "color-mix(in srgb, var(--ok) 15%, transparent)" : "color-mix(in srgb, var(--danger) 15%, transparent)",
-                    color: u.is_active ? "var(--ok)" : "var(--danger)",
-                  }}>
+                  <span className="statusDot" style={{ ["--dot" as any]: u.is_active ? "var(--ok)" : "var(--danger)", fontSize: 12 }}>
                     {u.is_active ? "Active" : "Disabled"}
                   </span>
                 </td>
@@ -6811,6 +6809,24 @@ function JobSummaryTab() {
 
       {summary && (
         <>
+          {/* Phase C metrics strip: one bordered row split into columns
+              (microLabel + large mono value), not separate KPI boxes. Uses the
+              figures already computed for this job's summary below. */}
+          <div className="card" style={{ display: "flex", flexWrap: "wrap", padding: 0, overflow: "hidden" }}>
+            {[
+              { label: "Bill", value: `$${Number(billTotal || 0).toFixed(0)}` },
+              { label: "Materials", value: `$${materialsTotal.toFixed(0)}` },
+              { label: "Furniture", value: summary.inventory.furniture_count },
+              { label: "Boxes", value: summary.inventory.box_count },
+              { label: "BOL items", value: summary.bol?.item_count ?? 0 },
+              { label: "DVIRs", value: summary.dvirs.length },
+            ].map((m, i) => (
+              <div key={m.label} style={{ flex: "1 1 88px", minWidth: 88, padding: "12px 14px", borderLeft: i === 0 ? "none" : "1px solid var(--border)" }}>
+                <div className="microLabel">{m.label}</div>
+                <div className="mono" style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
           <div className="card">
             <button
               onClick={() => setSummary(null)}

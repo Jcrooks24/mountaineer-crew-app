@@ -734,10 +734,6 @@ export default function App() {
     });
   }
 
-  function iconForStatus(s: "queued" | "synced") {
-    return s === "synced" ? "✓" : "●";
-  }
-
   function markLogEventsSyncedByIds(ids: Set<string>) {
     const log = loadLog();
     let changed = false;
@@ -2021,7 +2017,7 @@ export default function App() {
           <span className="statusDot mono" style={{ ["--dot" as any]: isOnline ? "var(--ok)" : "var(--danger)", fontSize: 12 }}>
             {isOnline ? "Online" : "Offline"}
           </span>
-          <span className="chip" style={queueLen > 0 ? { color: "var(--brand2)", borderColor: "color-mix(in srgb, var(--brand2) 35%, transparent)" } : {}}>
+          <span className="statusDot" style={{ ["--dot" as any]: queueLen > 0 ? "var(--brand2)" : "var(--muted)", fontSize: 12 }}>
             Queue <span className="mono">{queueLen}</span>
           </span>
           <span className="statusDot" style={{ ["--dot" as any]: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize", fontSize: 12 }}>
@@ -2330,15 +2326,13 @@ export default function App() {
                     <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
                       <div className="row" style={{ gap: 8, flexWrap: "wrap", minWidth: 0 }}>
                         <span
-                          className="chip"
+                          className="statusDot"
                           style={{
-                            padding: "3px 8px",
+                            ["--dot" as any]: e.sync_status === "synced" ? "var(--ok)" : "var(--brand2)",
                             fontSize: 11,
-                            color: e.sync_status === "synced" ? "var(--ok)" : "var(--brand2)",
-                            borderColor: e.sync_status === "synced" ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
                           }}
                         >
-                          {iconForStatus(e.sync_status)}
+                          {e.sync_status === "synced" ? "Synced" : "Queued"}
                         </span>
                         <strong style={{ fontSize: 14 }}>{e.type}</strong>
                         {e.created_by && (

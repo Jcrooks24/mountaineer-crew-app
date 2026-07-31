@@ -103,7 +103,7 @@ label weight is capped at 600 globally.
 - Page container 12px horizontal padding; 8px gap between cards; 14px card
   padding; 48px min interactive-row height; 36px min button height.
 
-## Layout — admin desktop shell (Phase C, not yet built)
+## Layout — admin desktop shell (Phase C — shell + roster table + metrics strip built; see Rollout status)
 
 - **Sidebar:** 200px fixed, `var(--card)` bg, `border-right`. Active nav item =
   `border-left: 3px solid var(--brand)` + `background: var(--hover→--card2)`,
@@ -121,7 +121,14 @@ muscle memory is safety-critical.
 
 - Done (crew): `DVIR`, `Reimbursement`, `JobReport`, `BillOfLadingForm`,
   `LongDistance`, `OffJob`, `DocumentLibrary`, `RodsRecorder`, `RodsSignoff`,
-  `TruckDeckGauge`.
-- Next (crew): Materials, Availability, Profile, the crew hub (`App.tsx`).
-- Then: Admin console.
-- Layout restructure: after the restyle, per ADR 0025.
+  `TruckDeckGauge`, `Availability`, `Profile`, the crew hub (`App.tsx`, incl.
+  Phase B action-grid drill-in + status chips → `.statusDot`). Materials is
+  embedded in `App.tsx` and follows the hub's primitives.
+- Admin console (Phase C): desktop sidebar shell **built**; roster is a data-table
+  aligned to the spec (`.mono` header on `--card2`, row-hover shift, `.statusDot`
+  status); Job Summary leads with a metrics strip (`.microLabel` + large `.mono`).
+  Remaining: apply the data-table pattern to any other admin card-lists as they
+  come up, and the metrics strip to other admin views if wanted.
+- Not a from-scratch layout restructure - the shell exists; remaining work is
+  converting specific views to the table/metrics patterns (ADR 0025). Confirm nav
+  IA before moving where things live.
