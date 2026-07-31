@@ -119,6 +119,7 @@ These are non-negotiable and are enforced in review. Full text in
 | [docs/RUNBOOKS.md](docs/RUNBOOKS.md) | Step-by-step checklists for when something is broken. |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md) | Inventory of every account and key, what it does, how to rotate it. No secret values. |
 | [docs/decisions/](docs/decisions/) | Why things are the way they are. Read before "fixing" something that looks wrong. |
+| [docs/business/](docs/business/) | The company this app serves: who does what, the SOP, the tools audit, the M1 merger assessment. Read before deciding whether a feature should exist. |
 | [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md) | The pre-promotion test protocol (`/vet`). |
 
 **These docs are also mirrored to Google Drive** as Google Docs, so you can read them on
