@@ -553,6 +553,50 @@ export type LoadForJobResult = {
   signed: boolean;
 };
 
+/** Bridge: the crew logs actual inventory in the Inventory tab, which writes to
+ * `job_inventory_items` (keyed by job_uuid) - a store the BOL never read. On a
+ * non-loading LD leg the BOL-inventory tab is hidden, so the crew's only
+ * inventory option was that separate store, and they ended up signing a BOL
+ * with no items. This pulls the job's Actual Inventory into the BOL as its
+ * declared items, mapped to the BOL item shape. Item ids are prefixed `inv-` +
+ * the item's uuid/id so a re-open (or the two-device merge) dedupes instead of
+ * duplicating. Best-effort + online-only: a failure or offline just returns []
+ * and the BOL is unchanged. Amends ADR 0015's strict separation - see ADR
+ * 0030. */
+// One seed attempt per BOL per session. loadForJob re-runs on every tab
+// focus / visibilitychange, so without this an empty BOL would re-fetch
+// inventory on every refocus, and items the crew deliberately deleted would
+// keep reappearing. Seeding once per session leaves the crew in control after
+// the first fill. Cleared on reload (a Set, not persisted), so a genuinely new
+// session re-checks.
+const _seedAttempted = new Set<string>();
+
+async function seedItemsFromInventory(jobUuid: string): Promise<BOLItem[]> {
+  if (!jobUuid || !navigator.onLine) return [];
+  try {
+    const r = await apiFetch<{ items: Array<Record<string, any>> }>(
+      `/api/job-inventory/${encodeURIComponent(jobUuid)}`,
+    );
+    const rows = Array.isArray(r.items) ? r.items : [];
+    return rows.map((it, i) => {
+      const room = (it.room || "").trim();
+      const notes = (it.notes || "").trim();
+      const pt = String(it.pack_type || "").toUpperCase();
+      return {
+        item_no: i + 1,
+        id: `inv-${it.item_uuid || it.id}`,
+        name: it.name || "",
+        qty: Math.max(1, Number(it.qty) || 1),
+        condition_notes: room ? (notes ? `${room}: ${notes}` : room) : notes,
+        photos: [],
+        packed_by: pt === "CP" ? "cp" : pt === "PBO" ? "pbo" : "",
+      } as BOLItem;
+    });
+  } catch {
+    return [];
+  }
+}
+
 /** Resolve the working draft for a job: adopt the server BOL as the source of
  * truth (so any rep/device can continue a job's BOL at any stage, with the
  * earlier signatures intact) UNLESS there is unsynced local work, or the local
@@ -572,30 +616,58 @@ export async function loadForJobWithInfo(job: { job_uuid: string; job_name: stri
   // needs warning about overwriting.
   const localHasWork = !!local && (local.items.length > 0 || local.status !== "draft");
 
+  let draft: BOLDraft;
+  let existed: boolean;
+  // Persist only what the pre-bridge code persisted (an adopted/merged server
+  // draft), plus a draft the seed actually populated. A bare newDraft in the
+  // no-server path is left UNSAVED, exactly as before - otherwise merely opening
+  // a BOL would persist an empty draft that then shows as a blank entry in the
+  // open-BOL chooser (listOpenBols enumerates local drafts).
+  let shouldPersist = false;
   if (!server) {
-    const draft = local || newDraft(job);
-    return { draft, existed: localHasWork, itemCount: draft.items.length, signed: draft.status !== "draft" };
+    draft = local || newDraft(job);
+    existed = localHasWork;
+  } else {
+    const serverDraft = draftFromServer(server, job, local?.crew_rep);
+    if (!local || !pendingLocal) {
+      // No un-synced local edits: the local draft is fully synced, so the SERVER
+      // is authoritative and is adopted unconditionally. This replaces a string
+      // compare of `updated_at` that let a device's own edits permanently block
+      // adoption - the reason a second device never saw the first's items.
+      draft = serverDraft;
+    } else {
+      // Un-synced local edits exist AND the server has a copy. Because the id is
+      // now derived from job_uuid, both refer to the same document, so union the
+      // item lists by item id rather than pick a winner - a second device
+      // building the same BOL must not drop the first device's items. Local wins
+      // a per-item conflict (it holds the edit that hasn't been pushed yet).
+      // Signatures/status stay local while a signing op is queued, else server.
+      draft = mergeBolDrafts(local, serverDraft);
+    }
+    // A server BOL exists, so the crew is continuing an existing document.
+    existed = true;
+    shouldPersist = true; // prior behavior saved the adopted/merged server draft
   }
-  const serverDraft = draftFromServer(server, job, local?.crew_rep);
 
-  // No un-synced local edits: the local draft is fully synced, so the SERVER is
-  // authoritative and is adopted unconditionally. This replaces a string compare
-  // of `updated_at` that let a device's own edits permanently block adoption -
-  // the reason a second device never saw the first's items.
-  if (!local || !pendingLocal) {
-    saveDraft(serverDraft);
-    return { draft: serverDraft, existed: true, itemCount: serverDraft.items.length, signed: serverDraft.status !== "draft" };
+  // Bridge (ADR 0030): an UNSIGNED BOL with no items of its own inherits the
+  // job's Actual Inventory, so inventory logged in the Inventory tab shows on
+  // the BOL instead of the crew signing an empty one. Gated on status "draft"
+  // so a signed BOL is never re-seeded, and on an empty item list so crew-added
+  // BOL items are never duplicated. Best-effort: offline / no inventory / a
+  // fetch error just leaves the draft untouched. `existed` is computed BEFORE
+  // the seed: seeding inventory into a fresh BOL does not make it a pre-existing
+  // document, so the self-overwrite warning still keys off a real prior BOL.
+  if (draft.items.length === 0 && draft.status === "draft" && !_seedAttempted.has(draft.bol_id)) {
+    _seedAttempted.add(draft.bol_id); // once per BOL per session, whatever the result
+    const seeded = await seedItemsFromInventory(job.job_uuid);
+    if (seeded.length) {
+      draft = { ...draft, items: seeded, updated_at: new Date().toISOString() };
+      shouldPersist = true; // a populated draft is worth persisting; a blank one is not
+    }
   }
 
-  // Un-synced local edits exist AND the server has a copy. Because the id is now
-  // derived from job_uuid, both refer to the same document, so union the item
-  // lists by item id rather than pick a winner - a second device building the
-  // same BOL must not drop the first device's items. Local wins a per-item
-  // conflict (it holds the edit that hasn't been pushed yet). Signatures/status
-  // stay local while a signing op is queued, else take the server's.
-  const merged = mergeBolDrafts(local, serverDraft);
-  saveDraft(merged);
-  return { draft: merged, existed: true, itemCount: merged.items.length, signed: merged.status !== "draft" };
+  if (shouldPersist) saveDraft(draft);
+  return { draft, existed, itemCount: draft.items.length, signed: draft.status !== "draft" };
 }
 
 /** Thin wrapper: the resolved draft only (callers that don't need the
