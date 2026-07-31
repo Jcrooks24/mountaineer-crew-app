@@ -1,4 +1,4 @@
-import { Children, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
@@ -4310,6 +4310,7 @@ function AdvancedSettingsPage() {
           read-only health snapshot, then collapsible Diagnostics. */}
       <SheetSyncCard />
       <SheetSyncHealthCard />
+      <SheetBackfillCard />
       <AppHealthCard />
 
       {/* Diagnostics last and collapsed by default - admin only goes here
@@ -4374,6 +4375,9 @@ type SyncCheck = {
   env_var: string;
   env_set: boolean;
   tab_exists: boolean;
+  never_synced?: boolean;
+  failing?: boolean;
+  needs_attention?: boolean;
   last_ok_at: string | null;
   last_error_at: string | null;
   last_error: string | null;
@@ -4400,7 +4404,14 @@ function SheetSyncHealthCard() {
     } finally { setBusy(false); }
   }
 
-  const problems = data?.syncs.filter((s) => !s.tab_exists || s.last_error_at) ?? [];
+  // Current state only. A sync that failed once and has succeeded since is not a
+  // problem, and a tab that doesn't exist yet because the feature has never been
+  // used isn't either (_ensure_tab creates it on the first write). Flagging both
+  // made the panel cry wolf on ~half the registry.
+  const problems = data?.syncs.filter(
+    (s) => s.needs_attention ?? (!s.tab_exists || !!s.last_error_at),
+  ) ?? [];
+  const pending = data?.syncs.filter((s) => !s.tab_exists && s.never_synced) ?? [];
 
   return (
     <div className="card">
@@ -4442,16 +4453,36 @@ function SheetSyncHealthCard() {
                     <tr key={s.key} style={{ borderTop: "1px solid var(--border)" }}>
                       <td style={{ padding: "4px 6px" }}>{s.label}</td>
                       <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{s.tab}</td>
-                      <td style={{ padding: "4px 6px", color: s.tab_exists ? "var(--ok)" : "var(--danger)", fontWeight: 700 }}>
-                        {s.tab_exists ? "✓" : "missing"}
+                      <td
+                        style={{
+                          padding: "4px 6px",
+                          fontWeight: 700,
+                          color: s.tab_exists
+                            ? "var(--ok)"
+                            : s.never_synced ? "var(--muted)" : "var(--danger)",
+                        }}
+                        title={
+                          s.tab_exists
+                            ? ""
+                            : s.never_synced
+                              ? "Nothing has synced here yet - the tab is created automatically on the first write."
+                              : "This sync has written before but its tab is gone - check the tab name in the sheet."
+                        }
+                      >
+                        {s.tab_exists ? "✓" : s.never_synced ? "not yet" : "missing"}
                       </td>
                       <td style={{ padding: "4px 6px", color: s.env_set ? "var(--text)" : "var(--warn)" }} title={s.env_set ? "" : `${s.env_var} not set - using default tab`}>
                         {s.env_set ? "yes" : "default"}
                       </td>
-                      <td style={{ padding: "4px 6px", color: s.last_error_at ? "var(--danger)" : "var(--muted)" }}>
-                        {s.last_error_at
+                      <td style={{ padding: "4px 6px", color: s.failing ? "var(--danger)" : "var(--muted)" }}>
+                        {s.failing && s.last_error_at
                           ? `error ${new Date(s.last_error_at).toLocaleString()}`
                           : s.last_ok_at ? new Date(s.last_ok_at).toLocaleString() : "-"}
+                        {!s.failing && s.last_error_at && (
+                          <div style={{ fontSize: 11, opacity: 0.7 }}>
+                            recovered from an error {new Date(s.last_error_at).toLocaleDateString()}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -4460,10 +4491,197 @@ function SheetSyncHealthCard() {
             </div>
           )}
           {problems.some((s) => s.last_error) && (
+            // Every failing sync, not the first three - the truncated list used to
+            // hide the error of whichever sync you were actually chasing.
             <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>
-              {problems.filter((s) => s.last_error).slice(0, 3).map((s) => (
-                <div key={s.key}>{s.label}: {s.last_error}</div>
+              {problems.filter((s) => s.last_error).map((s) => (
+                <div key={s.key} style={{ marginBottom: 4 }}>{s.label}: {s.last_error}</div>
               ))}
+            </div>
+          )}
+          {pending.length > 0 && (
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+              Not created yet (normal - the tab is added on the first sync):{" "}
+              {pending.map((s) => s.label).join(", ")}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// Sheet backfill - what never reached the Sheet, and a button to re-send it.
+// The health check above answers "is this sync working now"; this answers
+// "what did the outages leave behind", which the status rows cannot - they
+// track one state per export function, not per record.
+// ─────────────────────────────────────────
+type BackfillRow = {
+  key: string;
+  label: string;
+  tab: string;
+  tab_exists: boolean;
+  auto: string | null;
+  in_db: number | null;
+  in_sheet?: number | null;
+  missing: { id: string; label: string; created_at: string }[];
+  missing_count: number;
+  truncated?: boolean;
+  error: string | null;
+};
+type BackfillAudit = {
+  spreadsheet_id: string;
+  connected: boolean;
+  error: string | null;
+  total_missing?: number;
+  results: BackfillRow[];
+};
+
+function SheetBackfillCard() {
+  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState<string | null>(null);
+  const [data, setData] = useState<BackfillAudit | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true); setErr(null); setNote(null);
+    try {
+      setData(await apiFetch<BackfillAudit>("/api/admin/system-check/sheet-backfill"));
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Audit failed");
+    } finally { setBusy(false); }
+  }
+
+  async function resend(row: BackfillRow) {
+    setSending(row.key); setErr(null); setNote(null);
+    try {
+      const res = await apiFetch<{ queued: number; skipped: number; not_queued: number; cap: number }>(
+        "/api/admin/system-check/sheet-backfill",
+        { method: "POST", body: JSON.stringify({ key: row.key }) },
+      );
+      setNote(
+        `${row.label}: queued ${res.queued} record(s)` +
+        (res.skipped ? `, ${res.skipped} skipped` : "") +
+        (res.not_queued ? `, ${res.not_queued} left over (cap ${res.cap} per run - run it again)` : "") +
+        ". Exports run in the background; re-run the audit in a minute to confirm.",
+      );
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Re-export failed");
+    } finally { setSending(null); }
+  }
+
+  const withMissing = data?.results.filter((r) => r.missing_count > 0) ?? [];
+  const errored = data?.results.filter((r) => r.error) ?? [];
+
+  return (
+    <div className="card">
+      <div className="sectionTitle">Sheet Backfill - what never made it</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Compares the database against the Sheet and lists records that were saved
+        but whose sheet row is missing - usually the leftovers of a sync outage.
+        Nothing is lost when this happens: the app is the system of record and the
+        Sheet is a mirror. Read-only until you press Re-send.
+      </div>
+      <button onClick={run} disabled={busy} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>
+        {busy ? "Comparing…" : "Run audit"}
+      </button>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+      {note && <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>{note}</div>}
+
+      {data && (
+        <div style={{ marginTop: 12 }}>
+          <div className="small" style={{ marginBottom: 8, fontWeight: 700,
+            color: !data.connected ? "var(--danger)" : (data.total_missing ? "var(--warn)" : "var(--ok)") }}>
+            {!data.connected
+              ? `✗ Not connected: ${data.error || "unknown error"}`
+              : data.total_missing
+                ? `${data.total_missing} record(s) missing from the Sheet`
+                : "✓ Every record is in the Sheet"}
+          </div>
+
+          {data.connected && withMissing.length > 0 && (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: "var(--muted)" }}>
+                    <th style={{ padding: "4px 6px" }}>Sync</th>
+                    <th style={{ padding: "4px 6px" }}>In app</th>
+                    <th style={{ padding: "4px 6px" }}>Missing</th>
+                    <th style={{ padding: "4px 6px" }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {withMissing.map((r) => (
+                    <Fragment key={r.key}>
+                      <tr style={{ borderTop: "1px solid var(--border)" }}>
+                        <td style={{ padding: "4px 6px" }}>
+                          {r.label}
+                          <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{r.tab}</div>
+                        </td>
+                        <td style={{ padding: "4px 6px" }}>{r.in_db ?? "-"}</td>
+                        <td style={{ padding: "4px 6px", color: "var(--danger)", fontWeight: 700 }}>
+                          {r.missing_count}
+                        </td>
+                        <td style={{ padding: "4px 6px", whiteSpace: "nowrap" }}>
+                          <button
+                            className="btnGhost"
+                            style={{ padding: "3px 8px", fontSize: 12, marginRight: 6 }}
+                            onClick={() => setOpen(open === r.key ? null : r.key)}
+                          >
+                            {open === r.key ? "Hide" : "Show"}
+                          </button>
+                          <button
+                            className="btnPrimary"
+                            style={{ padding: "3px 8px", fontSize: 12 }}
+                            disabled={sending !== null}
+                            onClick={() => resend(r)}
+                          >
+                            {sending === r.key ? "Sending…" : "Re-send"}
+                          </button>
+                        </td>
+                      </tr>
+                      {open === r.key && (
+                        <tr>
+                          <td colSpan={4} style={{ padding: "0 6px 8px" }}>
+                            <div style={{ maxHeight: 200, overflowY: "auto", fontSize: 11 }}>
+                              {r.missing.map((m) => (
+                                <div key={m.id} style={{ color: "var(--muted)", padding: "2px 0" }}>
+                                  {m.created_at ? `${new Date(m.created_at).toLocaleDateString()} - ` : ""}
+                                  {m.label || m.id}
+                                </div>
+                              ))}
+                              {r.truncated && (
+                                <div style={{ color: "var(--warn)", paddingTop: 4 }}>
+                                  …list truncated. The count above is exact; Re-send handles them in batches.
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {errored.length > 0 && (
+            <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>
+              {errored.map((r) => (
+                <div key={r.key} style={{ marginBottom: 4 }}>{r.label}: {r.error}</div>
+              ))}
+            </div>
+          )}
+
+          {data.connected && (
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+              Timeline events and BOLs are not listed: the auto-reconciler already
+              backfills those every 5 minutes.
             </div>
           )}
         </div>

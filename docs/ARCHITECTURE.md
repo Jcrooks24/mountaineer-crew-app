@@ -141,6 +141,15 @@ to drain, and `pruneStale` deleting it 14 days later. It now exposes `drainAll()
 `App.tsx` calls on boot and on reconnect regardless of tab or mode. Any queue whose UI
 can be feature-flagged off needs the same treatment.
 
+**Actual Inventory and the BOL are two stores, now bridged one way.** The Inventory tab
+(`ActualInventory`) writes `job_inventory_items` keyed by `job_uuid`; the BOL's declared
+items live in `digital_bols.items_json` keyed by `bol_id`. They are written independently.
+Because a crew could log inventory in one and sign an empty BOL from the other,
+`bolStore.loadForJob` now seeds an **unsigned, empty** BOL from that job's Actual
+Inventory (`GET /api/job-inventory/{job_uuid}`), best-effort and online-only. The BOL
+reads from inventory; inventory does not read from the BOL
+([ADR 0026](decisions/0026-bol-inherits-actual-inventory.md), amending ADR 0015).
+
 **Why retries are safe:** every payload carries a client-generated UUID, and the
 backend upserts on it. This is the single invariant that makes the whole offline
 design work, and as of 2026-07-13 every queue honors it (the estimator and
@@ -178,6 +187,15 @@ All of it is in-process threads. No Celery, no cron, no queue service.
   (`bol_reconcile.py`) - a scheduled BOL export whose pool thread died leaves the
   BOL in Postgres but not the sheet (ADR 0020). Holds a Postgres advisory lock so
   only one worker does it.
+- **Sheet backfill** (`sheet_backfill.py`), admin-triggered, not scheduled. The
+  reconciler above covers events and BOLs; the other seventeen syncs fire once at
+  write time and nothing re-drives them, so an export that died leaves a record in
+  Postgres with no sheet row and no trace of which record it was (`sheet_sync_status`
+  tracks one state per export *function*). This module diffs the two sides - source
+  query per sync vs. the tab's key column read back - and re-drives the real export
+  for whatever is missing. Three Sheets reads total for the whole audit, batched, so
+  the audit cannot itself trip the quota that caused the gap
+  ([ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md)).
 - **Crew-resources loop**, hourly, **off unless `CREW_RESOURCES_ENABLED=true`**.
   Maintains a daily availability summary event on Google Calendar.
 

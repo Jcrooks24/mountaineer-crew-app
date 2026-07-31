@@ -151,10 +151,11 @@ function parseDutyNote(note: string): { status: DutyStatus | null; driver: strin
 
 /** Distinct driver names that have DUTY events in the log (old notes without a
  * driver fall back to `fallbackDriver`). */
-export function rodsDriverNames(events: MinEvent[], fallbackDriver = ""): string[] {
+export function rodsDriverNames(events: MinEvent[], fallbackDriver = "", date?: string): string[] {
   const set = new Set<string>();
   for (const e of events) {
     if (e.type !== "DUTY") continue;
+    if (date && localDateFromTs(e.timestamp) !== date) continue;
     const p = parseDutyNote(e.note || "");
     if (!p.status) continue;
     set.add(p.driver || fallbackDriver);
@@ -162,14 +163,40 @@ export function rodsDriverNames(events: MinEvent[], fallbackDriver = ""): string
   return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
+/** Sorted unique local calendar dates ("YYYY-MM-DD") that have DUTY events -
+ * the days a multi-day trip needs a RODS for. */
+export function rodsDatesFromEvents(events: MinEvent[]): string[] {
+  const set = new Set<string>();
+  for (const e of events) {
+    if (e.type !== "DUTY") continue;
+    const d = localDateFromTs(e.timestamp);
+    if (d) set.add(d);
+  }
+  return [...set].sort();
+}
+
 /** Duty changes for ONE driver, derived from the DUTY events. Editing an
  * event's time in the activity log edits the RODS. Begins off-duty at
  * midnight. Within a single minute, the LAST tap wins - lets the crew fix
  * a misclick without leaving a stale earlier entry stuck on the log. */
-export function changesForDriver(events: MinEvent[], driver: string, fallbackDriver = ""): DutyChange[] {
+/** Local calendar date ("YYYY-MM-DD", device tz) of an ISO timestamp. */
+function localDateFromTs(ts: string): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+export function changesForDriver(events: MinEvent[], driver: string, fallbackDriver = "", date?: string): DutyChange[] {
   const duty = events
     .filter((e) => {
       if (e.type !== "DUTY") return false;
+      // Per-day RODS: an FMCSA duty log is ONE calendar day. Without this
+      // filter a multi-day LD trip collapses EVERY day's duty events into a
+      // single 24h timeline sorted by time-of-day - jumbling the duty-time
+      // totals and making currentStatus pick a prior night's last tap (the
+      // crew-reported "stuck on Off Duty" on day 2, and wrong totals in the
+      // Report). When `date` is omitted, behavior is unchanged (single day).
+      if (date && localDateFromTs(e.timestamp) !== date) return false;
       const p = parseDutyNote(e.note || "");
       return !!p.status && (p.driver || fallbackDriver) === driver;
     })

@@ -156,7 +156,22 @@ Symptoms: the office says a job is missing. The crew swear they logged it.
      not have them reinstall: [logging out deletes unsynced photos and reimbursements](#known-defects).
    - **In the app, not in the Sheet** → continue below.
 3. **Check Admin → Advanced Settings → System Check → Sheet Syncs.** It lists every
-   `SHEETS_*_TAB` variable and flags the unset ones.
+   `SHEETS_*_TAB` variable and flags the unset ones. Read the columns literally:
+   - **Exists = `not yet`** is normal. Nothing has ever synced to that tab, and
+     `_ensure_tab` creates it on the first write. `Long-distance pay` reads this
+     way until someone logs a long-distance day.
+   - **Exists = `missing`** is a real problem: this sync has written before, so the
+     tab was renamed or deleted in the sheet, or the `SHEETS_*_TAB` variable was
+     changed to a name that does not exist.
+   - **Last sync = red `error …`** means the *most recent* attempt failed. A grey
+     timestamp with "recovered from an error …" underneath means it failed once and
+     has synced fine since; that is not something to chase. See
+     [ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md).
+   - A `429 RATE_LIMIT_EXCEEDED` or an SSL `EOF occurred` in the error text is a
+     transient Google failure. Those are retried with backoff now, so a *current*
+     one means the retries were exhausted (a sustained burst, not a blip) - re-save
+     the record to re-drive the export, and grep the Render logs for
+     `[sheets] transient` to see how often it is happening.
 4. **Look in the other tab.** If a tab variable is unset on **staging**, staging
    writes into the **production** tab. Your "missing" row may be sitting in the
    office's real sheet, mixed in with real data, put there by a test. Search the prod

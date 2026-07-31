@@ -459,7 +459,11 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         desired.push({
           id: existing?.id ?? uuid(),
           label,
-          // Preserve an admin-edited value; only default on first creation.
+          // Preserve an admin-edited value; only default on first creation. A
+          // line created before employee hours populate defaults to 1h and is
+          // then preserved (can stay frozen at 1h) - the bill-totals warning
+          // flags that as a suspected under-bill rather than silently changing
+          // an admin-visible value here.
           qty: existing ? existing.qty : defaultTruckHours,
           rate: existing ? existing.rate : 90,
           unit: "hr",
@@ -646,6 +650,29 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     () => materials.reduce((s, m) => s + materialExt(m), 0),
     [materials],
   );
+
+  // Non-blocking sanity checks that catch the common "bill came out too low"
+  // causes at review time: a billable employee whose hours never got logged
+  // (labor line stuck at 0h), or a truck line still at the 1h placeholder while
+  // shifts ran longer. Surfaced as an amber note in the totals, not a hard
+  // block - the crew/admin can still save (some jobs legitimately have a 0-hour
+  // stand-in), but the low total is no longer silent.
+  const billWarnings = useMemo(() => {
+    const w: string[] = [];
+    const zeroLabor = bill.items.filter((it) => it.source === "hours" && it.qty <= 0);
+    if (zeroLabor.length) {
+      w.push(`${zeroLabor.length} labor line${zeroLabor.length > 1 ? "s" : ""} at 0 hours - was everyone's time logged?`);
+    }
+    const longestShift = (employeeHours ?? []).reduce(
+      (m, e) => (e.non_billable ? m : Math.max(m, roundBillableQuarter(e.hours || 0))),
+      0,
+    );
+    const lowTruck = bill.items.filter((it) => it.source === "truck" && it.qty <= 1);
+    if (lowTruck.length && longestShift > 1) {
+      w.push(`${lowTruck.length} truck line${lowTruck.length > 1 ? "s" : ""} at 1h or less while a shift ran ${longestShift}h - check truck hours.`);
+    }
+    return w;
+  }, [bill.items, employeeHours]);
 
   // ── Empty / loading states ────────────────────────────────────────────────────
 
@@ -909,6 +936,19 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
           <span>Materials</span><span>{fmt(materialsTotal)}</span>
         </div>
+        {billWarnings.length > 0 && (
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 4,
+            padding: "8px 10px", borderRadius: 8,
+            border: "1px solid var(--danger)",
+            background: "color-mix(in srgb, var(--danger) 12%, transparent)",
+            fontSize: 12, color: "var(--text)",
+          }}>
+            {billWarnings.map((msg, i) => (
+              <div key={i}>⚠ {msg}</div>
+            ))}
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 18 }}>
           <span>Total</span>
           <span style={{ color: "var(--brand)" }}>{fmt(grandTotal)}</span>
