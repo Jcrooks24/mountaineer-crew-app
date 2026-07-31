@@ -266,6 +266,12 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List
             # `end` powers the scheduled-duration fallback for est-vs-actual
             # hours (Phase 4). Previously fetched from Google but dropped.
             "end": end,
+            # Event body + location so the crew can see the job's context (the
+            # office writes addresses, crew, special instructions into the
+            # calendar event). Surfaced in the hub's active-job card. Google
+            # returns description as light HTML sometimes; the client strips it.
+            "description": it.get("description") or "",
+            "location": it.get("location") or "",
             # Count of invited crew (non-declined, real people, minus workspace/
             # shared mailboxes). Cached at resolve time so the schedule fallback
             # can express estimated MAN-hours (invitees x duration).

@@ -169,6 +169,11 @@ type CalEvent = {
   summary: string;
   start?: string;
   end?: string;
+  // The office writes the job's address, crew, and special instructions into
+  // the calendar event; surfaced in the hub's active-job context card so the
+  // crew see what they're on. `description` can arrive as light HTML.
+  description?: string;
+  location?: string;
   // Count of invited crew on the event; cached server-side at resolve so the
   // est-vs-actual schedule fallback can express man-hours (invitees x duration).
   invitees?: number;
@@ -277,6 +282,27 @@ function stringToJobUuid(seedStr: string): string {
  */
 function calEventToJobUuid(calId: string): string {
   return stringToJobUuid(calId);
+}
+
+// Google Calendar descriptions can carry light HTML (<br>, <a>, bold). Strip to
+// readable plain text for the active-job context card: tags out, common entities
+// decoded, whitespace collapsed. Not a sanitizer - the result is rendered as
+// TEXT, never as HTML.
+function calText(raw: string | undefined | null): string {
+  if (!raw) return "";
+  return String(raw)
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/(p|div|li)\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**
@@ -2027,17 +2053,15 @@ export default function App() {
               cut the redundancy. Admin stays (not in the crew bottom nav). */}
           {user?.role === "admin" && (
             <button
-              className="chip"
               onClick={() => nav("/admin")}
-              style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
+              style={{ cursor: "pointer", background: "none", border: "none", color: "var(--muted)", fontSize: 13, fontWeight: 600, padding: "4px 4px" }}
             >
               Admin
             </button>
           )}
           <button
-            className="chip"
             onClick={() => { setPatchNotesUnseen(false); nav("/profile"); }}
-            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)", position: "relative" }}
+            style={{ cursor: "pointer", background: "none", border: "none", color: "var(--muted)", fontSize: 13, fontWeight: 600, padding: "4px 4px", position: "relative" }}
           >
             Profile
             {patchNotesUnseen && (
@@ -2068,15 +2092,10 @@ export default function App() {
             <div className="microLabel" style={{ marginBottom: 10 }}>Job</div>
 
             <div className="col" style={{ gap: 12 }}>
-              {/* 1 - Date */}
+              {/* 1 - Calendar job selector: lead with the job (the common case);
+                  the date is tucked below and defaults to today. */}
               <div className="col">
-                <div className="label">Date</div>
-                <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
-              </div>
-
-              {/* 2 - Calendar job selector */}
-              <div className="col">
-                <div className="label" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div className="microLabel" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span>Select Job{" "}
                     <span className="small" style={{ marginLeft: 4 }}>
                       {calLoading ? "Loading…" : calEvents.length > 0 ? `(${calEvents.length} found)` : calLoaded ? "(none found)" : ""}
@@ -2108,7 +2127,7 @@ export default function App() {
 
                 {calSelectedId === "__other__" && (
                   <div className="col" style={{ marginTop: 8 }}>
-                    <div className="label">Job description (required)</div>
+                    <div className="microLabel">Job description (required)</div>
                     <input
                       value={calOtherName}
                       onChange={(e) => {
@@ -2132,10 +2151,17 @@ export default function App() {
                 ) : null}
               </div>
 
+              {/* 2 - Date (secondary): defaults to today; change it to see another
+                  day's calendar jobs. */}
+              <div className="col">
+                <div className="microLabel">Date</div>
+                <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
+              </div>
+
               {/* 3 - Job name display */}
               {jobName && (
                 <div className="col">
-                  <div className="label">Job Name</div>
+                  <div className="microLabel">Job Name</div>
                   <div style={{ fontWeight: 600, fontSize: 15 }}>{jobName}</div>
                 </div>
               )}
@@ -2143,7 +2169,7 @@ export default function App() {
               {/* 4 - Job ID (auto, read-only) */}
               {jobUuid && (
                 <div className="col">
-                  <div className="label">Job ID</div>
+                  <div className="microLabel">Job ID</div>
                   <div className="mono small" style={{ color: "var(--muted)", fontSize: 11 }}>{jobUuid}</div>
                 </div>
               )}
@@ -2155,7 +2181,7 @@ export default function App() {
             {/* Job type toggle + LD day plan live in the Job tile. */}
             <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                <span className="label" style={{ marginBottom: 0 }}>Job type</span>
+                <span className="microLabel" style={{ marginBottom: 0 }}>Job type</span>
                 <button
                   type="button"
                   role="switch"
@@ -2174,6 +2200,54 @@ export default function App() {
               )}
             </div>
           </div>
+
+          {/* Active-job context: the office writes the address, crew, and special
+              instructions into the calendar event. Surface it so the crew can see
+              what they're on without leaving the app. Only shown when a real
+              calendar job is selected and it carries context. */}
+          {(() => {
+            const ev = calEvents.find((e) => e.id === calSelectedId);
+            if (!ev) return null;
+            const loc = (ev.location || "").trim();
+            const desc = calText(ev.description);
+            const crew = ev.invitees ?? 0;
+            if (!loc && !desc && !crew) return null;
+            return (
+              <div className="card">
+                <div className="microLabel" style={{ marginBottom: 10 }}>Current job</div>
+                <div style={{ fontWeight: 600, fontSize: 15, wordBreak: "break-word" }}>{ev.summary}</div>
+                {(loc || crew > 0) && (
+                  <div className="row wrap" style={{ gap: 20, marginTop: 10 }}>
+                    {loc && (
+                      <div className="col" style={{ gap: 2, minWidth: 0 }}>
+                        <div className="microLabel">Location</div>
+                        <a
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: 13, color: "var(--brand2)", textDecoration: "none", wordBreak: "break-word" }}
+                        >
+                          {loc}
+                        </a>
+                      </div>
+                    )}
+                    {crew > 0 && (
+                      <div className="col" style={{ gap: 2 }}>
+                        <div className="microLabel">Crew</div>
+                        <span className="mono" style={{ fontSize: 14 }}>{crew}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {desc && (
+                  <div style={{ marginTop: loc || crew > 0 ? 12 : 10 }}>
+                    <div className="microLabel" style={{ marginBottom: 4 }}>Details</div>
+                    <div className="small" style={{ color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{desc}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {(() => {
             const coreActions = (
