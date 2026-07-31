@@ -1138,6 +1138,38 @@ def _check_env_vars() -> Dict[str, str]:
     return {"name": "Env vars", "status": status, "detail": f"missing: {', '.join(missing)}"}
 
 
+def _check_sheet_record_drift(db: Session) -> Dict[str, str]:
+    """Live DB-vs-Sheet record audit for ALL syncs, folded into app health so a
+    single check answers "is the sheet an accurate mirror of the server?". This
+    is the record-level counterpart to _check_event_drift / _check_bol_drift
+    (which cover only the two reconciled syncs). WARN, never FAIL: a hole in the
+    mirror is recoverable (Postgres is the system of record), and the backfill /
+    auto-reconciler close it - it should nudge, not alarm."""
+    try:
+        from app.integrations.sheet_backfill import audit_sheet_backfill
+        audit = audit_sheet_backfill(db)
+        if not audit.get("connected"):
+            return {"name": "Sheet record sync", "status": "warn",
+                    "detail": f"could not audit: {audit.get('error') or 'not connected'}"}
+        total = int(audit.get("total_missing", 0) or 0)
+        if total == 0:
+            return {"name": "Sheet record sync", "status": "ok",
+                    "detail": "sheet mirrors the server - no missing records"}
+        offenders = [
+            (r["label"], r.get("missing_count", 0))
+            for r in audit.get("results", [])
+            if not r.get("auto") and r.get("missing_count", 0) > 0
+        ]
+        offenders.sort(key=lambda x: x[1], reverse=True)
+        parts = "; ".join(f"{lbl}: {n}" for lbl, n in offenders[:6])
+        more = "" if len(offenders) <= 6 else f" (+{len(offenders) - 6} more)"
+        return {"name": "Sheet record sync", "status": "warn",
+                "detail": f"{total} record(s) not in the sheet - {parts}{more}. "
+                          f"Re-send from Sync & Accuracy."}
+    except Exception as ex:  # noqa: BLE001 - a health check must never 500
+        return {"name": "Sheet record sync", "status": "warn", "detail": f"audit failed: {ex}"}
+
+
 @router.get("/health")
 def app_health(
     db: Session = Depends(get_db),
@@ -1154,6 +1186,7 @@ def app_health(
         _check_drive_api(db),
         _check_event_drift(db),
         _check_bol_drift(db),
+        _check_sheet_record_drift(db),
         _check_event_freshness(db),
     ]
     worst = "ok"

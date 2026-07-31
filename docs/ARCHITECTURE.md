@@ -218,16 +218,24 @@ All of it is in-process threads. No Celery, no cron, no queue service.
   record and pushes them, then does the same sweep for signed BOLs
   (`bol_reconcile.py`) - a scheduled BOL export whose pool thread died leaves the
   BOL in Postgres but not the sheet (ADR 0020). Holds a Postgres advisory lock so
-  only one worker does it.
-- **Sheet backfill** (`sheet_backfill.py`), admin-triggered, not scheduled. The
-  reconciler above covers events and BOLs; the other seventeen syncs fire once at
-  write time and nothing re-drives them, so an export that died leaves a record in
-  Postgres with no sheet row and no trace of which record it was (`sheet_sync_status`
-  tracks one state per export *function*). This module diffs the two sides - source
-  query per sync vs. the tab's key column read back - and re-drives the real export
-  for whatever is missing. Three Sheets reads total for the whole audit, batched, so
-  the audit cannot itself trip the quota that caused the gap
+  only one worker does it. Every ~20 minutes (every 4th cycle) it also runs the
+  generic self-heal (`reconcile_all_missing`, ADR 0031): the backfill diff for the
+  other seventeen syncs, re-driving whatever never landed, capped per cycle so it
+  cannot flood the export pool. So all nineteen syncs are now eventually
+  consistent, not just events and BOLs.
+- **Sheet backfill** (`sheet_backfill.py`), the shared audit + re-export path used
+  both by the reconciler above and by the admin Sync & Accuracy tool. The other
+  seventeen syncs fire once at write time; if an export died it left a record in
+  Postgres with no sheet row and no trace of which one (`sheet_sync_status` tracks
+  one state per export *function*). This module diffs the two sides - source query
+  per sync vs. the tab's key column read back - and re-drives the real export for
+  whatever is missing, joining `sheet_sync_status.last_error` per sync so a record
+  that will not re-send shows *why* (the export throwing, not a lost write). Three
+  Sheets reads total for the whole audit, batched, so the audit cannot itself trip
+  the quota that caused the gap
   ([ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md)).
+  App Health runs this audit live and WARNs when the Sheet is out of sync
+  ([ADR 0031](decisions/0031-sync-accuracy-is-one-surface.md)).
 - **Crew-resources loop**, hourly, **off unless `CREW_RESOURCES_ENABLED=true`**.
   Maintains a daily availability summary event on Google Calendar.
 - **Payroll finalize emails** are NOT background work. They are sent inline,

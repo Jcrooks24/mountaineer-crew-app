@@ -486,6 +486,28 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
         result["error"] = str(e)
         return result
 
+    # Per-sync last export error, so a record that will not drain shows WHY: the
+    # usual cause is the export throwing on every attempt (a data quirk in that
+    # row), not a lost write. Joined by the export fn name via SHEET_SYNC_REGISTRY,
+    # which is keyed the same as this module's registry.
+    sync_status: Dict[str, Dict[str, Any]] = {}
+    try:
+        from app.integrations.sheets_export import SHEET_SYNC_REGISTRY
+        from app.db.models.sheet_sync_status import SheetSyncStatus
+        statuses = {r.fn_name: r for r in db.query(SheetSyncStatus).all()}
+        for reg in SHEET_SYNC_REGISTRY:
+            st = statuses.get(reg.get("fn") or "")
+            if not st:
+                continue
+            ok_at, err_at = st.last_ok_at, st.last_error_at
+            sync_status[reg["key"]] = {
+                "failing": bool(err_at) and (ok_at is None or err_at > ok_at),
+                "last_error": st.last_error,
+                "last_error_at": err_at.isoformat() if err_at else None,
+            }
+    except Exception:  # noqa: BLE001 - status is a nice-to-have, never fail the audit
+        sync_status = {}
+
     auditable = [e for e in BACKFILL_REGISTRY if not e.get("auto")]
 
     # Pass 1: header rows, batched. Locate each key column by NAME rather than
@@ -520,9 +542,16 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
     for entry in auditable:
         key = entry["key"]
         tab = tabs[key]
+        st = sync_status.get(key) or {}
         row_out: Dict[str, Any] = {
             "key": key, "label": entry["label"], "tab": tab,
             "tab_exists": tab in titles, "auto": None, "error": None,
+            # Drain diagnostics: if the last export attempt for this sync failed,
+            # the same failure is why its missing records will not re-send. The UI
+            # shows this next to the missing count instead of "re-send did nothing".
+            "failing": st.get("failing", False),
+            "last_error": st.get("last_error"),
+            "last_error_at": st.get("last_error_at"),
         }
         try:
             records = entry["source"](db)
@@ -582,6 +611,67 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
 
     result["total_missing"] = sum(r["missing_count"] for r in result["results"])
     return result
+
+
+# Total records re-driven across ALL syncs in one auto-reconcile cycle.
+# Deliberately well under the manual tool's per-sync cap: this runs unattended on
+# a schedule and must never flood the 2-worker export pool and starve live crew
+# syncs. A large backlog drains over successive cycles (and the office can clear
+# the bulk on demand with the manual backfill tool at 100/sync/request).
+RECONCILE_MAX_PER_CYCLE = 100
+
+
+def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE) -> Dict[str, Any]:
+    """Self-heal every backfillable sync: audit Postgres against the Sheet once,
+    then re-drive the records that never landed, up to a per-cycle budget. This is
+    the durable "retry until it lands" the once-at-write-time export lacked - a
+    failed materials/report/RODS/etc. export is re-driven on the next cycle and
+    keeps being re-driven until the sheet shows it, exactly as events and BOLs
+    already self-heal via their own reconcilers.
+
+    Reuses the manual backfill's audit + `_re_*` drivers, so there is one
+    re-export code path. Safe to run on a schedule: the audited exports are
+    replace-style (keyed delete-before-write), so re-driving a record that is
+    actually present rewrites its row rather than duplicating it. A record whose
+    export genuinely throws every time is re-driven each cycle but stays visible
+    as a persistent failure in the Sheet-record health check (its `last_error`),
+    so the churn is bounded and surfaced, not silent.
+
+    Returns {ok, queued, per_sync, remaining_missing}. Never raises - the caller
+    is a background loop that must not die."""
+    try:
+        audit = audit_sheet_backfill(db)
+    except Exception as e:  # noqa: BLE001 - never take down the reconcile loop
+        return {"ok": False, "error": str(e), "queued": 0, "per_sync": {}, "remaining_missing": 0}
+    if not audit.get("connected"):
+        return {"ok": False, "error": audit.get("error") or "sheets not connected",
+                "queued": 0, "per_sync": {}, "remaining_missing": 0}
+
+    budget = max(0, int(max_total))
+    total_queued = 0
+    per_sync: Dict[str, int] = {}
+    remaining_missing = 0
+    for row in audit["results"]:
+        if row.get("auto") or row.get("error"):
+            continue
+        remaining_missing += int(row.get("missing_count", 0) or 0)
+        if budget <= 0:
+            continue
+        ids = [m["id"] for m in row.get("missing", [])][:budget]
+        if not ids:
+            continue
+        try:
+            res = reexport_missing(db, row["key"], ids)
+        except Exception as e:  # noqa: BLE001 - one sync must not kill the sweep
+            print(f"[reconcile-all] {row['key']} re-export failed: {e}")
+            continue
+        q = int(res.get("queued", 0) or 0)
+        if q:
+            per_sync[row["key"]] = q
+            total_queued += q
+            budget -= q
+    return {"ok": True, "queued": total_queued, "per_sync": per_sync,
+            "remaining_missing": remaining_missing}
 
 
 def reexport_missing(db: Session, key: str, ids: Optional[List[str]] = None) -> Dict[str, Any]:

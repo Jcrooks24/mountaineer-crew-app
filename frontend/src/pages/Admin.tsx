@@ -4365,10 +4365,18 @@ function AdvancedSettingsPage() {
 
       <DataManagementCard />
 
-      {/* Sheet Sync and App Health moved here from the Settings tab - both
-          are admin-troubleshooting tools that don't need to surface on
-          every visit to Settings. Order: action card (Sheet Sync) before
-          read-only health snapshot, then collapsible Diagnostics. */}
+      {/* Sync & Accuracy: one group of tools that answer "is the app healthy
+          and is the Sheet an accurate mirror of the server, and fix it if not".
+          App Health now folds in a live record-drift audit, so it WARNs when the
+          Sheet is out of sync; the cards below drill into and fix that drift.
+          Order: connection + structural check, record drift + re-send, then the
+          overall health snapshot. */}
+      <div className="microLabel" style={{ margin: "18px 0 4px" }}>Sync &amp; Accuracy</div>
+      <div className="small" style={{ color: "var(--muted)", margin: "0 0 6px" }}>
+        Audit and fix app and record accuracy. App Health flags when the Sheet is
+        out of sync with the server; the tools below show what is missing and why,
+        and re-send it.
+      </div>
       <SheetSyncCard />
       <SheetSyncHealthCard />
       <SheetBackfillCard />
@@ -4590,6 +4598,12 @@ type BackfillRow = {
   missing_count: number;
   truncated?: boolean;
   error: string | null;
+  // Drain diagnostics: if the last export for this sync failed, that same error
+  // is why its missing records will not re-send - surfaced so a stuck record
+  // reads as "export is throwing: <reason>" instead of "re-send did nothing".
+  failing?: boolean;
+  last_error?: string | null;
+  last_error_at?: string | null;
 };
 type BackfillAudit = {
   spreadsheet_id: string;
@@ -4682,6 +4696,12 @@ function SheetBackfillCard() {
                         <td style={{ padding: "4px 6px" }}>
                           {r.label}
                           <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{r.tab}</div>
+                          {r.failing && r.last_error && (
+                            <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 2 }}
+                              title="The export is failing, so re-sending will not land these until this is fixed.">
+                              ⚠ export failing: {r.last_error}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: "4px 6px" }}>{r.in_db ?? "-"}</td>
                         <td style={{ padding: "4px 6px", color: "var(--danger)", fontWeight: 700 }}>

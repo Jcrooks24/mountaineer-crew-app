@@ -179,9 +179,14 @@ Symptoms: the office says a job is missing. The crew swear they logged it.
    [ADR 0003](decisions/0003-staging-prod-sheet-tab-split.md).
 5. **Check the Sheets API in System Check.** If it is failing, go to
    [Google access is broken](#google-access-is-broken). Once access returns, the
-   reconciler backfills events automatically. Note that the reconciler covers
-   **events**; other record types rely on the export firing at write time, so for
-   those you may need to re-save the record to retrigger the export.
+   auto-reconciler backfills everything on its own: events and BOLs every 5
+   minutes, and all other syncs (materials, reports, RODS, reimbursements, ...)
+   every ~20 minutes via the backfill diff (ADR 0031). A record missing from the
+   sheet lands within one cycle without a re-save. App Health WARNs while the
+   Sheet is out of sync. To clear a large backlog faster, use Admin, Advanced
+   Settings, Sync & Accuracy, Sheet Backfill to re-send on demand (100 per sync
+   per click). If a sync's records will not re-send at all, that row shows the
+   export's `last_error` - fix that record's data rather than re-sending again.
 
 ---
 
