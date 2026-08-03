@@ -6,6 +6,7 @@ import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePa
 import AppHeader from "../components/AppHeader";
 import VehicleUnitSpecs from "../components/VehicleUnitSpecs";
 import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
+import { loadJobSetup } from "../lib/jobSetupStore";
 
 // ── FMCSA 49 CFR §396.11 inspection items with descriptions ──────────────────
 const INSPECTION_ITEMS: { name: string; desc: string }[] = [
@@ -176,6 +177,22 @@ export default function DVIRPage() {
 
   // ── Vehicle info ───────────────────────────────────────────────────────────
   const [vehicleNumber, setVehicleNumber] = useState("");
+
+  // C1.3 (ADR 0034): default the unit from the job header's assigned truck when
+  // this DVIR is attached to a job and the inspector hasn't picked one yet. Only
+  // fills an empty field, so it never overrides a manual choice.
+  useEffect(() => {
+    if (!attachedJobUuid) return;
+    let cancelled = false;
+    loadJobSetup(attachedJobUuid)
+      .then((h) => {
+        const u = h?.vehicle_unit_names?.[0];
+        if (!cancelled && u) setVehicleNumber((cur) => cur || u);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [attachedJobUuid]);
+
   const [trailerNumber, setTrailerNumber] = useState("");
   const [odometer, setOdometer] = useState("");
   const [inspectionType, setInspectionType] = useState<"pre-trip" | "post-trip">("pre-trip");
