@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
+import { loadJobSetup } from "../lib/jobSetupStore";
 import { fetchRemoteBol, listOpenBols, type OpenBol } from "../lib/bolStore";
 import RodsSignoff from "./RodsSignoff";
 import RosterPicker from "./RosterPicker";
@@ -666,6 +667,26 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
     return () => { window.clearTimeout(bail); };
   }, [jobUuid]);
+
+  // C1.3 (ADR 0034): seed the job type from the job header, but ONLY for a
+  // brand-new report - one with no server row and no tags yet. Once per job,
+  // and it never touches an existing report or a report that already has tags,
+  // so a crew member who deliberately cleared them is not overridden.
+  const seededTypeForRef = useRef<string>("");
+  useEffect(() => {
+    if (!loaded || !jobUuid || seededTypeForRef.current === jobUuid) return;
+    seededTypeForRef.current = jobUuid;
+    if (serverUpdatedAtRef.current) return;      // existing report - leave it
+    if (data.job_type_tags.length > 0) return;   // already tagged
+    loadJobSetup(jobUuid)
+      .then((h) => {
+        const tags = h?.job_type_tags ?? [];
+        if (tags.length) {
+          setData((prev) => (prev.job_type_tags.length ? prev : { ...prev, job_type_tags: tags }));
+        }
+      })
+      .catch(() => {});
+  }, [loaded, jobUuid]);
 
   // Debounced draft autosave. Triggers on every change to `data` or
   // `billReviewed` once the form is loaded; skipped during the first render
