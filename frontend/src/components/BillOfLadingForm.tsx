@@ -43,6 +43,8 @@ import {
   VALUATION_OPTIONS,
 } from "../lib/bolContract";
 import { getCompanyInfoCached, refreshCompanyInfo, type CompanyInfo } from "../lib/companyInfo";
+import VehicleUnitSpecs from "./VehicleUnitSpecs";
+import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
 import SuggestInput from "./SuggestInput";
 import NumberField from "./NumberField";
 
@@ -404,10 +406,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   // field shows the fleet's canonical units in a dropdown instead of a
   // free-text input. Preserves any pre-existing custom entry.
   const [units, setUnits] = useState<string[]>([]);
+  const [vehUnits, setVehUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
   useEffect(() => {
     apiFetch<{ units: string[] }>("/api/dvir/units")
       .then((r) => setUnits(Array.isArray(r?.units) ? r.units : []))
       .catch(() => { /* offline is fine - the input still accepts a saved custom value */ });
+    refreshUnits().then(setVehUnits).catch(() => {});
   }, []);
   const [walkNotes, setWalkNotes] = useState(draft.walkthrough_notes || "");
   const [finalCharges, setFinalCharges] = useState(draft.final_charges != null ? String(draft.final_charges) : "");
@@ -1377,6 +1381,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                   </select>
                 </label>
               </div>
+              <VehicleUnitSpecs unit={unitByName(vehUnits, vehicle)} />
             </>
           )}
 

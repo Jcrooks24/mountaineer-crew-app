@@ -4,6 +4,8 @@ import { apiFetch } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import AppHeader from "../components/AppHeader";
+import VehicleUnitSpecs from "../components/VehicleUnitSpecs";
+import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
 
 // ── FMCSA 49 CFR §396.11 inspection items with descriptions ──────────────────
 const INSPECTION_ITEMS: { name: string; desc: string }[] = [
@@ -164,6 +166,8 @@ export default function DVIRPage() {
 
   // ── Units list ─────────────────────────────────────────────────────────────
   const [units, setUnits] = useState<string[]>([]);
+  const [vehUnits, setVehUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
+  useEffect(() => { refreshUnits().then(setVehUnits).catch(() => {}); }, []);
   useEffect(() => {
     apiFetch<{ units: string[] }>("/api/dvir/units")
       .then((r) => setUnits(r.units))
@@ -475,6 +479,7 @@ export default function DVIRPage() {
                 <option key={u} value={u}>{u}</option>
               ))}
             </select>
+            <VehicleUnitSpecs unit={unitByName(vehUnits, vehicleNumber)} />
           </div>
 
           <div style={{
