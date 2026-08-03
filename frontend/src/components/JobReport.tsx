@@ -1053,6 +1053,35 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // Duplicate a saved hours row with a BLANK employee, keeping the times/hours.
+  // Big crews often share a shift; this saves re-keying it. The new row renders
+  // an inline employee picker (its name is blank) so the crew just pick a
+  // person - the hours copy over exactly, with no editor round-trip that would
+  // drop the break detail.
+  function duplicateEmployee(i: number) {
+    const emp = data.employee_hours[i];
+    if (!emp) return;
+    setData((prev) => ({
+      ...prev,
+      employee_hours: [
+        ...prev.employee_hours,
+        { ...emp, user_id: undefined, name: "", skill_rating: undefined, skill_ratings: undefined },
+      ],
+    }));
+    setSaved(false);
+  }
+
+  // Assign a roster person to a row that has no employee yet (a duplicated row).
+  function assignEmployeeToRow(i: number, userId: number | null, name: string) {
+    setData((prev) => ({
+      ...prev,
+      employee_hours: prev.employee_hours.map((e, idx) =>
+        idx === i ? { ...e, user_id: userId ?? undefined, name } : e,
+      ),
+    }));
+    setSaved(false);
+  }
+
 
   // Crew-lead 1-5 skill rating for this mover on this job. Tapping the active
   // star again clears it back to N/A (null). Display-only - never touches the
@@ -1635,9 +1664,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                       block below this row (see further down). */}
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-                      <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
-                      </div>
+                      {emp.name || emp.user_id != null ? (
+                        <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name || "(no name)"}</div>
+                        </div>
+                      ) : (
+                        <div style={{ marginBottom: 6 }}>
+                          <div className="small" style={{ color: "var(--brand)", marginBottom: 4, fontWeight: 600 }}>
+                            Assign this duplicated shift to a crew member
+                          </div>
+                          <RosterPicker userId={null} onChange={(id, nm) => assignEmployeeToRow(i, id, nm)} />
+                        </div>
+                      )}
                       <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                         {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
                         {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
@@ -1658,6 +1696,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                         disabled={isEditing}
                       >
                         {isEditing ? "Editing…" : "Edit"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => duplicateEmployee(i)}
+                        title="Duplicate this shift for another crew member"
+                      >
+                        Duplicate
                       </button>
                       <button
                         type="button"

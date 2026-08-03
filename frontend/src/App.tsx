@@ -1429,6 +1429,31 @@ export default function App() {
     }
   }
 
+  // Manual cross-device pull. Cross-device sync otherwise only reconciles on
+  // reconnect / mount, so a crew member on one device can't see what a teammate
+  // just logged to the same job. This pushes my own pending work up first (so
+  // the refresh reconciles both ways), then pulls the job's server state:
+  // timeline events, photos, and materials. Wired to a persistent Refresh button
+  // in the hub header, visible on every tab.
+  const [refreshing, setRefreshing] = useState(false);
+  async function refreshFromServer() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await syncQueueNow();
+      const uuid = jobUuid.trim();
+      if (uuid) {
+        await Promise.all([
+          fetchJobEvents(uuid),
+          fetchServerPhotos(uuid),
+          syncMaterialsInBackground(uuid),
+        ]);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   // -----------------------
   // Photos
   // -----------------------
@@ -2042,6 +2067,22 @@ export default function App() {
         </div>
 
         <div className="row wrap" style={{ justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={refreshFromServer}
+            disabled={refreshing || !isOnline}
+            title="Pull the latest data other crew logged for this job"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              background: "none", border: "1px solid var(--border)", borderRadius: 8,
+              color: "var(--text)", padding: "4px 8px", fontSize: 12, fontWeight: 600,
+              cursor: refreshing || !isOnline ? "default" : "pointer",
+              opacity: !isOnline ? 0.5 : 1,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></svg>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
           <span className="statusDot mono" style={{ ["--dot" as any]: isOnline ? "var(--ok)" : "var(--danger)", fontSize: 12 }}>
             {isOnline ? "Online" : "Offline"}
           </span>
