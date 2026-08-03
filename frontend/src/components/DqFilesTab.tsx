@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
+import DqRoadTest from "./DqRoadTest";
 import {
   loadDqOverview,
   loadDqFile,
@@ -14,12 +15,16 @@ import {
   type DqFileItem,
 } from "../lib/dqStore";
 
+// Admin-filled DQ types with an in-app form (C4.3). Others are upload-only.
+const FILLABLE_ADMIN = new Set<string>(["road_test_form", "road_test_certificate"]);
+
 export default function DqFilesTab() {
   const [overview, setOverview] = useState<DqOverview | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [file, setFile] = useState<DqFile | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [filling, setFilling] = useState<string | null>(null);
 
   const refreshOverview = useCallback(async () => {
     try { setOverview(await loadDqOverview()); } catch { setErr("Could not load DQ overview."); }
@@ -43,6 +48,19 @@ export default function DqFilesTab() {
   };
 
   if (selected != null) {
+    if (filling && file) {
+      return (
+        <div className="card">
+          <DqRoadTest
+            variant={filling === "road_test_form" ? "form" : "certificate"}
+            driverName={file.name || ""}
+            userId={file.user_id}
+            onDone={() => { setFilling(null); onUploaded(); }}
+            onCancel={() => setFilling(null)}
+          />
+        </div>
+      );
+    }
     return (
       <div className="col" style={{ gap: 14 }}>
         <button type="button" onClick={() => { setSelected(null); setFile(null); }} style={{ alignSelf: "flex-start", fontSize: 13 }}>
@@ -61,7 +79,14 @@ export default function DqFilesTab() {
             </div>
             <div className="col" style={{ gap: 8 }}>
               {file.types.map((t) => (
-                <DqRow key={t.key} item={t} userId={file.user_id} onUploaded={onUploaded} />
+                <DqRow
+                  key={t.key}
+                  item={t}
+                  userId={file.user_id}
+                  onUploaded={onUploaded}
+                  fillable={FILLABLE_ADMIN.has(t.key)}
+                  onFill={() => setFilling(t.key)}
+                />
               ))}
             </div>
           </div>
@@ -108,7 +133,19 @@ export default function DqFilesTab() {
   );
 }
 
-function DqRow({ item, userId, onUploaded }: { item: DqFileItem; userId: number; onUploaded: () => void }) {
+function DqRow({
+  item,
+  userId,
+  onUploaded,
+  fillable,
+  onFill,
+}: {
+  item: DqFileItem;
+  userId: number;
+  onUploaded: () => void;
+  fillable?: boolean;
+  onFill?: () => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -141,7 +178,12 @@ function DqRow({ item, userId, onUploaded }: { item: DqFileItem; userId: number;
         )}
         {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
       </div>
-      <div style={{ flexShrink: 0 }}>
+      <div className="row" style={{ gap: 6, flexShrink: 0 }}>
+        {fillable && (
+          <button type="button" onClick={onFill} disabled={busy} className="btnPrimary" style={{ fontSize: 12 }}>
+            Fill in app
+          </button>
+        )}
         <input ref={inputRef} type="file" accept="application/pdf,image/*" onChange={onFile} style={{ display: "none" }} />
         <button type="button" onClick={pick} disabled={busy} style={{ fontSize: 12 }}>
           {busy ? "Uploading…" : item.document ? "Replace" : "Upload"}
