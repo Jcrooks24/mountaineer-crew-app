@@ -58,6 +58,40 @@ class PayrollCorrectionUpsert(BaseModel):
         return round(float(v), 2)
 
 
+class JobCorrectionUpsert(BaseModel):
+    """A correction made from the Job Summary (ADR 0032).
+
+    Deliberately smaller than PayrollCorrectionUpsert: the job (path param), the
+    work date, and what the crew reported are all derived server-side from the
+    job's record, so the admin supplies only who, which bucket, the corrected
+    number, and why. There is no period - a job correction is not period-scoped.
+    """
+
+    user_id: int
+    bucket: str = "billable"
+    corrected_hours: float = 0.0
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def reason_required(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("a correction needs a reason - the crew member is told it")
+        if len(v) > 2000:
+            raise ValueError("reason too long")
+        return v
+
+    @field_validator("corrected_hours")
+    @classmethod
+    def hours_sane(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("hours cannot be negative")
+        if v > 400:
+            raise ValueError("hours out of range")
+        return round(float(v), 2)
+
+
 class PayrollFinalizeRequest(BaseModel):
     period_start: str
     period_end: str

@@ -136,6 +136,22 @@ total, photos, and admin notes. Two crew on the same job (same calendar event or
 same typed manual entry) are grouped together automatically. A copy-paste invoice
 block gives the office a plain-text summary for invoicing software.
 
+**Correcting hours.** Under Employee Hours, **Hour corrections** is where you fix
+a wrong hours entry for this job (ADR 0032). Pick the employee, the bucket
+(billable / non-billable / per-diem), enter what it should be, and write a
+reason. This never changes what the crew submitted - it records an override, and
+both numbers stay visible. The correction flows into whichever pay period the
+job falls in, and the payroll page shows it read-only.
+
+**Initialing the job.** At the bottom, **Initial this job** is your sign-off.
+Tick all three - you reviewed the record, made any corrections, and confirmed
+the job's data landed in the Google Sheet (you look and tick; it is not
+auto-verified) - then enter your initials. Saving writes your initials into the
+job's sheet rows and **emails each crew member any correction made to their
+hours** for this job. It is idempotent: re-initialing does not re-send a
+correction that already went out. Add a correction after initialing? Its "not
+yet sent" note tells you to re-initial to mail it.
+
 ### Office Hours
 Admin-only logging of non-job office/shop time: date, clock in/out, any number of
 break periods, notes. Net hours calculate automatically.
@@ -178,19 +194,24 @@ on the roster. Those hours are **not counted**, so fix the name or add the
 person before you run payroll.
 
 **Correcting a crew mistake.** Open an employee's **Detail** to see their week
-by week overtime, hours by day, and every line the totals were built from. Hit
-**Correct** on a wrong line, enter what it should be, and write a reason.
+by week overtime, hours by day, and every line the totals were built from.
+Corrections never change what the crew submitted - they are an override, and
+both numbers stay visible ("Corrected from 8: clocked out at 3:30"). Overtime is
+recalculated after corrections, so moving hours out of billable can correctly
+remove someone's OT.
 
-Corrections never change what the crew submitted. They are an override recorded
-against this pay period, and both numbers stay visible ("Corrected from 8:
-clocked out at 3:30"). **+ Add a line** records something with no underlying
-entry at all, e.g. a bonus. Overtime is recalculated after corrections, so
-moving hours out of billable can correctly remove someone's OT.
+**Job hours are corrected on the Job Summary, not here** (ADR 0032). A `Job`
+line shows the corrected number with an **at Job Summary** marker and no Correct
+button; open that job in Job Summary to change it, and the crew member is emailed
+when you initial the job. Off-job, office and manual lines are still corrected
+here: hit **Correct** on the line, or **+ Add a line** for something with no
+underlying entry at all (a bonus, say).
 
-**Finalizing.** When the corrections are right, **Finalize and notify** emails
-each affected crew member one summary of exactly what changed on their hours and
-why (your reason text is the body of that email, so write it for them). It is
-safe to run repeatedly: a correction is mailed once, so if you fix one more
+**Finalizing.** When the off-job/office/manual corrections are right, **Finalize
+and notify** emails each affected crew member one summary of exactly what changed
+and why (your reason text is the body of that email, so write it for them). Job
+corrections are not mailed from here - they go out when you initial the job. It
+is safe to run repeatedly: a correction is mailed once, so if you fix one more
 thing afterwards, only that one goes out. Tick anyone you have already spoken to
 in person to mark them done without an email. If a send fails, the page says so
 and that correction is left unsent, so finalizing again retries it.

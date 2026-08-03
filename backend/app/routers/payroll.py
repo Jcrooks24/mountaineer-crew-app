@@ -76,6 +76,7 @@ from app.db.models.payroll_correction import (
 from app.db.models.reimbursement import Reimbursement
 from app.db.models.user import User
 from app.schemas.payroll import (
+    JobCorrectionUpsert,
     PayrollCorrectionUpsert,
     PayrollFinalizeRequest,
 )
@@ -454,6 +455,28 @@ def _correction_target(r: Dict[str, Any]) -> Tuple[Any, ...]:
     return (r["user_id"], r["source"], r["source_key"], r["bucket"])
 
 
+def _dedupe_corrections(
+    corrections: List[PayrollCorrection],
+) -> List[PayrollCorrection]:
+    """Collapse corrections that share a target, preferring the job-scoped one.
+
+    A job correction and a legacy period-scoped correction can point at the same
+    (user, source="job", source_key=job_uuid, bucket) - the latter left over
+    from before ADR 0032. They would both match the same rows in
+    _apply_corrections, and only one can win. The job-scoped row is the current
+    one, so it takes precedence; the job correction endpoint also migrates a
+    legacy row in place on the first edit, so this only bridges the window
+    before that happens.
+    """
+    by_target: Dict[Tuple[Any, ...], PayrollCorrection] = {}
+    for c in corrections:
+        key = (c.user_id, c.source, c.source_key, c.bucket)
+        existing = by_target.get(key)
+        if existing is None or (existing.job_uuid is None and c.job_uuid is not None):
+            by_target[key] = c
+    return list(by_target.values())
+
+
 def _apply_corrections(
     rows: List[Dict[str, Any]],
     corrections: List[PayrollCorrection],
@@ -608,35 +631,57 @@ def _employee_summary(
     }
 
 
-def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
-    roster = {u.id: u for u in db.query(User).filter(User.is_active.is_(True)).all()}
-    # Inactive users can still have hours inside a past period (somebody who
-    # left mid-period still gets that period's paycheck), so pull them too.
-    inactive = (
-        db.query(User).filter(User.is_active.is_(False)).all()
-    )
-    for u in inactive:
-        roster.setdefault(u.id, u)
+def _roster(db: Session) -> Tuple[Dict[int, User], Dict[str, int]]:
+    """The roster keyed by id, plus a lower-cased-name -> id lookup.
 
+    Inactive users are included: somebody who left mid-period still gets that
+    period's paycheck, and their name still has to resolve on an old report.
+    """
+    roster = {u.id: u for u in db.query(User).filter(User.is_active.is_(True)).all()}
+    for u in db.query(User).filter(User.is_active.is_(False)).all():
+        roster.setdefault(u.id, u)
     name_to_id = {
         (u.name or "").strip().lower(): u.id
         for u in roster.values()
         if (u.name or "").strip()
     }
+    return roster, name_to_id
+
+
+def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
+    roster, name_to_id = _roster(db)
 
     rows, warnings = _job_hours(db, start, end, roster, name_to_id)
     rows += _off_job_hours(db, start, end, roster)
     rows += _office_hours(db, start, end, roster)
     rows += _per_diem_nights(db, start, end, roster, rows)
 
-    corrections = (
+    # Corrections come from two places now (ADR 0032):
+    #   - job-scoped, keyed by the jobs contributing hours to this period. A job
+    #     correction is made once from the Job Summary and applies to whichever
+    #     period the job falls in.
+    #   - period-scoped legacy / non-job rows (off-job, office, manual), keyed by
+    #     the period as before.
+    job_uuids_in_period = {
+        r["source_key"] for r in rows if r["source"] == "job" and r["source_key"]
+    }
+    job_corrections = (
+        db.query(PayrollCorrection)
+        .filter(PayrollCorrection.job_uuid.in_(job_uuids_in_period))
+        .all()
+        if job_uuids_in_period
+        else []
+    )
+    period_corrections = (
         db.query(PayrollCorrection)
         .filter(
+            PayrollCorrection.job_uuid.is_(None),
             PayrollCorrection.period_start == start.isoformat(),
             PayrollCorrection.period_end == end.isoformat(),
         )
         .all()
     )
+    corrections = _dedupe_corrections(job_corrections + period_corrections)
     rows, _ = _apply_corrections(rows, corrections, roster)
     reimb = _reimbursements(db, start, end, roster)
 
@@ -673,8 +718,12 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     return {
         "period": {"start": start.isoformat(), "end": end.isoformat()},
         "employees": employees,
+        # Only period-scoped (non-job) corrections are mailed from payroll
+        # finalize; job corrections are mailed when their job is initialed. The
+        # pending count drives the finalize button, so it counts only what
+        # finalize would actually send.
         "pending_correction_count": sum(
-            1 for c in corrections if c.notified_at is None
+            1 for c in corrections if c.job_uuid is None and c.notified_at is None
         ),
         "correction_count": len(corrections),
         "warnings": warnings,
@@ -747,6 +796,19 @@ def upsert_correction(
         )
     if body.source not in CORRECTION_SOURCES:
         raise HTTPException(status_code=400, detail="unknown source")
+    # Job hours are corrected at the Job Summary now (ADR 0032), so they carry a
+    # job_uuid and get their own audit + per-job crew email. Editing them from
+    # the period tool would create a period-scoped duplicate with no job to
+    # notify against, so it is refused here with a pointer to the right place.
+    if body.source == "job":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Job hours are corrected on the Job Summary for that job, not "
+                "here. Open the job in Job Summary to correct or explain its "
+                "hours."
+            ),
+        )
     if body.bucket not in CORRECTION_BUCKETS:
         raise HTTPException(status_code=400, detail="unknown bucket")
 
@@ -833,6 +895,342 @@ def delete_correction(
     return None
 
 
+# ── Job-scoped corrections (made from the Job Summary) ───────────────────────
+# ADR 0032: job hours are corrected once, at the job, and flow into whichever
+# pay period contains the job's date. source stays "job" and source_key stays
+# the job_uuid so the summary's target matching is untouched; job_uuid is the
+# scope marker and the notify key.
+
+def _job_label(db: Session, job_uuid: str) -> str:
+    nm = (
+        db.query(func.max(Event.job_name))
+        .filter(Event.job_uuid == job_uuid)
+        .scalar()
+    )
+    return (nm or "").strip() or job_uuid[:8]
+
+
+def _job_work_date(db: Session, job_uuid: str) -> date:
+    """The job's date, by the same rule as _job_hours: earliest event in
+    Mountain time, falling back to the report's updated_at, then today. Lands a
+    job correction in the right by-day column and the right OT week."""
+    ts = (
+        db.query(func.min(Event.timestamp))
+        .filter(Event.job_uuid == job_uuid)
+        .scalar()
+    )
+    if ts is None:
+        rep = (
+            db.query(JobReport.updated_at)
+            .filter(JobReport.job_uuid == job_uuid)
+            .first()
+        )
+        ts = rep[0] if rep else None
+    if ts is None:
+        return datetime.now(MOUNTAIN_TZ).date()
+    return utc_naive_to_mountain_date(ts)
+
+
+def _job_reported(
+    db: Session, job_uuid: str, roster: Dict[int, User], name_to_id: Dict[str, int]
+) -> Dict[Tuple[int, str], Dict[str, Any]]:
+    """What the crew reported on this job, grouped by (user_id, bucket).
+
+    The exact numbers _job_hours produces, so the "before" on a correction (and
+    thus the email) matches what the payroll page shows. Keyed by bucket because
+    a correction targets a bucket: billable, non_billable, or per_diem_nights.
+    """
+    rep = (
+        db.query(JobReport.employee_hours_json)
+        .filter(JobReport.job_uuid == job_uuid)
+        .first()
+    )
+    out: Dict[Tuple[int, str], Dict[str, Any]] = {}
+    if not rep or not rep[0]:
+        return out
+    try:
+        entries = json.loads(rep[0]) or []
+    except Exception:
+        return out
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        uid = e.get("user_id")
+        nm = (e.get("name") or "").strip()
+        if not isinstance(uid, int) or uid not in roster:
+            uid = name_to_id.get(nm.lower())
+        if uid is None:
+            continue
+        name = roster[uid].name or nm
+        hours = float(e.get("hours") or 0)
+        bucket = "non_billable" if e.get("non_billable") else "billable"
+        if hours:
+            slot = out.setdefault((uid, bucket), {"hours": 0.0, "user_name": name})
+            slot["hours"] += hours
+        if e.get("out_of_town"):
+            slot = out.setdefault((uid, "per_diem_nights"), {"hours": 0.0, "user_name": name})
+            slot["hours"] += 1
+    return out
+
+
+def _find_job_correction(
+    db: Session, job_uuid: str, user_id: int, bucket: str
+) -> Optional[PayrollCorrection]:
+    """The existing correction for this (job, employee, bucket), if any.
+
+    Prefers a job-scoped row; falls back to a legacy period-scoped job
+    correction (source="job", source_key=job_uuid) so the first edit from the
+    Job Summary migrates it in place rather than leaving a period-scoped
+    duplicate the read path then has to dedupe forever.
+    """
+    matches = (
+        db.query(PayrollCorrection)
+        .filter(
+            PayrollCorrection.user_id == user_id,
+            PayrollCorrection.source == "job",
+            PayrollCorrection.source_key == job_uuid,
+            PayrollCorrection.bucket == bucket,
+        )
+        .all()
+    )
+    for m in matches:
+        if m.job_uuid == job_uuid:
+            return m
+    return matches[0] if matches else None
+
+
+def _job_correction_json(c: PayrollCorrection) -> Dict[str, Any]:
+    return {
+        "id": c.id,
+        "user_id": c.user_id,
+        "user_name": c.user_name,
+        "bucket": c.bucket,
+        "original_hours": c.original_hours,
+        "corrected_hours": c.corrected_hours,
+        "reason": c.reason,
+        "created_by_name": c.created_by_name,
+        "notified_at": c.notified_at.isoformat() if c.notified_at else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+    }
+
+
+@router.get("/job/{job_uuid}/corrections")
+def list_job_corrections(
+    job_uuid: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Everything the Job Summary needs to show and edit this job's corrections:
+    what the crew reported per (employee, bucket), and any corrections already
+    on record."""
+    roster, name_to_id = _roster(db)
+    reported = _job_reported(db, job_uuid, roster, name_to_id)
+    corrections = (
+        db.query(PayrollCorrection)
+        .filter(
+            PayrollCorrection.source == "job",
+            PayrollCorrection.source_key == job_uuid,
+        )
+        .all()
+    )
+    corrections = _dedupe_corrections(corrections)
+    pending = sum(1 for c in corrections if c.notified_at is None)
+    return {
+        "job_uuid": job_uuid,
+        "job_name": _job_label(db, job_uuid),
+        "work_date": _job_work_date(db, job_uuid).isoformat(),
+        "reported": [
+            {
+                "user_id": uid,
+                "user_name": v["user_name"],
+                "bucket": bucket,
+                "hours": round(v["hours"], 2),
+            }
+            for (uid, bucket), v in sorted(
+                reported.items(), key=lambda kv: (kv[1]["user_name"].lower(), kv[0][1])
+            )
+        ],
+        "corrections": [_job_correction_json(c) for c in corrections],
+        "pending_notify_count": pending,
+    }
+
+
+@router.put("/job/{job_uuid}/corrections")
+def upsert_job_correction(
+    job_uuid: str,
+    body: JobCorrectionUpsert,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    if body.bucket not in CORRECTION_BUCKETS:
+        raise HTTPException(status_code=400, detail="unknown bucket")
+
+    roster, name_to_id = _roster(db)
+    target = roster.get(body.user_id) or db.query(User).filter(User.id == body.user_id).first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="employee not found")
+
+    # Both derived from the job's record, never trusted from the client: the
+    # "before" is what the crew reported (so the email is honest), and the date
+    # is the job's date (so the correction lands in the right period and week).
+    reported = _job_reported(db, job_uuid, roster, name_to_id)
+    original = float(reported.get((body.user_id, body.bucket), {}).get("hours", 0.0))
+    work_date = _job_work_date(db, job_uuid).isoformat()
+    label = _job_label(db, job_uuid)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    existing = _find_job_correction(db, job_uuid, body.user_id, body.bucket)
+    if existing is not None:
+        # Editing a correction that already went out re-arms the notification:
+        # the crew member was told the old number and is owed the new one.
+        changed = (
+            existing.corrected_hours != body.corrected_hours
+            or (existing.reason or "") != body.reason
+        )
+        existing.job_uuid = job_uuid          # migrate a legacy row in place
+        existing.period_start = None
+        existing.period_end = None
+        existing.corrected_hours = body.corrected_hours
+        existing.original_hours = original
+        existing.reason = body.reason
+        existing.work_date = work_date
+        existing.source_label = label
+        existing.user_name = target.name or target.email
+        existing.created_by_id = admin.id
+        existing.created_by_name = admin.name or admin.email
+        existing.updated_at = now
+        if changed:
+            existing.notified_at = None
+        db.commit()
+        db.refresh(existing)
+        return _job_correction_json(existing)
+
+    c = PayrollCorrection(
+        job_uuid=job_uuid,
+        period_start=None,
+        period_end=None,
+        user_id=body.user_id,
+        user_name=target.name or target.email,
+        source="job",
+        source_key=job_uuid,
+        source_label=label,
+        work_date=work_date,
+        bucket=body.bucket,
+        original_hours=original,
+        corrected_hours=body.corrected_hours,
+        reason=body.reason,
+        created_by_id=admin.id,
+        created_by_name=admin.name or admin.email,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return _job_correction_json(c)
+
+
+@router.delete("/job/{job_uuid}/corrections/{correction_id}", status_code=204)
+def delete_job_correction(
+    job_uuid: str,
+    correction_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    c = (
+        db.query(PayrollCorrection)
+        .filter(
+            PayrollCorrection.id == correction_id,
+            PayrollCorrection.source_key == job_uuid,
+        )
+        .first()
+    )
+    if c is None:
+        raise HTTPException(status_code=404, detail="correction not found")
+    db.delete(c)
+    db.commit()
+    return None
+
+
+def _job_correction_email(
+    employee_name: str, job_name: str, work_date: str, cs: List[PayrollCorrection]
+) -> Tuple[str, str]:
+    first = employee_name.split(" ")[0] if employee_name else "there"
+    body = (
+        f"Hi {first},\n\n"
+        f"Your reported hours on {job_name} ({work_date}) were reviewed and "
+        f"corrected before payroll. Here is exactly what changed:\n\n"
+        + "\n\n".join(_correction_lines(cs))
+        + "\n\n"
+        "These are the numbers being paid. If any of this looks wrong, reply to "
+        "this email or talk to the office before the next pay period closes.\n\n"
+        "Mountaineer Moving\n"
+    )
+    return f"Correction to your hours on {job_name}", body
+
+
+def notify_job_corrections(db: Session, job_uuid: str) -> Dict[str, Any]:
+    """Mail every un-notified correction on this job to the crew it affects.
+
+    Called when a job is initialed on the Job Summary. Idempotent the same way
+    finalize is: a correction is mailed once and stamped notified_at, so
+    re-initialing a job does not re-send. Best-effort per employee - one bad
+    address must not stop the rest - and it never raises: initialing is the
+    admin's own checkpoint and must not be blocked by mail trouble. When email
+    is unconfigured it reports that and leaves notified_at unset so a later,
+    configured save still sends.
+    """
+    cs = (
+        db.query(PayrollCorrection)
+        .filter(
+            PayrollCorrection.job_uuid == job_uuid,
+            PayrollCorrection.notified_at.is_(None),
+        )
+        .all()
+    )
+    result: Dict[str, Any] = {"sent": [], "failed": [], "email_unconfigured": False}
+    if not cs:
+        return result
+    if not os.getenv("POSTMARK_SERVER_TOKEN", "").strip() or not os.getenv(
+        "SMTP_FROM", ""
+    ).strip():
+        result["email_unconfigured"] = True
+        return result
+
+    job_name = _job_label(db, job_uuid)
+    work_date = _job_work_date(db, job_uuid).isoformat()
+    by_user: Dict[int, List[PayrollCorrection]] = defaultdict(list)
+    for c in cs:
+        by_user[c.user_id].append(c)
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for uid, group in by_user.items():
+        user = db.query(User).filter(User.id == uid).first()
+        name = user.name if user else (group[0].user_name or "")
+        if user is None or not user.email:
+            result["failed"].append({
+                "user_id": uid, "name": name, "count": len(group),
+                "error": "no email address on the roster",
+            })
+            continue
+        subject, text = _job_correction_email(name or user.email, job_name, work_date, group)
+        try:
+            send_email(to_email=user.email, subject=subject, text=text)
+        except Exception as exc:
+            result["failed"].append({
+                "user_id": uid, "name": name, "count": len(group), "error": str(exc),
+            })
+            continue
+        for c in group:
+            c.notified_at = now
+        result["sent"].append({"user_id": uid, "name": name, "count": len(group)})
+
+    # Only corrections whose email actually went out carry a notified_at, so a
+    # failure is retried by the next initialing rather than silently marked done.
+    db.commit()
+    return result
+
+
 # ── Finalize (send the correction emails) ────────────────────────────────────
 
 _BUCKET_LABELS = {
@@ -914,6 +1312,10 @@ def finalize_period(
     pending = (
         db.query(PayrollCorrection)
         .filter(
+            # Period-scoped rows only. Job corrections are mailed when their job
+            # is initialed on the Job Summary, not from here (ADR 0032), so a
+            # period finalize must not also mail them - that would double-notify.
+            PayrollCorrection.job_uuid.is_(None),
             PayrollCorrection.period_start == s.isoformat(),
             PayrollCorrection.period_end == e.isoformat(),
             PayrollCorrection.notified_at.is_(None),

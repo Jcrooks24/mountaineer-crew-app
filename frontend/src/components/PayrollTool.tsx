@@ -13,8 +13,13 @@ import { apiFetch, ApiError } from "../api/client";
  *   1. Pick a pay period, read the per-employee summary.
  *   2. Open an employee whose numbers look wrong, correct the offending line.
  *      Corrections are an override layer - the crew's submission is never
- *      touched, and both numbers stay visible.
- *   3. Finalize, which mails each affected crew member exactly what changed.
+ *      touched, and both numbers stay visible. Job hours are read-only here:
+ *      they are corrected on the Job Summary for that job (ADR 0032), and this
+ *      page shows the corrected number with an "at Job Summary" marker. Only
+ *      off-job, office and manual lines are editable here.
+ *   3. Finalize, which mails each affected crew member exactly what changed on
+ *      their off-job/office/manual lines. Job corrections are mailed when their
+ *      job is initialed, not here.
  */
 
 // ── Types (mirror routers/payroll.py's response) ─────────────────────────────
@@ -694,9 +699,22 @@ function EmployeeDetail({
                     ? (l.hours === 1 ? " night" : " nights")
                     : " hrs"}
                 </span>
-                <button type="button" onClick={() => setEditing(l)} style={{ fontSize: 12 }}>
-                  {l.correction_id ? "Edit" : "Correct"}
-                </button>
+                {l.source === "job" ? (
+                  // Job hours are corrected on the Job Summary now (ADR 0032),
+                  // so they are read-only here - the number reflects any
+                  // correction, but the edit happens where the job lives.
+                  <span
+                    className="small"
+                    title="Correct this on the Job Summary for this job"
+                    style={{ color: "var(--muted)", whiteSpace: "nowrap" }}
+                  >
+                    at Job Summary
+                  </span>
+                ) : (
+                  <button type="button" onClick={() => setEditing(l)} style={{ fontSize: 12 }}>
+                    {l.correction_id ? "Edit" : "Correct"}
+                  </button>
+                )}
               </div>
             </div>
           ))}

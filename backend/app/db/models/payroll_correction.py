@@ -25,10 +25,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 
 from app.db.session import Base
@@ -54,12 +56,21 @@ class PayrollCorrection(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # The pay period this correction belongs to (ISO YYYY-MM-DD, inclusive).
-    # Corrections are period-scoped rather than global: the same job can be
-    # corrected differently if it is ever re-run in a later period, and
-    # finalizing a period must not re-mail corrections from an older one.
-    period_start = Column(String, nullable=False, index=True)
-    period_end = Column(String, nullable=False, index=True)
+    # The pay period a NON-job correction belongs to (ISO YYYY-MM-DD, inclusive).
+    # Off-job, office and manual corrections are still period-scoped: they have
+    # no job to hang off, and finalizing a period must not re-mail corrections
+    # from an older one. Job corrections leave these NULL (see job_uuid).
+    period_start = Column(String, nullable=True, index=True)
+    period_end = Column(String, nullable=True, index=True)
+
+    # Set when this is a JOB-scoped correction (ADR 0032, amends 0029). A job
+    # correction is made once, from the Job Summary, and flows into whichever
+    # pay period contains the job's date - correct the job once, it is correct
+    # everywhere. source stays "job" and source_key stays the job_uuid, so the
+    # payroll summary's target matching is unchanged; job_uuid is what tells the
+    # read path to pull it in by job rather than by period, and what the partial
+    # unique index below keys on.
+    job_uuid = Column(String, nullable=True, index=True)
 
     # Who the correction is about. user_id is the key; user_name is kept for
     # display and for the email, and so a correction stays readable if the
@@ -112,9 +123,11 @@ class PayrollCorrection(Base):
     updated_at = Column(DateTime, nullable=False)
 
     __table_args__ = (
-        # One correction per (period, employee, source record, bucket). A second
-        # correction to the same thing is an edit of the first, not a new row -
-        # otherwise two half-corrections stack and the total is wrong twice.
+        # One correction per (period, employee, source record, bucket) for the
+        # period-scoped rows. A second correction to the same thing is an edit of
+        # the first, not a new row - otherwise two half-corrections stack and the
+        # total is wrong twice. Job rows have NULL periods, so Postgres treats
+        # them as distinct here and this constraint never governs them.
         UniqueConstraint(
             "period_start",
             "period_end",
@@ -123,5 +136,16 @@ class PayrollCorrection(Base):
             "source_key",
             "bucket",
             name="uq_payroll_correction_target",
+        ),
+        # The same one-per-target rule for job-scoped rows, keyed on the job
+        # instead of the period. Partial so it applies only where job_uuid is
+        # set, leaving the period-scoped rows to the constraint above.
+        Index(
+            "uq_payroll_correction_job",
+            "user_id",
+            "job_uuid",
+            "bucket",
+            unique=True,
+            postgresql_where=text("job_uuid IS NOT NULL"),
         ),
     )

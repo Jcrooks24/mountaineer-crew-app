@@ -1,7 +1,9 @@
 # 0029 - Payroll corrections are an override layer, and the app holds no pay rates
 
 **Date:** 2026-07-28
-**Status:** Accepted
+**Status:** Accepted. Amended by [0032](0032-corrections-are-made-at-the-job.md), which
+moves job-hour corrections from the pay period to the job and makes initialing
+the notification trigger. The override-not-edit principle here is unchanged.
 
 ## Context
 

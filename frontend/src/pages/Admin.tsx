@@ -1,4 +1,4 @@
-import { Children, Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
@@ -6691,9 +6691,53 @@ type JobSummary = {
   entry_status: {
     entered_by: string;
     entered_on: string;
+    validated?: boolean;
+    corrected?: boolean;
+    confirmed_in_sheet?: boolean;
     updated_by_name: string | null;
     updated_at: string | null;
   } | null;
+};
+
+// ── Job-level hour corrections (ADR 0032) ──────────────────────────────────
+// Corrections are an override layer made from the Job Summary: the crew's
+// submitted hours are never edited, both numbers stay visible, and each change
+// is emailed to the crew member when the job is initialed.
+
+type JobCorrection = {
+  id: number;
+  user_id: number;
+  user_name: string;
+  bucket: string;
+  original_hours: number;
+  corrected_hours: number;
+  reason: string;
+  created_by_name: string | null;
+  notified_at: string | null;
+  updated_at: string | null;
+};
+
+type JobReported = { user_id: number; user_name: string; bucket: string; hours: number };
+
+type JobCorrectionsResp = {
+  job_uuid: string;
+  job_name: string;
+  work_date: string;
+  reported: JobReported[];
+  corrections: JobCorrection[];
+  pending_notify_count: number;
+};
+
+type NotifyResult = {
+  sent: { user_id: number; name: string; count: number }[];
+  failed: { user_id: number; name: string; count: number; error: string }[];
+  email_unconfigured: boolean;
+};
+
+const CORRECTION_BUCKET_LABELS: Record<string, string> = {
+  billable: "Billable",
+  non_billable: "Non-billable",
+  per_diem_nights: "Per-diem nights",
 };
 
 type JobCandidate = {
@@ -6704,6 +6748,258 @@ type JobCandidate = {
   material_count: number;
   entered: boolean;
 };
+
+function fmtHrs(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0$/, "");
+}
+
+/** Correct a job's employee hours from the Job Summary (ADR 0032). Self-
+ *  contained: fetches the job's corrections + what the crew reported, edits an
+ *  override, and never touches the crew's submission. `employees` are the people
+ *  on the job report, so an admin can add a correction to a bucket someone
+ *  reported nothing in (moving hours to "other", say). Refetches when
+ *  `refreshSignal` changes - the attestation save bumps it after mailing. */
+function JobHourCorrections({
+  jobUuid,
+  employees,
+  refreshSignal,
+}: {
+  jobUuid: string;
+  employees: Array<{ user_id: number; name: string }>;
+  refreshSignal: number;
+}) {
+  const [resp, setResp] = useState<JobCorrectionsResp | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Form state.
+  const [userId, setUserId] = useState<number | "">("");
+  const [bucket, setBucket] = useState("billable");
+  const [hours, setHours] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [formErr, setFormErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const data = await apiFetch<JobCorrectionsResp>(
+        `/api/admin/payroll/job/${encodeURIComponent(jobUuid)}/corrections`,
+      );
+      setResp(data);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not load corrections.");
+    } finally {
+      setLoading(false);
+    }
+  }, [jobUuid]);
+
+  useEffect(() => { load(); }, [load, refreshSignal]);
+
+  const reportedFor = (uid: number, b: string): number =>
+    resp?.reported.find((r) => r.user_id === uid && r.bucket === b)?.hours ?? 0;
+
+  const closeForm = () => {
+    setAdding(false);
+    setEditingId(null);
+    setUserId("");
+    setBucket("billable");
+    setHours("");
+    setReason("");
+    setFormErr(null);
+  };
+
+  const openAdd = () => {
+    closeForm();
+    setAdding(true);
+  };
+
+  const openEdit = (c: JobCorrection) => {
+    setAdding(false);
+    setEditingId(c.id);
+    setUserId(c.user_id);
+    setBucket(c.bucket);
+    setHours(String(c.corrected_hours));
+    setReason(c.reason);
+    setFormErr(null);
+  };
+
+  const save = async () => {
+    if (userId === "") { setFormErr("Pick an employee."); return; }
+    const n = Number(hours);
+    if (!Number.isFinite(n) || n < 0) { setFormErr("Enter the corrected hours as a number."); return; }
+    if (!reason.trim()) { setFormErr("A reason is required - the crew member is emailed this text."); return; }
+    setBusy(true);
+    setFormErr(null);
+    try {
+      await apiFetch(`/api/admin/payroll/job/${encodeURIComponent(jobUuid)}/corrections`, {
+        method: "PUT",
+        body: JSON.stringify({
+          user_id: userId,
+          bucket,
+          corrected_hours: n,
+          reason: reason.trim(),
+        }),
+      });
+      closeForm();
+      await load();
+    } catch (e) {
+      setFormErr(e instanceof ApiError ? e.message : "Could not save the correction.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (c: JobCorrection) => {
+    if (!confirm(`Remove the correction to ${c.user_name}'s ${CORRECTION_BUCKET_LABELS[c.bucket] || c.bucket} hours?`)) return;
+    setBusy(true);
+    try {
+      await apiFetch(`/api/admin/payroll/job/${encodeURIComponent(jobUuid)}/corrections/${c.id}`, {
+        method: "DELETE",
+      });
+      if (editingId === c.id) closeForm();
+      await load();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not remove the correction.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const corrections = resp?.corrections ?? [];
+  const pending = resp?.pending_notify_count ?? 0;
+  const unit = bucket === "per_diem_nights" ? "nights" : "hrs";
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Hour corrections</div>
+        {!adding && editingId === null && (
+          <button type="button" onClick={openAdd} style={{ fontSize: 12 }}>
+            + Correct hours
+          </button>
+        )}
+      </div>
+      <div className="small" style={{ color: "var(--muted)", margin: "8px 0 10px" }}>
+        This never changes what the crew submitted - it records an override for
+        payroll. Each correction is emailed to the crew member when you initial
+        the job below.
+      </div>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginBottom: 8 }}>{err}</div>}
+      {loading && !resp && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
+
+      {corrections.length > 0 && (
+        <div className="col" style={{ gap: 6, marginBottom: 10 }}>
+          {corrections.map((c) => (
+            <div
+              key={c.id}
+              className="row"
+              style={{
+                justifyContent: "space-between", alignItems: "center", gap: 10,
+                padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 8,
+                fontSize: 13,
+              }}
+            >
+              <div className="col" style={{ gap: 1, minWidth: 0 }}>
+                <span style={{ fontWeight: 600 }}>
+                  {c.user_name}
+                  <span style={{ color: "var(--muted)", fontWeight: 400 }}>
+                    {" "}({CORRECTION_BUCKET_LABELS[c.bucket] || c.bucket})
+                  </span>
+                </span>
+                <span className="small" style={{ color: "var(--brand)" }}>
+                  {fmtHrs(c.original_hours)} → {fmtHrs(c.corrected_hours)}
+                  {c.bucket === "per_diem_nights" ? " nights" : " hrs"} · {c.reason}
+                </span>
+                <span className="small" style={{ color: "var(--muted)" }}>
+                  {c.notified_at ? "Crew emailed" : "Not yet sent - initial the job to notify"}
+                </span>
+              </div>
+              <div className="row" style={{ gap: 8, flexShrink: 0 }}>
+                <button type="button" onClick={() => openEdit(c)} disabled={busy} style={{ fontSize: 12 }}>Edit</button>
+                <button type="button" onClick={() => remove(c)} disabled={busy} style={{ fontSize: 12, color: "var(--danger)" }}>Remove</button>
+              </div>
+            </div>
+          ))}
+          {pending > 0 && (
+            <div className="small" style={{ color: "var(--warn, #e0a800)" }}>
+              {pending} correction{pending === 1 ? "" : "s"} not yet emailed. Initial the job below to send.
+            </div>
+          )}
+        </div>
+      )}
+
+      {(adding || editingId !== null) && (
+        <div className="col" style={{ gap: 10, padding: 12, borderRadius: 10, border: "1px solid var(--brand)" }}>
+          <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
+            <label className="col" style={{ gap: 3, minWidth: 160 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Employee</span>
+              <select
+                value={userId}
+                onChange={(e) => setUserId(e.target.value ? Number(e.target.value) : "")}
+                disabled={editingId !== null}
+              >
+                <option value="">Pick…</option>
+                {employees.map((emp) => (
+                  <option key={emp.user_id} value={emp.user_id}>{emp.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="col" style={{ gap: 3 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Bucket</span>
+              <select value={bucket} onChange={(e) => setBucket(e.target.value)} disabled={editingId !== null}>
+                {Object.entries(CORRECTION_BUCKET_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+            </label>
+            <label className="col" style={{ gap: 3, width: 130 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>
+                {bucket === "per_diem_nights" ? "Nights" : "Should be"}
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step={0.25}
+                value={hours}
+                onChange={(e) => setHours(e.target.value)}
+              />
+            </label>
+            {userId !== "" && (
+              <div className="small" style={{ color: "var(--muted)", paddingBottom: 6 }}>
+                Crew reported {fmtHrs(reportedFor(userId, bucket))} {unit}
+              </div>
+            )}
+          </div>
+          <label className="col" style={{ gap: 3 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Reason (the crew member is emailed this)</span>
+            <textarea
+              rows={2}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Clocked out at 3, not 5 - confirmed with the crew lead."
+              style={{ width: "100%", resize: "vertical" }}
+            />
+          </label>
+          {formErr && <span className="small" style={{ color: "var(--danger)" }}>{formErr}</span>}
+          <div className="row" style={{ gap: 8 }}>
+            <button type="button" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save correction"}</button>
+            <button type="button" onClick={closeForm} disabled={busy}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {corrections.length === 0 && !adding && editingId === null && !loading && (
+        <div className="small" style={{ color: "var(--muted)" }}>No corrections on this job.</div>
+      )}
+    </div>
+  );
+}
 
 function JobSummaryTab() {
   const [date, setDate] = useState("");
@@ -6722,6 +7018,14 @@ function JobSummaryTab() {
   const [entrySaving, setEntrySaving] = useState(false);
   const [entrySaved, setEntrySaved] = useState(false);
   const [entryError, setEntryError] = useState<string | null>(null);
+  // The three-part attestation (ADR 0032) and the notify result from the last
+  // save. correctionsRefresh forces the corrections card to refetch after a
+  // save mails its corrections.
+  const [entryValidated, setEntryValidated] = useState(false);
+  const [entryCorrected, setEntryCorrected] = useState(false);
+  const [entryConfirmedSheet, setEntryConfirmedSheet] = useState(false);
+  const [entryNotify, setEntryNotify] = useState<NotifyResult | null>(null);
+  const [correctionsRefresh, setCorrectionsRefresh] = useState(0);
 
   async function search() {
     if (!date && !name.trim()) {
@@ -6758,6 +7062,11 @@ function JobSummaryTab() {
       // new jobs default to today's Mountain date and an empty initials box.
       setEntryInitials(data.entry_status?.entered_by ?? "");
       setEntryDate(data.entry_status?.entered_on || mountainDateYYYYMMDD());
+      setEntryValidated(!!data.entry_status?.validated);
+      setEntryCorrected(!!data.entry_status?.corrected);
+      setEntryConfirmedSheet(!!data.entry_status?.confirmed_in_sheet);
+      setEntryNotify(null);
+      setCorrectionsRefresh((n) => n + 1);
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to load summary");
     } finally {
@@ -6776,19 +7085,36 @@ function JobSummaryTab() {
       setEntryError("Date is required.");
       return;
     }
+    if (!(entryValidated && entryCorrected && entryConfirmedSheet)) {
+      setEntryError("Confirm all three checks before initialing.");
+      return;
+    }
     setEntrySaving(true);
     setEntryError(null);
     setEntrySaved(false);
+    setEntryNotify(null);
     try {
-      const updated = await apiFetch<{ entry_status: NonNullable<JobSummary["entry_status"]> }>(
+      const updated = await apiFetch<{
+        entry_status: NonNullable<JobSummary["entry_status"]>;
+        notify?: NotifyResult;
+      }>(
         `/api/admin/job-entry-status/${encodeURIComponent(summary.job_uuid)}`,
         {
           method: "PUT",
-          body: JSON.stringify({ entered_by: initials, entered_on: entryDate }),
+          body: JSON.stringify({
+            entered_by: initials,
+            entered_on: entryDate,
+            validated: entryValidated,
+            corrected: entryCorrected,
+            confirmed_in_sheet: entryConfirmedSheet,
+          }),
         },
       );
       setSummary((prev) => (prev ? { ...prev, entry_status: updated.entry_status } : prev));
       setEntrySaved(true);
+      setEntryNotify(updated.notify ?? null);
+      // Corrections were just mailed - refetch so their "sent" state updates.
+      setCorrectionsRefresh((n) => n + 1);
     } catch (e: any) {
       setEntryError(e instanceof ApiError ? e.message : "Save failed.");
     } finally {
@@ -7258,6 +7584,20 @@ function JobSummaryTab() {
             })()}
           </div>
 
+          {/* Job-level hour corrections (ADR 0032). Employees are those on the
+              report who resolved to a user_id, deduped. */}
+          <JobHourCorrections
+            jobUuid={summary.job_uuid}
+            refreshSignal={correctionsRefresh}
+            employees={Array.from(
+              new Map(
+                (summary.job_report?.employee_hours ?? [])
+                  .filter((e) => typeof e.user_id === "number")
+                  .map((e) => [e.user_id as number, { user_id: e.user_id as number, name: e.name || "-" }]),
+              ).values(),
+            )}
+          />
+
           <div className="card">
             <div className="microLabel" style={{ marginBottom: 10 }}>DVIRs ({summary.dvirs.length})</div>
             {summary.dvirs.length === 0 ? (
@@ -7580,7 +7920,7 @@ function JobSummaryTab() {
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="microLabel" style={{ marginBottom: 10 }}>Data entry</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Initial this job</div>
               <span
                 className="chip"
                 style={{
@@ -7590,13 +7930,38 @@ function JobSummaryTab() {
                   borderColor: summary.entry_status ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
                 }}
               >
-                {summary.entry_status ? "✓ Entered" : "Pending entry"}
+                {summary.entry_status ? "✓ Initialed" : "Pending"}
               </span>
             </div>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-              Record your initials and the date once you've entered this job's data into the books.
-              Saving also writes the values into every job-related sheet for this job.
+              Initialing is your sign-off that all three below are true. Saving
+              writes your initials into every job-related sheet for this job and
+              emails each crew member any correction made to their hours above.
             </div>
+            {(() => {
+              const checkRow = (
+                checked: boolean,
+                set: (v: boolean) => void,
+                label: string,
+              ) => (
+                <label className="row" style={{ gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => { set(e.target.checked); setEntrySaved(false); }}
+                    style={{ marginTop: 2, flexShrink: 0 }}
+                  />
+                  <span className="small">{label}</span>
+                </label>
+              );
+              return (
+                <div className="col" style={{ gap: 8, marginBottom: 12 }}>
+                  {checkRow(entryValidated, setEntryValidated, "I reviewed this job's record.")}
+                  {checkRow(entryCorrected, setEntryCorrected, "I made any needed hour corrections (or there were none).")}
+                  {checkRow(entryConfirmedSheet, setEntryConfirmedSheet, "I confirmed this job's data landed in the Google Sheet.")}
+                </div>
+              );
+            })()}
             <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
               <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
@@ -7609,7 +7974,7 @@ function JobSummaryTab() {
                 />
               </label>
               <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Entered on</span>
+                <span className="small" style={{ color: "var(--muted)" }}>Date</span>
                 <input
                   type="date"
                   value={entryDate}
@@ -7618,24 +7983,42 @@ function JobSummaryTab() {
               </label>
               <button
                 onClick={saveEntryStatus}
-                disabled={entrySaving}
+                disabled={entrySaving || !(entryValidated && entryCorrected && entryConfirmedSheet)}
                 className="btnPrimary"
                 style={{ flex: "0 0 auto" }}
               >
-                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Mark entered")}
+                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Initial job")}
               </button>
             </div>
             {entryError && (
               <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{entryError}</div>
             )}
             {entrySaved && !entryError && (
-              <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>
-                ✓ Saved and propagated to sheets
+              <div className="col" style={{ gap: 4, marginTop: 8 }}>
+                <div className="small" style={{ color: "var(--ok)" }}>
+                  ✓ Initialed and propagated to sheets
+                </div>
+                {entryNotify?.email_unconfigured && (
+                  <div className="small" style={{ color: "var(--warn, #e0a800)" }}>
+                    Corrections were not emailed: email is not configured on this
+                    server. They will send on the next initialing once it is.
+                  </div>
+                )}
+                {entryNotify?.sent.map((s) => (
+                  <div key={s.user_id} className="small" style={{ color: "var(--ok)" }}>
+                    Emailed {s.name} ({s.count} correction{s.count === 1 ? "" : "s"})
+                  </div>
+                ))}
+                {entryNotify?.failed.map((f) => (
+                  <div key={f.user_id} className="small" style={{ color: "var(--danger)" }}>
+                    Could not email {f.name}: {f.error}. Their corrections will retry on the next initialing.
+                  </div>
+                ))}
               </div>
             )}
             {summary.entry_status && (
               <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-                Last updated by {summary.entry_status.updated_by_name || "-"}
+                Last initialed by {summary.entry_status.updated_by_name || "-"}
                 {summary.entry_status.updated_at ? ` on ${formatMountainDateTime(summary.entry_status.updated_at)}` : ""}
               </div>
             )}

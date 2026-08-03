@@ -812,12 +812,7 @@ def job_summary(
             }
             for n in admin_notes
         ],
-        "entry_status": None if not entry_status else {
-            "entered_by": entry_status.entered_by,
-            "entered_on": entry_status.entered_on,
-            "updated_by_name": entry_status.updated_by_name,
-            "updated_at": _iso(entry_status.updated_at),
-        },
+        "entry_status": _entry_status_json(entry_status) if entry_status else None,
     }
 
 
@@ -831,6 +826,22 @@ def job_summary(
 class EntryStatusUpsert(BaseModel):
     entered_by: str
     entered_on: str  # YYYY-MM-DD
+    # The three-part attestation (ADR 0032). All must be true to record initials.
+    validated: bool = False
+    corrected: bool = False
+    confirmed_in_sheet: bool = False
+
+
+def _entry_status_json(row: AdminEntryStatus) -> Dict[str, Any]:
+    return {
+        "entered_by": row.entered_by,
+        "entered_on": row.entered_on,
+        "validated": bool(row.validated),
+        "corrected": bool(row.corrected),
+        "confirmed_in_sheet": bool(row.confirmed_in_sheet),
+        "updated_by_name": row.updated_by_name,
+        "updated_at": _iso(row.updated_at),
+    }
 
 
 @router.get("/job-entry-status/{job_uuid}")
@@ -842,15 +853,7 @@ def get_entry_status(
     row = db.query(AdminEntryStatus).filter(AdminEntryStatus.job_uuid == job_uuid).first()
     if not row:
         return {"job_uuid": job_uuid, "entry_status": None}
-    return {
-        "job_uuid": job_uuid,
-        "entry_status": {
-            "entered_by": row.entered_by,
-            "entered_on": row.entered_on,
-            "updated_by_name": row.updated_by_name,
-            "updated_at": _iso(row.updated_at),
-        },
-    }
+    return {"job_uuid": job_uuid, "entry_status": _entry_status_json(row)}
 
 
 @router.put("/job-entry-status/{job_uuid}")
@@ -866,12 +869,26 @@ def upsert_entry_status(
     entered_on = (payload.entered_on or "").strip()
     if not entered_on:
         raise HTTPException(status_code=400, detail="entered_on is required")
+    # Initialing is a three-part attestation now (ADR 0032). All three must be
+    # affirmed; the initials are the signature on that statement, so recording
+    # them without it would be signing a claim that was never made.
+    if not (payload.validated and payload.corrected and payload.confirmed_in_sheet):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Confirm all three - validated the record, made any corrections, "
+                "and confirmed it landed in the Google Sheet - before initialing."
+            ),
+        )
 
     now = datetime.now(timezone.utc)
     existing = db.query(AdminEntryStatus).filter(AdminEntryStatus.job_uuid == job_uuid).first()
     if existing:
         existing.entered_by = initials
         existing.entered_on = entered_on
+        existing.validated = True
+        existing.corrected = True
+        existing.confirmed_in_sheet = True
         existing.updated_by_id = current_user.id
         existing.updated_by_name = current_user.name or current_user.email
         existing.updated_at = now
@@ -883,6 +900,9 @@ def upsert_entry_status(
             job_uuid=job_uuid,
             entered_by=initials,
             entered_on=entered_on,
+            validated=True,
+            corrected=True,
+            confirmed_in_sheet=True,
             updated_by_id=current_user.id,
             updated_by_name=current_user.name or current_user.email,
             updated_at=now,
@@ -903,15 +923,21 @@ def upsert_entry_status(
         # PUT again to retry.
         print(f"[entry-status] sweep failed for {job_uuid}: {exc}")
 
+    # Initialing is what notifies crew of the corrections made on this job
+    # (ADR 0032). Best-effort and non-raising - the checkpoint is saved above
+    # regardless; the outcome is surfaced so the admin knows if a mail failed.
+    notify: Dict[str, Any] = {"sent": [], "failed": [], "email_unconfigured": False}
+    try:
+        from app.routers.payroll import notify_job_corrections
+        notify = notify_job_corrections(db, job_uuid)
+    except Exception as exc:
+        print(f"[entry-status] correction notify failed for {job_uuid}: {exc}")
+
     return {
         "job_uuid": job_uuid,
-        "entry_status": {
-            "entered_by": row.entered_by,
-            "entered_on": row.entered_on,
-            "updated_by_name": row.updated_by_name,
-            "updated_at": _iso(row.updated_at),
-        },
+        "entry_status": _entry_status_json(row),
         "sheet_sweep": sweep_counts,
+        "notify": notify,
     }
 
 
