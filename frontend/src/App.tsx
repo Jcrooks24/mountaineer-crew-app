@@ -13,6 +13,8 @@ import { getUnitsCached as getVehUnitsCached, refreshUnits as refreshVehUnits, t
 import { drainAll as drainJobInventory } from "./lib/jobInventoryQueue";
 import { drainJobSetups } from "./lib/jobSetupStore";
 import JobSetupPanel from "./components/JobSetupPanel";
+import { drainChecklistChecks } from "./lib/jobChecklistStore";
+import JobChecklistCard from "./components/JobChecklistCard";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
@@ -1873,7 +1875,7 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); void drainChecklistChecks(); };
     const onOffline = () => setIsOnline(false);
     // Flush any incidents + off-job hours + un-uploaded photos queued while
     // offline on this mount too.
@@ -1887,6 +1889,8 @@ export default function App() {
     void drainJobInventory();
     // Job-setup headers saved offline (C1.2).
     void drainJobSetups();
+    // Checklist manual ticks saved offline (C3).
+    void drainChecklistChecks();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
@@ -2341,6 +2345,10 @@ export default function App() {
               />
             );
           })()}
+
+          {/* Job checklist (C3): applicable items for this job, auto-checked
+              from in-app signals + manual ticks. */}
+          {jobUuid && <JobChecklistCard key={jobUuid} jobUuid={jobUuid} longDistance={longDistance} />}
 
           {(() => {
             // Loaded weights logged for this job - visible to anyone, any time
