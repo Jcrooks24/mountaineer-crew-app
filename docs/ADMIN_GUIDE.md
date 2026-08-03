@@ -186,12 +186,21 @@ out-of-town flag, de-duplicated so a night marked in both places is owed once.
 Reimbursements are approved, personally-paid expenses only; company-card
 expenses are an expense log and are excluded.
 
-**No pay rates, on purpose.** The app has never stored an hourly rate and this
-tool does not add one, so it reports hours rather than dollars ([ADR
-0029](decisions/0029-payroll-corrections-are-an-override-layer.md)). Mileage is
-reported as **miles, not dollars**, for the same reason: you price it at
-whatever rate is current. Tips are not tracked per employee anywhere in the app,
-so they stay manual.
+**No hourly wages, on purpose.** The app has never stored an hourly rate and
+this tool does not add one, so it reports hours rather than gross pay ([ADR
+0029](decisions/0029-payroll-corrections-are-an-override-layer.md)). Tips are not
+tracked per employee anywhere in the app, so they stay manual.
+
+**Mileage and per-diem pay.** Those two are reimbursement rates, not wages, so
+they *are* configurable ([ADR
+0033](decisions/0033-reimbursement-rates-live-in-config.md)). Set them in
+**Settings -> Payroll rates** (mileage $/mile, per-diem $/night). The payroll
+page then multiplies each person's logged miles and out-of-town nights by the
+rate and shows the dollar figure under the count, and the spreadsheet export
+gains **Per-diem $** and **Mileage $** columns. Leave a rate at 0 and that column
+stays a count only, priced by you. Rates apply live: re-opening an old period
+shows it at today's rate, so copy the numbers out at run time if a rate later
+changes.
 
 **Overtime.** Billable hours over 40 in a Monday-to-Sunday week. Non-billable
 and Other do not count toward the 40. Run periods that start on a Monday and end

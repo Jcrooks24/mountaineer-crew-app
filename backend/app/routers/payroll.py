@@ -539,9 +539,24 @@ def _apply_corrections(
 
 # ── Summary assembly ─────────────────────────────────────────────────────────
 
+def _payroll_rates(db: Session) -> Dict[str, float]:
+    """The configured mileage ($/mi) and per-diem ($/night) rates, or 0 when
+    unset (in which case the page shows units without a dollar figure)."""
+    from app.core.payroll_rates import PAYROLL_RATES_KEY, normalize_rates
+    from app.db.models.system_config import SystemConfig
+    row = db.query(SystemConfig).filter(SystemConfig.key == PAYROLL_RATES_KEY).first()
+    raw = None
+    if row and row.value:
+        try:
+            raw = json.loads(row.value)
+        except (ValueError, TypeError):
+            raw = None
+    return normalize_rates(raw)
+
+
 def _employee_summary(
     user: User, rows: List[Dict[str, Any]], start: date, end: date,
-    reimb: Dict[str, Any],
+    reimb: Dict[str, Any], rates: Dict[str, float],
 ) -> Dict[str, Any]:
     days: Dict[date, Dict[str, float]] = defaultdict(
         lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0}
@@ -581,6 +596,14 @@ def _employee_summary(
     non_billable = sum(v["non_billable"] for v in days.values())
     other = sum(v["other"] for v in days.values())
 
+    # Standardized reimbursement rates turn the crew-logged counts into dollars
+    # (ADR 0033). A rate of 0 (unset) leaves the amount at 0, and the page shows
+    # the miles / nights without a dollar figure.
+    nights = int(per_diem)
+    miles = int(reimb.get("miles", 0))
+    per_diem_amount = round(nights * rates.get("per_diem_rate", 0.0), 2)
+    mileage_amount = round(miles * rates.get("mileage_rate", 0.0), 2)
+
     return {
         "user_id": user.id,
         "name": user.name or user.email,
@@ -591,9 +614,11 @@ def _employee_summary(
             "non_billable_hours": round(non_billable, 2),
             "other_hours": round(other, 2),
             "total_hours": round(regular + ot + non_billable + other, 2),
-            "per_diem_nights": int(per_diem),
+            "per_diem_nights": nights,
+            "per_diem_amount": per_diem_amount,
             "reimbursement_amount": round(reimb.get("amount", 0.0), 2),
-            "mileage_miles": int(reimb.get("miles", 0)),
+            "mileage_miles": miles,
+            "mileage_amount": mileage_amount,
         },
         "weeks": week_rows,
         "days": [
@@ -684,13 +709,14 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     corrections = _dedupe_corrections(job_corrections + period_corrections)
     rows, _ = _apply_corrections(rows, corrections, roster)
     reimb = _reimbursements(db, start, end, roster)
+    rates = _payroll_rates(db)
 
     by_user: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
     for r in rows:
         by_user[r["user_id"]].append(r)
 
     employees = [
-        _employee_summary(roster[uid], urows, start, end, reimb.get(uid, {}))
+        _employee_summary(roster[uid], urows, start, end, reimb.get(uid, {}), rates)
         for uid, urows in by_user.items()
         if uid in roster
     ]
@@ -698,7 +724,7 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     # money and would otherwise be invisible on the page.
     for uid, r in reimb.items():
         if uid not in by_user and uid in roster:
-            employees.append(_employee_summary(roster[uid], [], start, end, r))
+            employees.append(_employee_summary(roster[uid], [], start, end, r, rates))
 
     employees.sort(key=lambda e: (e["name"] or "").lower())
 
@@ -717,6 +743,7 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
 
     return {
         "period": {"start": start.isoformat(), "end": end.isoformat()},
+        "rates": rates,
         "employees": employees,
         # Only period-scoped (non-job) corrections are mailed from payroll
         # finalize; job corrections are mailed when their job is initialed. The

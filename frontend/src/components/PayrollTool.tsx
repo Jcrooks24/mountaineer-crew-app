@@ -31,9 +31,13 @@ type Totals = {
   other_hours: number;
   total_hours: number;
   per_diem_nights: number;
+  per_diem_amount: number;
   reimbursement_amount: number;
   mileage_miles: number;
+  mileage_amount: number;
 };
+
+type Rates = { mileage_rate: number; per_diem_rate: number };
 
 type WeekRow = {
   week_start: string;
@@ -85,6 +89,7 @@ type Employee = {
 
 type Summary = {
   period: { start: string; end: string };
+  rates: Rates;
   employees: Employee[];
   pending_correction_count: number;
   correction_count: number;
@@ -242,7 +247,8 @@ export default function PayrollTool() {
     if (!data) return "";
     const head = [
       "Employee", "Regular", "Overtime", "Non-billable", "Other",
-      "Total hrs", "Per-diem nights", "Reimbursement $", "Mileage mi",
+      "Total hrs", "Per-diem nights", "Per-diem $", "Reimbursement $",
+      "Mileage mi", "Mileage $",
     ].join("\t");
     const rows = data.employees.map((e) =>
       [
@@ -253,8 +259,10 @@ export default function PayrollTool() {
         e.totals.other_hours,
         e.totals.total_hours,
         e.totals.per_diem_nights,
+        e.totals.per_diem_amount.toFixed(2),
         e.totals.reimbursement_amount.toFixed(2),
         e.totals.mileage_miles,
+        e.totals.mileage_amount.toFixed(2),
       ].join("\t"),
     );
     return [head, ...rows].join("\n");
@@ -362,6 +370,23 @@ export default function PayrollTool() {
             <button type="button" onClick={copyTsv} disabled={!tsv}>
               {copied ? "Copied" : "Copy for spreadsheet"}
             </button>
+          </div>
+
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+            {data.rates.mileage_rate > 0 || data.rates.per_diem_rate > 0 ? (
+              <>
+                Rates:{" "}
+                {data.rates.mileage_rate > 0
+                  ? `mileage $${data.rates.mileage_rate.toFixed(2)}/mi`
+                  : "mileage rate not set"}
+                {" · "}
+                {data.rates.per_diem_rate > 0
+                  ? `per-diem $${data.rates.per_diem_rate.toFixed(2)}/night`
+                  : "per-diem rate not set"}
+              </>
+            ) : (
+              "Set mileage and per-diem rates in Settings to show them as pay. Until then, miles and nights are counts only."
+            )}
           </div>
 
           {data.employees.length === 0 ? (
@@ -504,6 +529,15 @@ function EmployeeRows({
       {n === 0 ? <span style={{ color: "var(--muted)" }}>0</span> : fmtHours(n)}
     </td>
   );
+  // A count cell that also shows its dollar figure when a rate is configured.
+  const unitNum = (count: number, amount: number) => (
+    <td style={{ textAlign: "right", padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>
+      {count === 0 ? <span style={{ color: "var(--muted)" }}>0</span> : fmtHours(count)}
+      {amount > 0 && (
+        <div className="small" style={{ color: "var(--muted)" }}>${amount.toFixed(2)}</div>
+      )}
+    </td>
+  );
 
   return (
     <>
@@ -527,11 +561,11 @@ function EmployeeRows({
         <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
           {fmtHours(t.total_hours)}
         </td>
-        {num(t.per_diem_nights)}
+        {unitNum(t.per_diem_nights, t.per_diem_amount)}
         <td style={{ textAlign: "right", padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>
           {t.reimbursement_amount ? `$${t.reimbursement_amount.toFixed(2)}` : <span style={{ color: "var(--muted)" }}>-</span>}
         </td>
-        {num(t.mileage_miles)}
+        {unitNum(t.mileage_miles, t.mileage_amount)}
         <td style={{ textAlign: "right", padding: "6px 8px" }}>
           <button type="button" onClick={onToggle} style={{ fontSize: 12 }}>
             {open ? "Close" : "Detail"}
@@ -741,7 +775,7 @@ function EmployeeDetail({
               <span key={i} className="small">
                 {shortDate(r.date)} - {r.label}
                 {r.amount != null ? ` - $${r.amount.toFixed(2)}` : ""}
-                {r.miles != null ? ` - ${r.miles} mi (no rate in app; price it yourself)` : ""}
+                {r.miles != null ? ` - ${r.miles} mi (see the Mileage $ total; set the rate in Settings)` : ""}
               </span>
             ))}
           </div>

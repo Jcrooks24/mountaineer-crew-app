@@ -3,7 +3,10 @@
 **Date:** 2026-07-28
 **Status:** Accepted. Amended by [0032](0032-corrections-are-made-at-the-job.md), which
 moves job-hour corrections from the pay period to the job and makes initialing
-the notification trigger. The override-not-edit principle here is unchanged.
+the notification trigger (override-not-edit unchanged), and by
+[0033](0033-reimbursement-rates-live-in-config.md), which allows two
+company-wide reimbursement rates (mileage, per-diem) in config while keeping
+hourly wages out.
 
 ## Context
 

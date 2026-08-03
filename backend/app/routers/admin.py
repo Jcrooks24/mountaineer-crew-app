@@ -337,6 +337,49 @@ def set_vehicle_units(
 
 
 # ---------------------------
+# Payroll reimbursement rates (2f) - mileage $/mi, per-diem $/night. Admin-only
+# read + write; the payroll summary reads them server-side. These are
+# standardized reimbursement rates, not hourly wages (ADR 0033, amends 0029).
+# ---------------------------
+
+class PayrollRatesRequest(BaseModel):
+    mileage_rate: float = 0.0
+    per_diem_rate: float = 0.0
+
+
+@router.get("/config/payroll-rates")
+def get_payroll_rates(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, float]:
+    from app.core.payroll_rates import PAYROLL_RATES_KEY, normalize_rates
+    row = db.query(SystemConfig).filter(SystemConfig.key == PAYROLL_RATES_KEY).first()
+    raw = None
+    if row and row.value:
+        try:
+            raw = _json.loads(row.value)
+        except (ValueError, TypeError):
+            raw = None
+    return normalize_rates(raw)
+
+
+@router.put("/config/payroll-rates", status_code=204)
+def set_payroll_rates(
+    payload: PayrollRatesRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    from app.core.payroll_rates import PAYROLL_RATES_KEY, normalize_rates
+    rates = normalize_rates(payload.model_dump())
+    row = db.query(SystemConfig).filter(SystemConfig.key == PAYROLL_RATES_KEY).first()
+    if row:
+        row.value = _json.dumps(rates)
+    else:
+        db.add(SystemConfig(key=PAYROLL_RATES_KEY, value=_json.dumps(rates)))
+    db.commit()
+
+
+# ---------------------------
 # Company (carrier) information config
 # ---------------------------
 

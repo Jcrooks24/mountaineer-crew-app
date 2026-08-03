@@ -2730,6 +2730,7 @@ function SettingsTab({
         onClick={onOpenAdvanced}
       />
       <CompanyInfoCard />
+      <PayrollRatesCard />
       <VehicleUnitsCard />
       <DVIRUnitsCard />
       <EmployeeTagsManagerCard />
@@ -5319,6 +5320,91 @@ function CompanyInfoCard() {
       <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
         {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
         <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save company info"}</button>
+      </div>
+    </div>
+  );
+}
+
+// Payroll reimbursement rates (2f): mileage $/mi and per-diem $/night. The
+// payroll page multiplies crew-logged miles/nights by these to show pay. 0 = not
+// set (payroll shows counts only). These are reimbursement rates, not wages
+// (ADR 0033); hourly pay stays in QuickBooks.
+function PayrollRatesCard() {
+  const [mileage, setMileage] = useState("");
+  const [perDiem, setPerDiem] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ mileage_rate: number; per_diem_rate: number }>("/api/admin/config/payroll-rates")
+      .then((r) => {
+        setMileage(String(r.mileage_rate ?? 0));
+        setPerDiem(String(r.per_diem_rate ?? 0));
+      })
+      .catch(() => setErr("Failed to load payroll rates"));
+  }, []);
+
+  async function save() {
+    const m = Number(mileage);
+    const p = Number(perDiem);
+    if (!Number.isFinite(m) || m < 0 || !Number.isFinite(p) || p < 0) {
+      setErr("Rates must be zero or a positive number.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/payroll-rates", {
+        method: "PUT",
+        body: JSON.stringify({ mileage_rate: m, per_diem_rate: p }),
+      });
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const field = (
+    label: string,
+    hint: string,
+    value: string,
+    setter: (v: string) => void,
+  ) => (
+    <label className="col" style={{ gap: 4 }}>
+      <span className="small" style={{ color: "var(--muted)" }}>{label}</span>
+      <input
+        type="number"
+        inputMode="decimal"
+        min={0}
+        step={0.01}
+        value={value}
+        onChange={(e) => { setter(e.target.value); setSaved(false); setErr(null); }}
+        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, maxWidth: 200 }}
+      />
+      <span className="small" style={{ color: "var(--muted)" }}>{hint}</span>
+    </label>
+  );
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>Payroll rates</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Standardized reimbursement rates the Payroll page uses to turn crew-logged
+        miles and out-of-town nights into pay. Leave a rate at 0 to show the count
+        only. These are reimbursement rates, not hourly wages (those stay in
+        QuickBooks).
+      </div>
+      <div className="col" style={{ gap: 12 }}>
+        {field("Mileage rate", "Dollars per mile, e.g. 0.65", mileage, setMileage)}
+        {field("Per-diem rate", "Dollars per out-of-town night, e.g. 40", perDiem, setPerDiem)}
+      </div>
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+      <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
+        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
+        <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save payroll rates"}</button>
       </div>
     </div>
   );
