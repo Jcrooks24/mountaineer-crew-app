@@ -7001,6 +7001,240 @@ function JobHourCorrections({
   );
 }
 
+type BillItem = { label?: string; qty?: number; unit?: string; rate?: number; discount?: number };
+
+type ReportBilling = {
+  personal_vehicles: number;
+  dumpster_pct: number;
+  recycling_pct: number;
+  billing_method: string;
+  bill_personal_vehicles: boolean;
+};
+
+function billLineTotal(items: BillItem[], globalDiscount: number): number {
+  const subtotal = items.reduce((s, it) => {
+    const qty = Number(it.qty) || 0;
+    const rate = Number(it.rate) || 0;
+    const disc = Number(it.discount) || 0;
+    return s + qty * rate * (1 - disc / 100);
+  }, 0);
+  return subtotal * (1 - (globalDiscount || 0) / 100);
+}
+
+/** Admin correction of a job's billing (2e): the bill invoice AND the job-report
+ *  billing fields, edited in place. On save it re-exports both to the Sheet and
+ *  emails the job's crew the total change + reason. The bill is the office's
+ *  invoice (not crew-sacred like hours), so there is no override layer. */
+function BillCorrectionEditor({
+  jobUuid,
+  bill,
+  reportBilling,
+  onClose,
+  onSaved,
+}: {
+  jobUuid: string;
+  bill: { items: BillItem[]; global_discount: number; notes: string | null };
+  reportBilling: ReportBilling | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [items, setItems] = useState<BillItem[]>(() => bill.items.map((x) => ({ ...x })));
+  const [globalDiscount, setGlobalDiscount] = useState(String(bill.global_discount ?? 0));
+  const [notes, setNotes] = useState(bill.notes ?? "");
+  const [pv, setPv] = useState(reportBilling ? String(reportBilling.personal_vehicles) : "");
+  const [dumpster, setDumpster] = useState(reportBilling ? String(reportBilling.dumpster_pct) : "");
+  const [recycling, setRecycling] = useState(reportBilling ? String(reportBilling.recycling_pct) : "");
+  const [method, setMethod] = useState(reportBilling?.billing_method ?? "");
+  const [billPv, setBillPv] = useState(!!reportBilling?.bill_personal_vehicles);
+  const [reason, setReason] = useState("");
+  const [notify, setNotify] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    before_total: number;
+    after_total: number;
+    notify: NotifyResult;
+  } | null>(null);
+
+  const beforeTotal = billLineTotal(bill.items, bill.global_discount || 0);
+  const newTotal = billLineTotal(items, Number(globalDiscount) || 0);
+
+  const setItem = (i: number, patch: Partial<BillItem>) =>
+    setItems((prev) => prev.map((it, j) => (j === i ? { ...it, ...patch } : it)));
+  const addItem = () => setItems((prev) => [...prev, { label: "", qty: 1, rate: 0, discount: 0 }]);
+  const removeItem = (i: number) => setItems((prev) => prev.filter((_, j) => j !== i));
+
+  const save = async () => {
+    if (!reason.trim()) { setErr("A reason is required - the crew is emailed it."); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      const cleanItems = items.map((it) => ({
+        label: (it.label ?? "").trim(),
+        qty: Number(it.qty) || 0,
+        unit: it.unit,
+        rate: Number(it.rate) || 0,
+        discount: Number(it.discount) || 0,
+      }));
+      const payload: Record<string, unknown> = {
+        items: cleanItems,
+        global_discount: Number(globalDiscount) || 0,
+        notes: notes.trim() || null,
+        reason: reason.trim(),
+        notify,
+      };
+      if (reportBilling) {
+        payload.personal_vehicles = Number(pv) || 0;
+        payload.dumpster_pct = Number(dumpster) || 0;
+        payload.recycling_pct = Number(recycling) || 0;
+        payload.billing_method = method.trim();
+        payload.bill_personal_vehicles = billPv;
+      }
+      const r = await apiFetch<{ before_total: number; after_total: number; notify: NotifyResult }>(
+        `/api/admin/bill-correction/${encodeURIComponent(jobUuid)}`,
+        { method: "POST", body: JSON.stringify(payload) },
+      );
+      setResult({ before_total: r.before_total, after_total: r.after_total, notify: r.notify });
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not save the correction.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (result) {
+    return (
+      <div className="col" style={{ gap: 8, padding: 12, borderRadius: 10, border: "1px solid var(--ok)", marginTop: 10 }}>
+        <div className="small" style={{ color: "var(--ok)", fontWeight: 700 }}>
+          ✓ Bill corrected: ${result.before_total.toFixed(2)} → ${result.after_total.toFixed(2)}
+        </div>
+        {result.notify.email_unconfigured && (
+          <div className="small" style={{ color: "var(--warn, #e0a800)" }}>
+            Crew were not emailed: email is not configured on this server.
+          </div>
+        )}
+        {result.notify.sent.map((s) => (
+          <div key={s.user_id} className="small" style={{ color: "var(--ok)" }}>Emailed {s.name}</div>
+        ))}
+        {result.notify.failed.map((f) => (
+          <div key={f.user_id} className="small" style={{ color: "var(--danger)" }}>
+            Could not email {f.name}: {f.error}
+          </div>
+        ))}
+        {!notify && !result.notify.email_unconfigured && result.notify.sent.length === 0 && (
+          <div className="small" style={{ color: "var(--muted)" }}>No email sent (notify was off).</div>
+        )}
+        <div>
+          <button type="button" onClick={() => { onSaved(); onClose(); }}>Done</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="col" style={{ gap: 12, padding: 12, borderRadius: 10, border: "1px solid var(--brand)", marginTop: 10 }}>
+      <div style={{ fontWeight: 700, fontSize: 13 }}>Correct bill</div>
+
+      {/* Line items */}
+      <div className="col" style={{ gap: 6 }}>
+        {items.map((it, i) => (
+          <div key={i} className="row wrap" style={{ gap: 6, alignItems: "flex-end" }}>
+            <label className="col" style={{ gap: 2, flex: "2 1 160px", minWidth: 120 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Line</span>
+              <input value={it.label ?? ""} onChange={(e) => setItem(i, { label: e.target.value })} placeholder="Label" />
+            </label>
+            <label className="col" style={{ gap: 2, width: 64 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
+              <input type="number" inputMode="decimal" step={0.25} value={it.qty ?? 0} onChange={(e) => setItem(i, { qty: Number(e.target.value) })} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 84 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Rate $</span>
+              <input type="number" inputMode="decimal" step={0.01} value={it.rate ?? 0} onChange={(e) => setItem(i, { rate: Number(e.target.value) })} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 64 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Disc %</span>
+              <input type="number" inputMode="decimal" step={1} value={it.discount ?? 0} onChange={(e) => setItem(i, { discount: Number(e.target.value) })} />
+            </label>
+            <button type="button" onClick={() => removeItem(i)} style={{ color: "var(--danger)", flex: "0 0 auto" }}>Remove</button>
+          </div>
+        ))}
+        <div>
+          <button type="button" onClick={addItem} style={{ fontSize: 12 }}>+ Add line</button>
+        </div>
+      </div>
+
+      <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
+        <label className="col" style={{ gap: 2, width: 120 }}>
+          <span className="small" style={{ color: "var(--muted)" }}>Global discount %</span>
+          <input type="number" inputMode="decimal" step={1} value={globalDiscount} onChange={(e) => setGlobalDiscount(e.target.value)} />
+        </label>
+        <div className="small" style={{ paddingBottom: 6 }}>
+          New total <strong>${newTotal.toFixed(2)}</strong>
+          <span style={{ color: "var(--muted)" }}> (was ${beforeTotal.toFixed(2)})</span>
+        </div>
+      </div>
+
+      <label className="col" style={{ gap: 2 }}>
+        <span className="small" style={{ color: "var(--muted)" }}>Bill notes</span>
+        <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: "100%", resize: "vertical" }} />
+      </label>
+
+      {reportBilling && (
+        <div className="col" style={{ gap: 8, paddingTop: 4, borderTop: "1px solid var(--border)" }}>
+          <div className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Report billing fields</div>
+          <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
+            <label className="col" style={{ gap: 2, width: 110 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Billing method</span>
+              <input value={method} onChange={(e) => setMethod(e.target.value)} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 90 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Personal veh.</span>
+              <input type="number" inputMode="numeric" step={1} value={pv} onChange={(e) => setPv(e.target.value)} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 100 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>M1 dumpster %</span>
+              <input type="number" inputMode="numeric" step={5} value={dumpster} onChange={(e) => setDumpster(e.target.value)} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 100 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>M1 recycling %</span>
+              <input type="number" inputMode="numeric" step={5} value={recycling} onChange={(e) => setRecycling(e.target.value)} />
+            </label>
+            <label className="row" style={{ gap: 6, alignItems: "center", paddingBottom: 6 }}>
+              <input type="checkbox" checked={billPv} onChange={(e) => setBillPv(e.target.checked)} />
+              <span className="small">Bill personal vehicles</span>
+            </label>
+          </div>
+        </div>
+      )}
+
+      <label className="col" style={{ gap: 2 }}>
+        <span className="small" style={{ color: "var(--muted)" }}>Reason (the crew is emailed this)</span>
+        <textarea
+          rows={2}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. Removed the duplicate dolly line."
+          style={{ width: "100%", resize: "vertical" }}
+        />
+      </label>
+
+      <label className="row" style={{ gap: 8, alignItems: "center" }}>
+        <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+        <span className="small">Email the job's crew what changed</span>
+      </label>
+
+      {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
+
+      <div className="row" style={{ gap: 8 }}>
+        <button type="button" onClick={save} disabled={busy} className="btnPrimary">
+          {busy ? "Saving…" : (notify ? "Save & notify crew" : "Save correction")}
+        </button>
+        <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function JobSummaryTab() {
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
@@ -7026,6 +7260,7 @@ function JobSummaryTab() {
   const [entryConfirmedSheet, setEntryConfirmedSheet] = useState(false);
   const [entryNotify, setEntryNotify] = useState<NotifyResult | null>(null);
   const [correctionsRefresh, setCorrectionsRefresh] = useState(0);
+  const [editingBill, setEditingBill] = useState(false);
 
   async function search() {
     if (!date && !name.trim()) {
@@ -7067,6 +7302,7 @@ function JobSummaryTab() {
       setEntryConfirmedSheet(!!data.entry_status?.confirmed_in_sheet);
       setEntryNotify(null);
       setCorrectionsRefresh((n) => n + 1);
+      setEditingBill(false);
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to load summary");
     } finally {
@@ -7863,18 +8099,25 @@ function JobSummaryTab() {
           )}
 
           <div className="card">
-            <div className="microLabel" style={{ marginBottom: 10 }}>
-              Bill
-              {summary.bill && (
-                <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
-                  Total ${billTotal.toFixed(2)}
-                </span>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="microLabel" style={{ marginBottom: 0 }}>
+                Bill
+                {summary.bill && (
+                  <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+                    Total ${billTotal.toFixed(2)}
+                  </span>
+                )}
+              </div>
+              {!editingBill && (
+                <button type="button" onClick={() => setEditingBill(true)} style={{ fontSize: 12 }}>
+                  Correct bill
+                </button>
               )}
             </div>
             {!summary.bill ? (
-              <div className="small" style={{ color: "var(--muted)" }}>No bill saved.</div>
+              <div className="small" style={{ color: "var(--muted)", marginTop: 10 }}>No bill saved.</div>
             ) : (
-              <div className="col" style={{ gap: 4 }}>
+              <div className="col" style={{ gap: 4, marginTop: 10 }}>
                 <div className="small"><strong>Saved by:</strong> {summary.bill.saved_by_name ?? "-"}</div>
                 <div className="small"><strong>Global discount:</strong> {summary.bill.global_discount}%</div>
                 {summary.bill.items.map((it, i) => (
@@ -7887,6 +8130,29 @@ function JobSummaryTab() {
                   <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>{summary.bill.notes}</div>
                 )}
               </div>
+            )}
+            {editingBill && (
+              <BillCorrectionEditor
+                jobUuid={summary.job_uuid}
+                bill={{
+                  items: (summary.bill?.items ?? []) as BillItem[],
+                  global_discount: summary.bill?.global_discount ?? 0,
+                  notes: summary.bill?.notes ?? null,
+                }}
+                reportBilling={
+                  summary.job_report
+                    ? {
+                        personal_vehicles: summary.job_report.personal_vehicles,
+                        dumpster_pct: summary.job_report.dumpster_pct,
+                        recycling_pct: summary.job_report.recycling_pct,
+                        billing_method: summary.job_report.billing_method,
+                        bill_personal_vehicles: summary.job_report.bill_personal_vehicles,
+                      }
+                    : null
+                }
+                onClose={() => setEditingBill(false)}
+                onSaved={() => loadSummary(summary.job_uuid)}
+              />
             )}
           </div>
 

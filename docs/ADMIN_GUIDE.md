@@ -143,6 +143,16 @@ reason. This never changes what the crew submitted - it records an override, and
 both numbers stay visible. The correction flows into whichever pay period the
 job falls in, and the payroll page shows it read-only.
 
+**Correcting the bill.** The Bill card has a **Correct bill** button: edit the
+line items, global discount and notes, and the job-report billing fields
+(billing method, M1 dumpster/recycling %, personal vehicles). It shows the new
+total against the old as you type. Write a reason and **Save & notify crew** -
+the corrected bill and report re-export to the Sheet, and each crew member on the
+job is emailed the total change and your reason. Untick the notify box to save
+without emailing. Unlike hours, the bill is edited in place (it is the office's
+invoice), so there is no separate override - the pre-edit total is captured for
+the email.
+
 **Initialing the job.** At the bottom, **Initial this job** is your sign-off.
 Tick all three - you reviewed the record, made any corrections, and confirmed
 the job's data landed in the Google Sheet (you look and tick; it is not

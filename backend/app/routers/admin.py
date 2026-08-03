@@ -18,6 +18,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
+from app.core.mailer import send_email
 from app.core.company import COMPANY_FIELDS, COMPANY_INFO_KEY, merge_company
 from app.db.models.admin_entry_status import AdminEntryStatus
 from app.db.models.admin_note import AdminNote
@@ -937,6 +938,224 @@ def upsert_entry_status(
         "job_uuid": job_uuid,
         "entry_status": _entry_status_json(row),
         "sheet_sweep": sweep_counts,
+        "notify": notify,
+    }
+
+
+# ---------------------------
+# Admin bill correction (2e). The office corrects the billing on a job - the
+# bill invoice (line items, discount, notes) and the job-report billing fields -
+# and the crew who worked it are emailed what changed. The bill is the office's
+# invoice, not crew-sacred like hours, so this edits in place (no override
+# layer); the pre-edit total is captured for the email. See docs ADR 0032 for
+# the sibling hours flow and the same best-effort, non-raising notify contract.
+# ---------------------------
+
+def _bill_line_total(items: List[Dict[str, Any]], global_discount: float) -> float:
+    """The bill total, computed exactly as the Job Summary shows it:
+    sum(qty * rate * (1 - line_discount)) then the global discount."""
+    subtotal = 0.0
+    for it in items or []:
+        try:
+            qty = float(it.get("qty") or 0)
+            rate = float(it.get("rate") or 0)
+            disc = float(it.get("discount") or 0)
+        except (TypeError, ValueError):
+            continue
+        subtotal += qty * rate * (1 - disc / 100.0)
+    return subtotal * (1 - (global_discount or 0.0) / 100.0)
+
+
+def _job_employee_recipients(db: Session, job_uuid: str) -> List[User]:
+    """The crew on this job who can be emailed: the user_ids on the job report's
+    employee hours, resolved to active roster rows with an address. A name with
+    no user_id cannot be mailed and is simply skipped."""
+    rep = (
+        db.query(JobReport.employee_hours_json)
+        .filter(JobReport.job_uuid == job_uuid)
+        .first()
+    )
+    ids: set = set()
+    if rep and rep[0]:
+        try:
+            for e in _json.loads(rep[0]) or []:
+                if isinstance(e, dict) and isinstance(e.get("user_id"), int):
+                    ids.add(e["user_id"])
+        except (ValueError, TypeError):
+            pass
+    if not ids:
+        return []
+    return db.query(User).filter(User.id.in_(ids)).all()
+
+
+class BillCorrectionRequest(BaseModel):
+    # The corrected invoice.
+    items: List[Dict[str, Any]]
+    global_discount: float = 0.0
+    notes: Optional[str] = None
+    # The corrected job-report billing fields. None = leave that field as-is,
+    # so the admin can correct the bill without touching the report or vice
+    # versa. Only sent when the report exists.
+    personal_vehicles: Optional[int] = None
+    dumpster_pct: Optional[int] = None
+    recycling_pct: Optional[int] = None
+    billing_method: Optional[str] = None
+    bill_personal_vehicles: Optional[bool] = None
+    # Required: it is the body of the email the crew receives.
+    reason: str
+    notify: bool = True
+
+
+def _bill_correction_email(
+    employee_name: str, job_name: str, before: float, after: float, reason: str
+) -> tuple:
+    first = employee_name.split(" ")[0] if employee_name else "there"
+    changed = abs(after - before) >= 0.005
+    total_line = (
+        f"The bill total changed from ${before:,.2f} to ${after:,.2f}.\n\n"
+        if changed
+        else "The bill total did not change.\n\n"
+    )
+    body = (
+        f"Hi {first},\n\n"
+        f"The billing on {job_name} was reviewed and corrected by the office.\n\n"
+        + total_line
+        + f"Reason: {reason}\n\n"
+        "If any of this looks wrong, reply to this email or talk to the office.\n\n"
+        "Mountaineer Moving\n"
+    )
+    return f"Billing correction for {job_name}", body
+
+
+@router.post("/bill-correction/{job_uuid}")
+def correct_bill(
+    job_uuid: str,
+    body: BillCorrectionRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="A reason is required - the crew is emailed it.",
+        )
+    if len(reason) > 2000:
+        raise HTTPException(status_code=400, detail="reason too long")
+
+    now = datetime.now(timezone.utc)
+
+    # ── Bill invoice ──
+    existing = db.query(JobBill).filter(JobBill.job_uuid == job_uuid).first()
+    before_total = _bill_line_total(
+        _json.loads(existing.items_json or "[]") if existing else [],
+        existing.global_discount if existing else 0.0,
+    )
+    after_total = _bill_line_total(body.items, body.global_discount)
+    if existing:
+        existing.items_json = _json.dumps(body.items)
+        existing.global_discount = body.global_discount
+        existing.notes = body.notes
+        existing.saved_by_id = admin.id
+        existing.saved_by_name = admin.name or admin.email
+        existing.updated_at = now
+        bill = existing
+    else:
+        bill = JobBill(
+            job_uuid=job_uuid,
+            items_json=_json.dumps(body.items),
+            global_discount=body.global_discount,
+            notes=body.notes,
+            saved_by_id=admin.id,
+            saved_by_name=admin.name or admin.email,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(bill)
+
+    # ── Job-report billing fields ──
+    report = db.query(JobReport).filter(JobReport.job_uuid == job_uuid).first()
+    report_changed = False
+    if report is not None:
+        if body.personal_vehicles is not None and report.personal_vehicles != body.personal_vehicles:
+            report.personal_vehicles = body.personal_vehicles
+            report_changed = True
+        if body.dumpster_pct is not None and report.dumpster_pct != body.dumpster_pct:
+            report.dumpster_pct = body.dumpster_pct
+            report_changed = True
+        if body.recycling_pct is not None and report.recycling_pct != body.recycling_pct:
+            report.recycling_pct = body.recycling_pct
+            report_changed = True
+        if body.billing_method is not None and report.billing_method != body.billing_method:
+            report.billing_method = body.billing_method
+            report_changed = True
+        if body.bill_personal_vehicles is not None and bool(report.bill_personal_vehicles) != body.bill_personal_vehicles:
+            report.bill_personal_vehicles = body.bill_personal_vehicles
+            report_changed = True
+
+    db.commit()
+    db.refresh(bill)
+
+    # ── Re-export the corrected records to the Sheet ──
+    try:
+        from app.routers.bill import _export_bill
+        _export_bill(db, bill)
+    except Exception as exc:
+        print(f"[bill-correction] bill export failed for {job_uuid}: {exc}")
+    if report is not None and report_changed:
+        try:
+            from app.routers.job_report import _export_report_to_sheets
+            _export_report_to_sheets(db, report)
+        except Exception as exc:
+            print(f"[bill-correction] report export failed for {job_uuid}: {exc}")
+
+    # ── Notify the job's crew ──
+    notify: Dict[str, Any] = {"sent": [], "failed": [], "email_unconfigured": False}
+    if body.notify:
+        if not os.getenv("POSTMARK_SERVER_TOKEN", "").strip() or not os.getenv("SMTP_FROM", "").strip():
+            notify["email_unconfigured"] = True
+        else:
+            job_name = (
+                db.query(func.max(Event.job_name))
+                .filter(Event.job_uuid == job_uuid)
+                .scalar()
+            ) or job_uuid[:8]
+            for user in _job_employee_recipients(db, job_uuid):
+                name = user.name or user.email
+                if not user.email:
+                    notify["failed"].append({
+                        "user_id": user.id, "name": name,
+                        "error": "no email address on the roster",
+                    })
+                    continue
+                subject, textbody = _bill_correction_email(
+                    name, job_name, before_total, after_total, reason,
+                )
+                try:
+                    send_email(to_email=user.email, subject=subject, text=textbody)
+                except Exception as exc:
+                    notify["failed"].append({"user_id": user.id, "name": name, "error": str(exc)})
+                    continue
+                notify["sent"].append({"user_id": user.id, "name": name})
+
+    return {
+        "job_uuid": job_uuid,
+        "bill": {
+            "items": _json.loads(bill.items_json or "[]"),
+            "global_discount": bill.global_discount or 0.0,
+            "notes": bill.notes,
+            "saved_by_name": bill.saved_by_name,
+            "updated_at": _iso(bill.updated_at),
+        },
+        "report_billing": None if report is None else {
+            "personal_vehicles": report.personal_vehicles,
+            "dumpster_pct": report.dumpster_pct,
+            "recycling_pct": report.recycling_pct,
+            "billing_method": report.billing_method,
+            "bill_personal_vehicles": bool(report.bill_personal_vehicles),
+        },
+        "before_total": round(before_total, 2),
+        "after_total": round(after_total, 2),
         "notify": notify,
     }
 
