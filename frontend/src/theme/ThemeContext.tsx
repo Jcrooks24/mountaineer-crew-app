@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import logoLight from "../assets/logo_light.png";
 import logoDark from "../assets/logo_dark.png";
@@ -381,7 +381,7 @@ export const DEFAULT_SETTINGS: ThemeSettings = {
   // Enterprise Dark is the app's default identity (the facelift). Existing
   // users keep whatever they already saved in localStorage; only new users and
   // anyone who never picked a theme land here. See ADR 0025.
-  themeId: "enterprise-dark",
+  themeId: "enterprise-light",
   brandOverride: null,
   brand2Override: null,
   textMode: "preset",
@@ -541,19 +541,32 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<ThemeSettings>(loadSettings);
+  // Did this device already have a saved theme when the app started? If so the
+  // user has a preference, and the admin-saved server theme must NOT clobber it.
+  // Captured before the first applySettings writes localStorage, so it is true
+  // first-run detection. Fixes "theme drops on navigation": a remount (error-
+  // boundary reload, service-worker update) re-fetched the server theme and
+  // overrode the user's choice every time.
+  const hadLocalTheme = useRef(localStorage.getItem(STORAGE_KEY) != null);
 
-  // On mount: fetch admin-saved theme from server and apply it for all users
+  // On mount: fetch the admin-saved theme from the server. It is the DEFAULT for
+  // a device with no local choice yet; a user's own saved theme wins. Either
+  // way the admin-managed global content (help texts, pin colors) always syncs.
   useEffect(() => {
     fetch(`${API}/api/config/theme`)
       .then((r) => r.ok ? r.json() : null)
       .then((serverSettings: Partial<ThemeSettings> | null) => {
         if (!serverSettings) return;
-        setSettings((prev) => ({
-          ...prev,
-          ...serverSettings,
-          pinColors: { ...DEFAULT_PIN_COLORS, ...(serverSettings.pinColors ?? {}) },
-          helpTexts: { ...DEFAULT_HELP_TEXTS, ...(serverSettings.helpTexts ?? {}) },
-        }));
+        setSettings((prev) => {
+          const globalContent = {
+            pinColors: { ...DEFAULT_PIN_COLORS, ...(serverSettings.pinColors ?? {}) },
+            helpTexts: { ...DEFAULT_HELP_TEXTS, ...(serverSettings.helpTexts ?? {}) },
+          };
+          // User already chose a theme on this device: keep it, sync only the
+          // global content. A new device adopts the admin theme as its start.
+          if (hadLocalTheme.current) return { ...prev, ...globalContent };
+          return { ...prev, ...serverSettings, ...globalContent };
+        });
       })
       .catch(() => { /* network unavailable - use localStorage fallback */ });
   }, []);

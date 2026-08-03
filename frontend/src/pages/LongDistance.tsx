@@ -137,18 +137,6 @@ export default function LongDistance() {
         </div>
       </div>
 
-      <div className="card" data-component="LdDocumentsSection">
-        <div className="microLabel" style={{ marginBottom: 10 }}>Documents</div>
-        <div className="col" style={{ gap: 8 }}>
-          <button onClick={() => setSection("docs")} style={{ textAlign: "left" }}>
-            <div style={{ fontWeight: 700 }}>View all LD documents</div>
-            <div className="small" style={{ color: "var(--muted)" }}>
-              Browse your RODS logs, Prior On-Duty statements, and Bills of Lading across every day and job.
-            </div>
-          </button>
-        </div>
-      </div>
-
       <div className="card" data-component="LdTralaExemption">
         <div className="microLabel" style={{ marginBottom: 10 }}>TRALA Rental-Truck Exemption - 82 FR 47306</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>

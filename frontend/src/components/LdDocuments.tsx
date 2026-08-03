@@ -71,7 +71,11 @@ export default function LdDocuments({ onOpenBol }: { onOpenBol: (bolId: string) 
   const shownRods = useMemo(() => [...rods].sort((a, b) => (b.log_date || "").localeCompare(a.log_date || "")), [rods]);
   const shownPods = useMemo(() => [...pods].filter((p) => !jf || p.job_name === jf).sort((a, b) => (b.statement_date || "").localeCompare(a.statement_date || "")), [pods, jf]);
 
-  const hrs = (n?: number) => `${(n ?? 0).toFixed(1)}h`;
+  // Coerce with Number(): the API can send `hours_last_24` as a string, and
+  // `??` only fills null/undefined - a string slips through and `.toFixed` blows
+  // up ("(n ?? 0).toFixed is not a function"). Number() + `|| 0` handles a
+  // string, null, undefined, or NaN.
+  const hrs = (n?: number | string | null) => `${(Number(n) || 0).toFixed(1)}h`;
 
   return (
     <div className="col" style={{ gap: 12 }}>
