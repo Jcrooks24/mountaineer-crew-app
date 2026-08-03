@@ -1,0 +1,388 @@
+/**
+ * Job setup capture panel - ADR 0034, C1.2.
+ *
+ * Appears on the hub once a job is selected. Captures the job header: crew
+ * (pre-filled from the calendar invitees, then confirm/add), vehicle unit(s),
+ * local/long-distance, name/date, origin/destination/stops, and job type. Saves
+ * to the offline-safe job-setup store. Nothing else reads the header yet (that
+ * is C1.3); this is where the office fills it in.
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { apiFetch, ApiError } from "../api/client";
+import RosterPicker from "./RosterPicker";
+import { useJobTypes } from "../lib/jobTypesStore";
+import { getUnitsCached, refreshUnits, type VehicleUnit } from "../lib/vehicleUnits";
+import {
+  loadJobSetup,
+  saveJobSetup,
+  type CrewMember,
+  type JobSetupData,
+} from "../lib/jobSetupStore";
+
+type Meta = {
+  jobName: string;
+  jobDate: string;
+  source: "calendar" | "manual" | null;
+  calendarEventId: string | null;
+};
+
+type EventCrew = {
+  ok: boolean;
+  matched: { user_id: number; name: string; email: string }[];
+  unmatched: string[];
+};
+
+export default function JobSetupPanel({
+  jobUuid,
+  meta,
+}: {
+  jobUuid: string;
+  meta: Meta;
+}) {
+  const jobTypes = useJobTypes();
+  const [units, setUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
+
+  const [loaded, setLoaded] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [existing, setExisting] = useState<JobSetupData | null>(null);
+
+  // Form state.
+  const [crew, setCrew] = useState<CrewMember[]>([]);
+  const [unmatched, setUnmatched] = useState<string[]>([]);
+  const [suggested, setSuggested] = useState<{ user_id: number; name: string }[]>([]);
+  const [vehicleUnitNames, setVehicleUnitNames] = useState<string[]>([]);
+  const [isLD, setIsLD] = useState(false);
+  const [jobName, setJobName] = useState("");
+  const [jobDate, setJobDate] = useState("");
+  const [origin, setOrigin] = useState("");
+  const [destination, setDestination] = useState("");
+  const [stops, setStops] = useState<string[]>([]);
+  const [tags, setTags] = useState<string[]>([]);
+  const [notes, setNotes] = useState("");
+  const [locked, setLocked] = useState(false);
+
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<"idle" | "saved" | "queued">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [lockedConflict, setLockedConflict] = useState(false);
+
+  // Hydrate the form from an existing header, or seed a fresh one from the
+  // job meta + calendar invitees.
+  const hydrate = useCallback((h: JobSetupData | null, evc: EventCrew | null) => {
+    if (h) {
+      setCrew(h.crew || []);
+      setVehicleUnitNames(h.vehicle_unit_names || []);
+      setIsLD(!!h.is_long_distance);
+      setJobName(h.job_name || meta.jobName || "");
+      setJobDate(h.job_date || meta.jobDate || "");
+      setOrigin(h.origin || "");
+      setDestination(h.destination || "");
+      setStops(h.stops || []);
+      setTags(h.job_type_tags || []);
+      setNotes(h.notes || "");
+      setLocked(!!h.locked);
+    } else {
+      // Fresh job: pre-fill crew from matched invitees (unconfirmed until the
+      // crew tick them), and name/date from the selected job.
+      setCrew(
+        (evc?.matched || []).map((m) => ({
+          user_id: m.user_id,
+          name: m.name,
+          source: "invitee" as const,
+          confirmed: false,
+        })),
+      );
+      setJobName(meta.jobName || "");
+      setJobDate(meta.jobDate || "");
+    }
+    if (evc) {
+      setUnmatched(evc.unmatched || []);
+      setSuggested((evc.matched || []).map((m) => ({ user_id: m.user_id, name: m.name })));
+    }
+  }, [meta.jobName, meta.jobDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setStatus("idle");
+    setErr(null);
+    setLockedConflict(false);
+    refreshUnits().then((u) => { if (!cancelled) setUnits(u); }).catch(() => {});
+
+    (async () => {
+      const h = await loadJobSetup(jobUuid);
+      let evc: EventCrew | null = null;
+      // Only ask the calendar for invitees when there is no saved crew yet -
+      // once the header has crew, that is the source of truth.
+      if ((!h || !(h.crew && h.crew.length)) && meta.source === "calendar" && meta.calendarEventId) {
+        try {
+          evc = await apiFetch<EventCrew>(
+            `/api/calendar/event-crew?calendar_event_id=${encodeURIComponent(meta.calendarEventId)}`,
+          );
+        } catch {
+          evc = null;
+        }
+      }
+      if (cancelled) return;
+      setExisting(h);
+      hydrate(h, evc);
+      // Open the form automatically the first time a job has no header.
+      setOpen(!h);
+      setLoaded(true);
+    })();
+
+    return () => { cancelled = true; };
+  }, [jobUuid, meta.source, meta.calendarEventId, hydrate]);
+
+  const toggleUnit = (name: string) =>
+    setVehicleUnitNames((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
+    );
+  const toggleTag = (t: string) =>
+    setTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+
+  const setCrewConfirmed = (i: number, v: boolean) =>
+    setCrew((prev) => prev.map((c, j) => (j === i ? { ...c, confirmed: v } : c)));
+  const removeCrew = (i: number) => setCrew((prev) => prev.filter((_, j) => j !== i));
+  const addCrew = (userId: number | null, name: string) => {
+    if (userId == null) return;
+    setCrew((prev) =>
+      prev.some((c) => c.user_id === userId)
+        ? prev
+        : [...prev, { user_id: userId, name, source: "added", confirmed: true }],
+    );
+  };
+  const addSuggested = () =>
+    setCrew((prev) => {
+      const have = new Set(prev.map((c) => c.user_id));
+      const add = suggested
+        .filter((s) => !have.has(s.user_id))
+        .map((s) => ({ user_id: s.user_id, name: s.name, source: "invitee" as const, confirmed: true }));
+      return [...prev, ...add];
+    });
+
+  const body = useMemo<JobSetupData>(() => ({
+    job_name: jobName.trim() || null,
+    job_date: jobDate.trim() || null,
+    source: meta.source,
+    calendar_event_id: meta.calendarEventId,
+    is_long_distance: isLD,
+    job_type_tags: tags,
+    vehicle_unit_names: vehicleUnitNames,
+    crew,
+    origin: origin.trim() || null,
+    destination: destination.trim() || null,
+    stops: stops.map((s) => s.trim()).filter(Boolean),
+    notes: notes.trim() || null,
+    locked,
+  }), [jobName, jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, crew, origin, destination, stops, notes, locked]);
+
+  const doSave = async (override: boolean) => {
+    setBusy(true);
+    setErr(null);
+    setLockedConflict(false);
+    try {
+      const r = await saveJobSetup(jobUuid, { ...body, override });
+      setStatus(r.synced ? "saved" : "queued");
+      if (r.setup) { setExisting(r.setup); setLocked(!!r.setup.locked); }
+      if (r.synced) setOpen(false);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setLockedConflict(true);
+        setErr("This job's setup is locked. Unlock it to save your changes.");
+      } else {
+        setErr(e instanceof ApiError ? e.message : "Could not save. Try again.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!loaded) {
+    return (
+      <div className="card">
+        <div className="small" style={{ color: "var(--muted)" }}>Loading job setup…</div>
+      </div>
+    );
+  }
+
+  const confirmedCount = crew.filter((c) => c.confirmed).length;
+  const summary = existing
+    ? [
+        `${confirmedCount || crew.length} crew`,
+        vehicleUnitNames.length ? vehicleUnitNames.join(", ") : null,
+        isLD ? "Long-distance" : "Local",
+      ].filter(Boolean).join(" · ")
+    : "Not set up yet";
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div>
+          <div className="microLabel" style={{ marginBottom: 2 }}>Set up job</div>
+          <div className="small" style={{ color: "var(--muted)" }}>{summary}</div>
+        </div>
+        <div className="row" style={{ gap: 8, alignItems: "center" }}>
+          {status === "saved" && <span className="small" style={{ color: "var(--ok)" }}>Saved</span>}
+          {status === "queued" && <span className="small" style={{ color: "var(--warn, #e0a800)" }}>Saved offline</span>}
+          {existing?.locked && <span className="chip" style={{ fontSize: 10 }}>Locked</span>}
+          <button type="button" onClick={() => setOpen((o) => !o)} style={{ fontSize: 12 }}>
+            {open ? "Close" : existing ? "Edit" : "Set up"}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="col" style={{ gap: 14, marginTop: 12 }}>
+          {/* Crew */}
+          <div className="col" style={{ gap: 6 }}>
+            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Crew</span>
+            {crew.length === 0 && (
+              <span className="small" style={{ color: "var(--muted)" }}>No crew yet. Add them below.</span>
+            )}
+            {crew.map((c, i) => (
+              <div key={`${c.user_id ?? c.name}-${i}`} className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, padding: "4px 0" }}>
+                <label className="row" style={{ gap: 8, alignItems: "center", minWidth: 0 }}>
+                  <input type="checkbox" checked={c.confirmed} onChange={(e) => setCrewConfirmed(i, e.target.checked)} />
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{c.name || "(unnamed)"}</span>
+                  {c.source === "invitee" && (
+                    <span className="chip" style={{ fontSize: 10, color: "var(--muted)" }}>invited</span>
+                  )}
+                </label>
+                <button type="button" onClick={() => removeCrew(i)} style={{ fontSize: 12, color: "var(--danger)" }}>Remove</button>
+              </div>
+            ))}
+            {suggested.some((s) => !crew.some((c) => c.user_id === s.user_id)) && (
+              <button type="button" onClick={addSuggested} style={{ fontSize: 12, alignSelf: "flex-start" }}>
+                + Add all invited crew
+              </button>
+            )}
+            <RosterPicker userId={null} onChange={addCrew} />
+            {unmatched.length > 0 && (
+              <span className="small" style={{ color: "var(--muted)" }}>
+                {unmatched.length} invited email{unmatched.length === 1 ? "" : "s"} matched nobody on the roster: {unmatched.join(", ")}
+              </span>
+            )}
+          </div>
+
+          {/* Local / long-distance */}
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={isLD} onChange={(e) => setIsLD(e.target.checked)} />
+            <span className="small"><strong>Long-distance job</strong> (unticked = local)</span>
+          </label>
+
+          {/* Vehicle units */}
+          <div className="col" style={{ gap: 6 }}>
+            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Vehicle unit(s)</span>
+            <div className="row wrap" style={{ gap: 8 }}>
+              {units.length === 0 && <span className="small" style={{ color: "var(--muted)" }}>No units configured.</span>}
+              {units.map((u) => {
+                const on = vehicleUnitNames.includes(u.name);
+                return (
+                  <button
+                    key={u.name}
+                    type="button"
+                    onClick={() => toggleUnit(u.name)}
+                    style={{
+                      padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
+                      border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+                      background: on ? "var(--brand)" : "transparent",
+                      color: on ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: on ? 700 : 400,
+                    }}
+                  >
+                    {u.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Job type */}
+          <div className="col" style={{ gap: 6 }}>
+            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Job type</span>
+            <div className="row wrap" style={{ gap: 8 }}>
+              {jobTypes.length === 0 && <span className="small" style={{ color: "var(--muted)" }}>No job types configured.</span>}
+              {jobTypes.map((t) => {
+                const on = tags.includes(t);
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => toggleTag(t)}
+                    style={{
+                      padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
+                      border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+                      background: on ? "var(--brand)" : "transparent",
+                      color: on ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: on ? 700 : 400,
+                    }}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Name / date */}
+          <div className="row wrap" style={{ gap: 10 }}>
+            <label className="col" style={{ gap: 2, flex: "1 1 160px" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Job name</span>
+              <input value={jobName} onChange={(e) => setJobName(e.target.value)} />
+            </label>
+            <label className="col" style={{ gap: 2, flex: "0 0 160px" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Date</span>
+              <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
+            </label>
+          </div>
+
+          {/* Addresses */}
+          <div className="col" style={{ gap: 6 }}>
+            <label className="col" style={{ gap: 2 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Origin</span>
+              <input value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="Pickup address (blank OK)" />
+            </label>
+            {stops.map((s, i) => (
+              <div key={i} className="row" style={{ gap: 6, alignItems: "flex-end" }}>
+                <label className="col" style={{ gap: 2, flex: 1 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Stop {i + 1}</span>
+                  <input value={s} onChange={(e) => setStops((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))} />
+                </label>
+                <button type="button" onClick={() => setStops((prev) => prev.filter((_, j) => j !== i))} style={{ fontSize: 12, color: "var(--danger)" }}>Remove</button>
+              </div>
+            ))}
+            <button type="button" onClick={() => setStops((prev) => [...prev, ""])} style={{ fontSize: 12, alignSelf: "flex-start" }}>+ Add stop</button>
+            <label className="col" style={{ gap: 2 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Destination</span>
+              <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Delivery address (blank OK)" />
+            </label>
+          </div>
+
+          {/* Notes */}
+          <label className="col" style={{ gap: 2 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Notes</span>
+            <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: "100%", resize: "vertical" }} />
+          </label>
+
+          {/* Lock (C2) */}
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} />
+            <span className="small">Lock this setup so it is not overwritten by accident</span>
+          </label>
+
+          {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
+
+          <div className="row" style={{ gap: 8 }}>
+            <button type="button" className="btnPrimary" onClick={() => doSave(false)} disabled={busy}>
+              {busy ? "Saving…" : "Save job setup"}
+            </button>
+            {lockedConflict && (
+              <button type="button" onClick={() => { setLocked(false); doSave(true); }} disabled={busy}>
+                Unlock and save
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

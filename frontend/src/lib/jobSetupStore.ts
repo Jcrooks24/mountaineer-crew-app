@@ -1,0 +1,146 @@
+/**
+ * Job setup (header) store - ADR 0034, C1.2.
+ *
+ * Offline-safe like the other outboxes: the header is cached to localStorage so
+ * it displays offline, and a save that can't reach the server is queued and
+ * retried on reconnect (drainable from App.tsx). A save the server actively
+ * REJECTS (e.g. a locked header, 409) is surfaced, not queued - retrying it
+ * forever would never succeed. Keyed by job_uuid; one header per job.
+ */
+import { apiFetch, ApiError } from "../api/client";
+
+export type CrewMember = {
+  user_id: number | null;
+  name: string;
+  source: "invitee" | "added";
+  confirmed: boolean;
+};
+
+export type JobSetupData = {
+  job_name: string | null;
+  job_date: string | null;
+  source: string | null;
+  calendar_event_id: string | null;
+  is_long_distance: boolean;
+  job_type_tags: string[];
+  vehicle_unit_names: string[];
+  crew: CrewMember[];
+  origin: string | null;
+  destination: string | null;
+  stops: string[];
+  notes: string | null;
+  locked: boolean;
+  updated_by_name?: string | null;
+  updated_at?: string | null;
+};
+
+const CACHE_KEY = "crew_job_setup_cache_v1";
+const QUEUE_KEY = "crew_job_setup_queue_v1";
+
+type Bag = Record<string, JobSetupData>;
+
+function loadBag(key: string): Bag {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function saveBag(key: string, bag: Bag) {
+  try {
+    localStorage.setItem(key, JSON.stringify(bag));
+  } catch {
+    /* quota - the retry just won't persist across reload */
+  }
+}
+
+export function getCachedJobSetup(jobUuid: string): JobSetupData | null {
+  return loadBag(CACHE_KEY)[jobUuid] ?? null;
+}
+function cacheJobSetup(jobUuid: string, data: JobSetupData) {
+  const bag = loadBag(CACHE_KEY);
+  bag[jobUuid] = data;
+  saveBag(CACHE_KEY, bag);
+}
+function enqueue(jobUuid: string, data: JobSetupData) {
+  const bag = loadBag(QUEUE_KEY);
+  bag[jobUuid] = data;
+  saveBag(QUEUE_KEY, bag);
+}
+function dequeue(jobUuid: string) {
+  const bag = loadBag(QUEUE_KEY);
+  if (jobUuid in bag) {
+    delete bag[jobUuid];
+    saveBag(QUEUE_KEY, bag);
+  }
+}
+
+/** Load a job's header. Cached-first so an offline open still shows the last
+ *  known header; a successful fetch refreshes the cache. */
+export async function loadJobSetup(jobUuid: string): Promise<JobSetupData | null> {
+  try {
+    const r = await apiFetch<{ setup: JobSetupData | null }>(
+      `/api/job-setup/${encodeURIComponent(jobUuid)}`,
+    );
+    if (r.setup) cacheJobSetup(jobUuid, r.setup);
+    return r.setup ?? getCachedJobSetup(jobUuid);
+  } catch {
+    return getCachedJobSetup(jobUuid);
+  }
+}
+
+/** Save a job's header. Returns synced:false and queues on a network failure
+ *  (never loses the edit); rethrows an ApiError so the UI can show a real
+ *  rejection (a locked header, a validation error) instead of pretending it
+ *  saved. */
+export async function saveJobSetup(
+  jobUuid: string,
+  body: JobSetupData & { override?: boolean },
+): Promise<{ synced: boolean; setup?: JobSetupData }> {
+  cacheJobSetup(jobUuid, body); // optimistic - the edit shows immediately
+  try {
+    const r = await apiFetch<{ setup: JobSetupData }>(
+      `/api/job-setup/${encodeURIComponent(jobUuid)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+    dequeue(jobUuid);
+    if (r.setup) cacheJobSetup(jobUuid, r.setup);
+    return { synced: true, setup: r.setup };
+  } catch (e) {
+    if (e instanceof ApiError) {
+      // The server responded and refused (locked / invalid). Do not queue a
+      // write that will keep being rejected; let the caller surface it.
+      throw e;
+    }
+    enqueue(jobUuid, body); // network down - retry on reconnect
+    return { synced: false };
+  }
+}
+
+/** Drain queued header saves. Call on reconnect / app boot. A server rejection
+ *  (ApiError) drops the item - it will never succeed; only network failures are
+ *  kept for another try. */
+export async function drainJobSetups(): Promise<void> {
+  const bag = loadBag(QUEUE_KEY);
+  const uuids = Object.keys(bag);
+  if (!uuids.length) return;
+  for (const jobUuid of uuids) {
+    try {
+      const r = await apiFetch<{ setup: JobSetupData }>(
+        `/api/job-setup/${encodeURIComponent(jobUuid)}`,
+        { method: "PUT", body: JSON.stringify(bag[jobUuid]) },
+      );
+      if (r.setup) cacheJobSetup(jobUuid, r.setup);
+      dequeue(jobUuid);
+    } catch (e) {
+      if (e instanceof ApiError) dequeue(jobUuid); // rejected - stop retrying
+      // else network - leave it queued
+    }
+  }
+}
+
+export function pendingJobSetups(): number {
+  return Object.keys(loadBag(QUEUE_KEY)).length;
+}
