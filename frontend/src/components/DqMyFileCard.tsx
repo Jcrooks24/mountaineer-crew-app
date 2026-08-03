@@ -7,9 +7,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadMyDqFile, uploadMyDq, type DqFile, type DqFileItem } from "../lib/dqStore";
 import DqCertViolationsForm from "./DqCertViolationsForm";
+import DqEmploymentAppForm from "./DqEmploymentAppForm";
 
-// DQ types with an in-app fillable form (C4.2). Others are upload-only for now.
-const FILLABLE = new Set<string>(["annual_cert_violations"]);
+// Driver-audience DQ types with an in-app fillable form. Others are upload-only.
+const FILLABLE = new Set<string>(["annual_cert_violations", "employment_application"]);
 
 export default function DqMyFileCard() {
   const [file, setFile] = useState<DqFile | null>(null);
@@ -44,6 +45,17 @@ export default function DqMyFileCard() {
     return (
       <div className="card">
         <DqCertViolationsForm
+          driverName={file.name || ""}
+          onDone={() => { setFilling(null); refresh(); }}
+          onCancel={() => setFilling(null)}
+        />
+      </div>
+    );
+  }
+  if (filling === "employment_application") {
+    return (
+      <div className="card">
+        <DqEmploymentAppForm
           driverName={file.name || ""}
           onDone={() => { setFilling(null); refresh(); }}
           onCancel={() => setFilling(null)}
