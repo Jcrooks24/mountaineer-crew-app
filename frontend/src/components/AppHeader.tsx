@@ -40,16 +40,27 @@ export default function AppHeader({
             onClick={onBack}
             aria-label="Back"
             style={{
-              background: "none", border: "none", color: "var(--muted)", cursor: "pointer",
-              padding: "8px 6px", display: "inline-flex", alignItems: "center", fontSize: 20, lineHeight: 1,
+              background: "none", border: "none", color: "var(--brand)", cursor: "pointer",
+              padding: "8px 8px 8px 2px", display: "inline-flex", alignItems: "center", gap: 2,
+              fontSize: 14, fontWeight: 600, lineHeight: 1, flexShrink: 0,
             }}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            Back
           </button>
         )}
         <div style={{ minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-          <span style={{ fontWeight: 600, fontSize: "0.875rem" }}>Mountaineer Moving</span>
-          {title && <span style={{ color: "var(--muted)", fontSize: "0.875rem" }}> · {title}</span>}
+          {/* On a back-able (nested) screen the screen name is the useful label;
+              the company wordmark stays only on top-level tabs where there's no
+              back button, so nested headers read "< Back  ·  Reimbursement". */}
+          {onBack
+            ? (title && <span style={{ fontWeight: 600, fontSize: "0.9375rem" }}>{title}</span>)
+            : (
+              <>
+                <span style={{ fontWeight: 600, fontSize: "0.875rem" }}>Mountaineer Moving</span>
+                {title && <span style={{ color: "var(--muted)", fontSize: "0.875rem" }}> · {title}</span>}
+              </>
+            )}
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
