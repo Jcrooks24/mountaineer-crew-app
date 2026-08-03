@@ -224,6 +224,16 @@ def _src_off_job(db: Session) -> List[Dict[str, Any]]:
     } for r in rows if r.entry_uuid]
 
 
+def _src_bug_reports(db: Session) -> List[Dict[str, Any]]:
+    from app.db.models.bug_report import BugReport
+    rows = db.query(BugReport).order_by(BugReport.created_at.desc()).all()
+    return [{
+        "id": r.bug_uuid,
+        "label": f"{r.submitted_by_name or 'unknown'} ({r.occurred_date or ''})".strip(" ()"),
+        "created_at": _iso(r.created_at),
+    } for r in rows if r.bug_uuid]
+
+
 def _src_availability(db: Session) -> List[Dict[str, Any]]:
     """Keyed by (user_name, window_start) because that is what the tab holds -
     one row per person per 14-day window, not one per day."""
@@ -378,6 +388,11 @@ def _re_off_job(db: Session, ref: Any) -> None:
         _export(row)
 
 
+def _re_bug_report(db: Session, ref: Any) -> None:
+    from app.integrations.sheets_export import schedule_bug_report_export
+    schedule_bug_report_export(str(ref))
+
+
 def _re_availability(db: Session, ref: Any) -> None:
     from app.integrations.sheets_export import schedule_availability_export
     if isinstance(ref, dict) and ref.get("user_id") is not None:
@@ -447,6 +462,9 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
     {"key": "off_job_hours", "label": "Off-job hours", "env": "SHEETS_OFF_JOB_TAB",
      "default": "OffJobHours", "key_cols": ["entry_uuid"],
      "source": _src_off_job, "reexport": _re_off_job},
+    {"key": "bug_reports", "label": "Bug reports", "env": "SHEETS_BUGS_TAB",
+     "default": "Bugs", "key_cols": ["bug_uuid"],
+     "source": _src_bug_reports, "reexport": _re_bug_report},
 ]
 
 

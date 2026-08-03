@@ -59,4 +59,5 @@ export const TileIcons = {
   clock: () => (<svg {...S}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>),
   road: () => (<svg {...S}><path d="M6 21 8 3M18 21 16 3" /><path d="M12 5v3M12 11v3M12 17v3" /></svg>),
   gear: () => (<svg {...S}><circle cx="12" cy="12" r="3.2" /><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" /></svg>),
+  bug: () => (<svg {...S}><rect x="8" y="7" width="8" height="12" rx="4" /><path d="M9 5a3 3 0 0 1 6 0M12 7v12M3 12h5M16 12h5M4 8l4 2M20 8l-4 2M4 17l4-2M20 17l-4-2" /></svg>),
 };

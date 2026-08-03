@@ -2668,6 +2668,76 @@ def schedule_incident_export(incident_uuid: str) -> None:
     _EXPORT_POOL.submit(_incident_export_worker, incident_uuid)
 
 
+# ── Bug reports ───────────────────────────────────────────────────────────────
+
+BUG_REPORT_HEADERS = [
+    "bug_uuid", "occurred_date", "submitted_by", "description", "screenshots", "created_at",
+]
+
+
+def export_bug_report_to_sheets(db: Session, bug: Dict[str, Any]) -> int:
+    """Replace-style export: one row per bug_uuid on the Bugs tab, which the
+    nightly crew-feedback email reads. A re-submit (e.g. screenshots that
+    finished uploading after the first POST) overwrites in place."""
+    tab = os.getenv("SHEETS_BUGS_TAB", "Bugs").strip() or "Bugs"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = bug.get("bug_uuid") or ""
+    if not uuid:
+        return 0
+    svc = _get_sheets_svc(db)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, BUG_REPORT_HEADERS)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "bug_uuid", uuid)
+    urls = bug.get("screenshot_urls") or []
+    row = {
+        "bug_uuid": uuid,
+        "occurred_date": bug.get("occurred_date") or "",
+        "submitted_by": bug.get("submitted_by_name") or "",
+        "description": bug.get("description") or "",
+        "screenshots": ", ".join(u for u in urls if isinstance(u, str) and u),
+        "created_at": bug.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
+def _build_bug_report_payload(db: Session, bug_uuid: str) -> Optional[Dict[str, Any]]:
+    from app.db.models.bug_report import BugReport  # local import to avoid cycles
+
+    row = db.query(BugReport).filter(BugReport.bug_uuid == bug_uuid).first()
+    if row is None:
+        return None
+    try:
+        urls = json.loads(row.screenshot_urls or "[]")
+    except (ValueError, TypeError):
+        urls = []
+    return {
+        "bug_uuid": row.bug_uuid,
+        "occurred_date": row.occurred_date or "",
+        "submitted_by_name": row.submitted_by_name or "",
+        "description": row.description or "",
+        "screenshot_urls": [u for u in urls if isinstance(u, str)],
+        "created_at": _iso(row.created_at),
+    }
+
+
+def schedule_bug_report_export(bug_uuid: str) -> None:
+    """Re-export one bug report to the Bugs tab. Low-frequency (one per submit),
+    replace-style, so a plain background fire is enough - no coalescer needed."""
+    if not bug_uuid:
+        return
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        payload = _build_bug_report_payload(db, bug_uuid)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+    if payload:
+        run_export_in_background(export_bug_report_to_sheets, payload)
+
+
 def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
     """Re-read one BOL from the DB into the export shape export_bol_to_sheets
     expects. The worker calls this when it runs, so a coalesced export always
@@ -3287,6 +3357,7 @@ SHEET_SYNC_REGISTRY = [
     {"key": "reimbursements",    "label": "Reimbursements",      "env": "SHEETS_REIMBURSEMENTS_TAB",     "default": "Reimbursements",    "fn": "export_reimbursement_to_sheets"},
     {"key": "availability",      "label": "Availability",        "env": "SHEETS_AVAILABILITY_TAB",       "default": "Availability",      "fn": "export_availability_window_to_sheets"},
     {"key": "off_job_hours",     "label": "Off-job hours",       "env": "SHEETS_OFF_JOB_TAB",            "default": "OffJobHours",       "fn": "export_off_job_to_sheets"},
+    {"key": "bug_reports",       "label": "Bug reports",         "env": "SHEETS_BUGS_TAB",               "default": "Bugs",              "fn": "export_bug_report_to_sheets"},
 ]
 
 

@@ -8,6 +8,7 @@ import ActualInventory from "./components/ActualInventory";
 import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport";
 import { drainIncidents } from "./lib/incidentStore";
 import { drainOffJob } from "./lib/offJobStore";
+import { drainBugReports } from "./lib/bugReportStore";
 import { drainAll as drainJobInventory } from "./lib/jobInventoryQueue";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
@@ -1821,12 +1822,13 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainPendingPhotos(); void drainJobInventory(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainPendingPhotos(); void drainJobInventory(); };
     const onOffline = () => setIsOnline(false);
     // Flush any incidents + off-job hours + un-uploaded photos queued while
     // offline on this mount too.
     drainIncidents();
     drainOffJob();
+    void drainBugReports();
     void drainPendingPhotos();
     // Inventory adds queued offline: drained here rather than only inside
     // ActualInventory, because that component no longer mounts on local jobs.
