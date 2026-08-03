@@ -35,3 +35,16 @@ def get_company_info(db: Session = Depends(get_db)):
     row = db.query(SystemConfig).filter(SystemConfig.key == COMPANY_INFO_KEY).first()
     stored = json.loads(row.value) if row and row.value else {}
     return merge_company(stored)
+
+
+@router.get("/vehicle-units")
+def get_vehicle_units(db: Session = Depends(get_db)):
+    """Fleet units + their weight/dimension data (dry weight, GVWR, dims, axle
+    capacities). Public so DVIR, BOLs, and the inventory weight flags can read it
+    without an admin token. Returns the seeded default fleet when nothing is set."""
+    from app.core.vehicle_units import VEHICLE_UNITS_KEY, normalize_units, default_units
+
+    row = db.query(SystemConfig).filter(SystemConfig.key == VEHICLE_UNITS_KEY).first()
+    if not row or not row.value:
+        return {"units": default_units()}
+    return {"units": normalize_units(json.loads(row.value))}

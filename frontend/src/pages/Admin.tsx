@@ -2657,6 +2657,7 @@ function SettingsTab({
         onClick={onOpenAdvanced}
       />
       <CompanyInfoCard />
+      <VehicleUnitsCard />
       <DVIRUnitsCard />
       <EmployeeTagsManagerCard />
       <JobTypesManagerCard />
@@ -5245,6 +5246,113 @@ function CompanyInfoCard() {
       <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
         {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
         <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save company info"}</button>
+      </div>
+    </div>
+  );
+}
+
+type VehicleUnit = {
+  name: string;
+  dry_weight_lbs: number | null;
+  gvwr_lbs: number | null;
+  length_ft: number | null;
+  width_ft: number | null;
+  height_ft: number | null;
+  axle_capacities_lbs: number[];
+  notes?: string;
+};
+
+function VehicleUnitsCard() {
+  const [units, setUnits] = useState<VehicleUnit[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ units: VehicleUnit[] }>("/api/config/vehicle-units")
+      .then((r) => setUnits(r.units || []))
+      .catch(() => setErr("Failed to load vehicle units"));
+  }, []);
+
+  const numVal = (v: string): number | null => {
+    const n = Number(v);
+    return v.trim() === "" || !Number.isFinite(n) ? null : n;
+  };
+  function update(i: number, patch: Partial<VehicleUnit>) {
+    setUnits((prev) => prev.map((u, idx) => (idx === i ? { ...u, ...patch } : u)));
+    setSaved(false);
+  }
+  function addUnit() {
+    setUnits((prev) => [...prev, {
+      name: "", dry_weight_lbs: null, gvwr_lbs: null,
+      length_ft: null, width_ft: null, height_ft: null, axle_capacities_lbs: [],
+    }]);
+    setSaved(false);
+  }
+  function removeUnit(i: number) {
+    setUnits((prev) => prev.filter((_, idx) => idx !== i));
+    setSaved(false);
+  }
+  async function save() {
+    const cleaned = units.filter((u) => u.name.trim());
+    if (cleaned.length === 0) { setErr("Add at least one named unit"); return; }
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch("/api/admin/config/vehicle-units", { method: "PUT", body: JSON.stringify({ units: cleaned }) });
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally { setBusy(false); }
+  }
+
+  const numInput = { width: "100%", padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" as const };
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>Vehicle Units (DOT weight)</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Each truck's empty (dry) weight, GVWR, dimensions, and per-axle capacities.
+        Feeds the DVIR/BOL vehicle info and the inventory weight-capacity flags.
+        Payload capacity = GVWR minus dry weight.
+      </div>
+
+      <div className="col" style={{ gap: 14 }}>
+        {units.map((u, i) => (
+          <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <input value={u.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="Unit name / number (e.g. 26INT)" style={{ ...numInput, fontWeight: 700, flex: "1 1 auto" }} />
+              <button onClick={() => removeUnit(i)} style={{ color: "var(--danger)", background: "none", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Remove</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">Dry wt (lb)</span><input type="number" value={u.dry_weight_lbs ?? ""} onChange={(e) => update(i, { dry_weight_lbs: numVal(e.target.value) })} style={numInput} /></label>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">GVWR (lb)</span><input type="number" value={u.gvwr_lbs ?? ""} onChange={(e) => update(i, { gvwr_lbs: numVal(e.target.value) })} style={numInput} /></label>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">Length (ft)</span><input type="number" value={u.length_ft ?? ""} onChange={(e) => update(i, { length_ft: numVal(e.target.value) })} style={numInput} /></label>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">Width (ft)</span><input type="number" value={u.width_ft ?? ""} onChange={(e) => update(i, { width_ft: numVal(e.target.value) })} style={numInput} /></label>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">Height (ft)</span><input type="number" value={u.height_ft ?? ""} onChange={(e) => update(i, { height_ft: numVal(e.target.value) })} style={numInput} /></label>
+            </div>
+            <label className="col" style={{ gap: 2, marginTop: 8 }}>
+              <span className="microLabel">Axle capacities (lb, comma-separated)</span>
+              <input
+                value={u.axle_capacities_lbs.join(", ")}
+                onChange={(e) => update(i, { axle_capacities_lbs: e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0) })}
+                placeholder="e.g. 12000, 20000"
+                style={numInput}
+              />
+            </label>
+            {u.gvwr_lbs != null && u.dry_weight_lbs != null && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                Payload capacity: <span className="mono" style={{ color: "var(--text)", fontWeight: 600 }}>{(u.gvwr_lbs - u.dry_weight_lbs).toLocaleString()} lb</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="row" style={{ gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <button onClick={addUnit}>+ Add unit</button>
+        <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save units"}</button>
+        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved</span>}
+        {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
       </div>
     </div>
   );

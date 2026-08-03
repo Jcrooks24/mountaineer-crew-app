@@ -295,6 +295,47 @@ def set_dvir_units(
 
 
 # ---------------------------
+# Vehicle-unit fleet registry (weight + dims for DOT compliance)
+# ---------------------------
+
+class VehicleUnitIn(BaseModel):
+    name: str
+    dry_weight_lbs: Optional[float] = None
+    gvwr_lbs: Optional[float] = None
+    length_ft: Optional[float] = None
+    width_ft: Optional[float] = None
+    height_ft: Optional[float] = None
+    axle_capacities_lbs: List[float] = []
+    notes: Optional[str] = None
+
+
+class VehicleUnitsRequest(BaseModel):
+    units: List[VehicleUnitIn]
+
+
+@router.put("/config/vehicle-units", status_code=204)
+def set_vehicle_units(
+    payload: VehicleUnitsRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Admin write for the fleet registry. Read is public via
+    GET /api/config/vehicle-units so field screens (DVIR, BOL, weight flags)
+    don't need an admin token."""
+    from app.core.vehicle_units import VEHICLE_UNITS_KEY, normalize_units
+
+    units = normalize_units([u.model_dump() for u in payload.units])
+    if not units:
+        raise HTTPException(status_code=400, detail="At least one named unit is required")
+    row = db.query(SystemConfig).filter(SystemConfig.key == VEHICLE_UNITS_KEY).first()
+    if row:
+        row.value = _json.dumps(units)
+    else:
+        db.add(SystemConfig(key=VEHICLE_UNITS_KEY, value=_json.dumps(units)))
+    db.commit()
+
+
+# ---------------------------
 # Company (carrier) information config
 # ---------------------------
 
