@@ -289,6 +289,36 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
   const [submitted, setSubmitted] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Auto-fill the prior-7-day on-duty hours from the driver's own logged history
+  // (job + off-job + office hours summed per day). The driver reviews and can
+  // adjust any day. Re-runs when the trip date changes (a new 7-day window).
+  // Offline / no history just leaves the fields at 0 for manual entry.
+  const [autofilled, setAutofilled] = useState(false);
+  useEffect(() => {
+    if (priorDates.length === 0) return;
+    const start = priorDates[0];
+    const end = priorDates[priorDates.length - 1];
+    let cancelled = false;
+    apiFetch<{ days: { date: string; hours: number }[] }>(
+      `/api/hours/daily?start=${start}&end=${end}`,
+    )
+      .then((r) => {
+        if (cancelled) return;
+        const next: Record<string, string> = {};
+        for (const d of priorDates) next[d] = "0";
+        for (const day of r.days || []) {
+          if (day.date in next) next[day.date] = String(day.hours ?? 0);
+        }
+        setDailyHours(next);
+        const lastDay = (r.days || []).find((x) => x.date === end);
+        if (lastDay) setHoursLast24(String(lastDay.hours ?? 0));
+        setAutofilled(true);
+      })
+      .catch(() => { /* offline / no history - manual entry */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripDate]);
+
   const totalLast7 = useMemo(
     () =>
       priorDates.reduce((s, d) => {
@@ -452,6 +482,11 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
             <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
               On-duty hours per day (last 7 days before trip) *
             </div>
+            {autofilled && (
+              <div className="small" style={{ color: "var(--brand)", marginBottom: 6 }}>
+                Auto-filled from your logged hours (job + off-job + office). Review each day and adjust if needed.
+              </div>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {priorDates.map((d) => (
                 <div key={d} className="row" style={{ gap: 10, justifyContent: "space-between" }}>

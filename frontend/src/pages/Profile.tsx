@@ -474,6 +474,7 @@ type WorkedWeek = {
   ot_hours: number;
   non_billable_hours: number;
   other_hours: number;
+  office_hours: number;
   total_hours: number;
 };
 type WorkedHistory = {
@@ -483,14 +484,16 @@ type WorkedHistory = {
     ot_hours: number;
     non_billable_hours: number;
     other_hours: number;
+    office_hours: number;
     total_hours: number;
   };
 };
 
-// The endpoint returns a hard two-week window (see routers/hours.py): it used to
-// load every job report ever written on every Profile mount, which is an OOM risk
-// on the 512 MB worker. There is deliberately no "show older weeks" expander,
-// because there is nothing older to show.
+// The endpoint defaults to a two-week window (kept small because it runs on every
+// Profile mount), but accepts a `weeks` param so the crew can expand their history
+// on demand - the "Show more" button below raises it, capped server-side.
+const HISTORY_DEFAULT_WEEKS = 2;
+const HISTORY_MORE_WEEKS = 12;
 
 // week_start is the Monday; render "Mon D - Sun D".
 function fmtWeek(iso: string): string {
@@ -515,15 +518,24 @@ function HoursTile({ label, value, accent }: { label: string; value: number; acc
 function WorkedHoursCard() {
   const [data, setData] = useState<WorkedHistory | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [weeksWindow, setWeeksWindow] = useState(HISTORY_DEFAULT_WEEKS);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
-    apiFetch<WorkedHistory>("/api/hours/worked-history")
-      .then(setData)
-      .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"));
-  }, []);
+    let cancelled = false;
+    setLoadingMore(weeksWindow > HISTORY_DEFAULT_WEEKS);
+    apiFetch<WorkedHistory>(`/api/hours/worked-history?weeks=${weeksWindow}`)
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch((e: any) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoadingMore(false); });
+    return () => { cancelled = true; };
+  }, [weeksWindow]);
 
   const weeks = data?.weeks ?? [];
   const s = data?.summary;
+  // Only show the office column when this person actually logs office hours.
+  const hasOffice = !!s && (s.office_hours > 0 || weeks.some((w) => w.office_hours > 0));
+  const expanded = weeksWindow > HISTORY_DEFAULT_WEEKS;
 
   return (
     <div className="card">
@@ -532,7 +544,8 @@ function WorkedHoursCard() {
         <BetaTag feature="workedHours" style={{ marginTop: 0 }} />
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-        Your logged hours for the last two weeks. Overtime is anything over 40 hrs in a week.
+        Your logged hours{expanded ? ` over the last ${weeksWindow} weeks` : " for the last two weeks"}.
+        Job + off-job{hasOffice ? " + office" : ""} time. Overtime is anything over 40 hrs in a week.
       </div>
       {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
       {data == null && !err && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
@@ -542,6 +555,7 @@ function WorkedHoursCard() {
             <HoursTile label="Regular" value={s.regular_hours} />
             <HoursTile label="Overtime" value={s.ot_hours} accent="var(--warn)" />
             <HoursTile label="Non-billable" value={s.non_billable_hours} />
+            {hasOffice && <HoursTile label="Office" value={s.office_hours} />}
             {s.other_hours > 0 && <HoursTile label="Other" value={s.other_hours} />}
             <HoursTile label="Total" value={s.total_hours} accent="var(--brand)" />
           </div>
@@ -554,6 +568,7 @@ function WorkedHoursCard() {
                 <span style={{ width: 52, textAlign: "right" }}>Reg</span>
                 <span style={{ width: 42, textAlign: "right" }}>OT</span>
                 <span style={{ width: 56, textAlign: "right" }}>N-bill</span>
+                {hasOffice && <span style={{ width: 52, textAlign: "right" }}>Office</span>}
               </div>
               {weeks.map((w) => (
                 <div key={w.week_start} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
@@ -561,8 +576,27 @@ function WorkedHoursCard() {
                   <span className="mono" style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
                   <span className="mono" style={{ width: 42, textAlign: "right", color: w.ot_hours > 0 ? "var(--warn)" : "var(--muted)", fontWeight: w.ot_hours > 0 ? 700 : 400 }}>{w.ot_hours.toFixed(1)}</span>
                   <span className="mono" style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
+                  {hasOffice && <span className="mono" style={{ width: 52, textAlign: "right", color: "var(--muted)" }}>{w.office_hours.toFixed(1)}</span>}
                 </div>
               ))}
+              <div style={{ marginTop: 10 }}>
+                {!expanded ? (
+                  <button
+                    onClick={() => setWeeksWindow(HISTORY_MORE_WEEKS)}
+                    disabled={loadingMore}
+                    style={{ background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontWeight: 600, fontSize: 13, padding: "4px 0" }}
+                  >
+                    {loadingMore ? "Loading…" : "Show more history"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setWeeksWindow(HISTORY_DEFAULT_WEEKS)}
+                    style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontWeight: 600, fontSize: 13, padding: "4px 0" }}
+                  >
+                    Show less
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </>
