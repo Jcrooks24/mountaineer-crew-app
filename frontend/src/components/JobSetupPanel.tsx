@@ -57,8 +57,6 @@ export default function JobSetupPanel({
   const [suggested, setSuggested] = useState<{ user_id: number; name: string }[]>([]);
   const [vehicleUnitNames, setVehicleUnitNames] = useState<string[]>([]);
   const [isLD, setIsLD] = useState(false);
-  const [jobName, setJobName] = useState("");
-  const [jobDate, setJobDate] = useState("");
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [stops, setStops] = useState<string[]>([]);
@@ -78,8 +76,6 @@ export default function JobSetupPanel({
       setCrew(h.crew || []);
       setVehicleUnitNames(h.vehicle_unit_names || []);
       setIsLD(!!h.is_long_distance);
-      setJobName(h.job_name || meta.jobName || "");
-      setJobDate(h.job_date || meta.jobDate || "");
       setOrigin(h.origin || "");
       setDestination(h.destination || "");
       setStops(h.stops || []);
@@ -97,14 +93,12 @@ export default function JobSetupPanel({
           confirmed: false,
         })),
       );
-      setJobName(meta.jobName || "");
-      setJobDate(meta.jobDate || "");
     }
     if (evc) {
       setUnmatched(evc.unmatched || []);
       setSuggested((evc.matched || []).map((m) => ({ user_id: m.user_id, name: m.name })));
     }
-  }, [meta.jobName, meta.jobDate]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -168,8 +162,9 @@ export default function JobSetupPanel({
     });
 
   const body = useMemo<JobSetupData>(() => ({
-    job_name: jobName.trim() || null,
-    job_date: jobDate.trim() || null,
+    // Name/date are identity from the job selection, not editable here.
+    job_name: (meta.jobName || "").trim() || null,
+    job_date: (meta.jobDate || "").trim() || null,
     source: meta.source,
     calendar_event_id: meta.calendarEventId,
     is_long_distance: isLD,
@@ -181,7 +176,7 @@ export default function JobSetupPanel({
     stops: stops.map((s) => s.trim()).filter(Boolean),
     notes: notes.trim() || null,
     locked,
-  }), [jobName, jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, crew, origin, destination, stops, notes, locked]);
+  }), [meta.jobName, meta.jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, crew, origin, destination, stops, notes, locked]);
 
   const doSave = async (override: boolean) => {
     setBusy(true);
@@ -330,18 +325,6 @@ export default function JobSetupPanel({
                 );
               })}
             </div>
-          </div>
-
-          {/* Name / date */}
-          <div className="row wrap" style={{ gap: 10 }}>
-            <label className="col" style={{ gap: 2, flex: "1 1 160px" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Job name</span>
-              <input value={jobName} onChange={(e) => setJobName(e.target.value)} />
-            </label>
-            <label className="col" style={{ gap: 2, flex: "0 0 160px" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Date</span>
-              <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
-            </label>
           </div>
 
           {/* Addresses */}

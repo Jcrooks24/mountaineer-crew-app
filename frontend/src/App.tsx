@@ -386,6 +386,11 @@ export default function App() {
     localStorage.setItem(MODE_KEY, val);
   }
 
+  // The calendar event description is often long (the office pastes full
+  // instructions), which crowds the hub. Collapsed by default; the crew expand
+  // it when they need it.
+  const [showJobDetails, setShowJobDetails] = useState(false);
+
   // The Inventory tab only exists in long-distance mode. Today the mode switch
   // itself lives on the Timeline tab, so nobody can be sitting on Inventory at
   // the moment it flips to local - but that is a layout coincidence, not a
@@ -2244,27 +2249,15 @@ export default function App() {
               {historyStatus && <div className="small" style={{ color: "var(--muted)" }}>{historyStatus}</div>}
             </div>
 
-            {/* Job type toggle + LD day plan live in the Job tile. */}
-            <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                <span className="microLabel" style={{ marginBottom: 0 }}>Job type</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={longDistance}
-                  onClick={() => setPersistedMode(longDistance ? "local" : "long_distance")}
-                  style={{ position: "relative", width: 52, height: 28, borderRadius: 999, border: "none", cursor: "pointer", background: longDistance ? "var(--brand)" : "var(--border)", transition: "background .15s", flexShrink: 0 }}
-                >
-                  <span style={{ position: "absolute", top: 3, left: longDistance ? 27 : 3, width: 22, height: 22, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
-                </button>
-                <span style={{ fontWeight: 700, fontSize: 13 }}>{longDistance ? "Long-distance (interstate)" : "Local"}</span>
-              </label>
-              {longDistance && (
-                <div style={{ marginTop: 12 }}>
-                  <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
-                </div>
-              )}
-            </div>
+            {/* Local vs long-distance is set in Set up job now (ADR 0034); the
+                redundant tile toggle was removed. The LD day plan still shows
+                here when the job is long-distance. */}
+            {longDistance && (
+              <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+                <div className="microLabel" style={{ marginBottom: 10 }}>Long-distance day plan</div>
+                <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
+              </div>
+            )}
           </div>
 
           {/* Active-job context: the office writes the address, crew, and special
@@ -2307,8 +2300,17 @@ export default function App() {
                 )}
                 {desc && (
                   <div style={{ marginTop: loc || crew > 0 ? 12 : 10 }}>
-                    <div className="microLabel" style={{ marginBottom: 4 }}>Details</div>
-                    <div className="small" style={{ color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{desc}</div>
+                    <button
+                      type="button"
+                      onClick={() => setShowJobDetails((v) => !v)}
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
+                    >
+                      <span className="microLabel" style={{ marginBottom: 0 }}>Details</span>
+                      <span className="small" style={{ color: "var(--brand2)" }}>{showJobDetails ? "Hide" : "Show"}</span>
+                    </button>
+                    {showJobDetails && (
+                      <div className="small" style={{ color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5, marginTop: 6 }}>{desc}</div>
+                    )}
                   </div>
                 )}
               </div>
@@ -2331,10 +2333,10 @@ export default function App() {
                   calendarEventId: jm?.calendarEventId || calSelectedId || null,
                 }}
                 onHeader={(h) => {
-                  // C1.3: the job header owns local/long-distance now, so the
-                  // device mode follows it when a job that has one is selected
-                  // or saved. A job with no header keeps the device toggle.
-                  if (h) setMode(h.is_long_distance ? "long_distance" : "local");
+                  // C1.3: the job header owns local/long-distance now (the tile
+                  // toggle was removed as redundant). Selecting or saving a job
+                  // with a header sets and persists the mode from it.
+                  if (h) setPersistedMode(h.is_long_distance ? "long_distance" : "local");
                 }}
               />
             );
