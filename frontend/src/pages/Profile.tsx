@@ -4,6 +4,7 @@ import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { refreshDirectory } from "../lib/userDirectory";
 import { markPatchNotesSeenNow } from "../lib/patchNotesSeen";
+import DqMyFileCard from "../components/DqMyFileCard";
 import {
   APP_BUILD_ID,
   APP_VERSION_NAME,
@@ -307,6 +308,9 @@ export default function Profile() {
           />
         </div>
       </div>
+
+      {/* Driver qualification documents (C4) */}
+      <DqMyFileCard />
 
       {/* Worked hours - weekly regular / OT / non-billable breakdown */}
       <WorkedHoursCard />

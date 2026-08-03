@@ -29,6 +29,8 @@ import EstimatorTab from "../components/EstimatorTab";
 import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
 import OfficeHoursPanel from "./OfficeHours";
 import PayrollTool from "../components/PayrollTool";
+import DqFilesTab from "../components/DqFilesTab";
+import DqDocTypesCard from "../components/DqDocTypesCard";
 import { roundBillableQuarter } from "../components/JobReport";
 import {
   formatMountainDate,
@@ -82,7 +84,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents" | "payroll";
+type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents" | "payroll" | "dq";
 
 const TAB_TITLES: Record<Tab, string> = {
   map: "Admin Dashboard",
@@ -93,6 +95,7 @@ const TAB_TITLES: Record<Tab, string> = {
   summary: "Job Summary",
   office: "Office Hours",
   payroll: "Payroll",
+  dq: "DQ Files",
   settings: "Settings",
   advanced: "Advanced Settings",
   appearance: "Theme & Appearance",
@@ -208,6 +211,7 @@ export default function Admin() {
           {tab === "summary" && <JobSummaryTab />}
           {tab === "office" && <OfficeHoursPanel />}
           {tab === "payroll" && <PayrollTool />}
+          {tab === "dq" && <DqFilesTab />}
           {tab === "incidents" && <IncidentsAdminTab />}
           {tab === "settings" && (
             <SettingsTab
@@ -295,6 +299,7 @@ function AdminSidebar({ current, onPick }: { current: Tab; onPick: (t: Tab) => v
     { tab: "summary", label: "Job Summary" },
     { tab: "office", label: "Office Hours" },
     { tab: "payroll", label: "Payroll" },
+    { tab: "dq", label: "DQ Files" },
     { tab: "incidents", label: "Incidents" },
     { tab: "settings", label: "Settings" },
   ];
@@ -340,6 +345,7 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
     { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
     { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
     { tab: "payroll",   label: "Payroll",      hint: "Hours by employee for a pay period" },
+    { tab: "dq",        label: "DQ Files",     hint: "Driver qualification documents" },
     { tab: "incidents", label: "Incidents",    hint: "Crew-reported incident log" },
     { tab: "settings",  label: "Settings",     hint: "Theme, field config, and advanced options" },
   ];
@@ -2737,6 +2743,7 @@ function SettingsTab({
       <EmployeeTagsManagerCard />
       <JobTypesManagerCard />
       <JobChecklistCard />
+      <DqDocTypesCard />
       <SkillsManagerCard />
       <FurnitureCatalogCard />
       <HelpTextCard />

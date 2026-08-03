@@ -15,6 +15,7 @@ import { drainJobSetups } from "./lib/jobSetupStore";
 import JobSetupPanel from "./components/JobSetupPanel";
 import { drainChecklistChecks } from "./lib/jobChecklistStore";
 import JobChecklistCard from "./components/JobChecklistCard";
+import DqReminderBanner from "./components/DqReminderBanner";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
@@ -2161,6 +2162,9 @@ export default function App() {
       {/* Admin notes - global, then per-job when a job is selected */}
       <AdminNotesBanner scope="global" />
       {jobUuid && <AdminNotesBanner key={jobUuid} scope={jobUuid} />}
+
+      {/* DQ missing-docs reminder (C4): shows when the driver owes documents. */}
+      <DqReminderBanner />
 
       {/* Job selector + core actions: always visible (drill-in home context). */}
       <div className="card">
