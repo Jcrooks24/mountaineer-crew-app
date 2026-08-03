@@ -249,6 +249,7 @@ per-device setup). Contains:
 - **DVIR unit list:** add, edit, remove vehicles from the DVIR dropdown
 - **Employee Tags:** the free-form tag list used across the roster and digest
 - **Job Types:** the job type tags crew pick from on the Job Report
+- **Job Checklist:** the checklist shown on a job. Each item is either manual (the crew tick it) or auto (it ticks itself when the app sees the thing happen - a DVIR filed, the report saved, the BOL signed, PODS/RODS filed, etc.). Limit an item to long-distance jobs and/or specific job types; leave job types empty for every job. The crew see the applicable items on the hub once a job is set up
 - **Crew Skills (registry):** define each skill, mark it core (rated on every job) or job-specific, choose which job types it applies to, and keep a per-employee skill matrix
 - **Furniture Catalogue:** import and export the shared catalogue as CSV, with item dimensions and custom fields. One catalogue feeds the Estimator, actual inventory, and the BOL item pickers
 - **Help Text:** labels and hints shown on the crew timeline and other fields
