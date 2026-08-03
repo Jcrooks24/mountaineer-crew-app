@@ -6,10 +6,15 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadMyDqFile, uploadMyDq, type DqFile, type DqFileItem } from "../lib/dqStore";
+import DqCertViolationsForm from "./DqCertViolationsForm";
+
+// DQ types with an in-app fillable form (C4.2). Others are upload-only for now.
+const FILLABLE = new Set<string>(["annual_cert_violations"]);
 
 export default function DqMyFileCard() {
   const [file, setFile] = useState<DqFile | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [filling, setFilling] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try { setFile(await loadMyDqFile()); setErr(null); }
@@ -35,6 +40,18 @@ export default function DqMyFileCard() {
     );
   }
 
+  if (filling === "annual_cert_violations") {
+    return (
+      <div className="card">
+        <DqCertViolationsForm
+          driverName={file.name || ""}
+          onDone={() => { setFilling(null); refresh(); }}
+          onCancel={() => setFilling(null)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="card">
       <div className="microLabel" style={{ marginBottom: 4 }}>DQ file</div>
@@ -45,14 +62,30 @@ export default function DqMyFileCard() {
       </div>
       <div className="col" style={{ gap: 8 }}>
         {file.types.map((t) => (
-          <MyDqRow key={t.key} item={t} onUploaded={refresh} />
+          <MyDqRow
+            key={t.key}
+            item={t}
+            onUploaded={refresh}
+            fillable={t.audience === "driver" && FILLABLE.has(t.key)}
+            onFill={() => setFilling(t.key)}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function MyDqRow({ item, onUploaded }: { item: DqFileItem; onUploaded: () => void }) {
+function MyDqRow({
+  item,
+  onUploaded,
+  fillable,
+  onFill,
+}: {
+  item: DqFileItem;
+  onUploaded: () => void;
+  fillable?: boolean;
+  onFill?: () => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -88,7 +121,12 @@ function MyDqRow({ item, onUploaded }: { item: DqFileItem; onUploaded: () => voi
         {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
       </div>
       {mine && (
-        <div style={{ flexShrink: 0 }}>
+        <div className="row" style={{ gap: 6, flexShrink: 0 }}>
+          {fillable && (
+            <button type="button" onClick={onFill} disabled={busy} className="btnPrimary" style={{ fontSize: 12 }}>
+              Fill in app
+            </button>
+          )}
           <input ref={inputRef} type="file" accept="application/pdf,image/*" onChange={onFile} style={{ display: "none" }} />
           <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} style={{ fontSize: 12 }}>
             {busy ? "Uploading…" : item.document ? "Replace" : "Upload"}
