@@ -2343,8 +2343,10 @@ export default function App() {
                 onHeader={(h) => {
                   // C1.3: the job header owns local/long-distance now (the tile
                   // toggle was removed as redundant). Selecting or saving a job
-                  // with a header sets and persists the mode from it.
-                  if (h) setPersistedMode(h.is_long_distance ? "long_distance" : "local");
+                  // sets and persists the mode from its header; a job with no
+                  // header resets to local (the app default) so the previous
+                  // job's flag never carries over.
+                  setPersistedMode(h?.is_long_distance ? "long_distance" : "local");
                 }}
               />
             );

@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db, require_admin
@@ -85,25 +86,44 @@ def _do_upload(
     )
 
     now = datetime.now(timezone.utc)
-    row = (
-        db.query(DqDocument)
-        .filter(DqDocument.user_id == user_id, DqDocument.doc_type == doc_type)
-        .first()
-    )
+
+    def _find():
+        return (
+            db.query(DqDocument)
+            .filter(DqDocument.user_id == user_id, DqDocument.doc_type == doc_type)
+            .first()
+        )
+
+    def _apply(r: DqDocument) -> None:
+        r.doc_name = t["name"]
+        r.drive_file_id = result["file_id"]
+        r.drive_url = result.get("url", "")
+        r.filename = file.filename
+        r.status = "submitted"
+        r.submitted_by_id = submitter.id
+        r.submitted_by_name = submitter.name or submitter.email
+        r.submitted_at = now
+        r.updated_at = now
+
+    row = _find()
     old_file_id = row.drive_file_id if row else None
     if row is None:
         row = DqDocument(user_id=user_id, doc_type=doc_type, submitted_at=now)
         db.add(row)
-    row.doc_name = t["name"]
-    row.drive_file_id = result["file_id"]
-    row.drive_url = result.get("url", "")
-    row.filename = file.filename
-    row.status = "submitted"
-    row.submitted_by_id = submitter.id
-    row.submitted_by_name = submitter.name or submitter.email
-    row.submitted_at = now
-    row.updated_at = now
-    db.commit()
+    _apply(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent upload for the same (driver, type) won the insert race.
+        # Adopt the existing row and point it at the file we just uploaded; its
+        # previous file becomes the old_file_id we delete below.
+        db.rollback()
+        row = _find()
+        if row is None:
+            raise HTTPException(status_code=409, detail="document conflict, retry")
+        old_file_id = row.drive_file_id
+        _apply(row)
+        db.commit()
     db.refresh(row)
 
     # Most-recent-wins: drop the previous file so the DQ file holds one copy.

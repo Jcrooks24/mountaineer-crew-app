@@ -1043,6 +1043,16 @@ def upsert_entry_status(
 # the sibling hours flow and the same best-effort, non-raising notify contract.
 # ---------------------------
 
+def _parse_bill_items(raw: Optional[str]) -> List[Dict[str, Any]]:
+    """Bill line items from stored JSON, tolerant of a corrupted column - a bad
+    blob must not 500 a correction; treat it as an empty invoice."""
+    try:
+        v = _json.loads(raw or "[]")
+        return v if isinstance(v, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
 def _bill_line_total(items: List[Dict[str, Any]], global_discount: float) -> float:
     """The bill total, computed exactly as the Job Summary shows it:
     sum(qty * rate * (1 - line_discount)) then the global discount."""
@@ -1140,7 +1150,7 @@ def correct_bill(
     # ── Bill invoice ──
     existing = db.query(JobBill).filter(JobBill.job_uuid == job_uuid).first()
     before_total = _bill_line_total(
-        _json.loads(existing.items_json or "[]") if existing else [],
+        _parse_bill_items(existing.items_json) if existing else [],
         existing.global_discount if existing else 0.0,
     )
     after_total = _bill_line_total(body.items, body.global_discount)
@@ -1233,7 +1243,7 @@ def correct_bill(
     return {
         "job_uuid": job_uuid,
         "bill": {
-            "items": _json.loads(bill.items_json or "[]"),
+            "items": _parse_bill_items(bill.items_json),
             "global_discount": bill.global_discount or 0.0,
             "notes": bill.notes,
             "saved_by_name": bill.saved_by_name,

@@ -17,6 +17,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
@@ -86,17 +87,34 @@ def set_check(
     if not key:
         raise HTTPException(status_code=400, detail="item_key required")
     now = datetime.now(timezone.utc)
-    row = (
-        db.query(JobChecklistCheck)
-        .filter(JobChecklistCheck.job_uuid == job_uuid, JobChecklistCheck.item_key == key)
-        .first()
-    )
+
+    def _find():
+        return (
+            db.query(JobChecklistCheck)
+            .filter(JobChecklistCheck.job_uuid == job_uuid, JobChecklistCheck.item_key == key)
+            .first()
+        )
+
+    def _apply(r: JobChecklistCheck) -> None:
+        r.checked = bool(body.checked)
+        r.checked_by_id = current_user.id
+        r.checked_by_name = current_user.name or current_user.email
+        r.updated_at = now
+
+    row = _find()
     if row is None:
         row = JobChecklistCheck(job_uuid=job_uuid, item_key=key, updated_at=now)
         db.add(row)
-    row.checked = bool(body.checked)
-    row.checked_by_id = current_user.id
-    row.checked_by_name = current_user.name or current_user.email
-    row.updated_at = now
-    db.commit()
+    _apply(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two devices ticked the same item at once and both missed the SELECT.
+        # The unique (job_uuid, item_key) rejected our insert; adopt the winner.
+        db.rollback()
+        row = _find()
+        if row is None:
+            raise HTTPException(status_code=409, detail="checklist item conflict")
+        _apply(row)
+        db.commit()
     return {"item_key": key, "checked": bool(row.checked)}

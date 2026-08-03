@@ -7,7 +7,7 @@
  * queued if offline and drained on reconnect (a tick is never lost in the
  * field). AUTO signals are read-only and only refresh when online.
  */
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch, isPermanentFailure } from "../api/client";
 
 export type ChecklistItem = {
   key: string;
@@ -128,7 +128,9 @@ export async function setManualCheck(
     if (qkey in q) { delete q[qkey]; saveBag(QUEUE_KEY, q); }
     return { synced: true };
   } catch (e) {
-    if (e instanceof ApiError) throw e; // server refused (e.g. bad key) - surface
+    // Permanent client-error rejection (e.g. bad key): surface it. Transient
+    // (5xx/408/429/401/403) or network: queue and retry on reconnect.
+    if (isPermanentFailure(e)) throw e;
     const q = loadBag<QueueBag>(QUEUE_KEY);
     q[qkey] = { job_uuid: jobUuid, item_key: itemKey, checked };
     saveBag(QUEUE_KEY, q);
@@ -150,8 +152,8 @@ export async function drainChecklistChecks(): Promise<void> {
       });
       delete q[k];
     } catch (e) {
-      if (e instanceof ApiError) delete q[k]; // rejected - stop retrying
-      // else network - keep for next time
+      // Drop only a permanent client-error rejection; keep transient + network.
+      if (isPermanentFailure(e)) delete q[k];
     }
   }
   saveBag(QUEUE_KEY, q);

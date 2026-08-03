@@ -682,20 +682,22 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     rows += _per_diem_nights(db, start, end, roster, rows)
 
     # Corrections come from two places now (ADR 0032):
-    #   - job-scoped, keyed by the jobs contributing hours to this period. A job
-    #     correction is made once from the Job Summary and applies to whichever
-    #     period the job falls in.
+    #   - job-scoped, loaded by the correction's own work_date falling in this
+    #     period. Loading by the job's *produced* rows would silently drop a
+    #     correction for a job that produced none (e.g. adding hours the crew
+    #     never logged, or a report later cleared) - and the "no matching row ->
+    #     its own row" fallback in _apply_corrections would then never fire,
+    #     evaporating an admin's decision (the exact thing ADR 0029/0032 forbid).
     #   - period-scoped legacy / non-job rows (off-job, office, manual), keyed by
     #     the period as before.
-    job_uuids_in_period = {
-        r["source_key"] for r in rows if r["source"] == "job" and r["source_key"]
-    }
     job_corrections = (
         db.query(PayrollCorrection)
-        .filter(PayrollCorrection.job_uuid.in_(job_uuids_in_period))
+        .filter(
+            PayrollCorrection.job_uuid.isnot(None),
+            PayrollCorrection.work_date >= start.isoformat(),
+            PayrollCorrection.work_date <= end.isoformat(),
+        )
         .all()
-        if job_uuids_in_period
-        else []
     )
     period_corrections = (
         db.query(PayrollCorrection)

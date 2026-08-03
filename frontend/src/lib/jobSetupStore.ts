@@ -7,7 +7,7 @@
  * REJECTS (e.g. a locked header, 409) is surfaced, not queued - retrying it
  * forever would never succeed. Keyed by job_uuid; one header per job.
  */
-import { apiFetch, ApiError } from "../api/client";
+import { apiFetch, isPermanentFailure } from "../api/client";
 
 export type CrewMember = {
   user_id: number | null;
@@ -109,12 +109,13 @@ export async function saveJobSetup(
     if (r.setup) cacheJobSetup(jobUuid, r.setup);
     return { synced: true, setup: r.setup };
   } catch (e) {
-    if (e instanceof ApiError) {
-      // The server responded and refused (locked / invalid). Do not queue a
-      // write that will keep being rejected; let the caller surface it.
+    if (isPermanentFailure(e)) {
+      // The server refused with a client error (locked 409 / invalid). A retry
+      // will never succeed; surface it instead of queuing forever.
       throw e;
     }
-    enqueue(jobUuid, body); // network down - retry on reconnect
+    // Transient (5xx/408/429/401/403) or network down - queue and retry.
+    enqueue(jobUuid, body);
     return { synced: false };
   }
 }
@@ -135,8 +136,9 @@ export async function drainJobSetups(): Promise<void> {
       if (r.setup) cacheJobSetup(jobUuid, r.setup);
       dequeue(jobUuid);
     } catch (e) {
-      if (e instanceof ApiError) dequeue(jobUuid); // rejected - stop retrying
-      // else network - leave it queued
+      // Drop only a permanent client-error rejection; keep transient (5xx/408/
+      // 429/401/403) and network failures queued for the next drain.
+      if (isPermanentFailure(e)) dequeue(jobUuid);
     }
   }
 }

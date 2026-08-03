@@ -14,6 +14,18 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * A PERMANENT (non-retryable) failure: the server responded with a client-error
+ * status that a retry will never fix (bad payload, not found, conflict).
+ * Everything else - transient 5xx/408/429, auth 401/403 (may recover when the
+ * token refreshes), and network errors (not an ApiError at all) - is retryable
+ * and must stay queued. Offline stores split on this so a reconnect hiccup never
+ * silently drops a crew member's queued write (ADR 0013).
+ */
+export function isPermanentFailure(e: unknown): boolean {
+  return e instanceof ApiError && [400, 404, 409, 422].includes(e.status);
+}
+
 export async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();
 
