@@ -9,6 +9,7 @@ import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport
 import { drainIncidents } from "./lib/incidentStore";
 import { drainOffJob } from "./lib/offJobStore";
 import { drainBugReports } from "./lib/bugReportStore";
+import { getUnitsCached as getVehUnitsCached, refreshUnits as refreshVehUnits, type VehicleUnit } from "./lib/vehicleUnits";
 import { drainAll as drainJobInventory } from "./lib/jobInventoryQueue";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
@@ -1154,6 +1155,24 @@ export default function App() {
     }
   }
 
+  // ── Loaded-weight capture (B3/B4). Logging a weight creates a WEIGHT event, so
+  // it is timestamped, offline-queued, cross-device, and visible to anyone in the
+  // timeline + the "Loaded weights" summary. No new store needed. ──
+  const [vehUnits, setVehUnits] = useState<VehicleUnit[]>(() => getVehUnitsCached());
+  useEffect(() => { refreshVehUnits().then(setVehUnits).catch(() => {}); }, []);
+  const [showWeightEntry, setShowWeightEntry] = useState(false);
+  const [weightVal, setWeightVal] = useState("");
+  const [weightUnit, setWeightUnit] = useState("");
+  async function logWeight() {
+    const n = Number(weightVal);
+    if (!Number.isFinite(n) || n <= 0) { setStatus("Enter a loaded weight in pounds."); return; }
+    const unit = weightUnit.trim();
+    const note = `${Math.round(n).toLocaleString()} lb${unit ? ` · ${unit}` : ""}`;
+    await recordEvent("WEIGHT", note);
+    setWeightVal("");
+    setShowWeightEntry(false);
+  }
+
   // -----------------------
   // Calendar binding
   // -----------------------
@@ -2293,6 +2312,31 @@ export default function App() {
           })()}
 
           {(() => {
+            // Loaded weights logged for this job - visible to anyone, any time
+            // (B4). Newest first. The timeline carries the full history; this is
+            // the at-a-glance summary.
+            const weights = [...mergedLog].filter((e) => e.type === "WEIGHT")
+              .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+            if (weights.length === 0) return null;
+            return (
+              <div className="card">
+                <div className="microLabel" style={{ marginBottom: 10 }}>Loaded weights</div>
+                <div className="col" style={{ gap: 6 }}>
+                  {weights.map((e) => (
+                    <div key={e.event_id} className="row" style={{ justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                      <span className="mono" style={{ fontWeight: 600, fontSize: 14 }}>{e.note}</span>
+                      <span className="small mono" style={{ color: "var(--muted)", textAlign: "right" }}>
+                        {e.timestamp ? new Date(e.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}
+                        {e.created_by ? ` · ${e.created_by}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {(() => {
             const coreActions = (
               <>
                 <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={() => recordEvent("ARRIVE")}>
@@ -2321,6 +2365,35 @@ export default function App() {
                 {sendingType === "NOTE" ? "..." : "Note"}
               </button>
             );
+            const weightButton = (
+              <button
+                disabled={!canSend || sendingType !== null}
+                onClick={() => setShowWeightEntry((v) => !v)}
+                title="Record a loaded / scale weight for this job"
+              >
+                {showWeightEntry ? "Cancel weight" : "Weight"}
+              </button>
+            );
+            const weightEntry = showWeightEntry ? (
+              <div className="row wrap" style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={weightVal}
+                  onChange={(e) => setWeightVal(e.target.value)}
+                  placeholder="Loaded weight (lb)"
+                  style={{ flex: "1 1 130px", minWidth: 0 }}
+                  autoFocus
+                />
+                <select value={weightUnit} onChange={(e) => setWeightUnit(e.target.value)} style={{ flex: "0 1 140px" }}>
+                  <option value="">Unit (optional)</option>
+                  {vehUnits.map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+                </select>
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={logWeight}>
+                  {sendingType === "WEIGHT" ? "..." : "Log weight"}
+                </button>
+              </div>
+            ) : null;
             // Drive-only LD day: the RODS duty logger replaces the Actions tile.
             if (longDistance && ldDriving && ldLabor.length === 0) {
               return <RodsRecorder events={mergedLog} onLogEvent={recordEvent} />;
@@ -2337,7 +2410,8 @@ export default function App() {
                       <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
                         Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is recorded by the RODS above.
                       </div>
-                      <div className="row wrap">{coreActions}</div>
+                      <div className="row wrap">{coreActions}{weightButton}</div>
+                      {weightEntry}
                     </>
                   }
                 />
@@ -2353,7 +2427,8 @@ export default function App() {
                       Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is handled by the RODS on drive days.
                     </div>
                   )}
-                  <div className="row wrap">{coreActions}{noteButton}</div>
+                  <div className="row wrap">{coreActions}{noteButton}{weightButton}</div>
+                  {weightEntry}
                 </div>
               );
             }
@@ -2451,7 +2526,7 @@ export default function App() {
                         >
                           {e.sync_status === "synced" ? "Synced" : "Queued"}
                         </span>
-                        <strong style={{ fontSize: 14 }}>{e.type}</strong>
+                        <strong style={{ fontSize: 14 }}>{e.type === "WEIGHT" ? "Loaded weight" : e.type}</strong>
                         {e.created_by && (
                           <span className="row" style={{ gap: 6, minWidth: 0 }}>
                             <UserAvatar displayName={e.created_by} size={18} />
