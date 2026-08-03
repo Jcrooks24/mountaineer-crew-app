@@ -688,6 +688,27 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       .catch(() => {});
   }, [loaded, jobUuid]);
 
+  // C1.3 (ADR 0034): the job header's crew, offered as quick-add chips in the
+  // Employee Hours editor. Tapping one just targets the editor at that person
+  // (like the roster picker) - the crew still enter times and save a real row,
+  // so no empty 0-hour rows are ever written to the payroll source.
+  const [jobCrew, setJobCrew] = useState<{ user_id: number; name: string }[]>([]);
+  useEffect(() => {
+    if (!jobUuid) { setJobCrew([]); return; }
+    let cancelled = false;
+    loadJobSetup(jobUuid)
+      .then((h) => {
+        if (cancelled) return;
+        setJobCrew(
+          (h?.crew || [])
+            .filter((m) => typeof m.user_id === "number")
+            .map((m) => ({ user_id: m.user_id as number, name: m.name })),
+        );
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobUuid]);
+
   // Debounced draft autosave. Triggers on every change to `data` or
   // `billReviewed` once the form is loaded; skipped during the first render
   // after hydration so we don't write back the just-loaded values.
@@ -1572,6 +1593,35 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   Editing entry #{editingIndex + 1}. Save replaces the row; Cancel keeps the original.
                 </div>
               )}
+              {/* Quick-add crew from the job header (C1.3). Sets the editor's
+                  person; the crew then pick times and Save employee as usual. */}
+              {(() => {
+                const already = new Set(
+                  data.employee_hours.map((e) => e.user_id).filter((v): v is number => typeof v === "number"),
+                );
+                const toAdd = jobCrew.filter((c) => !already.has(c.user_id) && c.user_id !== editUserId);
+                if (toAdd.length === 0) return null;
+                return (
+                  <div className="col" style={{ gap: 4 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Add crew from job setup:</span>
+                    <div className="row wrap" style={{ gap: 6 }}>
+                      {toAdd.map((c) => (
+                        <button
+                          key={c.user_id}
+                          type="button"
+                          onClick={() => { setEditUserId(c.user_id); setEditName(c.name); setEditError(null); }}
+                          style={{
+                            padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
+                            border: "1px solid var(--border)", background: "transparent", color: "var(--text)",
+                          }}
+                        >
+                          + {c.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               <RosterPicker
                 userId={editUserId}
                 legacyName={editUserId == null && editName ? editName : undefined}
