@@ -45,6 +45,7 @@ import {
 import { getCompanyInfoCached, refreshCompanyInfo, type CompanyInfo } from "../lib/companyInfo";
 import VehicleUnitSpecs from "./VehicleUnitSpecs";
 import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
+import { loadJobSetup } from "../lib/jobSetupStore";
 import SuggestInput from "./SuggestInput";
 import NumberField from "./NumberField";
 
@@ -447,6 +448,32 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     if (Object.keys(patch).length) setField(patch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // C1.3 (ADR 0034): seed the origin/destination from the job header on a NEW
+  // BOL draft, once per job. Only fills a blank address (the functional update
+  // re-checks emptiness), so it never overwrites what the crew has typed and
+  // leaves a signed/loaded BOL alone.
+  const seededBolAddrRef = useRef<string>("");
+  useEffect(() => {
+    const ju = draft.job_uuid;
+    if (!ju || draft.status !== "draft" || seededBolAddrRef.current === ju) return;
+    if ((draft.origin_address || "").trim() && (draft.dest_address || "").trim()) return;
+    seededBolAddrRef.current = ju;
+    loadJobSetup(ju)
+      .then((h) => {
+        if (!h) return;
+        setDraft((prev) => {
+          if (prev.status !== "draft") return prev;
+          const p: { origin_address?: string; dest_address?: string } = {};
+          if (h.origin && !(prev.origin_address || "").trim()) p.origin_address = h.origin;
+          if (h.destination && !(prev.dest_address || "").trim()) p.dest_address = h.destination;
+          if (!Object.keys(p).length) return prev;
+          return { ...prev, ...p, updated_at: new Date().toISOString() };
+        });
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.job_uuid, draft.status]);
 
   // Shipper address defaults to the pickup (origin) address, with an override for
   // the crew to enter a different address. Checked = mirror the origin.
