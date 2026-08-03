@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
 import { getCompanyInfoCached, setCompanyInfoCache, type CompanyInfo } from "../lib/companyInfo";
+import { useJobTypes } from "../lib/jobTypesStore";
 
 const ADMIN_API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 import { useAuth } from "../auth/AuthContext";
@@ -2735,6 +2736,7 @@ function SettingsTab({
       <DVIRUnitsCard />
       <EmployeeTagsManagerCard />
       <JobTypesManagerCard />
+      <JobChecklistCard />
       <SkillsManagerCard />
       <FurnitureCatalogCard />
       <HelpTextCard />
@@ -5405,6 +5407,146 @@ function PayrollRatesCard() {
       <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
         {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
         <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save payroll rates"}</button>
+      </div>
+    </div>
+  );
+}
+
+// Job checklist config (C3.1): admin-editable checklist items, each manual or
+// bound to an AUTO signal, optionally limited to long-distance and/or job types.
+type ChecklistItem = { key?: string; label: string; auto_key: string; ld_only: boolean; job_types: string[] };
+
+function JobChecklistCard() {
+  const jobTypes = useJobTypes();
+  const [items, setItems] = useState<ChecklistItem[]>([]);
+  const [autoSignals, setAutoSignals] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ items: ChecklistItem[]; auto_signals: Record<string, string> }>("/api/admin/config/job-checklist")
+      .then((r) => { setItems(r.items); setAutoSignals(r.auto_signals); setLoaded(true); })
+      .catch(() => { setErr("Failed to load checklist"); setLoaded(true); });
+  }, []);
+
+  const update = (i: number, patch: Partial<ChecklistItem>) => {
+    setItems((prev) => prev.map((it, j) => (j === i ? { ...it, ...patch } : it)));
+    setSaved(false);
+  };
+  const remove = (i: number) => { setItems((prev) => prev.filter((_, j) => j !== i)); setSaved(false); };
+  const add = () => { setItems((prev) => [...prev, { label: "", auto_key: "", ld_only: false, job_types: [] }]); setSaved(false); };
+  const move = (i: number, dir: -1 | 1) => {
+    setItems((prev) => {
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = prev.slice();
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+    setSaved(false);
+  };
+  const toggleType = (i: number, t: string) =>
+    update(i, {
+      job_types: items[i].job_types.includes(t)
+        ? items[i].job_types.filter((x) => x !== t)
+        : [...items[i].job_types, t],
+    });
+
+  async function save() {
+    if (items.some((it) => !it.label.trim())) { setErr("Every item needs a label."); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/job-checklist", { method: "PUT", body: JSON.stringify({ items }) });
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>Job checklist</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        The checklist shown on a job. An item is either manual (the crew tick it)
+        or auto (it ticks itself when the app sees the thing happen). Limit an
+        item to long-distance jobs and/or specific job types. Leave job types
+        empty for every job.
+      </div>
+      {!loaded ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div className="col" style={{ gap: 12 }}>
+          {items.map((it, i) => (
+            <div key={i} className="col" style={{ gap: 8, border: "1px solid var(--border)", borderRadius: 10, padding: 10 }}>
+              <div className="row" style={{ gap: 6, alignItems: "flex-start" }}>
+                <textarea
+                  rows={2}
+                  value={it.label}
+                  onChange={(e) => update(i, { label: e.target.value })}
+                  placeholder="Checklist item"
+                  style={{ flex: 1, resize: "vertical", padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }}
+                />
+                <div className="col" style={{ gap: 2 }}>
+                  <button type="button" onClick={() => move(i, -1)} disabled={i === 0} title="Move up" style={{ fontSize: 12, padding: "2px 8px" }}>↑</button>
+                  <button type="button" onClick={() => move(i, 1)} disabled={i === items.length - 1} title="Move down" style={{ fontSize: 12, padding: "2px 8px" }}>↓</button>
+                </div>
+              </div>
+              <div className="row wrap" style={{ gap: 10, alignItems: "center" }}>
+                <label className="col" style={{ gap: 2 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Auto-check</span>
+                  <select value={it.auto_key} onChange={(e) => update(i, { auto_key: e.target.value })}>
+                    {Object.entries(autoSignals).map(([k, label]) => (
+                      <option key={k} value={k}>{label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="row" style={{ gap: 6, alignItems: "center" }}>
+                  <input type="checkbox" checked={it.ld_only} onChange={(e) => update(i, { ld_only: e.target.checked })} />
+                  <span className="small">Long-distance only</span>
+                </label>
+                <button type="button" onClick={() => remove(i)} style={{ fontSize: 12, color: "var(--danger)", marginLeft: "auto" }}>Remove</button>
+              </div>
+              {jobTypes.length > 0 && (
+                <div className="col" style={{ gap: 4 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>
+                    Job types {it.job_types.length === 0 ? "(all)" : ""}
+                  </span>
+                  <div className="row wrap" style={{ gap: 6 }}>
+                    {jobTypes.map((t) => {
+                      const on = it.job_types.includes(t);
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => toggleType(i, t)}
+                          style={{
+                            padding: "4px 10px", borderRadius: 999, fontSize: 12, cursor: "pointer",
+                            border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+                            background: on ? "var(--brand)" : "transparent",
+                            color: on ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: on ? 700 : 400,
+                          }}
+                        >
+                          {t}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          <button type="button" onClick={add} style={{ alignSelf: "flex-start", fontSize: 13 }}>+ Add item</button>
+        </div>
+      )}
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+      <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
+        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
+        <button className="btnPrimary" onClick={save} disabled={busy || !loaded}>{busy ? "Saving…" : "Save checklist"}</button>
       </div>
     </div>
   );

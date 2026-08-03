@@ -48,3 +48,16 @@ def get_vehicle_units(db: Session = Depends(get_db)):
     if not row or not row.value:
         return {"units": default_units()}
     return {"units": normalize_units(json.loads(row.value))}
+
+
+@router.get("/job-checklist")
+def get_job_checklist(db: Session = Depends(get_db)):
+    """The job checklist items. Public so the crew can render the checklist on a
+    job without an admin token. Returns the seeded default list when unset."""
+    from app.core.job_checklists import JOB_CHECKLIST_KEY, normalize_items, default_items
+
+    row = db.query(SystemConfig).filter(SystemConfig.key == JOB_CHECKLIST_KEY).first()
+    if not row or not row.value:
+        return {"items": default_items()}
+    items = normalize_items(json.loads(row.value))
+    return {"items": items if items else default_items()}

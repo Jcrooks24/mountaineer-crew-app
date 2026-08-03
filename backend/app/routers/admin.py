@@ -380,6 +380,55 @@ def set_payroll_rates(
 
 
 # ---------------------------
+# Job checklist config (C3). Admin-editable items, each manual or bound to an
+# AUTO signal, optionally limited to long-distance and/or job types. Crew read
+# the list via the public GET /api/config/job-checklist.
+# ---------------------------
+
+class ChecklistItemIn(BaseModel):
+    key: Optional[str] = None
+    label: str
+    auto_key: str = ""
+    ld_only: bool = False
+    job_types: List[str] = []
+
+
+class JobChecklistRequest(BaseModel):
+    items: List[ChecklistItemIn]
+
+
+@router.get("/config/job-checklist")
+def admin_get_job_checklist(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    from app.core.job_checklists import (
+        JOB_CHECKLIST_KEY, normalize_items, default_items, AUTO_SIGNALS,
+    )
+    row = db.query(SystemConfig).filter(SystemConfig.key == JOB_CHECKLIST_KEY).first()
+    items = normalize_items(_json.loads(row.value)) if row and row.value else default_items()
+    if not items:
+        items = default_items()
+    return {"items": items, "auto_signals": AUTO_SIGNALS}
+
+
+@router.put("/config/job-checklist", status_code=204)
+def admin_set_job_checklist(
+    payload: JobChecklistRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    from app.core.job_checklists import JOB_CHECKLIST_KEY, normalize_items
+    items = normalize_items([i.model_dump() for i in payload.items])
+    row = db.query(SystemConfig).filter(SystemConfig.key == JOB_CHECKLIST_KEY).first()
+    if row:
+        row.value = _json.dumps(items)
+    else:
+        db.add(SystemConfig(key=JOB_CHECKLIST_KEY, value=_json.dumps(items)))
+    db.commit()
+
+
+# ---------------------------
 # Company (carrier) information config
 # ---------------------------
 
