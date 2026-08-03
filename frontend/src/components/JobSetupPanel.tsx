@@ -35,9 +35,14 @@ type EventCrew = {
 export default function JobSetupPanel({
   jobUuid,
   meta,
+  onHeader,
 }: {
   jobUuid: string;
   meta: Meta;
+  // Fired with the SAVED header (or null when a job has none) after load and
+  // after a successful save. The hub uses it to make the device mode follow the
+  // job's long-distance flag (ADR 0034, C1.3).
+  onHeader?: (h: JobSetupData | null) => void;
 }) {
   const jobTypes = useJobTypes();
   const [units, setUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
@@ -126,6 +131,7 @@ export default function JobSetupPanel({
       if (cancelled) return;
       setExisting(h);
       hydrate(h, evc);
+      onHeader?.(h);
       // Open the form automatically the first time a job has no header.
       setOpen(!h);
       setLoaded(true);
@@ -185,6 +191,9 @@ export default function JobSetupPanel({
       const r = await saveJobSetup(jobUuid, { ...body, override });
       setStatus(r.synced ? "saved" : "queued");
       if (r.setup) { setExisting(r.setup); setLocked(!!r.setup.locked); }
+      // The saved header (or the queued body when offline) is what the hub
+      // should follow for the LD mode.
+      onHeader?.(r.setup ?? { ...body });
       if (r.synced) setOpen(false);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {

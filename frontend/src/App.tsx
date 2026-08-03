@@ -2330,6 +2330,12 @@ export default function App() {
                   source: src,
                   calendarEventId: jm?.calendarEventId || calSelectedId || null,
                 }}
+                onHeader={(h) => {
+                  // C1.3: the job header owns local/long-distance now, so the
+                  // device mode follows it when a job that has one is selected
+                  // or saved. A job with no header keeps the device toggle.
+                  if (h) setMode(h.is_long_distance ? "long_distance" : "local");
+                }}
               />
             );
           })()}
