@@ -370,12 +370,20 @@ function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
   );
 }
 
+type ConvoNote = { at: string; by: string; text: string };
 type AdminIncident = {
   id: number; incident_uuid: string; job_uuid: string | null; job_name: string | null;
   incident_date: string | null; reported_by_name: string | null; attributed_crew: string | null;
   severity: string; attributable: string; description: string; est_cost: number | null;
-  resolved: boolean; notes: string | null; photo_urls: string[]; created_at: string;
+  resolved: boolean; status: string; settled_amount: number | null; conversation_log: ConvoNote[];
+  notes: string | null; photo_urls: string[]; created_at: string;
 };
+
+const INCIDENT_STATUS_OPTS = [
+  { value: "", label: "No status" },
+  { value: "pending", label: "Needs action" },
+  { value: "resolved", label: "Resolved" },
+];
 
 // Admin log of crew-reported incidents. Read + resolve/reopen + edit notes/cost.
 function IncidentsAdminTab() {
@@ -383,7 +391,8 @@ function IncidentsAdminTab() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
-  const [showResolved, setShowResolved] = useState(true);
+  const [filter, setFilter] = useState<"all" | "" | "pending" | "resolved">("all");
+  const [noteDraft, setNoteDraft] = useState<Record<number, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -394,7 +403,7 @@ function IncidentsAdminTab() {
     return () => { cancelled = true; };
   }, []);
 
-  async function patch(inc: AdminIncident, body: Partial<Pick<AdminIncident, "resolved" | "notes" | "est_cost">>) {
+  async function patch(inc: AdminIncident, body: Record<string, any>) {
     setBusy(inc.id);
     try {
       const updated = await apiFetch<AdminIncident>(`/api/admin/incidents/${inc.id}`, {
@@ -406,20 +415,30 @@ function IncidentsAdminTab() {
     } finally { setBusy(null); }
   }
 
-  const shown = incidents.filter((i) => showResolved || !i.resolved);
-  const openCount = incidents.filter((i) => !i.resolved).length;
+  async function addNote(inc: AdminIncident) {
+    const text = (noteDraft[inc.id] || "").trim();
+    if (!text) return;
+    await patch(inc, { add_note: text });
+    setNoteDraft((prev) => ({ ...prev, [inc.id]: "" }));
+  }
+
+  const shown = incidents.filter((i) => filter === "all" || (i.status || "") === filter);
+  const pendingCount = incidents.filter((i) => (i.status || "") === "pending").length;
+  const noStatusCount = incidents.filter((i) => !(i.status || "")).length;
 
   return (
     <div className="card">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <div className="microLabel" style={{ marginBottom: 0 }}>Incidents</div>
-        <label className="row small" style={{ gap: 6, alignItems: "center", cursor: "pointer" }}>
-          <input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
-          Show resolved
-        </label>
+        <select value={filter} onChange={(e) => setFilter(e.target.value as any)} style={{ width: "auto", fontSize: 13, padding: "4px 8px" }}>
+          <option value="all">All</option>
+          <option value="pending">Needs action</option>
+          <option value="">No status</option>
+          <option value="resolved">Resolved</option>
+        </select>
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 12 }}>
-        {openCount} open · {incidents.length} total. Also exported to the Incidents sheet tab.
+        {pendingCount} need action · {noStatusCount} unset · {incidents.length} total. Also exported to the Incidents sheet tab.
       </div>
 
       {loading ? (
@@ -432,10 +451,17 @@ function IncidentsAdminTab() {
         <div className="col" style={{ gap: 10 }}>
           {shown.map((inc) => {
             const color = inc.severity === "major" ? "var(--danger)" : inc.severity === "moderate" ? "var(--warn)" : "var(--ok)";
+            const st = inc.status || "";
+            const statusColor = st === "resolved" ? "var(--ok)" : st === "pending" ? "var(--warn)" : "var(--muted)";
             return (
-              <div key={inc.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, opacity: inc.resolved ? 0.6 : 1 }}>
+              <div key={inc.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, opacity: st === "resolved" ? 0.7 : 1 }}>
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{inc.severity}</span>
+                  <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{inc.severity}</span>
+                    <span className="statusDot" style={{ ["--dot" as any]: statusColor, fontSize: 11 }}>
+                      {INCIDENT_STATUS_OPTS.find((o) => o.value === st)?.label || "No status"}
+                    </span>
+                  </div>
                   <span className="small" style={{ color: "var(--muted)" }}>{inc.incident_date || inc.created_at.slice(0, 10)}</span>
                 </div>
                 <div style={{ fontSize: 14, marginTop: 4 }}>{inc.description}</div>
@@ -444,15 +470,62 @@ function IncidentsAdminTab() {
                     inc.job_name ? `Job: ${inc.job_name}` : null,
                     inc.attributed_crew ? `Attributed: ${inc.attributed_crew}` : null,
                     `Attributable: ${inc.attributable}`,
-                    inc.est_cost != null ? `Est. $${inc.est_cost}` : null,
+                    inc.est_cost != null ? `Est. $${inc.est_cost.toLocaleString()}` : null,
+                    inc.settled_amount != null ? `Settled $${inc.settled_amount.toLocaleString()}` : null,
                     inc.reported_by_name ? `by ${inc.reported_by_name}` : null,
                   ].filter(Boolean).join(" · ")}
                 </div>
                 {inc.notes && <div className="small" style={{ marginTop: 4 }}>Notes: {inc.notes}</div>}
-                <div className="row" style={{ gap: 6, marginTop: 8 }}>
-                  <button disabled={busy === inc.id} onClick={() => patch(inc, { resolved: !inc.resolved })}
-                    style={{ fontSize: 12, padding: "4px 12px" }}>
-                    {inc.resolved ? "Reopen" : "Mark resolved"}
+
+                <div className="row wrap" style={{ gap: 10, marginTop: 10, alignItems: "center" }}>
+                  <label className="row small" style={{ gap: 4, alignItems: "center" }}>
+                    <span style={{ color: "var(--muted)" }}>Status</span>
+                    <select value={st} disabled={busy === inc.id} onChange={(e) => patch(inc, { status: e.target.value })}
+                      style={{ width: "auto", fontSize: 13, padding: "4px 8px" }}>
+                      {INCIDENT_STATUS_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="row small" style={{ gap: 4, alignItems: "center" }}>
+                    <span style={{ color: "var(--muted)" }}>Settled $</span>
+                    <input
+                      type="number" defaultValue={inc.settled_amount ?? ""} placeholder="0" disabled={busy === inc.id}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim();
+                        const n = v === "" ? null : Number(v);
+                        if (n !== (inc.settled_amount ?? null)) patch(inc, { settled_amount: n });
+                      }}
+                      style={{ width: 96, fontSize: 13, padding: "4px 8px" }}
+                    />
+                  </label>
+                </div>
+
+                {inc.conversation_log.length > 0 && (
+                  <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="microLabel" style={{ marginBottom: 6 }}>Conversation notes</div>
+                    <div className="col" style={{ gap: 6 }}>
+                      {inc.conversation_log.map((c, ci) => (
+                        <div key={ci} className="small">
+                          <span style={{ color: "var(--muted)" }}>
+                            {c.at ? new Date(c.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}
+                            {c.by ? ` · ${c.by}` : ""}:
+                          </span>{" "}
+                          {c.text}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="row" style={{ gap: 6, marginTop: 8, alignItems: "center" }}>
+                  <input
+                    value={noteDraft[inc.id] ?? ""}
+                    onChange={(e) => setNoteDraft((prev) => ({ ...prev, [inc.id]: e.target.value }))}
+                    placeholder="Add a conversation / resolution note…"
+                    disabled={busy === inc.id}
+                    onKeyDown={(e) => { if (e.key === "Enter") addNote(inc); }}
+                    style={{ flex: "1 1 auto", fontSize: 13, padding: "6px 8px" }}
+                  />
+                  <button disabled={busy === inc.id || !(noteDraft[inc.id] || "").trim()} onClick={() => addNote(inc)} style={{ fontSize: 12, padding: "4px 12px" }}>
+                    Add note
                   </button>
                 </div>
               </div>
