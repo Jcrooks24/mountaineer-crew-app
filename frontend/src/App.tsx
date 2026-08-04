@@ -394,6 +394,12 @@ export default function App() {
   // it when they need it.
   const [showJobDetails, setShowJobDetails] = useState(false);
 
+  // Once a job is active, the Select-Job dropdown + Date inputs collapse into a
+  // fixed read-only display; "Change job" reopens the picker to switch or start
+  // a new one. Selecting a job (jobUuid changes) closes the picker again.
+  const [selectingJob, setSelectingJob] = useState(false);
+  useEffect(() => { if (jobUuid) setSelectingJob(false); }, [jobUuid]);
+
   // The Inventory tab only exists in long-distance mode. Today the mode switch
   // itself lives on the Timeline tab, so nobody can be sitting on Inventory at
   // the moment it flips to local - but that is a layout coincidence, not a
@@ -2142,6 +2148,19 @@ export default function App() {
             <div className="microLabel" style={{ marginBottom: 10 }}>Job</div>
 
             <div className="col" style={{ gap: 12 }}>
+              {jobUuid && !selectingJob ? (
+                // Fixed read-only display of the active job, visible throughout.
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                  <div className="col" style={{ gap: 2, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 16, wordBreak: "break-word" }}>{jobName || "Selected job"}</div>
+                    <div className="mono small" style={{ color: "var(--muted)" }} title={jobUuid}>
+                      {jobDate}{jobDate ? "  ·  " : ""}#{jobUuid.slice(0, 8)}
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => setSelectingJob(true)} style={{ fontSize: 12, flexShrink: 0 }}>Change job</button>
+                </div>
+              ) : (
+                <>
               {/* 1 - Calendar job selector: lead with the job (the common case);
                   the date is tucked below and defaults to today. */}
               <div className="col">
@@ -2217,6 +2236,18 @@ export default function App() {
                     <div className="mono" style={{ color: "var(--muted)", fontSize: 10 }} title={jobUuid}>#{jobUuid.slice(0, 8)}</div>
                   )}
                 </div>
+              )}
+
+              {jobUuid && selectingJob && (
+                <button
+                  type="button"
+                  onClick={() => setSelectingJob(false)}
+                  style={{ fontSize: 12, alignSelf: "flex-start", color: "var(--muted)" }}
+                >
+                  Keep current job
+                </button>
+              )}
+                </>
               )}
 
               {status && <div className="small" style={{ color: "var(--brand)" }}>{status}</div>}
