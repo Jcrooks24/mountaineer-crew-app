@@ -24,7 +24,6 @@ import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { slotToBlob, slotToPreviewBlob, toQueuedPhoto, UnreadablePhotoError } from "./lib/queuedPhoto";
 import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
-import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
 import {
   formatMountain,
   formatMountainDate,
@@ -420,17 +419,6 @@ export default function App() {
   const [activityLog, setActivityLog] = useState<EventRecord[]>([]);
 
   const [clockText, setClockText] = useState<string>("-");
-  const [patchNotesUnseen, setPatchNotesUnseen] = useState<boolean>(false);
-
-  useEffect(() => {
-    apiFetch<{ id: number; updated_at: string }[]>("/api/patch-notes")
-      .then((rows) => {
-        const latest = rows[0]?.updated_at ?? null;
-        setPatchNotesUnseen(hasUnseenPatchNotes(latest));
-      })
-      .catch(() => {/* non-fatal - no indicator */});
-  }, []);
-
   // Retention prune on boot - drop stale log entries and stuck queue ops
   // so localStorage stays well clear of its per-origin quota. The Google
   // Sheet is authoritative long-term; this buffer only needs a couple of
@@ -2125,8 +2113,10 @@ export default function App() {
           <span className="statusDot" style={{ ["--dot" as any]: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize", fontSize: 12 }}>
             {jobStatus}
           </span>
-          {/* DVIR moved to the persistent bottom nav; button removed here to
-              cut the redundancy. Admin stays (not in the crew bottom nav). */}
+          {/* DVIR + Profile live in the persistent bottom nav; their top-bar
+              buttons were removed as redundant. The "new patch notes" dot moved
+              to the bottom-nav Profile tab. Admin stays (not in the crew bottom
+              nav, so this is its only entry point). */}
           {user?.role === "admin" && (
             <button
               onClick={() => nav("/admin")}
@@ -2135,27 +2125,6 @@ export default function App() {
               Admin
             </button>
           )}
-          <button
-            onClick={() => { setPatchNotesUnseen(false); nav("/profile"); }}
-            style={{ cursor: "pointer", background: "none", border: "none", color: "var(--muted)", fontSize: 13, fontWeight: 600, padding: "4px 4px", position: "relative" }}
-          >
-            Profile
-            {patchNotesUnseen && (
-              <span
-                title="New patch notes - view on Profile"
-                style={{
-                  position: "absolute",
-                  top: -2,
-                  right: -2,
-                  width: 9,
-                  height: 9,
-                  borderRadius: "50%",
-                  background: "var(--brand)",
-                  boxShadow: "0 0 0 2px var(--bg)",
-                }}
-              />
-            )}
-          </button>
         </div>
       </div>
 
@@ -2484,11 +2453,8 @@ export default function App() {
               </button>
             );
           })}
-          <button type="button" onClick={() => nav("/dvir")}
-            style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 68, padding: "10px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", cursor: "pointer" }}>
-            <span style={{ color: "var(--muted)", display: "inline-flex" }}><HubIcons.truck /></span>
-            <span style={{ fontSize: 12, fontWeight: 500 }}>DVIR</span>
-          </button>
+          {/* DVIR is in the persistent bottom nav; its hub Actions tile was
+              removed as redundant with that. */}
         </div>
       ) : (
         <button type="button" onClick={() => setTab("home")}

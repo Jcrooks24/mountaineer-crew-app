@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { apiFetch } from "../api/client";
+import { hasUnseenPatchNotes } from "../lib/patchNotesSeen";
 
 /**
  * Persistent crew bottom-nav shell (design system Phase B).
@@ -33,6 +36,19 @@ export default function BottomNav() {
   const loc = useLocation();
   const nav = useNavigate();
 
+  // "New patch notes" indicator, relocated here from the old top-bar Profile
+  // button (that button was redundant with this tab). Fetch the latest note's
+  // timestamp once; hasUnseenPatchNotes is re-read every render against the
+  // stored seen-time, so the dot clears itself once the crew opens Profile
+  // (the Profile page marks notes seen).
+  const [latestNote, setLatestNote] = useState<string | null>(null);
+  useEffect(() => {
+    apiFetch<{ id: number; updated_at: string }[]>("/api/patch-notes")
+      .then((rows) => setLatestNote(rows[0]?.updated_at ?? null))
+      .catch(() => { /* non-fatal - no indicator */ });
+  }, []);
+  const patchNotesUnseen = hasUnseenPatchNotes(latestNote);
+
   const p = loc.pathname;
   if (HIDE_PREFIXES.some((h) => p === h || p.startsWith(h + "/"))) return null;
 
@@ -61,7 +77,7 @@ export default function BottomNav() {
             aria-current={on ? "page" : undefined}
             onClick={() => nav(t.path)}
             style={{
-              flex: 1, minHeight: 56,
+              flex: 1, minHeight: 56, position: "relative",
               display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
               background: "transparent", border: "none", borderRadius: 0,
               cursor: "pointer", color, padding: "6px 0",
@@ -73,6 +89,16 @@ export default function BottomNav() {
             <span style={{ fontFamily: "var(--font)", fontSize: 12, fontWeight: on ? 600 : 400, color, letterSpacing: 0 }}>
               {t.label}
             </span>
+            {t.path === "/profile" && patchNotesUnseen && (
+              <span
+                title="New patch notes"
+                style={{
+                  position: "absolute", top: 8, right: "calc(50% - 16px)",
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: "var(--brand)", boxShadow: "0 0 0 2px var(--card)",
+                }}
+              />
+            )}
           </button>
         );
       })}
