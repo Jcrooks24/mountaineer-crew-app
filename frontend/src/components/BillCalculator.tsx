@@ -715,30 +715,10 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       )}
 
       {/* ── Line items ──
-          Card owns the horizontal scroll so the six-column grid can stay
-          intact on a narrow phone rather than wrapping chaotically. Every
-          inner row uses minWidth: 430 so the scroll position lines up. */}
-      <div className="card" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
-        {/* Header */}
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
-          minWidth: 430,
-          gap: 6, padding: "10px 12px",
-          background: "rgba(255,255,255,0.08)",
-          borderBottom: "1px solid var(--border)",
-          fontSize: 11, fontWeight: 800, color: "var(--text)",
-          opacity: 0.85,
-          textTransform: "uppercase", letterSpacing: "0.04em",
-        }}>
-          <span>Description</span>
-          <span style={{ textAlign: "right" }}>Qty</span>
-          <span style={{ textAlign: "right" }}>Rate ($)</span>
-          <span style={{ textAlign: "right" }}>Disc %</span>
-          <span style={{ textAlign: "right" }}>Amount</span>
-          <span />
-        </div>
-
+          Each row is a self-labeled stacked block (description on top, then
+          Qty / Rate / Disc that wrap), so the invoice fits a phone without any
+          horizontal scroll. No fixed-width grid, no column header. */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         {bill.items.length === 0 && (
           <div style={{ padding: "20px 14px", color: "var(--muted)", fontSize: 13, textAlign: "center" }}>
             No line items - add some below.
@@ -751,24 +731,17 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
 
         {/* ── Materials summary + live list ── */}
         <div style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
-          minWidth: 430,
-          gap: 6, padding: "10px 12px",
+          display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+          padding: "10px 12px",
           background: "color-mix(in srgb, var(--brand) 6%, transparent)",
           borderBottom: "1px solid var(--border)",
           borderTop: bill.items.length > 0 ? "1px solid var(--border)" : undefined,
-          alignItems: "center",
           fontSize: 13, fontWeight: 700,
         }}>
           <span>Materials</span>
-          <span />
-          <span />
-          <span />
           <span style={{ textAlign: "right", color: materialsTotal > 0 ? "var(--brand)" : "var(--muted)" }}>
             {fmt(materialsTotal)}
           </span>
-          <span />
         </div>
 
         {materials.length > 0 && (
@@ -779,25 +752,22 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
               return (
                 <div key={m.submissionId}>
                   <div style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 60px 90px 80px 28px",
-                    gap: 6, padding: "6px 12px 6px 28px",
+                    display: "flex", gap: 8, padding: "6px 12px 6px 28px",
                     borderBottom: m.failed ? "none" : "1px solid var(--border)",
                     alignItems: "center",
                     fontSize: 12, color: "var(--text)",
                     opacity: m.pending && !m.failed ? 0.75 : 1,
                   }}>
-                    <span style={{ color: "var(--muted)" }}>
+                    <span style={{ color: "var(--muted)", flex: 1, minWidth: 0 }}>
                       • {m.name}
+                      <span style={{ color: "var(--muted)" }}> ×{m.qty} @ {unit}</span>
                       {m.failed
                         ? <span style={{ marginLeft: 6, fontSize: 10, color: "var(--danger)", fontWeight: 700 }}>NOT SENT</span>
                         : m.pending && <span title="Waiting to sync" style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
                     </span>
-                    <span style={{ textAlign: "right", color: "var(--muted)" }}>×{m.qty}</span>
-                    <span style={{ textAlign: "right", color: "var(--muted)" }}>{unit}</span>
-                    <span style={{ textAlign: "right", fontWeight: 600 }}>{ext}</span>
+                    <span style={{ textAlign: "right", fontWeight: 600, flexShrink: 0 }}>{ext}</span>
                     <button type="button" onClick={() => removeMaterial(m.submissionId)}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1, flexShrink: 0 }}
                       aria-label="Remove material">×</button>
                   </div>
                   {/* The server refused this item. It is kept, not deleted (ADR
@@ -993,31 +963,47 @@ function LineItemRow({ item, onChange, onRemove }: {
 }) {
   const subtotal = lineSubtotal(item);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px", minWidth: 430, gap: 6, padding: "8px 12px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
-      <input value={item.label} onChange={(e) => onChange({ label: e.target.value })} placeholder="Description" style={{ ...cellInputStyle, fontSize: 13 }} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <NumberField min={0} step={0.25} value={item.qty} aria-label="Quantity"
-          onChange={(qty) => onChange({ qty })} style={numInputStyle} />
-        <select value={item.unit} onChange={(e) => onChange({ unit: e.target.value as Unit })} style={{ ...selectStyle, fontSize: 10 }}>
-          <option value="hr">hr</option>
-          <option value="ea">ea</option>
-          <option value="flat">flat</option>
-          <option value="mi">mi</option>
-          <option value="day">day</option>
-          <option value="lb">lb</option>
-          <option value="cu ft">cu ft</option>
-        </select>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+      {/* Description + running amount + remove. */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input value={item.label} onChange={(e) => onChange({ label: e.target.value })} placeholder="Description"
+          style={{ ...cellInputStyle, fontSize: 13, flex: 1, minWidth: 0 }} />
+        <div style={{ minWidth: 64, textAlign: "right", fontSize: 13, fontWeight: 700, color: subtotal > 0 ? "var(--text)" : "var(--muted)", flexShrink: 0 }}>
+          {fmt(subtotal)}
+        </div>
+        <button type="button" onClick={onRemove}
+          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1, flexShrink: 0 }}
+          aria-label="Remove">×</button>
       </div>
-      <NumberField min={0} step={0.01} value={item.rate} aria-label="Rate"
-        onChange={(rate) => onChange({ rate })} placeholder="0.00" style={numInputStyle} />
-      <NumberField min={0} max={100} step={1} value={item.discount} aria-label="Line discount percent"
-        onChange={(discount) => onChange({ discount })} style={numInputStyle} />
-      <div style={{ textAlign: "right", fontSize: 13, fontWeight: 600, color: subtotal > 0 ? "var(--text)" : "var(--muted)" }}>
-        {fmt(subtotal)}
+      {/* Qty (+ unit), Rate, Disc - self-labeled, wrap on a narrow phone. */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={fieldLabelStyle}>
+          <span>Qty</span>
+          <div style={{ display: "flex", gap: 4 }}>
+            <NumberField min={0} step={0.25} value={item.qty} aria-label="Quantity"
+              onChange={(qty) => onChange({ qty })} style={{ ...numInputStyle, width: 60 }} />
+            <select value={item.unit} onChange={(e) => onChange({ unit: e.target.value as Unit })} style={{ ...selectStyle, width: 62, fontSize: 12 }}>
+              <option value="hr">hr</option>
+              <option value="ea">ea</option>
+              <option value="flat">flat</option>
+              <option value="mi">mi</option>
+              <option value="day">day</option>
+              <option value="lb">lb</option>
+              <option value="cu ft">cu ft</option>
+            </select>
+          </div>
+        </label>
+        <label style={fieldLabelStyle}>
+          <span>Rate ($)</span>
+          <NumberField min={0} step={0.01} value={item.rate} aria-label="Rate"
+            onChange={(rate) => onChange({ rate })} placeholder="0.00" style={{ ...numInputStyle, width: 84 }} />
+        </label>
+        <label style={fieldLabelStyle}>
+          <span>Disc %</span>
+          <NumberField min={0} max={100} step={1} value={item.discount} aria-label="Line discount percent"
+            onChange={(discount) => onChange({ discount })} style={{ ...numInputStyle, width: 64 }} />
+        </label>
       </div>
-      <button type="button" onClick={onRemove}
-        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
-        aria-label="Remove">×</button>
     </div>
   );
 }
@@ -1030,6 +1016,12 @@ const cellInputStyle: React.CSSProperties = {
   color: "var(--text)", fontSize: 13, boxSizing: "border-box",
 };
 const numInputStyle: React.CSSProperties = { ...cellInputStyle, textAlign: "right" };
+// Small stacked label for the per-line Qty / Rate / Disc fields (mobile-first
+// invoice rows: the label sits above the field so no column header is needed).
+const fieldLabelStyle: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 2,
+  fontSize: 11, color: "var(--muted)", fontWeight: 600,
+};
 const selectStyle: React.CSSProperties = {
   width: "100%", padding: "3px 4px", borderRadius: 4,
   border: "1px solid var(--border)", background: "var(--bg)",
