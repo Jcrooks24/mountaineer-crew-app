@@ -1933,17 +1933,73 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       </div>
       )}
 
-      {/* Close-out. Three things the office cannot reconstruct after the fact:
-          why the day differed from the quote, whether the client was ready, and
-          what got added on site. All optional - a crew member who cannot answer
-          must still be able to submit, so nothing here gates Save. */}
+      {/* Drive-only LD days skip auto-populate review, billing method,
+          personal vehicles, review candidate, and hours reconciliation. */}
       {!driveOnly && (
+      <>
+      {/* ── Billing (bill helper + totals + notes + review + method in one tile) ── */}
       <div className="card">
-        <div className="row" style={{ alignItems: "center", gap: 8 }}>
-          <div className="microLabel" style={{ marginBottom: 0 }}>Close-out</div>
-          <BetaTag feature="closeout" style={{ marginTop: 0 }} />
+        <div className="microLabel" style={{ marginBottom: 10 }}>Billing</div>
+        <div style={{ marginBottom: 12 }}>
+          {billSlots.billHelper}
+          {billSlots.totals}
+          {billSlots.notes}
         </div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 14 }}>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
+          <input
+            type="checkbox"
+            checked={billReviewed}
+            onChange={(e) => { setBillReviewed(e.target.checked); setSaved(false); }}
+            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+          />
+          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
+            I have reviewed and confirmed the correctness of the auto-populated line items
+            in the Invoice Builder above (labor lines from Employee Hours plus any
+            dumpster / recycling charges from the sliders).
+          </span>
+        </label>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+          {BILLING_OPTIONS.map(({ value, label }) => {
+            const active = data.billing_method === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => set("billing_method", value)}
+                style={{
+                  padding: "11px 14px",
+                  borderRadius: 10,
+                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                  background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
+                  color: active ? "var(--brand)" : "var(--text)",
+                  fontWeight: active ? 700 : 400,
+                  fontSize: 13,
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── The rest of the tiles (any order at the bottom of the tab). */}
+
+      {/* ── Job wrap-up (close-out + review candidate + hours + crew feedback) ── */}
+      <div className="card">
+        <div className="microLabel" style={{ marginBottom: 10 }}>Job wrap-up</div>
+
+        {/* Close-out (merged into the wrap-up tile): why the day differed, whether
+            the client was ready, and what got added on site. All optional - a crew
+            member who cannot answer must still be able to submit, nothing here
+            gates Save. */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+          Close-out<BetaTag feature="closeout" style={{ marginTop: 0 }} />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 14 }}>
           Optional, but this is what tells the office why a job ran the way it did.
           Skip anything you cannot answer.
         </div>
@@ -2017,68 +2073,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           value={data.scope_changes}
           onChange={(fn) => setWith("scope_changes", fn)}
         />
-      </div>
-      )}
 
-      {/* Drive-only LD days skip auto-populate review, billing method,
-          personal vehicles, review candidate, and hours reconciliation. */}
-      {!driveOnly && (
-      <>
-      {/* ── Billing (bill helper + totals + notes + review + method in one tile) ── */}
-      <div className="card">
-        <div className="microLabel" style={{ marginBottom: 10 }}>Billing</div>
-        <div style={{ marginBottom: 12 }}>
-          {billSlots.billHelper}
-          {billSlots.totals}
-          {billSlots.notes}
-        </div>
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
-          <input
-            type="checkbox"
-            checked={billReviewed}
-            onChange={(e) => { setBillReviewed(e.target.checked); setSaved(false); }}
-            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
-          />
-          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
-            I have reviewed and confirmed the correctness of the auto-populated line items
-            in the Invoice Builder above (labor lines from Employee Hours plus any
-            dumpster / recycling charges from the sliders).
-          </span>
-        </label>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-          {BILLING_OPTIONS.map(({ value, label }) => {
-            const active = data.billing_method === value;
-            return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => set("billing_method", value)}
-                style={{
-                  padding: "11px 14px",
-                  borderRadius: 10,
-                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
-                  color: active ? "var(--brand)" : "var(--text)",
-                  fontWeight: active ? 700 : 400,
-                  fontSize: 13,
-                  textAlign: "left",
-                  cursor: "pointer",
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── The rest of the tiles (any order at the bottom of the tab). */}
-
-      {/* ── Personal vehicles ── */}
-      <div className="card">
-        <div className="microLabel" style={{ marginBottom: 10 }}>Job wrap-up</div>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Review candidate *</div>
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
