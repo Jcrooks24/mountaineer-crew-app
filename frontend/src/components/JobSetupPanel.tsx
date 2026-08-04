@@ -68,12 +68,10 @@ export default function JobSetupPanel({
   const [stops, setStops] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
-  const [locked, setLocked] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<"idle" | "saved" | "queued">("idle");
   const [err, setErr] = useState<string | null>(null);
-  const [lockedConflict, setLockedConflict] = useState(false);
 
   // Hydrate the form from an existing header, or seed a fresh one from the
   // job meta + calendar invitees.
@@ -87,7 +85,6 @@ export default function JobSetupPanel({
       setStops(h.stops || []);
       setTags(h.job_type_tags || []);
       setNotes(h.notes || "");
-      setLocked(!!h.locked);
     } else {
       // Fresh job: pre-fill crew from matched invitees (unconfirmed until the
       // crew tick them), and name/date from the selected job.
@@ -111,7 +108,6 @@ export default function JobSetupPanel({
     setLoaded(false);
     setStatus("idle");
     setErr(null);
-    setLockedConflict(false);
     refreshUnits().then((u) => { if (!cancelled) setUnits(u); }).catch(() => {});
 
     (async () => {
@@ -182,28 +178,25 @@ export default function JobSetupPanel({
     destination: destination.trim() || null,
     stops: stops.map((s) => s.trim()).filter(Boolean),
     notes: notes.trim() || null,
-    locked,
-  }), [meta.jobName, meta.jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, crew, origin, destination, stops, notes, locked]);
+    // Overwrite protection is confirm-to-edit now, not a persistent lock, so the
+    // header is never locked. Saves carry override (below) to bypass any stale
+    // lock left over from the old model.
+    locked: false,
+  }), [meta.jobName, meta.jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, crew, origin, destination, stops, notes]);
 
-  const doSave = async (override: boolean) => {
+  const doSave = async () => {
     setBusy(true);
     setErr(null);
-    setLockedConflict(false);
     try {
-      const r = await saveJobSetup(jobUuid, { ...body, override });
+      const r = await saveJobSetup(jobUuid, { ...body, override: true });
       setStatus(r.synced ? "saved" : "queued");
-      if (r.setup) { setExisting(r.setup); setLocked(!!r.setup.locked); }
+      if (r.setup) setExisting(r.setup);
       // The saved header (or the queued body when offline) is what the hub
       // should follow for the LD mode.
       onHeader?.(r.setup ?? { ...body });
       if (r.synced) setOpen(false);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        setLockedConflict(true);
-        setErr("This job's setup is locked. Unlock it to save your changes.");
-      } else {
-        setErr(e instanceof ApiError ? e.message : "Could not save. Try again.");
-      }
+      setErr(e instanceof ApiError ? e.message : "Could not save. Try again.");
     } finally {
       setBusy(false);
     }
@@ -211,22 +204,18 @@ export default function JobSetupPanel({
 
   // The prominent Local/Long-distance toggle persists immediately (it is a
   // single, always-visible control), so it does not need the crew to open and
-  // Save the whole setup. Reverts on a locked header.
+  // Save the whole setup.
   const saveLd = async (v: boolean) => {
     setIsLD(v);
     setErr(null);
     try {
-      const r = await saveJobSetup(jobUuid, { ...body, is_long_distance: v });
+      const r = await saveJobSetup(jobUuid, { ...body, is_long_distance: v, override: true });
       setStatus(r.synced ? "saved" : "queued");
-      if (r.setup) { setExisting(r.setup); setLocked(!!r.setup.locked); }
+      if (r.setup) setExisting(r.setup);
       onHeader?.(r.setup ?? { ...body, is_long_distance: v });
     } catch (e) {
       setIsLD(!v); // could not persist - put the toggle back
-      setErr(
-        e instanceof ApiError && e.status === 409
-          ? "This job's setup is locked. Open Edit and unlock it to change long-distance."
-          : "Could not save long-distance. Try again.",
-      );
+      setErr(e instanceof ApiError ? e.message : "Could not save long-distance. Try again.");
     }
   };
 
@@ -285,8 +274,19 @@ export default function JobSetupPanel({
             <div className="row" style={{ gap: 8, alignItems: "center" }}>
               {status === "saved" && <span className="small" style={{ color: "var(--ok)" }}>Saved</span>}
               {status === "queued" && <span className="small" style={{ color: "var(--warn, #e0a800)" }}>Saved offline</span>}
-              {existing.locked && <span className="chip" style={{ fontSize: 10 }}>Locked</span>}
-              <button type="button" onClick={() => setOpen(true)} style={{ fontSize: 12 }}>Edit</button>
+              {/* Confirm-to-edit: this setup feeds other tools, so editing it is
+                  a deliberate act (no accidental clobber). */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm("Edit this job's setup? It feeds the DVIR, the job report, and the checklist for this job.")) {
+                    setOpen(true);
+                  }
+                }}
+                style={{ fontSize: 12 }}
+              >
+                Edit
+              </button>
             </div>
           </div>
           {staticRow("Crew", crewNames.length ? crewNames.join(", ") : "None added")}
@@ -426,23 +426,12 @@ export default function JobSetupPanel({
             <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: "100%", resize: "vertical" }} />
           </label>
 
-          {/* Lock (C2) */}
-          <label className="row" style={{ gap: 8, alignItems: "center" }}>
-            <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} />
-            <span className="small">Lock this setup so it is not overwritten by accident</span>
-          </label>
-
           {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
 
           <div className="row" style={{ gap: 8 }}>
-            <button type="button" className="btnPrimary" onClick={() => doSave(false)} disabled={busy}>
+            <button type="button" className="btnPrimary" onClick={() => doSave()} disabled={busy}>
               {busy ? "Saving…" : "Save job setup"}
             </button>
-            {lockedConflict && (
-              <button type="button" onClick={() => { setLocked(false); doSave(true); }} disabled={busy}>
-                Unlock and save
-              </button>
-            )}
           </div>
         </div>
       )}

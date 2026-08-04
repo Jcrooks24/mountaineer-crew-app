@@ -46,8 +46,12 @@ authoritative header, and have the other tools seed their defaults from it.**
   fixes the drift and makes LD-only checklist items (C3) and LD tabs correct
   per job.
 - **The header resists accidental overwrite (C2).** Once set, editing it is a
-  deliberate act (a `locked` flag + confirm-to-edit), because it now feeds other
-  tools and a stray change propagates.
+  deliberate act: the static tile's Edit button asks the crew to confirm before
+  opening the form, because the header now feeds other tools and a stray change
+  propagates. (A persistent `locked` flag was the first cut; confirm-to-edit
+  replaced it 2026-08-04 as less friction for the same protection. The column
+  and its server-side override still exist for back-compat; the app always sends
+  `locked: false` + `override: true` now.)
 
 The three dead job structures stay dead: the legacy `jobs` table + integer
 `job_id` FK (always null), and the unregistered `jobs_registry`. `job_uuid` is
@@ -78,6 +82,7 @@ the only identity.
   - C1.1: `job_setup` model + migration + GET/PUT `/api/job-setup/{job_uuid}` (additive, no tool wiring). Sheet export of the header.
   - C1.2: the capture screen - crew from invitees (new crew-suggestions endpoint off the existing matcher) + confirm/add, vehicle unit(s), local/LD, name/date, origin/destination/stops, job type. Entry point from the hub.
   - C1.3: tools seed from the header - DVIR unit, LD mode, job type, addresses, report roster - one tool at a time.
-- **C2 - Overwrite protection.** `locked` + confirm-to-edit on the header. Folds into C1.
+- **C2 - Overwrite protection.** Confirm-to-edit on the header (superseded the
+  persistent `locked` flag 2026-08-04). Folds into C1.
 - **C3 - Configurable checklists.** Admin builds checklists in Settings, assigns to job types (+ LD-only items). Items auto-check off existing presence signals (DVIR row exists, report saved, BOL signed, inventory present, PODS/RODS filed); manual items (trucks swept, gear accounted for) the crew tick. Leans on the `job-summary` presence data + the header.
 - **C4 - DQ docs repository (independent).** Per-driver DQ forms filled in-app, exported to Drive, most-recent-per-type-per-driver, shown in Profile, with a reminder banner. Self-contained; does not depend on C1-C3.
