@@ -2736,16 +2736,16 @@ function SettingsTab({
         action="Open Advanced Settings →"
         onClick={onOpenAdvanced}
       />
-      <CompanyInfoCard />
-      <PayrollRatesCard />
-      <VehicleUnitsCard />
-      <EmployeeTagsManagerCard />
-      <JobTypesManagerCard />
-      <JobChecklistCard />
-      <DqDocTypesCard />
-      <SkillsManagerCard />
-      <FurnitureCatalogCard />
-      <HelpTextCard />
+      <CollapsibleSection title="Company info"><CompanyInfoCard /></CollapsibleSection>
+      <CollapsibleSection title="Payroll rates"><PayrollRatesCard /></CollapsibleSection>
+      <CollapsibleSection title="Vehicle units"><VehicleUnitsCard /></CollapsibleSection>
+      <CollapsibleSection title="Employee tags"><EmployeeTagsManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Job types"><JobTypesManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Job checklist"><JobChecklistCard /></CollapsibleSection>
+      <CollapsibleSection title="DQ document types"><DqDocTypesCard /></CollapsibleSection>
+      <CollapsibleSection title="Crew skills"><SkillsManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Furniture catalogue"><FurnitureCatalogCard /></CollapsibleSection>
+      <CollapsibleSection title="Help text"><HelpTextCard /></CollapsibleSection>
     </div>
   );
 }
@@ -5264,6 +5264,36 @@ type DVIRRecord = {
 // ─────────────────────────────────────────
 // DVIR vehicle units editor
 // ─────────────────────────────────────────
+// Wraps a Settings config card in a collapsed-by-default disclosure so the
+// admin does not see every config at once. The child card keeps its own title
+// (shown when expanded); the header is the toggle.
+function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        style={{
+          width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+          background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12,
+          padding: "12px 14px", cursor: "pointer", color: "var(--text)",
+        }}
+      >
+        <span className="microLabel" style={{ marginBottom: 0 }}>{title}</span>
+        <span
+          aria-hidden
+          style={{ color: "var(--muted)", fontSize: 20, lineHeight: 1, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}
+        >
+          ›
+        </span>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 function CompanyInfoCard() {
   const FIELDS: { key: keyof CompanyInfo; label: string; placeholder: string }[] = [
     { key: "name", label: "Company name", placeholder: "Mountaineer Moving LLC" },
