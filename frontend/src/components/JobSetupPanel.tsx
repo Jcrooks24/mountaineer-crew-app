@@ -278,6 +278,12 @@ export default function JobSetupPanel({
           {tags.length > 0 && staticRow("Type", tags.join(", "))}
           {routeParts.length > 0 && staticRow("Route", routeParts.join(" -> "))}
           {notes.trim() && staticRow("Notes", notes.trim())}
+          {(() => {
+            const doing = ldPlan.activities.filter((a) => isLD || a !== "driving");
+            return doing.length > 0
+              ? staticRow("Doing", doing.map((a) => a.charAt(0).toUpperCase() + a.slice(1)).join(", "))
+              : null;
+          })()}
         </div>
       ) : !open ? (
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -309,18 +315,44 @@ export default function JobSetupPanel({
             ) : crew.length === 0 ? (
               <span className="small" style={{ color: "var(--muted)" }}>No crew yet. Add them below.</span>
             ) : null}
-            {crew.map((c, i) => (
-              <div key={`${c.user_id ?? c.name}-${i}`} className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, padding: "4px 0" }}>
-                <label className="row" style={{ gap: 8, alignItems: "center", minWidth: 0 }}>
-                  <input type="checkbox" checked={c.confirmed} onChange={(e) => setCrewConfirmed(i, e.target.checked)} />
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{c.name || "(unnamed)"}</span>
-                  {c.source === "invitee" && (
-                    <span className="chip" style={{ fontSize: 10, color: "var(--muted)" }}>invited</span>
-                  )}
-                </label>
-                <button type="button" onClick={() => removeCrew(i)} style={{ fontSize: 12, color: "var(--danger)" }}>Remove</button>
+            {crew.length > 0 && (
+              <div className="row wrap" style={{ gap: 8 }}>
+                {crew.map((c, i) => {
+                  const on = c.confirmed;
+                  return (
+                    <span
+                      key={`${c.user_id ?? c.name}-${i}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={on}
+                      onClick={() => setCrewConfirmed(i, !on)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCrewConfirmed(i, !on); } }}
+                      title={on ? "On the job - tap to unselect" : "Suggested - tap to add"}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
+                        border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+                        background: on ? "var(--brand)" : "transparent",
+                        color: on ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: on ? 700 : 400,
+                      }}
+                    >
+                      <span>{c.name || "(unnamed)"}</span>
+                      {c.source === "invitee" && !on && (
+                        <span style={{ fontSize: 10, opacity: 0.7 }}>invited</span>
+                      )}
+                      <span
+                        role="button"
+                        aria-label={`Remove ${c.name || "crew member"}`}
+                        onClick={(e) => { e.stopPropagation(); removeCrew(i); }}
+                        style={{ marginLeft: 2, fontSize: 15, lineHeight: 1, opacity: 0.65 }}
+                      >
+                        ×
+                      </span>
+                    </span>
+                  );
+                })}
               </div>
-            ))}
+            )}
             {suggested.some((s) => !crew.some((c) => c.user_id === s.user_id)) && (
               <button type="button" onClick={addSuggested} style={{ fontSize: 12, alignSelf: "flex-start" }}>
                 + Add all invited crew
@@ -414,6 +446,12 @@ export default function JobSetupPanel({
             <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: "100%", resize: "vertical" }} />
           </label>
 
+          {/* What are you doing today? - the last setup field; it drives the
+              timeline tools (labor -> Actions, driving -> RODS). */}
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <LdPlanTile plan={ldPlan} onToggleActivity={onToggleActivity} showDriving={isLD} />
+          </div>
+
           {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
 
           <div className="row" style={{ gap: 8 }}>
@@ -423,12 +461,6 @@ export default function JobSetupPanel({
           </div>
         </div>
       )}
-
-      {/* What are you doing today? - part of the setup card, kept interactive so
-          the crew can update it through the day (it drives the timeline tools). */}
-      <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
-        <LdPlanTile plan={ldPlan} onToggleActivity={onToggleActivity} showDriving={isLD} />
-      </div>
     </div>
   );
 }
