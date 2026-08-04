@@ -202,23 +202,6 @@ export default function JobSetupPanel({
     }
   };
 
-  // The prominent Local/Long-distance toggle persists immediately (it is a
-  // single, always-visible control), so it does not need the crew to open and
-  // Save the whole setup.
-  const saveLd = async (v: boolean) => {
-    setIsLD(v);
-    setErr(null);
-    try {
-      const r = await saveJobSetup(jobUuid, { ...body, is_long_distance: v, override: true });
-      setStatus(r.synced ? "saved" : "queued");
-      if (r.setup) setExisting(r.setup);
-      onHeader?.(r.setup ?? { ...body, is_long_distance: v });
-    } catch (e) {
-      setIsLD(!v); // could not persist - put the toggle back
-      setErr(e instanceof ApiError ? e.message : "Could not save long-distance. Try again.");
-    }
-  };
-
   if (!loaded) {
     return <div className="small" style={{ color: "var(--muted)" }}>Loading job setup…</div>;
   }
@@ -232,40 +215,40 @@ export default function JobSetupPanel({
     </div>
   );
 
+  // Local / long-distance segmented toggle, used inside the setup form.
+  const ldToggle = (
+    <div className="col" style={{ gap: 6 }}>
+      <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Local or long-distance?</span>
+      <div
+        className="row"
+        role="group"
+        aria-label="Local or long-distance"
+        style={{ gap: 0, border: "1px solid var(--border)", borderRadius: 999, overflow: "hidden", alignSelf: "flex-start" }}
+      >
+        {([["local", "Local"], ["long_distance", "Long-distance"]] as const).map(([m, label]) => {
+          const on = (m === "long_distance") === isLD;
+          return (
+            <button
+              key={m}
+              type="button"
+              aria-pressed={on}
+              onClick={() => setIsLD(m === "long_distance")}
+              style={{
+                padding: "8px 20px", fontSize: 14, fontWeight: on ? 700 : 500, cursor: "pointer", border: "none",
+                background: on ? "var(--brand)" : "transparent",
+                color: on ? "var(--on-brand, #fff)" : "var(--muted)",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
     <div>
-      {/* Prominent Local/Long-distance toggle + "what are you doing today?" -
-          always visible for every job, above the detailed setup. */}
-      <div className="col" style={{ gap: 12, marginBottom: 14 }}>
-        <div
-          className="row"
-          role="group"
-          aria-label="Local or long-distance"
-          style={{ gap: 0, border: "1px solid var(--border)", borderRadius: 999, overflow: "hidden", alignSelf: "flex-start" }}
-        >
-          {([["local", "Local"], ["long_distance", "Long-distance"]] as const).map(([m, label]) => {
-            const on = (m === "long_distance") === isLD;
-            return (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={on}
-                onClick={() => { if ((m === "long_distance") !== isLD) saveLd(m === "long_distance"); }}
-                style={{
-                  padding: "8px 20px", fontSize: 14, fontWeight: on ? 700 : 500, cursor: "pointer", border: "none",
-                  background: on ? "var(--brand)" : "transparent",
-                  color: on ? "var(--on-brand, #fff)" : "var(--muted)",
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-        <LdPlanTile plan={ldPlan} onToggleActivity={onToggleActivity} showDriving={isLD} />
-        {!open && err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
-      </div>
-
       {!open && existing ? (
         // Static tile: the captured setup at a glance, with an Edit option.
         <div className="col" style={{ gap: 8 }}>
@@ -289,6 +272,7 @@ export default function JobSetupPanel({
               </button>
             </div>
           </div>
+          {staticRow("Trip", isLD ? "Long-distance" : "Local")}
           {staticRow("Crew", crewNames.length ? crewNames.join(", ") : "None added")}
           {staticRow("Truck", vehicleUnitNames.length ? vehicleUnitNames.join(", ") : "Not set")}
           {tags.length > 0 && staticRow("Type", tags.join(", "))}
@@ -311,6 +295,10 @@ export default function JobSetupPanel({
               <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>Cancel</button>
             )}
           </div>
+
+          {/* Local / long-distance */}
+          {ldToggle}
+
           {/* Crew */}
           <div className="col" style={{ gap: 6 }}>
             <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Crew</span>
@@ -435,6 +423,12 @@ export default function JobSetupPanel({
           </div>
         </div>
       )}
+
+      {/* What are you doing today? - part of the setup card, kept interactive so
+          the crew can update it through the day (it drives the timeline tools). */}
+      <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+        <LdPlanTile plan={ldPlan} onToggleActivity={onToggleActivity} showDriving={isLD} />
+      </div>
     </div>
   );
 }
