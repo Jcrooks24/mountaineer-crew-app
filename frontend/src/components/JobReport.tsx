@@ -119,7 +119,6 @@ import {
   type ScopeChangeEntry,
 } from "../lib/closeout";
 import NumberField from "./NumberField";
-import { useJobTypes } from "../lib/jobTypesStore";
 import { useSkills, skillsForJobTypes, type Skill } from "../lib/skillsStore";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
@@ -512,9 +511,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showDVIRModal, setShowDVIRModal] = useState(false);
-  // Admin-configurable job-type tags (server, cached). Union with any tags
-  // already saved on this report so a since-deactivated tag still shows.
-  const jobTypes = useJobTypes();
   // Skill registry + the subset relevant to this job's type(s) - the only
   // skills crew are asked to rate per employee.
   const skills = useSkills();
@@ -668,26 +664,43 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     return () => { window.clearTimeout(bail); };
   }, [jobUuid]);
 
-  // Job type is captured in Job setup now (the single source), so it is not
-  // entered twice. When the job's header carries a job type, mirror it onto the
-  // report (so it still exports to the sheet) and show it read-only below; the
-  // crew edit it in Job setup. A job with NO header keeps the editable picker
-  // (fallback for older jobs that were never set up).
-  const [headerJobTypes, setHeaderJobTypes] = useState<string[] | null>(null);
-  const headerTypeForRef = useRef<string>("");
+  // Job type and the assigned trucks are captured in Job setup now (the single
+  // source), so neither is entered a second time here. Seed both from the
+  // header once per job:
+  //  - Job type is mirrored onto the report silently. It still exports to the
+  //    sheet and still decides which skills are rated per employee below; the
+  //    crew just edit it in Job setup, not here (no job-type UI on the report).
+  //  - The trucks assigned in setup prefill the volume estimator (only when the
+  //    crew haven't started it yet), so they don't re-add trucks they already
+  //    picked. They can still add or remove trucks in the estimator.
+  const headerSeedRef = useRef<string>("");
   useEffect(() => {
-    if (!loaded || !jobUuid || headerTypeForRef.current === jobUuid) return;
-    headerTypeForRef.current = jobUuid;
+    if (!loaded || !jobUuid || headerSeedRef.current === jobUuid) return;
+    headerSeedRef.current = jobUuid;
     loadJobSetup(jobUuid)
       .then((h) => {
-        const tags = (h?.job_type_tags ?? []).filter(Boolean);
-        setHeaderJobTypes(tags);
-        if (tags.length) {
-          setData((prev) => {
+        if (!h) return;
+        const tags = (h.job_type_tags ?? []).filter(Boolean);
+        const units = (h.vehicle_unit_names ?? []).filter(Boolean);
+        setData((prev) => {
+          let next = prev;
+          if (tags.length) {
             const same = prev.job_type_tags.length === tags.length && prev.job_type_tags.every((t, i) => t === tags[i]);
-            return same ? prev : { ...prev, job_type_tags: tags };
-          });
-        }
+            if (!same) next = { ...next, job_type_tags: tags };
+          }
+          if (units.length && next.truck_fullness.length === 0) {
+            const fleet = TRUCK_IDS as readonly string[];
+            next = {
+              ...next,
+              truck_fullness: units.map((name) =>
+                fleet.includes(name)
+                  ? { truck: name, vertical_pct: 0, horizontal_pct: 0 }
+                  : { truck: name, vertical_pct: 0, horizontal_pct: 0, is_rental: true },
+              ),
+            };
+          }
+          return next;
+        });
       })
       .catch(() => {});
   }, [loaded, jobUuid]);
@@ -798,6 +811,17 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // calculates one. Offered as an End option only - it's a projection of when
   // the job finishes, so it's never a valid start or break bound.
   const [wrapUpTime, setWrapUpTime] = useState<Date | null>(null);
+  // The wrap-up estimator isn't needed on most jobs, so it stays collapsed until
+  // the crew ask for it (keeps the hours record uncluttered).
+  const [showWrapUp, setShowWrapUp] = useState(false);
+
+  // Close-out surfaces one question at a time (a small tree) instead of all at
+  // once. Two yes/no gates drive the reveal; they seed from any saved answers so
+  // a reopened report shows what was already filled rather than hiding it.
+  const [ranDiff, setRanDiff] = useState<boolean | null>(null);
+  const [scopeChanged, setScopeChanged] = useState<boolean | null>(null);
+  useEffect(() => { if (data.variance_causes.length > 0) setRanDiff((p) => (p == null ? true : p)); }, [data.variance_causes.length]);
+  useEffect(() => { if (data.scope_changes.length > 0) setScopeChanged((p) => (p == null ? true : p)); }, [data.scope_changes.length]);
 
   // First START on the timeline + last FINISH = the natural bookends for a
   // typical crew day. Prefilling these means the common case (everyone
@@ -1459,77 +1483,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           Hours, equipment, and vehicles - the data used to build the invoice line items.
         </div>
 
-        {/* Job type comes first: it decides which skills are rated per employee
-            below, so the crew must pick it before the skill rows are meaningful.
-            Deliberately NOT gated on canRate: a job with no designated rater on
-            site still needs its job type recorded. Any crew member sets it. */}
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
-          Job type<BetaTag feature="jobTypeTags" />
-        </div>
-        {headerJobTypes && headerJobTypes.length > 0 ? (
-          // Read-only: the job type comes from Job setup (edit it there), so it
-          // is not entered a second time here.
-          <>
-            <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-              Set in Job setup for this job. To change it, edit the job setup.
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
-              {data.job_type_tags.length === 0 && (
-                <span className="small" style={{ color: "var(--muted)" }}>None set.</span>
-              )}
-              {data.job_type_tags.map((tag) => (
-                <span
-                  key={tag}
-                  style={{
-                    padding: "8px 12px", borderRadius: 999, border: "2px solid var(--brand)",
-                    background: "color-mix(in srgb, var(--brand) 18%, transparent)",
-                    color: "var(--brand)", fontWeight: 700, fontSize: 13,
-                  }}
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-              {ht.jobTypeHint}
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
-              {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
-                const active = data.job_type_tags.includes(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => {
-                      setData((prev) => ({
-                        ...prev,
-                        job_type_tags: active
-                          ? prev.job_type_tags.filter((t) => t !== tag)
-                          : [...prev.job_type_tags, tag],
-                      }));
-                      setSaved(false);
-                    }}
-                    style={{
-                      padding: "8px 12px",
-                      borderRadius: 999,
-                      border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
-                      color: active ? "var(--brand)" : "var(--text)",
-                      fontWeight: active ? 700 : 400,
-                      fontSize: 13,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {tag}
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
+        {/* Job type is captured in Job setup (the single source) and no longer
+            shown here - it is mirrored onto the report silently above and still
+            decides which skills are rated per employee below. */}
 
         {/* Inventory is logged on long-distance jobs only (ADR 0015). On a local
             job there is no Inventory tab, so this line would be a permanent
@@ -1538,8 +1494,25 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
         {/* Wrap-up estimator sits directly above the hours record because it
             feeds it: the projected wrap-up time is offered as an End option in
-            the start/end pickers below. */}
-        <WrapUpEstimator jobUuid={jobUuid} onWrapUpChange={setWrapUpTime} />
+            the start/end pickers below. Hidden by default (not needed on most
+            jobs); expanded on demand. */}
+        <button
+          type="button"
+          onClick={() => setShowWrapUp((v) => !v)}
+          aria-expanded={showWrapUp}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6, alignSelf: "flex-start",
+            padding: "6px 12px", fontSize: 13, fontWeight: 700, borderRadius: 8,
+            border: "1px solid var(--border)", background: "transparent", color: "var(--text)", cursor: "pointer",
+          }}
+        >
+          {showWrapUp ? "Hide wrap-up estimate" : "Estimate wrap-up time"}
+        </button>
+        {showWrapUp && (
+          <div style={{ marginTop: 10 }}>
+            <WrapUpEstimator jobUuid={jobUuid} onWrapUpChange={setWrapUpTime} />
+          </div>
+        )}
 
         <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee man-hours</span>
@@ -2004,75 +1977,121 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           Skip anything you cannot answer.
         </div>
 
+        {/* Q1 - did the job run differently? "Yes" reveals the reason chips;
+            either answer unlocks Q2. */}
         <div style={{ fontWeight: 700, fontSize: 13 }}>Did the job run differently than quoted?</div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 8 }}>
-          Tick every reason that applied, in either direction. The note is for
-          anything the list misses.
-        </div>
-        <GroupedChipPicker
-          options={VARIANCE_CAUSES}
-          selected={data.variance_causes}
-          moreLabel="Ran longer than quoted"
-          lessLabel="Ran shorter than quoted"
-          onToggle={(key) =>
-            setWith("variance_causes", (prev) =>
-              prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
-          }
-        />
-        {data.variance_causes.length > 0 && (
-          <textarea
-            value={data.variance_note}
-            onChange={(e) => { set("variance_note", e.target.value); setSaved(false); }}
-            placeholder="What happened? (optional)"
-            rows={2}
-            style={{ width: "100%", marginTop: 8, resize: "vertical" }}
-          />
-        )}
-
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-          Was the client ready when you arrived?
-        </div>
         <div style={{ marginTop: 8 }}>
-          <ChipPicker
-            options={CLIENT_READINESS}
-            selected={data.client_readiness ? [data.client_readiness] : []}
-            onToggle={(key) => {
-              const next = data.client_readiness === key ? null : key;
-              set("client_readiness", next);
-              // Clearing back to ready (or to no answer) drops the detail, so the
-              // two answers can never contradict each other in the sheet.
-              if (!readinessNeedsDetail(next)) set("client_unready", []);
+          <YesNo
+            value={ranDiff}
+            onChange={(v) => {
+              setRanDiff(v);
+              if (!v) { set("variance_causes", []); set("variance_note", ""); }
               setSaved(false);
             }}
+            yesLabel="Yes, it differed"
+            noLabel="No, as quoted"
           />
         </div>
-        {readinessNeedsDetail(data.client_readiness) && (
+        {ranDiff === true && (
           <div style={{ marginTop: 12 }}>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
-              What was not ready? Tick all that applied.
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+              Tick every reason that applied, in either direction. The note is for
+              anything the list misses.
             </div>
-            <ChipPicker
-              options={CLIENT_UNREADY_REASONS}
-              selected={data.client_unready}
+            <GroupedChipPicker
+              options={VARIANCE_CAUSES}
+              selected={data.variance_causes}
+              moreLabel="Ran longer than quoted"
+              lessLabel="Ran shorter than quoted"
               onToggle={(key) =>
-                setWith("client_unready", (prev) =>
+                setWith("variance_causes", (prev) =>
                   prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
               }
             />
+            {data.variance_causes.length > 0 && (
+              <textarea
+                value={data.variance_note}
+                onChange={(e) => { set("variance_note", e.target.value); setSaved(false); }}
+                placeholder="What happened? (optional)"
+                rows={2}
+                style={{ width: "100%", marginTop: 8, resize: "vertical" }}
+              />
+            )}
           </div>
         )}
 
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-          Anything added or changed on site?
-        </div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 8 }}>
-          One entry per change, added or dropped. Tick every reason that fits it.
-          Hours are a rough guess at the time it cost you or gave back, not a bill.
-        </div>
-        <ScopeChangeEditor
-          value={data.scope_changes}
-          onChange={(fn) => setWith("scope_changes", fn)}
-        />
+        {/* Q2 - client readiness, revealed once Q1 is answered (or if a saved
+            answer exists downstream). */}
+        {(ranDiff !== null || data.client_readiness != null || data.scope_changes.length > 0) && (
+          <>
+            <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+              Was the client ready when you arrived?
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <ChipPicker
+                options={CLIENT_READINESS}
+                selected={data.client_readiness ? [data.client_readiness] : []}
+                onToggle={(key) => {
+                  const next = data.client_readiness === key ? null : key;
+                  set("client_readiness", next);
+                  // Clearing back to ready (or to no answer) drops the detail, so the
+                  // two answers can never contradict each other in the sheet.
+                  if (!readinessNeedsDetail(next)) set("client_unready", []);
+                  setSaved(false);
+                }}
+              />
+            </div>
+            {readinessNeedsDetail(data.client_readiness) && (
+              <div style={{ marginTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+                  What was not ready? Tick all that applied.
+                </div>
+                <ChipPicker
+                  options={CLIENT_UNREADY_REASONS}
+                  selected={data.client_unready}
+                  onToggle={(key) =>
+                    setWith("client_unready", (prev) =>
+                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
+                  }
+                />
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Q3 - on-site scope changes, revealed once Q2 is answered. "Yes"
+            reveals the change editor. */}
+        {(data.client_readiness != null || data.scope_changes.length > 0) && (
+          <>
+            <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+              Anything added or changed on site?
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <YesNo
+                value={scopeChanged}
+                onChange={(v) => {
+                  setScopeChanged(v);
+                  if (!v) set("scope_changes", []);
+                  setSaved(false);
+                }}
+                yesLabel="Yes"
+                noLabel="No"
+              />
+            </div>
+            {scopeChanged === true && (
+              <div style={{ marginTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                  One entry per change, added or dropped. Tick every reason that fits it.
+                  Hours are a rough guess at the time it cost you or gave back, not a bill.
+                </div>
+                <ScopeChangeEditor
+                  value={data.scope_changes}
+                  onChange={(fn) => setWith("scope_changes", fn)}
+                />
+              </div>
+            )}
+          </>
+        )}
 
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
