@@ -23,6 +23,7 @@ export default function Tools() {
         <Tile icon={<TileIcons.clock />} label="Off-job hours" sublabel="Log non-job time" onClick={() => nav("/off-job")} />
         <Tile icon={<TileIcons.road />} label="Long-distance" sublabel="HOS, RODS, per-diem" onClick={() => nav("/long-distance")} />
         <Tile icon={<TileIcons.bug />} label="Report a bug" sublabel="Something broken or off" onClick={() => nav("/report-bug")} />
+        <Tile icon={<TileIcons.lightbulb />} label="Request a feature" sublabel="Suggest an idea or change" onClick={() => nav("/request-feature")} />
         {user?.role === "admin" && (
           <Tile icon={<TileIcons.gear />} label="Admin" sublabel="Console" onClick={() => nav("/admin")} />
         )}

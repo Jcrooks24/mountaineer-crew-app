@@ -2738,6 +2738,73 @@ def schedule_bug_report_export(bug_uuid: str) -> None:
         run_export_in_background(export_bug_report_to_sheets, payload)
 
 
+FEATURE_REQUEST_HEADERS = [
+    "request_uuid", "title", "submitted_by", "description", "screenshots", "created_at",
+]
+
+
+def export_feature_request_to_sheets(db: Session, req: Dict[str, Any]) -> int:
+    """Replace-style export: one row per request_uuid on the FeatureRequests tab,
+    which the nightly crew-feedback email reads. A re-submit overwrites in place."""
+    tab = os.getenv("SHEETS_FEATURE_REQUESTS_TAB", "FeatureRequests").strip() or "FeatureRequests"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = req.get("request_uuid") or ""
+    if not uuid:
+        return 0
+    svc = _get_sheets_svc(db)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, FEATURE_REQUEST_HEADERS)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "request_uuid", uuid)
+    urls = req.get("screenshot_urls") or []
+    row = {
+        "request_uuid": uuid,
+        "title": req.get("title") or "",
+        "submitted_by": req.get("submitted_by_name") or "",
+        "description": req.get("description") or "",
+        "screenshots": ", ".join(u for u in urls if isinstance(u, str) and u),
+        "created_at": req.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
+def _build_feature_request_payload(db: Session, request_uuid: str) -> Optional[Dict[str, Any]]:
+    from app.db.models.feature_request import FeatureRequest  # local import to avoid cycles
+
+    row = db.query(FeatureRequest).filter(FeatureRequest.request_uuid == request_uuid).first()
+    if row is None:
+        return None
+    try:
+        urls = json.loads(row.screenshot_urls or "[]")
+    except (ValueError, TypeError):
+        urls = []
+    return {
+        "request_uuid": row.request_uuid,
+        "title": row.title or "",
+        "submitted_by_name": row.submitted_by_name or "",
+        "description": row.description or "",
+        "screenshot_urls": [u for u in urls if isinstance(u, str)],
+        "created_at": _iso(row.created_at),
+    }
+
+
+def schedule_feature_request_export(request_uuid: str) -> None:
+    """Re-export one feature request to the FeatureRequests tab. Low-frequency,
+    replace-style, so a plain background fire is enough."""
+    if not request_uuid:
+        return
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        payload = _build_feature_request_payload(db, request_uuid)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+    if payload:
+        run_export_in_background(export_feature_request_to_sheets, payload)
+
+
 def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
     """Re-read one BOL from the DB into the export shape export_bol_to_sheets
     expects. The worker calls this when it runs, so a coalesced export always
@@ -3358,6 +3425,7 @@ SHEET_SYNC_REGISTRY = [
     {"key": "availability",      "label": "Availability",        "env": "SHEETS_AVAILABILITY_TAB",       "default": "Availability",      "fn": "export_availability_window_to_sheets"},
     {"key": "off_job_hours",     "label": "Off-job hours",       "env": "SHEETS_OFF_JOB_TAB",            "default": "OffJobHours",       "fn": "export_off_job_to_sheets"},
     {"key": "bug_reports",       "label": "Bug reports",         "env": "SHEETS_BUGS_TAB",               "default": "Bugs",              "fn": "export_bug_report_to_sheets"},
+    {"key": "feature_requests",  "label": "Feature requests",    "env": "SHEETS_FEATURE_REQUESTS_TAB",   "default": "FeatureRequests",   "fn": "export_feature_request_to_sheets"},
 ]
 
 

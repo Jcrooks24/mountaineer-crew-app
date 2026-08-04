@@ -234,6 +234,16 @@ def _src_bug_reports(db: Session) -> List[Dict[str, Any]]:
     } for r in rows if r.bug_uuid]
 
 
+def _src_feature_requests(db: Session) -> List[Dict[str, Any]]:
+    from app.db.models.feature_request import FeatureRequest
+    rows = db.query(FeatureRequest).order_by(FeatureRequest.created_at.desc()).all()
+    return [{
+        "id": r.request_uuid,
+        "label": f"{r.submitted_by_name or 'unknown'}: {(r.title or r.description or '')[:40]}".strip(),
+        "created_at": _iso(r.created_at),
+    } for r in rows if r.request_uuid]
+
+
 def _src_availability(db: Session) -> List[Dict[str, Any]]:
     """Keyed by (user_name, window_start) because that is what the tab holds -
     one row per person per 14-day window, not one per day."""
@@ -393,6 +403,11 @@ def _re_bug_report(db: Session, ref: Any) -> None:
     schedule_bug_report_export(str(ref))
 
 
+def _re_feature_request(db: Session, ref: Any) -> None:
+    from app.integrations.sheets_export import schedule_feature_request_export
+    schedule_feature_request_export(str(ref))
+
+
 def _re_availability(db: Session, ref: Any) -> None:
     from app.integrations.sheets_export import schedule_availability_export
     if isinstance(ref, dict) and ref.get("user_id") is not None:
@@ -465,6 +480,9 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
     {"key": "bug_reports", "label": "Bug reports", "env": "SHEETS_BUGS_TAB",
      "default": "Bugs", "key_cols": ["bug_uuid"],
      "source": _src_bug_reports, "reexport": _re_bug_report},
+    {"key": "feature_requests", "label": "Feature requests", "env": "SHEETS_FEATURE_REQUESTS_TAB",
+     "default": "FeatureRequests", "key_cols": ["request_uuid"],
+     "source": _src_feature_requests, "reexport": _re_feature_request},
 ]
 
 

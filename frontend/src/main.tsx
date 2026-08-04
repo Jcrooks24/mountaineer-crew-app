@@ -29,6 +29,7 @@ import Reimbursement from "./pages/Reimbursement";
 import OffJob from "./pages/OffJob";
 import Availability from "./pages/Availability";
 import ReportBug from "./pages/ReportBug";
+import RequestFeature from "./pages/RequestFeature";
 import Tools from "./pages/Tools";
 
 createRoot(document.getElementById("root")!).render(
@@ -60,6 +61,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/reimbursement" element={<RequireAuth><Reimbursement /></RequireAuth>} />
           <Route path="/off-job" element={<RequireAuth><OffJob /></RequireAuth>} />
           <Route path="/report-bug" element={<RequireAuth><ReportBug /></RequireAuth>} />
+          <Route path="/request-feature" element={<RequireAuth><RequestFeature /></RequireAuth>} />
           <Route path="/availability" element={<RequireAuth><Availability /></RequireAuth>} />
           <Route path="/tools" element={<RequireAuth><Tools /></RequireAuth>} />
 

@@ -33,6 +33,7 @@ import app.db.models.job_type  # noqa: F401 - register job_types
 import app.db.models.skill  # noqa: F401 - register skills + user_skills
 import app.db.models.incident  # noqa: F401 - register incidents
 import app.db.models.bug_report  # noqa: F401 - register bug_reports
+import app.db.models.feature_request  # noqa: F401 - register feature_requests
 import app.db.models.job_setup  # noqa: F401 - register job_setup (job header, ADR 0034)
 import app.db.models.job_checklist_check  # noqa: F401 - register job_checklist_checks (C3)
 import app.db.models.dq_document  # noqa: F401 - register dq_documents (C4)
@@ -91,6 +92,7 @@ from app.routers.incidents import (
     admin_router as incidents_admin_router,
 )
 from app.routers.bug_reports import router as bug_reports_router
+from app.routers.feature_requests import router as feature_requests_router
 from app.routers.job_setup import router as job_setup_router
 from app.routers.job_checklist import router as job_checklist_router
 from app.routers.dq import router as dq_router, admin_router as dq_admin_router
@@ -276,6 +278,7 @@ app.include_router(skills_users_router)          # /api/admin/users/{id}/skills 
 app.include_router(furniture_catalog_router)     # /api/furniture-catalog (crew read + admin CSV import)
 app.include_router(incidents_router)             # /api/incidents (crew report + job list)
 app.include_router(bug_reports_router)           # /api/bug-report (crew bug report + admin list)
+app.include_router(feature_requests_router)      # /api/feature-request (crew feature request + admin list)
 app.include_router(incidents_admin_router)       # /api/admin/incidents (admin log)
 app.include_router(off_job_router)               # /api/off-job-hours (crew log + own history)
 app.include_router(off_job_admin_router)         # /api/admin/off-job-hours (admin log)
