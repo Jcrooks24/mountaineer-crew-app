@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
 import { useMergedCatalog, splitCatalogNames } from "../lib/furnitureCatalogStore";
+import { hhgWeightLbs } from "../lib/hhg";
 import { fetchRemoteBol } from "../lib/bolStore";
 import { getUnitsCached, refreshUnits, unitByName, payloadCapacity, type VehicleUnit } from "../lib/vehicleUnits";
 import { BetaTag } from "./BetaTag";
@@ -235,7 +236,7 @@ export default function ActualInventory({
   const estWeight = useMemo(() => {
     let lbs = 0;
     for (const r of rows) {
-      if (isChowRow(r)) { lbs += chowCuftFromNotes(r.notes) * 7; continue; }
+      if (isChowRow(r)) { lbs += hhgWeightLbs(chowCuftFromNotes(r.notes)); continue; }
       lbs += (catalogWeight.get((r.name || "").trim().toLowerCase()) ?? 0) * (r.qty || 0);
     }
     return Math.round(lbs);

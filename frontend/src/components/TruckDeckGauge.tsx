@@ -20,6 +20,7 @@
  */
 
 import { useRef } from "react";
+import { hhgWeightLbs, HHG_LBS_PER_CUFT } from "../lib/hhg";
 
 const SNAP = 5;
 
@@ -155,6 +156,10 @@ export default function TruckDeckGauge({
                   of about {capacityCuFt.toLocaleString()} cu ft
                 </div>
               )}
+              {/* Rough tonnage of the load: HHG averages ~7 lbs/cu ft. */}
+              <div className="small" style={{ color: "var(--muted)" }}>
+                ≈ {hhgWeightLbs(filledCuFt).toLocaleString()} lbs (at {HHG_LBS_PER_CUFT} lbs/cu ft)
+              </div>
             </>
           ) : (
             <span className="small" style={{ color: "var(--muted)" }}>
