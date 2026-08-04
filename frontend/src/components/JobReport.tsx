@@ -2461,7 +2461,7 @@ function EmployeeSkillRatings({
   if (skills.length === 0) {
     return (
       <div className="small" style={{ color: "var(--muted)" }}>
-        Pick a job type above to rate skills.
+        Set this job's type in Job setup to rate skills.
       </div>
     );
   }
