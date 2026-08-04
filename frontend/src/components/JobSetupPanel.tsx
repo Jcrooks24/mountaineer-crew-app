@@ -126,8 +126,8 @@ export default function JobSetupPanel({
       setExisting(h);
       hydrate(h, evc);
       onHeader?.(h);
-      // Open the form automatically the first time a job has no header.
-      setOpen(!h);
+      // Stay collapsed on load - the crew tap "Set up"/"Edit" to expand, so the
+      // job card is not a wall of fields on every page load.
       setLoaded(true);
     })();
 
@@ -203,11 +203,7 @@ export default function JobSetupPanel({
   };
 
   if (!loaded) {
-    return (
-      <div className="card">
-        <div className="small" style={{ color: "var(--muted)" }}>Loading job setup…</div>
-      </div>
-    );
+    return <div className="small" style={{ color: "var(--muted)" }}>Loading job setup…</div>;
   }
 
   const confirmedCount = crew.filter((c) => c.confirmed).length;
@@ -220,7 +216,7 @@ export default function JobSetupPanel({
     : "Not set up yet";
 
   return (
-    <div className="card">
+    <div>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <div>
           <div className="microLabel" style={{ marginBottom: 2 }}>Set up job</div>

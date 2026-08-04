@@ -2257,9 +2257,79 @@ export default function App() {
               {historyStatus && <div className="small" style={{ color: "var(--muted)" }}>{historyStatus}</div>}
             </div>
 
-            {/* Local vs long-distance is set in Set up job now (ADR 0034); the
-                redundant tile toggle was removed. The LD day plan still shows
-                here when the job is long-distance. */}
+            {/* Calendar context (folded into the Job tile): location + a
+                collapsible details block. The event's job name and invitee
+                "Crew" count are dropped here as redundant with the Job Name
+                above and Set up job's real crew list below. */}
+            {(() => {
+              const ev = calEvents.find((e) => e.id === calSelectedId);
+              if (!ev) return null;
+              const loc = (ev.location || "").trim();
+              const desc = calText(ev.description);
+              if (!loc && !desc) return null;
+              return (
+                <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+                  {loc && (
+                    <div className="col" style={{ gap: 2, minWidth: 0 }}>
+                      <div className="microLabel">Location</div>
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ fontSize: 13, color: "var(--brand2)", textDecoration: "none", wordBreak: "break-word" }}
+                      >
+                        {loc}
+                      </a>
+                    </div>
+                  )}
+                  {desc && (
+                    <div style={{ marginTop: loc ? 12 : 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowJobDetails((v) => !v)}
+                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
+                      >
+                        <span className="microLabel" style={{ marginBottom: 0 }}>Details</span>
+                        <span className="small" style={{ color: "var(--brand2)" }}>{showJobDetails ? "Hide" : "Show"}</span>
+                      </button>
+                      {showJobDetails && (
+                        <div className="small" style={{ color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5, marginTop: 6 }}>{desc}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Set up job (ADR 0034), embedded in the Job tile and collapsed by
+                default - one tile for the whole job: selector, identity,
+                context, and setup. */}
+            {jobUuid && (() => {
+              const jm = loadJobMeta(jobUuid);
+              const src = jm?.source === "calendar" || jm?.source === "manual" ? jm.source : null;
+              return (
+                <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+                  <JobSetupPanel
+                    key={jobUuid}
+                    jobUuid={jobUuid}
+                    meta={{
+                      jobName: jm?.jobName || jobName || "",
+                      jobDate: jm?.jobDate || jobDate || "",
+                      source: src,
+                      calendarEventId: jm?.calendarEventId || calSelectedId || null,
+                    }}
+                    onHeader={(h) => {
+                      // The job header owns local/long-distance now; selecting or
+                      // saving a job sets the mode from it, and a no-header job
+                      // resets to local so the prior job's flag never carries over.
+                      setPersistedMode(h?.is_long_distance ? "long_distance" : "local");
+                    }}
+                  />
+                </div>
+              );
+            })()}
+
+            {/* Long-distance day plan, when the job is long-distance. */}
             {longDistance && (
               <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
                 <div className="microLabel" style={{ marginBottom: 10 }}>Long-distance day plan</div>
@@ -2267,90 +2337,6 @@ export default function App() {
               </div>
             )}
           </div>
-
-          {/* Active-job context: the office writes the address, crew, and special
-              instructions into the calendar event. Surface it so the crew can see
-              what they're on without leaving the app. Only shown when a real
-              calendar job is selected and it carries context. */}
-          {(() => {
-            const ev = calEvents.find((e) => e.id === calSelectedId);
-            if (!ev) return null;
-            const loc = (ev.location || "").trim();
-            const desc = calText(ev.description);
-            const crew = ev.invitees ?? 0;
-            if (!loc && !desc && !crew) return null;
-            return (
-              <div className="card">
-                <div className="microLabel" style={{ marginBottom: 10 }}>Current job</div>
-                <div style={{ fontWeight: 600, fontSize: 15, wordBreak: "break-word" }}>{ev.summary}</div>
-                {(loc || crew > 0) && (
-                  <div className="row wrap" style={{ gap: 20, marginTop: 10 }}>
-                    {loc && (
-                      <div className="col" style={{ gap: 2, minWidth: 0 }}>
-                        <div className="microLabel">Location</div>
-                        <a
-                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ fontSize: 13, color: "var(--brand2)", textDecoration: "none", wordBreak: "break-word" }}
-                        >
-                          {loc}
-                        </a>
-                      </div>
-                    )}
-                    {crew > 0 && (
-                      <div className="col" style={{ gap: 2 }}>
-                        <div className="microLabel">Crew</div>
-                        <span className="mono" style={{ fontSize: 14 }}>{crew}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {desc && (
-                  <div style={{ marginTop: loc || crew > 0 ? 12 : 10 }}>
-                    <button
-                      type="button"
-                      onClick={() => setShowJobDetails((v) => !v)}
-                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
-                    >
-                      <span className="microLabel" style={{ marginBottom: 0 }}>Details</span>
-                      <span className="small" style={{ color: "var(--brand2)" }}>{showJobDetails ? "Hide" : "Show"}</span>
-                    </button>
-                    {showJobDetails && (
-                      <div className="small" style={{ color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5, marginTop: 6 }}>{desc}</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
-          {/* Job setup header capture (ADR 0034, C1.2). Appears once a job is
-              selected; captures crew/truck/LD/type/addresses for this job. */}
-          {jobUuid && (() => {
-            const jm = loadJobMeta(jobUuid);
-            const src = jm?.source === "calendar" || jm?.source === "manual" ? jm.source : null;
-            return (
-              <JobSetupPanel
-                key={jobUuid}
-                jobUuid={jobUuid}
-                meta={{
-                  jobName: jm?.jobName || jobName || "",
-                  jobDate: jm?.jobDate || jobDate || "",
-                  source: src,
-                  calendarEventId: jm?.calendarEventId || calSelectedId || null,
-                }}
-                onHeader={(h) => {
-                  // C1.3: the job header owns local/long-distance now (the tile
-                  // toggle was removed as redundant). Selecting or saving a job
-                  // sets and persists the mode from its header; a job with no
-                  // header resets to local (the app default) so the previous
-                  // job's flag never carries over.
-                  setPersistedMode(h?.is_long_distance ? "long_distance" : "local");
-                }}
-              />
-            );
-          })()}
 
           {/* Job checklist (C3): applicable items for this job, auto-checked
               from in-app signals + manual ticks. */}
