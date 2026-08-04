@@ -171,6 +171,9 @@ export type BillSlots = {
   billHelper: ReactNode;
   totals: ReactNode;
   notes: ReactNode;
+  /** Grand total (line items + materials, after global discount). Lets a caller
+   *  show the bill amount in a read-only recap without the editable totals card. */
+  total: number;
 };
 
 type Props = {
@@ -683,7 +686,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         Select a job to build a bill.
       </div>
     );
-    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null })}</>;
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null, total: 0 })}</>;
     return placeholder;
   }
 
@@ -691,7 +694,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     const placeholder = (
       <div className="card" style={{ color: "var(--muted)", fontSize: 13, padding: 14 }}>Loading bill…</div>
     );
-    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null })}</>;
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null, total: 0 })}</>;
     return placeholder;
   }
 
@@ -940,7 +943,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   );
 
   if (children) {
-    return <>{children({ billHelper: billHelperSlot, totals: totalsSlot, notes: notesSlot })}</>;
+    return <>{children({ billHelper: billHelperSlot, totals: totalsSlot, notes: notesSlot, total: grandTotal })}</>;
   }
 
   return (

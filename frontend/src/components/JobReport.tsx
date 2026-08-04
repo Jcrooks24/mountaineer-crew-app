@@ -100,6 +100,7 @@ import { fireConfetti } from "../lib/confetti";
 export { roundBillableQuarter, type EmployeeHoursEntry } from "../lib/employeeHours";
 import type { EmployeeHoursEntry } from "../lib/employeeHours";
 import { roundBillableQuarter } from "../lib/employeeHours";
+import { hhgWeightLbs } from "../lib/hhg";
 import {
   TRUCK_IDS,
   filledCuFt,
@@ -190,6 +191,14 @@ type ReportData = {
   hours_verified: boolean;
   employee_hours: EmployeeHoursEntry[];
 };
+
+type ReportView = "edit" | "review" | "closed";
+
+// Resolve a stored option key to its human label (falls back to the raw key so
+// a retired option still reads sensibly in the summary).
+function labelOf(list: { key: string; label: string }[], key: string): string {
+  return list.find((o) => o.key === key)?.label ?? key;
+}
 
 // Pre-3-state-migration drafts/responses stored review_candidate as a
 // boolean. Coerce on load so a saved draft from before this deploy still
@@ -511,6 +520,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showDVIRModal, setShowDVIRModal] = useState(false);
+  // Three-stage report view:
+  //  - "edit"   : the fillable form (drafts auto-save to the device throughout).
+  //  - "review" : a read-only, data-rich summary of every answer (no server
+  //               write yet - "Confirm and view report" only previews).
+  //  - "closed" : the collapsed single tile shown after "Save and close out job"
+  //               commits to the server. A submitted report loads straight here.
+  const [view, setView] = useState<ReportView>("edit");
   // Skill registry + the subset relevant to this job's type(s) - the only
   // skills crew are asked to rate per employee.
   const skills = useSkills();
@@ -600,6 +616,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         });
         serverUpdatedAtRef.current = (r as any).updated_at || "";
         setSaved(true);
+        // A report already exists on the server, so it has been closed out at
+        // least once: open straight to the collapsed tile (crew tap Edit to reopen).
+        setView("closed");
       })
       .catch((e) => {
         // ONLY reset to empty defaults on a real 404 (no report exists yet).
@@ -1317,6 +1336,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       }
 
       setSaved(true);
+      setView("closed"); // collapse to the single closed-out tile
       fireConfetti(); // celebrate a submitted report
       // Submit succeeded - discard the in-progress drafts (report + bill).
       // The server is now authoritative; further edits start fresh drafts.
@@ -1339,38 +1359,210 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     }
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-
-    if (!jobUuid) return setErr("No job selected.");
+  // Shared validation for both "Confirm and view report" and "Save and close
+  // out job". Returns an error message, or null when the report is complete.
+  function validateReport(): string | null {
+    if (!jobUuid) return "No job selected.";
     // Mixed LD days (labor + driving): the long-distance documents are required.
     if (mixedLd) {
-      if (!priorDone) return setErr("Complete the driver's Prior On-Duty statement before submitting.");
-      if (!bolStatus && !bolDeferred) return setErr("Attach the trip's Bill of Lading (or mark not at destination yet) before submitting.");
+      if (!priorDone) return "Complete the driver's Prior On-Duty statement before submitting.";
+      if (!bolStatus && !bolDeferred) return "Attach the trip's Bill of Lading (or mark not at destination yet) before submitting.";
     }
     // Drive-only LD days skip the billing/eval questions (no labor to bill).
     if (!driveOnly) {
-      if (data.has_personal_vehicles === null) return setErr("Indicate whether personal vehicles were at the job site.");
-      if (data.has_personal_vehicles && data.personal_vehicles < 1) return setErr("Enter how many personal vehicles were at the job site.");
-      if (data.has_dumpster_use === null) return setErr("Indicate whether the M1 dumpster was used on this job.");
-      if (data.has_dumpster_use && data.dumpster_pct <= 0) return setErr("Select the M1 dumpster fill percentage.");
-      if (data.has_recycling_use === null) return setErr("Indicate whether the M1 recycling bin was used on this job.");
-      if (data.has_recycling_use && data.recycling_pct <= 0) return setErr("Select the M1 recycling bin fill percentage.");
-      if (!data.billing_method) return setErr("Select a billing method.");
-      if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
-      if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
+      if (data.has_personal_vehicles === null) return "Indicate whether personal vehicles were at the job site.";
+      if (data.has_personal_vehicles && data.personal_vehicles < 1) return "Enter how many personal vehicles were at the job site.";
+      if (data.has_dumpster_use === null) return "Indicate whether the M1 dumpster was used on this job.";
+      if (data.has_dumpster_use && data.dumpster_pct <= 0) return "Select the M1 dumpster fill percentage.";
+      if (data.has_recycling_use === null) return "Indicate whether the M1 recycling bin was used on this job.";
+      if (data.has_recycling_use && data.recycling_pct <= 0) return "Select the M1 recycling bin fill percentage.";
+      if (!data.billing_method) return "Select a billing method.";
+      if (data.review_candidate === null) return "Indicate whether this client is a review candidate.";
+      if (data.hours_match === null) return "Indicate whether hours worked match hours billed.";
       if (!data.hours_match && !data.hours_mismatch_reason.trim())
-        return setErr("Please explain why the hours don't match.");
+        return "Please explain why the hours don't match.";
       if (data.has_crew_feedback === null)
-        return setErr("Indicate whether you have any feedback for the office.");
+        return "Indicate whether you have any feedback for the office.";
       if (data.has_crew_feedback && !data.crew_feedback.trim())
-        return setErr("Please share your feedback or change your answer to No.");
+        return "Please share your feedback or change your answer to No.";
+      // Surface the bill-review checkbox here (not only at the final POST) so it
+      // is caught before the crew leave the editable view.
+      const billData = billRef.current?.getData();
+      if (billData != null && !billReviewed)
+        return "Please confirm you have reviewed the auto-populated bill items before continuing.";
     }
+    return null;
+  }
 
-    // Show DVIR reminder before saving
+  // "Confirm and view report": validate, then switch to the read-only summary.
+  // No server write - the local draft already holds everything.
+  function handleConfirmView(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    const problem = validateReport();
+    if (problem) return setErr(problem);
+    setView("review");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // "Save and close out job": validate again, then the DVIR reminder gates the
+  // actual POST (doSave), which collapses the report to the closed-out tile.
+  function saveAndClose() {
+    setErr(null);
+    const problem = validateReport();
+    if (problem) return setErr(problem);
     pendingSaveRef.current = doSave;
     setShowDVIRModal(true);
+  }
+
+  // Read-only, data-rich recap of every answer, shown in the review and closed
+  // views. `billTotals` is the bill total node from the bill calculator.
+  function renderSummary(billTotal: number) {
+    const row = (label: string, value: React.ReactNode) => (
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "3px 0" }}>
+        <span className="small" style={{ color: "var(--muted)", flexShrink: 0 }}>{label}</span>
+        <span style={{ fontSize: 13, fontWeight: 600, textAlign: "right", minWidth: 0 }}>{value}</span>
+      </div>
+    );
+    const section = (title: string, children: React.ReactNode) => (
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 12 }}>
+        <div className="microLabel" style={{ marginBottom: 6 }}>{title}</div>
+        {children}
+      </div>
+    );
+
+    const emps = data.employee_hours.filter((e) => e.name.trim() || e.hours > 0);
+    const trucks = data.truck_fullness.filter((t) => (t.truck || "").trim() && t.vertical_pct > 0 && t.horizontal_pct > 0);
+    const scope = data.scope_changes.filter((c) => c.kinds.length > 0);
+    const billingLabel = BILLING_OPTIONS.find((o) => o.value === data.billing_method)?.label;
+
+    return (
+      <div className="col" style={{ gap: 0 }}>
+        <div>
+          <div className="microLabel" style={{ marginBottom: 6 }}>Hours</div>
+          {row("Billable", `${totalBillableHours.toFixed(2)} h`)}
+          {row("Actual", `${totalActualHours.toFixed(2)} h`)}
+          {data.hours_verified && row("Crew-lead verified", "Yes")}
+          {emps.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {emps.map((e, i) => (
+                <div key={i} className="row" style={{ justifyContent: "space-between", gap: 8, padding: "2px 0" }}>
+                  <span style={{ fontSize: 13, minWidth: 0 }}>
+                    {e.name || "(unnamed)"}{e.out_of_town ? " · out of town" : ""}{e.non_billable ? " · non-billable" : ""}
+                  </span>
+                  <span className="small mono" style={{ flexShrink: 0 }}>{roundBillableQuarter(e.hours).toFixed(2)} h</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {!driveOnly && section("Billing", (
+          <>
+            {row("Method", billingLabel ?? (data.billing_method || "Not set"))}
+            {row("Bill total", billTotal.toLocaleString("en-US", { style: "currency", currency: "USD" }))}
+          </>
+        ))}
+
+        {trucks.length > 0 && section("Truck fullness", (
+          <>
+            {trucks.map((t, i) => {
+              const cuft = filledCuFt(t);
+              const pct = Math.round((t.vertical_pct * t.horizontal_pct) / 100);
+              return (
+                <div key={i}>
+                  {row(t.truck || "Truck", `${pct}% full${cuft !== null ? ` · ${cuft.toLocaleString()} cu ft · ~${hhgWeightLbs(cuft).toLocaleString()} lbs` : ""}`)}
+                </div>
+              );
+            })}
+          </>
+        ))}
+
+        {!driveOnly && section("Extras", (
+          <>
+            {row("Personal vehicles", data.has_personal_vehicles ? `${data.personal_vehicles}${data.bill_personal_vehicles ? " (billed)" : ""}` : "None")}
+            {row("M1 dumpster", data.has_dumpster_use ? `${data.dumpster_pct}%` : "Not used")}
+            {row("M1 recycling", data.has_recycling_use ? `${data.recycling_pct}%` : "Not used")}
+          </>
+        ))}
+
+        {!driveOnly && section("Close-out", (
+          <>
+            {row("Ran differently", ranDiff === true
+              ? `Yes - ran ${varianceDir === "less" ? "shorter" : "longer"}`
+              : ranDiff === false ? "No, as quoted" : "Not answered")}
+            {data.variance_causes.length > 0 && row("Reasons", data.variance_causes.map((k) => labelOf(VARIANCE_CAUSES, k)).join(", "))}
+            {data.variance_note.trim() && row("Note", data.variance_note.trim())}
+            {row("Client readiness", data.client_readiness ? labelOf(CLIENT_READINESS, data.client_readiness) : "Not answered")}
+            {data.client_unready.length > 0 && row("Not ready", data.client_unready.map((k) => labelOf(CLIENT_UNREADY_REASONS, k)).join(", "))}
+            {row("Scope changes", scope.length === 0 ? "None" : String(scope.length))}
+            {scope.map((c, i) => (
+              <div key={i} className="small" style={{ color: "var(--muted)", padding: "2px 0" }}>
+                • {c.kinds.map((k) => labelOf(SCOPE_CHANGE_KINDS, k)).join(", ")} ({c.direction}{c.hours != null ? `, ~${c.hours}h` : ""}){c.note ? ` - ${c.note}` : ""}
+              </div>
+            ))}
+          </>
+        ))}
+
+        {!driveOnly && section("Wrap-up", (
+          <>
+            {row("Review candidate", data.review_candidate === "yes" ? "Yes - reach out" : data.review_candidate === "no" ? "No" : data.review_candidate === "na" ? "N/A" : "Not answered")}
+            {row("Hours match billed", data.hours_match === true ? "Yes" : data.hours_match === false ? "No" : "Not answered")}
+            {data.hours_match === false && data.hours_mismatch_reason.trim() && row("Discrepancy", data.hours_mismatch_reason.trim())}
+            {row("Crew feedback", data.has_crew_feedback ? "Yes" : data.has_crew_feedback === false ? "No" : "Not answered")}
+            {data.has_crew_feedback && data.crew_feedback.trim() && row("Feedback", data.crew_feedback.trim())}
+          </>
+        ))}
+      </div>
+    );
+  }
+
+  // The review + closed-out views share the summary; they differ only in the
+  // action row below it.
+  function renderReviewOrClosed(billTotal: number) {
+    return (
+      <div className="col" style={{ gap: 14 }}>
+        <div className="card">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <div className="microLabel" style={{ marginBottom: 0 }}>
+              {view === "closed" ? "Job report - closed out" : "Review job report"}
+            </div>
+            {view === "closed" && (
+              <button type="button" onClick={() => { setView("edit"); setErr(null); }} style={{ fontSize: 12 }}>
+                Edit report
+              </button>
+            )}
+          </div>
+          {view === "closed" ? (
+            <div className="small" style={{ color: "var(--ok)", marginBottom: 10 }}>
+              ✓ Saved and closed out{user?.name ? ` by ${user.name}` : ""}. Tap Edit to reopen.
+            </div>
+          ) : (
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+              Check every answer reads right, then save and close out the job.
+            </div>
+          )}
+          {renderSummary(billTotal)}
+        </div>
+
+        {err && (
+          <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+            {err}
+          </div>
+        )}
+
+        {view === "review" && (
+          <div className="row" style={{ gap: 8, marginBottom: 32 }}>
+            <button type="button" className="btnPrimary" disabled={busy} onClick={saveAndClose}>
+              {busy ? "Saving…" : "Save and close out job"}
+            </button>
+            <button type="button" disabled={busy} onClick={() => { setView("edit"); setErr(null); }}>
+              Back to editing
+            </button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   if (!jobUuid) {
@@ -1423,8 +1615,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           : undefined
       }
     >
-      {(billSlots) => (
-    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {(billSlots) =>
+        view !== "edit" ? (
+          renderReviewOrClosed(billSlots.total)
+        ) : (
+    <form onSubmit={handleConfirmView} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
       {/* Draft autosave indicator. Hidden once the report is submitted
           (the existing "✓ Report saved" banner below covers that state). */}
@@ -2375,16 +2570,22 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
-      <button
-        type="submit"
-        className="btnPrimary"
-        disabled={busy}
-        style={{ marginBottom: 32 }}
-      >
-        {busy ? "Saving…" : saved ? "Update Report" : "Save Report"}
-      </button>
+      {/* No "Save" here anymore: the report keeps auto-saving a local draft;
+          this only moves to the read-only review. The server write happens on
+          "Save and close out job" in the review view. */}
+      <div className="row" style={{ gap: 8, marginBottom: 32 }}>
+        <button type="submit" className="btnPrimary" disabled={busy}>
+          Confirm and view report
+        </button>
+        {saved && (
+          <button type="button" disabled={busy} onClick={() => { setView("closed"); setErr(null); }}>
+            Back to summary
+          </button>
+        )}
+      </div>
     </form>
-      )}
+        )
+      }
     </BillCalculator>
     </>
   );
