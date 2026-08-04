@@ -820,8 +820,22 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // a reopened report shows what was already filled rather than hiding it.
   const [ranDiff, setRanDiff] = useState<boolean | null>(null);
   const [scopeChanged, setScopeChanged] = useState<boolean | null>(null);
+  // Which way the job differed (longer vs shorter). Drives the second branch of
+  // Q1 so only that direction's reasons are shown.
+  const [varianceDir, setVarianceDir] = useState<"more" | "less" | null>(null);
   useEffect(() => { if (data.variance_causes.length > 0) setRanDiff((p) => (p == null ? true : p)); }, [data.variance_causes.length]);
   useEffect(() => { if (data.scope_changes.length > 0) setScopeChanged((p) => (p == null ? true : p)); }, [data.scope_changes.length]);
+  useEffect(() => {
+    setVarianceDir((prev) => {
+      if (prev != null || data.variance_causes.length === 0) return prev;
+      // Seed the direction from any saved grouped cause; if only "Other" was
+      // picked we can't tell, so default to "longer".
+      const g = data.variance_causes
+        .map((k) => VARIANCE_CAUSES.find((o) => o.key === k)?.group)
+        .find((x) => x === "more" || x === "less");
+      return g ?? "more";
+    });
+  }, [data.variance_causes]);
 
   // First START on the timeline + last FINISH = the natural bookends for a
   // typical crew day. Prefilling these means the common case (everyone
@@ -1514,7 +1528,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </div>
         )}
 
-        <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee man-hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
           {canRate && <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />}
@@ -1985,7 +1999,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             value={ranDiff}
             onChange={(v) => {
               setRanDiff(v);
-              if (!v) { set("variance_causes", []); set("variance_note", ""); }
+              if (!v) { set("variance_causes", []); set("variance_note", ""); setVarianceDir(null); }
               setSaved(false);
             }}
             yesLabel="Yes, it differed"
@@ -1994,28 +2008,66 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
         {ranDiff === true && (
           <div style={{ marginTop: 12 }}>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-              Tick every reason that applied, in either direction. The note is for
-              anything the list misses.
+            {/* Branch again: which way, then only that direction's reasons -
+                keeps the list short and the follow-up specific. */}
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>Which way?</div>
+            <div
+              role="group"
+              aria-label="Ran longer or shorter"
+              style={{ display: "inline-flex", gap: 0, border: "1px solid var(--border)", borderRadius: 999, overflow: "hidden" }}
+            >
+              {([["more", "Ran longer"], ["less", "Ran shorter"]] as const).map(([dir, label]) => {
+                const on = varianceDir === dir;
+                return (
+                  <button
+                    key={dir}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => {
+                      setVarianceDir(dir);
+                      // Drop any reasons that belonged to the other direction so
+                      // the two can't mix; "Other" (ungrouped) survives.
+                      setWith("variance_causes", (prev) =>
+                        prev.filter((k) => {
+                          const o = VARIANCE_CAUSES.find((x) => x.key === k);
+                          return !o?.group || o.group === dir;
+                        }));
+                      setSaved(false);
+                    }}
+                    style={{
+                      padding: "8px 18px", fontSize: 13, fontWeight: on ? 700 : 500, cursor: "pointer", border: "none",
+                      background: on ? "var(--brand)" : "transparent",
+                      color: on ? "var(--on-brand, #fff)" : "var(--muted)",
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
-            <GroupedChipPicker
-              options={VARIANCE_CAUSES}
-              selected={data.variance_causes}
-              moreLabel="Ran longer than quoted"
-              lessLabel="Ran shorter than quoted"
-              onToggle={(key) =>
-                setWith("variance_causes", (prev) =>
-                  prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
-              }
-            />
-            {data.variance_causes.length > 0 && (
-              <textarea
-                value={data.variance_note}
-                onChange={(e) => { set("variance_note", e.target.value); setSaved(false); }}
-                placeholder="What happened? (optional)"
-                rows={2}
-                style={{ width: "100%", marginTop: 8, resize: "vertical" }}
-              />
+            {varianceDir && (
+              <div style={{ marginTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                  Tick every reason that applied. The note is for anything the list misses.
+                </div>
+                <ChipPicker
+                  options={VARIANCE_CAUSES.filter((o) => o.group === varianceDir || !o.group)}
+                  selected={data.variance_causes}
+                  onToggle={(key) =>
+                    setWith("variance_causes", (prev) =>
+                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
+                  }
+                />
+                {data.variance_causes.length > 0 && (
+                  <textarea
+                    value={data.variance_note}
+                    onChange={(e) => { set("variance_note", e.target.value); setSaved(false); }}
+                    placeholder="What happened? (optional)"
+                    rows={2}
+                    style={{ width: "100%", marginTop: 8, resize: "vertical" }}
+                  />
+                )}
+              </div>
             )}
           </div>
         )}
@@ -2866,7 +2918,7 @@ function TruckFullnessEditor({
       {value.map((t, i) => {
         return (
           <div key={t.is_rental ? `rental-${i}` : t.truck} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div className="row" style={{ alignItems: "center", gap: 8 }}>
               {t.is_rental ? (
                 <input
                   value={t.truck}
@@ -2877,13 +2929,6 @@ function TruckFullnessEditor({
               ) : (
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{t.truck}</div>
               )}
-              <button
-                type="button"
-                onClick={() => removeAt(i)}
-                style={{ color: "var(--danger)", flexShrink: 0 }}
-              >
-                Remove
-              </button>
             </div>
             {t.is_rental && (
               <label className="col" style={{ gap: 2, marginTop: 8 }}>
@@ -2915,6 +2960,17 @@ function TruckFullnessEditor({
                 Rental trucks have no interior 25% markers - estimate the fill as best you can.
               </div>
             )}
+            {/* Remove sits at the bottom, away from the fill grid, so it isn't a
+                mis-tap while tapping the deck to set the load. */}
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+              <button
+                type="button"
+                onClick={() => removeAt(i)}
+                style={{ color: "var(--danger)", fontSize: 13 }}
+              >
+                Remove truck
+              </button>
+            </div>
           </div>
         );
       })}
