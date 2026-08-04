@@ -559,6 +559,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setLoaded(false);
     setSaved(false);
     setBillReviewed(false);
+    // Reset the view on every job switch. The load below re-opens the closed
+    // tile only if THIS job already has a submitted report; without this reset
+    // the previous job's "closed" view would stick to a fresh/unsubmitted job.
+    setView("edit");
+    // Same for the close-out tree gates - they re-seed from this job's data.
+    setRanDiff(null);
+    setScopeChanged(null);
+    setVarianceDir(null);
 
     // Safety net: force `loaded` true after 15 seconds even if the fetch is
     // stuck. Previously a hung /api/job-report request could leave the tab
