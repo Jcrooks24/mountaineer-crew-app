@@ -126,8 +126,9 @@ export default function JobSetupPanel({
       setExisting(h);
       hydrate(h, evc);
       onHeader?.(h);
-      // Stay collapsed on load - the crew tap "Set up"/"Edit" to expand, so the
-      // job card is not a wall of fields on every page load.
+      // A set-up job shows a compact static tile; a job with no header opens the
+      // form so the crew can fill it (with the suggested crew prefilled).
+      setOpen(!h);
       setLoaded(true);
     })();
 
@@ -206,40 +207,61 @@ export default function JobSetupPanel({
     return <div className="small" style={{ color: "var(--muted)" }}>Loading job setup…</div>;
   }
 
-  const confirmedCount = crew.filter((c) => c.confirmed).length;
-  const summary = existing
-    ? [
-        `${confirmedCount || crew.length} crew`,
-        vehicleUnitNames.length ? vehicleUnitNames.join(", ") : null,
-        isLD ? "Long-distance" : "Local",
-      ].filter(Boolean).join(" · ")
-    : "Not set up yet";
+  const crewNames = crew.filter((c) => c.confirmed).map((c) => c.name.trim()).filter(Boolean);
+  const routeParts = [origin, ...stops, destination].map((s) => (s || "").trim()).filter(Boolean);
+  const staticRow = (label: string, value: string) => (
+    <div className="row" style={{ gap: 10, alignItems: "baseline" }}>
+      <span className="small" style={{ color: "var(--muted)", flex: "0 0 52px" }}>{label}</span>
+      <span className="small" style={{ fontWeight: 600, minWidth: 0, wordBreak: "break-word" }}>{value}</span>
+    </div>
+  );
 
   return (
     <div>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <div>
-          <div className="microLabel" style={{ marginBottom: 2 }}>Set up job</div>
-          <div className="small" style={{ color: "var(--muted)" }}>{summary}</div>
+      {!open && existing ? (
+        // Static tile: the captured setup at a glance, with an Edit option.
+        <div className="col" style={{ gap: 8 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div className="microLabel" style={{ marginBottom: 0 }}>Job setup</div>
+            <div className="row" style={{ gap: 8, alignItems: "center" }}>
+              {status === "saved" && <span className="small" style={{ color: "var(--ok)" }}>Saved</span>}
+              {status === "queued" && <span className="small" style={{ color: "var(--warn, #e0a800)" }}>Saved offline</span>}
+              {existing.locked && <span className="chip" style={{ fontSize: 10 }}>Locked</span>}
+              <button type="button" onClick={() => setOpen(true)} style={{ fontSize: 12 }}>Edit</button>
+            </div>
+          </div>
+          {staticRow("Crew", crewNames.length ? crewNames.join(", ") : "None added")}
+          {staticRow("Truck", vehicleUnitNames.length ? vehicleUnitNames.join(", ") : "Not set")}
+          {staticRow("Type", [isLD ? "Long-distance" : "Local", ...tags].filter(Boolean).join(" · "))}
+          {routeParts.length > 0 && staticRow("Route", routeParts.join(" -> "))}
+          {notes.trim() && staticRow("Notes", notes.trim())}
         </div>
-        <div className="row" style={{ gap: 8, alignItems: "center" }}>
-          {status === "saved" && <span className="small" style={{ color: "var(--ok)" }}>Saved</span>}
-          {status === "queued" && <span className="small" style={{ color: "var(--warn, #e0a800)" }}>Saved offline</span>}
-          {existing?.locked && <span className="chip" style={{ fontSize: 10 }}>Locked</span>}
-          <button type="button" onClick={() => setOpen((o) => !o)} style={{ fontSize: 12 }}>
-            {open ? "Close" : existing ? "Edit" : "Set up"}
-          </button>
+      ) : !open ? (
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <div>
+            <div className="microLabel" style={{ marginBottom: 2 }}>Set up job</div>
+            <div className="small" style={{ color: "var(--muted)" }}>Not set up yet</div>
+          </div>
+          <button type="button" onClick={() => setOpen(true)} style={{ fontSize: 12 }}>Set up</button>
         </div>
-      </div>
-
-      {open && (
-        <div className="col" style={{ gap: 14, marginTop: 12 }}>
+      ) : (
+        <div className="col" style={{ gap: 14 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div className="microLabel" style={{ marginBottom: 0 }}>Set up job</div>
+            {existing && (
+              <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>Cancel</button>
+            )}
+          </div>
           {/* Crew */}
           <div className="col" style={{ gap: 6 }}>
             <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Crew</span>
-            {crew.length === 0 && (
+            {suggested.length > 0 ? (
+              <span className="small" style={{ color: "var(--muted)" }}>
+                Suggested from the calendar invitees (matched by email). Tick to confirm, or add more below.
+              </span>
+            ) : crew.length === 0 ? (
               <span className="small" style={{ color: "var(--muted)" }}>No crew yet. Add them below.</span>
-            )}
+            ) : null}
             {crew.map((c, i) => (
               <div key={`${c.user_id ?? c.name}-${i}`} className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, padding: "4px 0" }}>
                 <label className="row" style={{ gap: 8, alignItems: "center", minWidth: 0 }}>
