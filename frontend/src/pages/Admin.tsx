@@ -1634,20 +1634,30 @@ function MonthScheduleView({
   // the day cell to pin it; click again to unpin.
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Pull the window's availability + scheduled blocks from the server. Runs on
+  // mount and whenever the range changes; also wired to the Refresh button so an
+  // admin can re-pull crew submissions without reloading the page. The optional
+  // `signal` lets the effect drop a stale response when the range moves mid-flight.
+  const loadRange = useCallback(async (signal?: { cancelled: boolean }) => {
     setLoading(true);
     setErr(null);
-    apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${rangeStart}&end=${rangeEnd}`)
-      .then((r) => {
-        if (cancelled) return;
-        setRows(r.days);
-        setScheduledRows(r.scheduled);
-      })
-      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    try {
+      const r = await apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${rangeStart}&end=${rangeEnd}`);
+      if (signal?.cancelled) return;
+      setRows(r.days);
+      setScheduledRows(r.scheduled);
+    } catch (e) {
+      if (!signal?.cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load");
+    } finally {
+      if (!signal?.cancelled) setLoading(false);
+    }
   }, [rangeStart, rangeEnd]);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    loadRange(signal);
+    return () => { signal.cancelled = true; };
+  }, [loadRange]);
 
   const tagsById = useMemo(() => {
     const m = new Map<number, EmployeeTag>();
@@ -1863,6 +1873,25 @@ function MonthScheduleView({
           />
           <span>High contrast (saturated fills)</span>
         </label>
+        {/* Pull the latest crew availability from the server (crew submit on
+            their own devices, so the grid can be stale without a manual re-pull). */}
+        <button
+          type="button"
+          onClick={() => loadRange()}
+          disabled={loading}
+          title="Pull the latest crew availability from the server"
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "6px 14px", fontSize: 13, fontWeight: 700, borderRadius: 8,
+            cursor: loading ? "default" : "pointer",
+            border: "1px solid var(--border)",
+            background: "transparent",
+            color: "var(--text)",
+            opacity: loading ? 0.6 : 1,
+          }}
+        >
+          {loading ? "Refreshing…" : "↻ Refresh availability"}
+        </button>
         {/* Edit toggle. Off by default so tapping a cell does nothing until the
             admin opts in; on, it is clearly flagged so it is obvious the grid is
             now live. */}
