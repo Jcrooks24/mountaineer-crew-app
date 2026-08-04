@@ -193,6 +193,10 @@ export default function Admin() {
         </div>
       </div>
 
+      {/* Mobile: a persistent horizontal tab nav so admin can jump between
+          sections from anywhere (desktop uses the left sidebar below). */}
+      {!desktopMode && <AdminMobileNav current={tab} onPick={setTab} />}
+
       {/* Desktop: persistent left sidebar + content. Mobile: the drill-in
           tool menu (rendered inside the map tab) with a back button. */}
       <div style={desktopMode ? { display: "flex", gap: 16, alignItems: "flex-start" } : undefined}>
@@ -289,20 +293,58 @@ function DesktopModeToggle({
 // home itself, so it isn't listed here.
 // Desktop admin sidebar: 200px, left-border active nav (design system). Shown
 // only in desktopMode; mobile keeps the drill-in AdminToolMenu.
+const ADMIN_TAB_ITEMS: { tab: Tab; label: string }[] = [
+  { tab: "map", label: "Map" },
+  { tab: "employees", label: "Employees" },
+  { tab: "dvir", label: "DVIR Review" },
+  { tab: "estimator", label: "Estimator" },
+  { tab: "notes", label: "Patch Notes" },
+  { tab: "summary", label: "Job Summary" },
+  { tab: "office", label: "Office Hours" },
+  { tab: "payroll", label: "Payroll" },
+  { tab: "dq", label: "DQ Files" },
+  { tab: "incidents", label: "Incidents" },
+  { tab: "settings", label: "Settings" },
+];
+
+function adminTabActive(current: Tab, t: Tab): boolean {
+  return current === t || (t === "settings" && (current === "advanced" || current === "appearance"));
+}
+
+// Persistent horizontal nav for the admin console on mobile (desktop uses the
+// left sidebar). Without this, mobile admin could only switch tabs by backing
+// out to the tool menu each time.
+function AdminMobileNav({ current, onPick }: { current: Tab; onPick: (t: Tab) => void }) {
+  return (
+    <nav
+      aria-label="Admin sections"
+      style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 8, marginBottom: 12, WebkitOverflowScrolling: "touch" }}
+    >
+      {ADMIN_TAB_ITEMS.map((t) => {
+        const active = adminTabActive(current, t.tab);
+        return (
+          <button
+            key={t.tab}
+            type="button"
+            aria-current={active ? "page" : undefined}
+            onClick={() => onPick(t.tab)}
+            style={{
+              flex: "0 0 auto", padding: "6px 12px", borderRadius: 999, fontSize: 13, whiteSpace: "nowrap", cursor: "pointer",
+              border: active ? "1px solid var(--brand)" : "1px solid var(--border)",
+              background: active ? "var(--brand)" : "var(--card)",
+              color: active ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: active ? 700 : 500,
+            }}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 function AdminSidebar({ current, onPick }: { current: Tab; onPick: (t: Tab) => void }) {
-  const items: { tab: Tab; label: string }[] = [
-    { tab: "map", label: "Map" },
-    { tab: "employees", label: "Employees" },
-    { tab: "dvir", label: "DVIR Review" },
-    { tab: "estimator", label: "Estimator" },
-    { tab: "notes", label: "Patch Notes" },
-    { tab: "summary", label: "Job Summary" },
-    { tab: "office", label: "Office Hours" },
-    { tab: "payroll", label: "Payroll" },
-    { tab: "dq", label: "DQ Files" },
-    { tab: "incidents", label: "Incidents" },
-    { tab: "settings", label: "Settings" },
-  ];
+  const items = ADMIN_TAB_ITEMS;
   return (
     <nav
       style={{
