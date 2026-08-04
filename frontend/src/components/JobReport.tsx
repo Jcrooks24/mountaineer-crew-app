@@ -668,21 +668,25 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     return () => { window.clearTimeout(bail); };
   }, [jobUuid]);
 
-  // C1.3 (ADR 0034): seed the job type from the job header, but ONLY for a
-  // brand-new report - one with no server row and no tags yet. Once per job,
-  // and it never touches an existing report or a report that already has tags,
-  // so a crew member who deliberately cleared them is not overridden.
-  const seededTypeForRef = useRef<string>("");
+  // Job type is captured in Job setup now (the single source), so it is not
+  // entered twice. When the job's header carries a job type, mirror it onto the
+  // report (so it still exports to the sheet) and show it read-only below; the
+  // crew edit it in Job setup. A job with NO header keeps the editable picker
+  // (fallback for older jobs that were never set up).
+  const [headerJobTypes, setHeaderJobTypes] = useState<string[] | null>(null);
+  const headerTypeForRef = useRef<string>("");
   useEffect(() => {
-    if (!loaded || !jobUuid || seededTypeForRef.current === jobUuid) return;
-    seededTypeForRef.current = jobUuid;
-    if (serverUpdatedAtRef.current) return;      // existing report - leave it
-    if (data.job_type_tags.length > 0) return;   // already tagged
+    if (!loaded || !jobUuid || headerTypeForRef.current === jobUuid) return;
+    headerTypeForRef.current = jobUuid;
     loadJobSetup(jobUuid)
       .then((h) => {
-        const tags = h?.job_type_tags ?? [];
+        const tags = (h?.job_type_tags ?? []).filter(Boolean);
+        setHeaderJobTypes(tags);
         if (tags.length) {
-          setData((prev) => (prev.job_type_tags.length ? prev : { ...prev, job_type_tags: tags }));
+          setData((prev) => {
+            const same = prev.job_type_tags.length === tags.length && prev.job_type_tags.every((t, i) => t === tags[i]);
+            return same ? prev : { ...prev, job_type_tags: tags };
+          });
         }
       })
       .catch(() => {});
@@ -1462,41 +1466,70 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
           Job type<BetaTag feature="jobTypeTags" />
         </div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-          {ht.jobTypeHint}
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
-          {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
-            const active = data.job_type_tags.includes(tag);
-            return (
-              <button
-                key={tag}
-                type="button"
-                onClick={() => {
-                  setData((prev) => ({
-                    ...prev,
-                    job_type_tags: active
-                      ? prev.job_type_tags.filter((t) => t !== tag)
-                      : [...prev.job_type_tags, tag],
-                  }));
-                  setSaved(false);
-                }}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: 999,
-                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
-                  color: active ? "var(--brand)" : "var(--text)",
-                  fontWeight: active ? 700 : 400,
-                  fontSize: 13,
-                  cursor: "pointer",
-                }}
-              >
-                {tag}
-              </button>
-            );
-          })}
-        </div>
+        {headerJobTypes && headerJobTypes.length > 0 ? (
+          // Read-only: the job type comes from Job setup (edit it there), so it
+          // is not entered a second time here.
+          <>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
+              Set in Job setup for this job. To change it, edit the job setup.
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
+              {data.job_type_tags.length === 0 && (
+                <span className="small" style={{ color: "var(--muted)" }}>None set.</span>
+              )}
+              {data.job_type_tags.map((tag) => (
+                <span
+                  key={tag}
+                  style={{
+                    padding: "8px 12px", borderRadius: 999, border: "2px solid var(--brand)",
+                    background: "color-mix(in srgb, var(--brand) 18%, transparent)",
+                    color: "var(--brand)", fontWeight: 700, fontSize: 13,
+                  }}
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
+              {ht.jobTypeHint}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
+              {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
+                const active = data.job_type_tags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      setData((prev) => ({
+                        ...prev,
+                        job_type_tags: active
+                          ? prev.job_type_tags.filter((t) => t !== tag)
+                          : [...prev.job_type_tags, tag],
+                      }));
+                      setSaved(false);
+                    }}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 999,
+                      border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
+                      background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
+                      color: active ? "var(--brand)" : "var(--text)",
+                      fontWeight: active ? 700 : 400,
+                      fontSize: 13,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         {/* Inventory is logged on long-distance jobs only (ADR 0015). On a local
             job there is no Inventory tab, so this line would be a permanent
