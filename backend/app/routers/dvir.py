@@ -135,6 +135,18 @@ def get_units(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
+    """The DVIR unit dropdown. Unified onto the fleet registry (vehicle_units) so
+    trucks are managed in ONE place (Settings -> Vehicle Units). Falls back to
+    the legacy dvir_units list, then the defaults, if the registry is empty."""
+    from app.core.vehicle_units import VEHICLE_UNITS_KEY, normalize_units
+    vrow = db.query(SystemConfig).filter(SystemConfig.key == VEHICLE_UNITS_KEY).first()
+    if vrow and vrow.value:
+        try:
+            names = [u["name"] for u in normalize_units(json.loads(vrow.value)) if u.get("name")]
+        except (ValueError, TypeError):
+            names = []
+        if names:
+            return {"units": names}
     row = db.query(SystemConfig).filter(SystemConfig.key == UNITS_CONFIG_KEY).first()
     units = json.loads(row.value) if row and row.value else DEFAULT_UNITS
     return {"units": units}
