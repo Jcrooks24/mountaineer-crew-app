@@ -18,7 +18,7 @@ import { drainChecklistChecks } from "./lib/jobChecklistStore";
 import JobChecklistCard from "./components/JobChecklistCard";
 import DqReminderBanner from "./components/DqReminderBanner";
 import RodsRecorder from "./components/RodsRecorder";
-import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
+import { useLdPlan } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
@@ -2208,19 +2208,14 @@ export default function App() {
                 <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
               </div>
 
-              {/* 3 - Job name display */}
+              {/* 3 - Job name + short id (condensed - the full id is technical
+                  clutter; a short prefix is enough to eyeball). */}
               {jobName && (
-                <div className="col">
-                  <div className="microLabel">Job Name</div>
-                  <div style={{ fontWeight: 600, fontSize: 15 }}>{jobName}</div>
-                </div>
-              )}
-
-              {/* 4 - Job ID (auto, read-only) */}
-              {jobUuid && (
-                <div className="col">
-                  <div className="microLabel">Job ID</div>
-                  <div className="mono small" style={{ color: "var(--muted)", fontSize: 11 }}>{jobUuid}</div>
+                <div className="col" style={{ gap: 2 }}>
+                  <div style={{ fontWeight: 700, fontSize: 16, wordBreak: "break-word" }}>{jobName}</div>
+                  {jobUuid && (
+                    <div className="mono" style={{ color: "var(--muted)", fontSize: 10 }} title={jobUuid}>#{jobUuid.slice(0, 8)}</div>
+                  )}
                 </div>
               )}
 
@@ -2295,18 +2290,12 @@ export default function App() {
                       // resets to local so the prior job's flag never carries over.
                       setPersistedMode(h?.is_long_distance ? "long_distance" : "local");
                     }}
+                    ldPlan={ldPlan}
+                    onToggleActivity={ldToggleActivity}
                   />
                 </div>
               );
             })()}
-
-            {/* Long-distance day plan, when the job is long-distance. */}
-            {longDistance && (
-              <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
-                <div className="microLabel" style={{ marginBottom: 10 }}>Long-distance day plan</div>
-                <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
-              </div>
-            )}
           </div>
 
           {/* Job checklist (C3): applicable items for this job, auto-checked

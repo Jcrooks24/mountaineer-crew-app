@@ -12,6 +12,7 @@ import { apiFetch, ApiError } from "../api/client";
 import RosterPicker from "./RosterPicker";
 import { useJobTypes } from "../lib/jobTypesStore";
 import { getUnitsCached, refreshUnits, type VehicleUnit } from "../lib/vehicleUnits";
+import { LdPlanTile, type LdActivity, type LdPlan } from "./LdWorkday";
 import {
   loadJobSetup,
   saveJobSetup,
@@ -36,6 +37,8 @@ export default function JobSetupPanel({
   jobUuid,
   meta,
   onHeader,
+  ldPlan,
+  onToggleActivity,
 }: {
   jobUuid: string;
   meta: Meta;
@@ -43,6 +46,9 @@ export default function JobSetupPanel({
   // after a successful save. The hub uses it to make the device mode follow the
   // job's long-distance flag (ADR 0034, C1.3).
   onHeader?: (h: JobSetupData | null) => void;
+  // "What are you doing today?" - shown for every job (LD adds Driving).
+  ldPlan: LdPlan;
+  onToggleActivity: (a: LdActivity) => void;
 }) {
   const jobTypes = useJobTypes();
   const [units, setUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
@@ -203,6 +209,27 @@ export default function JobSetupPanel({
     }
   };
 
+  // The prominent Local/Long-distance toggle persists immediately (it is a
+  // single, always-visible control), so it does not need the crew to open and
+  // Save the whole setup. Reverts on a locked header.
+  const saveLd = async (v: boolean) => {
+    setIsLD(v);
+    setErr(null);
+    try {
+      const r = await saveJobSetup(jobUuid, { ...body, is_long_distance: v });
+      setStatus(r.synced ? "saved" : "queued");
+      if (r.setup) { setExisting(r.setup); setLocked(!!r.setup.locked); }
+      onHeader?.(r.setup ?? { ...body, is_long_distance: v });
+    } catch (e) {
+      setIsLD(!v); // could not persist - put the toggle back
+      setErr(
+        e instanceof ApiError && e.status === 409
+          ? "This job's setup is locked. Open Edit and unlock it to change long-distance."
+          : "Could not save long-distance. Try again.",
+      );
+    }
+  };
+
   if (!loaded) {
     return <div className="small" style={{ color: "var(--muted)" }}>Loading job setup…</div>;
   }
@@ -218,6 +245,38 @@ export default function JobSetupPanel({
 
   return (
     <div>
+      {/* Prominent Local/Long-distance toggle + "what are you doing today?" -
+          always visible for every job, above the detailed setup. */}
+      <div className="col" style={{ gap: 12, marginBottom: 14 }}>
+        <div
+          className="row"
+          role="group"
+          aria-label="Local or long-distance"
+          style={{ gap: 0, border: "1px solid var(--border)", borderRadius: 999, overflow: "hidden", alignSelf: "flex-start" }}
+        >
+          {([["local", "Local"], ["long_distance", "Long-distance"]] as const).map(([m, label]) => {
+            const on = (m === "long_distance") === isLD;
+            return (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={on}
+                onClick={() => { if ((m === "long_distance") !== isLD) saveLd(m === "long_distance"); }}
+                style={{
+                  padding: "8px 20px", fontSize: 14, fontWeight: on ? 700 : 500, cursor: "pointer", border: "none",
+                  background: on ? "var(--brand)" : "transparent",
+                  color: on ? "var(--on-brand, #fff)" : "var(--muted)",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <LdPlanTile plan={ldPlan} onToggleActivity={onToggleActivity} showDriving={isLD} />
+        {!open && err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
+      </div>
+
       {!open && existing ? (
         // Static tile: the captured setup at a glance, with an Edit option.
         <div className="col" style={{ gap: 8 }}>
@@ -232,7 +291,7 @@ export default function JobSetupPanel({
           </div>
           {staticRow("Crew", crewNames.length ? crewNames.join(", ") : "None added")}
           {staticRow("Truck", vehicleUnitNames.length ? vehicleUnitNames.join(", ") : "Not set")}
-          {staticRow("Type", [isLD ? "Long-distance" : "Local", ...tags].filter(Boolean).join(" · "))}
+          {tags.length > 0 && staticRow("Type", tags.join(", "))}
           {routeParts.length > 0 && staticRow("Route", routeParts.join(" -> "))}
           {notes.trim() && staticRow("Notes", notes.trim())}
         </div>
@@ -286,12 +345,6 @@ export default function JobSetupPanel({
               </span>
             )}
           </div>
-
-          {/* Local / long-distance */}
-          <label className="row" style={{ gap: 8, alignItems: "center" }}>
-            <input type="checkbox" checked={isLD} onChange={(e) => setIsLD(e.target.checked)} />
-            <span className="small"><strong>Long-distance job</strong> (unticked = local)</span>
-          </label>
 
           {/* Vehicle units */}
           <div className="col" style={{ gap: 6 }}>

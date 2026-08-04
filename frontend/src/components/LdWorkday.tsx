@@ -81,16 +81,26 @@ export function useLdPlan(date: string) {
   };
 }
 
-// Renders bare (no card wrapper) so it can live inside the Job type tile.
-export function LdPlanTile({ plan, onToggleActivity }: { plan: LdPlan; onToggleActivity: (a: LdActivity) => void }) {
+// Renders bare (no card wrapper) so it can live inside the Job tile. `showDriving`
+// is false on local jobs (Driving = the interstate RODS recorder, LD-only).
+export function LdPlanTile({
+  plan,
+  onToggleActivity,
+  showDriving = true,
+}: {
+  plan: LdPlan;
+  onToggleActivity: (a: LdActivity) => void;
+  showDriving?: boolean;
+}) {
+  const shown = LD_ACTIVITIES.filter((a) => showDriving || a !== "driving");
   return (
     <>
-      <div data-component="LdPlanTile" style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Today's plan</div>
+      <div data-component="LdPlanTile" style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>What are you doing today?</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-        What are you doing today? The tools below match your selection.
+        Pick everything that applies. The timeline tools match your selection.
       </div>
       <div className="col" style={{ gap: 8 }}>
-        {LD_ACTIVITIES.map((a) => {
+        {shown.map((a) => {
           const on = plan.activities.includes(a);
           return (
             <label key={a} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14 }}>
@@ -105,7 +115,7 @@ export function LdPlanTile({ plan, onToggleActivity }: { plan: LdPlan; onToggleA
           );
         })}
       </div>
-      {plan.activities.length === 0 && (
+      {showDriving && plan.activities.length === 0 && (
         <div className="small" style={{ color: "var(--muted)", marginTop: 10 }}>Pick at least one to start logging.</div>
       )}
     </>
