@@ -16,13 +16,13 @@ function todayISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-const inputStyle = { padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 };
-
-function Text({ label, value, onChange, type = "text", w, maxLength, placeholder }: { label: string; value: string; onChange: (v: string) => void; type?: string; w?: number | string; maxLength?: number; placeholder?: string }) {
+function Text({ label, value, onChange, type = "text", w, maxLength, placeholder }: { label: string; value: string; onChange: (v: string) => void; type?: string; w?: number; maxLength?: number; placeholder?: string }) {
+  // Fields shrink to fit narrow phones (flex-basis + maxWidth) so nothing runs
+  // off the edge; the input inherits the global 16px style (no iOS zoom-on-tap).
   return (
-    <label className="col" style={{ gap: 2, width: w, flex: w ? undefined : "1 1 140px" }}>
+    <label className="col" style={{ gap: 2, flex: `1 1 ${w ?? 140}px`, maxWidth: w, minWidth: 0 }}>
       <span className="small" style={{ color: "var(--muted)" }}>{label}</span>
-      <input type={type} value={value} maxLength={maxLength} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} style={inputStyle} />
+      <input type={type} value={value} maxLength={maxLength} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
     </label>
   );
 }
@@ -248,7 +248,7 @@ export default function DqEmploymentAppForm({ driverName, onDone, onCancel }: { 
           <button type="button" onClick={() => sigRef.current?.clear()} style={{ fontSize: 12 }}>Clear signature</button>
           <label className="row" style={{ gap: 6, alignItems: "center", marginLeft: "auto" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Date</span>
-            <input type="date" value={signedDate} onChange={(e) => setSignedDate(e.target.value)} style={inputStyle} />
+            <input type="date" value={signedDate} onChange={(e) => setSignedDate(e.target.value)} style={{ maxWidth: 170 }} />
           </label>
         </div>
       </div>
