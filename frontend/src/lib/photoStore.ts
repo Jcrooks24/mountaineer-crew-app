@@ -23,6 +23,8 @@ export type StoredPhoto = {
   drive_status?: "pending" | "uploaded" | "failed";
   drive_url?: string;
   drive_error?: string;
+  // before / after / general (incident photos carry incident_uuid instead).
+  category?: string;
   // Optional link to an incident this photo documents (see IncidentReport).
   incident_uuid?: string;
   claim_number?: string;

@@ -204,6 +204,7 @@ type ServerPhoto = {
   thumb_url: string;
   created_at: string;
   mime_type: string;
+  category?: string | null;
   incident_uuid?: string | null;
   claim_number?: string | null;
 };
@@ -532,6 +533,9 @@ export default function App() {
   // currently-selected target ("" = tag the batch to the job, not an incident).
   const [jobIncidents, setJobIncidents] = useState<JobIncidentRef[]>([]);
   const [attachIncidentUuid, setAttachIncidentUuid] = useState<string>("");
+  // Non-incident photos are before / after / general (the incident path is its
+  // own "category"). Applies to the whole pending batch on save.
+  const [photoCategory, setPhotoCategory] = useState<"before" | "after" | "general">("general");
 
   const [sendingType, setSendingType] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -1600,6 +1604,7 @@ export default function App() {
       caption,
       blob: await toQueuedPhoto(file),
       drive_status: "pending",
+      category: photoCategory,
       incident_uuid: inc?.incident_uuid,
       claim_number: inc?.claim_number,
     };
@@ -1614,6 +1619,7 @@ export default function App() {
       form.append("job_name", jobName);
       form.append("job_date", jobDate);
       form.append("caption", caption);
+      form.append("category", photoCategory);
       if (inc) {
         form.append("incident_uuid", inc.incident_uuid);
         form.append("claim_number", inc.claim_number || "");
@@ -2846,6 +2852,26 @@ export default function App() {
             <div className="card">
               <div className="microLabel" style={{ marginBottom: 10 }}>Ready to save ({pendingPhotos.length})</div>
 
+              {/* Photo type for the batch: before / after / general. Tagging to
+                  an incident below makes it an incident photo instead. */}
+              <div className="col" style={{ gap: 6, marginTop: 8 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Photo type</span>
+                <div className="row wrap" style={{ gap: 6 }}>
+                  {([["general", "General"], ["before", "Before"], ["after", "After"]] as const).map(([val, label]) => {
+                    const on = photoCategory === val;
+                    return (
+                      <button key={val} type="button" onClick={() => setPhotoCategory(val)}
+                        style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, cursor: "pointer",
+                          border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                          background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
+                          color: on ? "var(--brand)" : "var(--text)", fontWeight: on ? 700 : 400 }}>
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Attach target: tag this batch to an incident's claim, or leave
                   as plain job photos. Only shown when the job has incidents. */}
               {jobIncidents.length > 0 && (
@@ -2967,11 +2993,15 @@ export default function App() {
                         ) : (
                           p.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
                         )}
-                        {p.claim_number && (
+                        {p.claim_number ? (
                           <div style={{ display: "inline-block", marginBottom: 6, fontSize: 11, fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
                             Incident {p.claim_number}
                           </div>
-                        )}
+                        ) : p.category && p.category !== "general" ? (
+                          <div style={{ display: "inline-block", marginBottom: 6, fontSize: 11, fontWeight: 700, color: "var(--muted)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px", textTransform: "capitalize" }}>
+                            {p.category}
+                          </div>
+                        ) : null}
                         <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(p.created_at)}</div>
                         <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
                           {editingNoteId !== p.id && (

@@ -27,6 +27,7 @@ def upload_photo(
     job_date: str = Form(default=""),
     caption: str = Form(default=""),
     folder: str = Form(default=""),  # "estimator" routes to the estimator parent folder
+    category: str = Form(default="general"),  # before / after / general
     incident_uuid: str = Form(default=""),  # tags this photo to an incident
     claim_number: str = Form(default=""),   # denormalized for display / Drive search
     db: Session = Depends(get_db),
@@ -36,6 +37,9 @@ def upload_photo(
 
     incident_uuid = (incident_uuid or "").strip()
     claim_number = (claim_number or "").strip()
+    category = (category or "general").strip().lower()
+    if category not in ("before", "after", "general"):
+        category = "general"
     # Prefix the Drive caption with the claim number so an incident's photos are
     # findable in Drive by claim, mirroring the incident's claim_number in the
     # sheet. The DB fields below are the primary link; this is admin convenience.
@@ -83,6 +87,7 @@ def upload_photo(
         drive_file_id=result["file_id"],
         drive_url=result["url"],
         mime_type=mime_type,
+        category=category,
         incident_uuid=incident_uuid or None,
         claim_number=claim_number or None,
     )
@@ -184,6 +189,7 @@ def get_photos(
                 "thumb_url": f"https://drive.google.com/thumbnail?id={r.drive_file_id}&sz=w800",
                 "created_at": r.created_at.isoformat(),
                 "mime_type": r.mime_type,
+                "category": getattr(r, "category", None) or "general",
                 "incident_uuid": r.incident_uuid,
                 "claim_number": r.claim_number,
             }
