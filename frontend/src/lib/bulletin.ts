@@ -89,9 +89,15 @@ async function resizeImage(file: File, maxPx = 1600, quality = 0.85): Promise<Bl
 }
 
 export async function createPhotoPost(file: File, text: string): Promise<BulletinPost> {
-  const blob = await resizeImage(file);
+  // GIFs (usually animated) must NOT go through the canvas resize - that flattens
+  // them to a single JPEG frame and kills the animation. Send the original bytes;
+  // everything else is resized/compressed to keep the stored image small.
+  const upload =
+    file.type === "image/gif"
+      ? file
+      : new File([await resizeImage(file)], "photo.jpg", { type: "image/jpeg" });
   const form = new FormData();
-  form.append("file", new File([blob], "photo.jpg", { type: "image/jpeg" }));
+  form.append("file", upload);
   form.append("post_uuid", uuid());
   form.append("text", text);
   const res = await fetch(`${API}/api/bulletin/posts/photo`, {

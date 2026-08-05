@@ -180,7 +180,7 @@ def create_post(
     return _post_out(post, 0, False, [])
 
 
-MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB after the client-side resize
+MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB. JPEGs are resized client-side first; GIFs upload raw to keep animation.
 
 
 @router.post("/posts/photo")

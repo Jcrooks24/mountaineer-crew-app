@@ -18,21 +18,23 @@ const SignaturePad = forwardRef<SignaturePadHandle, Props>(function SignaturePad
   const drawing = useRef(false);
   const empty = useRef(true);
 
-  function themeColor(varName: string, fallback: string) {
-    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-    return v || fallback;
-  }
+  // A signature is a legal mark on a document, so it must read the same on every
+  // theme (and in the exported PDF/sheet): dark ink on white paper. The old code
+  // tinted it from theme vars, which rendered near-black on the enterprise LIGHT
+  // theme and made the pad look blank.
+  const INK = "#111827";
+  const PAPER = "#ffffff";
 
   function fillBackground() {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = themeColor("--card", "#0b1220");
+    ctx.fillStyle = PAPER;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
   function getCtx() {
     const ctx = canvasRef.current!.getContext("2d")!;
-    ctx.strokeStyle = themeColor("--brand", "#5dd6c2");
+    ctx.strokeStyle = INK;
     ctx.lineWidth = 2.5;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -139,7 +141,7 @@ const SignaturePad = forwardRef<SignaturePadHandle, Props>(function SignaturePad
         height,
         borderRadius: 8,
         border: "1px solid var(--border)",
-        background: "var(--bg)",
+        background: PAPER,
         cursor: "crosshair",
         touchAction: "none",
       }}

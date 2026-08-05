@@ -193,7 +193,6 @@ export default function DVIRPage() {
     return () => { cancelled = true; };
   }, [attachedJobUuid]);
 
-  const [trailerNumber, setTrailerNumber] = useState("");
   const [odometer, setOdometer] = useState("");
   const [inspectionType, setInspectionType] = useState<"pre-trip" | "post-trip">("pre-trip");
   const [inspectionDate, setInspectionDate] = useState(todayLocal());
@@ -265,7 +264,9 @@ export default function DVIRPage() {
         body: JSON.stringify({
           dvir_id: newUUID(),
           vehicle_number: vehicleNumber,
-          trailer_number: trailerNumber.trim() || null,
+          // Straight trucks only - no trailer, ever. Field removed from the form;
+          // the column stays for back-compat but is always null now.
+          trailer_number: null,
           odometer: odometer ? parseInt(odometer, 10) : null,
           inspection_type: inspectionType,
           inspection_date: inspectionDate,
@@ -360,7 +361,6 @@ export default function DVIRPage() {
               onClick={() => {
                 setSubmitted(null);
                 setVehicleNumber("");
-                setTrailerNumber("");
                 setOdometer("");
                 setDefects(new Set());
                 setDefectNotes("");
@@ -505,10 +505,6 @@ export default function DVIRPage() {
             gap: 10,
             marginBottom: 10,
           }}>
-            <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trailer # (or N/A)</div>
-              <input value={trailerNumber} onChange={(e) => setTrailerNumber(e.target.value)} placeholder="N/A if none" style={inputStyle} />
-            </div>
             <div>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Odometer (miles) *</div>
               <input type="number" value={odometer} onChange={(e) => setOdometer(e.target.value)} placeholder="Required" min={0} required style={inputStyle} />

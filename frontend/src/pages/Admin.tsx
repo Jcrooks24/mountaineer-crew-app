@@ -4,6 +4,7 @@ import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
 import { getCompanyInfoCached, setCompanyInfoCache, type CompanyInfo } from "../lib/companyInfo";
 import { useJobTypes } from "../lib/jobTypesStore";
+import { newClaimNumber } from "../lib/incidentStore";
 
 const ADMIN_API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 import { useAuth } from "../auth/AuthContext";
@@ -401,7 +402,7 @@ function IncidentsAdminTab() {
   // member reported through the app).
   const [showNew, setShowNew] = useState(false);
   const [creating, setCreating] = useState(false);
-  const blankNew = { claim_number: "", job_name: "", incident_date: "", severity: "minor", description: "", est_cost: "", attributed_crew: "" };
+  const blankNew = { job_name: "", incident_date: "", severity: "minor", description: "", est_cost: "", attributed_crew: "" };
   const [nc, setNc] = useState({ ...blankNew });
 
   const reload = useCallback(() => {
@@ -414,17 +415,19 @@ function IncidentsAdminTab() {
   useEffect(() => { reload(); }, [reload]);
 
   async function fileIncident() {
-    if (!nc.description.trim() && !nc.claim_number.trim()) {
-      alert("Add a description or a claim number.");
+    if (!nc.description.trim()) {
+      alert("Add a description of the claim.");
       return;
     }
     setCreating(true);
     try {
+      const incidentUuid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       await apiFetch("/api/incidents", {
         method: "POST",
         body: JSON.stringify({
-          incident_uuid: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          claim_number: nc.claim_number.trim() || null,
+          incident_uuid: incidentUuid,
+          // Auto-generated, unique, same format the crew flow uses - no manual entry.
+          claim_number: newClaimNumber(nc.incident_date || null, incidentUuid),
           job_name: nc.job_name.trim() || null,
           incident_date: nc.incident_date || null,
           severity: nc.severity,
@@ -493,7 +496,7 @@ function IncidentsAdminTab() {
           <div className="row wrap" style={{ gap: 10 }}>
             <label className="col" style={{ gap: 2, flex: "1 1 140px" }}>
               <span className="small" style={{ color: "var(--muted)" }}>Claim number</span>
-              <input value={nc.claim_number} onChange={(e) => setNc((v) => ({ ...v, claim_number: e.target.value }))} placeholder="e.g. CLM-1042" />
+              <input value="Auto-generated on file" disabled style={{ color: "var(--muted)", fontStyle: "italic" }} />
             </label>
             <label className="col" style={{ gap: 2, flex: "1 1 160px" }}>
               <span className="small" style={{ color: "var(--muted)" }}>Job / customer</span>
