@@ -29,6 +29,7 @@ from app.db.models.incident import Incident
 from app.db.models.job_bill import JobBill
 from app.db.models.job_inventory import JobInventoryItem
 from app.db.models.job_report import JobReport
+from app.db.models.job_setup import JobSetup
 from app.db.models.long_distance import LdDay
 from app.db.models.materials import MaterialsSubmission
 from app.db.models.photo import Photo
@@ -542,6 +543,21 @@ def job_search(
         if m.job_date:
             c["dates"].add(m.job_date)
         c["materials"] += 1
+
+    # Job setup headers - a job now often exists (name + date + crew) via its
+    # header before any events or materials are logged (ADR 0034). Without this,
+    # searching for a set-up-but-not-yet-worked job returns nothing.
+    sq = db.query(JobSetup).filter(JobSetup.job_uuid.isnot(None))
+    if date:
+        sq = sq.filter(JobSetup.job_date == date)
+    if needle:
+        sq = sq.filter(func.lower(JobSetup.job_name).like(f"%{needle}%"))
+    for s in sq.limit(500).all():
+        c = candidates.setdefault(s.job_uuid, {"names": [], "dates": set(), "events": 0, "materials": 0})
+        if s.job_name:
+            c["names"].append(s.job_name)
+        if s.job_date:
+            c["dates"].add(s.job_date)
 
     # One bulk lookup for the data-entry checkpoint chip - beats N queries
     # if the search ever returns a long candidate list.
