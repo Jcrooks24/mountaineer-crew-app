@@ -30,7 +30,9 @@ export default function Login() {
       });
 
       await loginWithToken(res.access_token);
-      nav("/", { replace: true });
+      // Land on the community bulletin (the front door); the core tools are one
+      // tap away from there.
+      nav("/bulletin", { replace: true });
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Login failed");
     } finally {

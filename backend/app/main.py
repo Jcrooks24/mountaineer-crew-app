@@ -41,6 +41,7 @@ import app.db.models.off_job_entry  # noqa: F401 - register off-job hours
 import app.db.models.user_email_alias  # noqa: F401 - register user_email_aliases
 import app.db.models.bol  # noqa: F401 - register digital_bols table
 import app.db.models.job_inventory  # noqa: F401 - register job_inventory_items table
+import app.db.models.bulletin  # noqa: F401 - register bulletin posts/likes/comments
 
 # Routers that exist
 from app.routers.sync import router as sync_router
@@ -95,6 +96,7 @@ from app.routers.bug_reports import router as bug_reports_router
 from app.routers.feature_requests import router as feature_requests_router
 from app.routers.job_setup import router as job_setup_router
 from app.routers.job_checklist import router as job_checklist_router
+from app.routers.bulletin import router as bulletin_router
 from app.routers.dq import router as dq_router, admin_router as dq_admin_router
 from app.routers.off_job import (
     router as off_job_router,
@@ -287,5 +289,6 @@ app.include_router(hours_router)                 # /api/hours/worked-history (pe
 app.include_router(payroll_router)               # /api/admin/payroll/* (admin payroll summary + corrections)
 app.include_router(job_setup_router)             # /api/job-setup/* (job header, ADR 0034)
 app.include_router(job_checklist_router)         # /api/job-checklist/* (C3 status + manual ticks)
+app.include_router(bulletin_router)              # /api/bulletin/* (community feed)
 app.include_router(dq_router)                    # /api/dq/* (driver DQ file, C4)
 app.include_router(dq_admin_router)              # /api/admin/dq/* (admin DQ management, C4)

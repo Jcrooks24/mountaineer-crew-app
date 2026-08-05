@@ -34,6 +34,7 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   "returnTrip",
   "workedHours",
   "closeout",
+  "bulletin",
 ]);
 
 export function isBeta(feature: string): boolean {

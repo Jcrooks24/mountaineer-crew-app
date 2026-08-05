@@ -31,6 +31,7 @@ import Availability from "./pages/Availability";
 import ReportBug from "./pages/ReportBug";
 import RequestFeature from "./pages/RequestFeature";
 import Tools from "./pages/Tools";
+import Bulletin from "./pages/Bulletin";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -64,6 +65,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/request-feature" element={<RequireAuth><RequestFeature /></RequireAuth>} />
           <Route path="/availability" element={<RequireAuth><Availability /></RequireAuth>} />
           <Route path="/tools" element={<RequireAuth><Tools /></RequireAuth>} />
+          <Route path="/bulletin" element={<RequireAuth><Bulletin /></RequireAuth>} />
 
           {/* Everything else requires auth */}
           <Route

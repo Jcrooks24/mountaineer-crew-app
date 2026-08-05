@@ -22,7 +22,8 @@ import { hasUnseenPatchNotes } from "../lib/patchNotesSeen";
 const TABS = [
   { label: "Jobs", path: "/", icon: BriefcaseIcon },
   { label: "Tools", path: "/tools", icon: GridIcon },
-  { label: "DVIR", path: "/dvir", icon: TruckIcon },
+  // DVIR lives in Tools; this slot is the community Bulletin.
+  { label: "Bulletin", path: "/bulletin", icon: MegaphoneIcon },
   { label: "Profile", path: "/profile", icon: PersonIcon },
 ] as const;
 
@@ -112,8 +113,8 @@ const svg = { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke:
 function BriefcaseIcon() {
   return (<svg {...svg}><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M3 12h18" /></svg>);
 }
-function TruckIcon() {
-  return (<svg {...svg}><path d="M2 5h11v10H2z" /><path d="M13 8h4l4 4v3h-8z" /><circle cx="6" cy="18" r="1.6" /><circle cx="17" cy="18" r="1.6" /></svg>);
+function MegaphoneIcon() {
+  return (<svg {...svg}><path d="M3 11v2a1 1 0 0 0 1 1h2l9 5V5L6 10H4a1 1 0 0 0-1 1Z" /><path d="M18 8a4 4 0 0 1 0 8" /></svg>);
 }
 function GridIcon() {
   return (<svg {...svg}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>);
