@@ -40,19 +40,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.integrations.sheets_export import (
-    REIMBURSEMENT_HEADERS,
     _api,
     _get_sheets_svc,
     _sheet_ids,
 )
 
 # The two corrupted headers sit at FIXED physical columns A and C (only their
-# header text was overwritten; the data is still there). Everything else is
-# resolved BY NAME from the live header row, because the sheet's physical column
-# order is not guaranteed to match REIMBURSEMENT_HEADERS.
+# header text was overwritten; the data is still there). Every other column is
+# resolved BY NAME from the live header row, and the sheet's existing column
+# ORDER is preserved (only A1/C1 are fixed and the Z/AA duplicates dropped).
 COL_UUID = 0          # A - legacy rows carry reimbursement_uuid here
 COL_SUBMITTED = 2     # C - legacy rows carry submitted_at here
-N_HEADERS = len(REIMBURSEMENT_HEADERS)  # 25
 
 
 def _f(v: str) -> float:
@@ -127,20 +125,24 @@ def main() -> None:
               "header above; fix the lookup before --apply.", file=sys.stderr)
         sys.exit(2)
 
-    def build_fixed(row) -> list[str]:
-        out: list[str] = []
-        for h in REIMBURSEMENT_HEADERS:
-            if h == "reimbursement_uuid":
-                v = cell(row, COL_UUID).strip() or (cell(row, idx_uuid_dup).strip() if idx_uuid_dup >= 0 else "")
-            elif h == "submitted_at":
-                v = cell(row, COL_SUBMITTED).strip() or (cell(row, idx_sub_dup).strip() if idx_sub_dup >= 0 else "")
-            else:
-                i = name_idx(h)
-                v = cell(row, i) if i >= 0 else ""
-            out.append(v)
-        return out
+    # PRESERVE the sheet's existing column order. Keep every physical column
+    # except the two re-appended duplicates; only fix the A1/C1 header text and
+    # unify the uuid/submitted_at values back into A/C.
+    drop = {i for i in (idx_uuid_dup, idx_sub_dup) if i >= 0}
+    keep = [i for i in range(len(header)) if i not in drop]
+    out_header = [
+        "reimbursement_uuid" if i == COL_UUID else "submitted_at" if i == COL_SUBMITTED else header[i]
+        for i in keep
+    ]
+    up = keep.index(idx_updated) if idx_updated in keep else -1  # updated_at position in the kept row
+    am = keep.index(idx_amount)                                   # amount position in the kept row
 
-    # 1) Rebuild each row in canonical column order, unifying the key back into A/C.
+    def build_kept(row) -> list[str]:
+        uuid = cell(row, COL_UUID).strip() or (cell(row, idx_uuid_dup).strip() if idx_uuid_dup >= 0 else "")
+        submitted = cell(row, COL_SUBMITTED).strip() or (cell(row, idx_sub_dup).strip() if idx_sub_dup >= 0 else "")
+        return [uuid if i == COL_UUID else submitted if i == COL_SUBMITTED else cell(row, i) for i in keep]
+
+    # 1) Unify + keep, skipping rows with no uuid anywhere (phantom/blank residue).
     misplaced = 0
     unified: list[list[str]] = []
     skipped_blank = 0
@@ -152,12 +154,9 @@ def main() -> None:
             continue
         if not a and z:
             misplaced += 1
-        unified.append(build_fixed(row))
+        unified.append(build_kept(row))
 
-    # 2) Dedupe by uuid (col 0 of the rebuilt row), keeping the latest updated_at
-    #    (which is at a known index in the rebuilt canonical order).
-    up = REIMBURSEMENT_HEADERS.index("updated_at")
-    am = REIMBURSEMENT_HEADERS.index("amount")
+    # 2) Dedupe by uuid (kept col 0), keeping the row with the latest updated_at.
     best: dict[str, list[str]] = {}
     order: list[str] = []
     for row in unified:
@@ -165,7 +164,7 @@ def main() -> None:
         if u not in best:
             order.append(u)
             best[u] = row
-        elif cell(row, up) > cell(best[u], up):
+        elif up >= 0 and cell(row, up) > cell(best[u], up):
             best[u] = row
     deduped = [best[u] for u in order]
 
@@ -198,34 +197,35 @@ def main() -> None:
     else:
         print(f"\nBackup {backup_name} already exists; leaving it.")
 
-    # 4) Clear the tab and rewrite: restored headers (A1/C1 correct) + deduped
-    #    rows, at exactly the 25 real columns.
+    # 4) Clear the tab and rewrite: the SAME column order, with A1/C1 headers
+    #    restored and the Z/AA duplicate columns dropped, plus deduped rows.
+    n_cols = len(out_header)
     _api(lambda: svc.spreadsheets().values().clear(
         spreadsheetId=spreadsheet_id, range=tab,
     ).execute())
-    out = [list(REIMBURSEMENT_HEADERS)] + deduped
+    out = [out_header] + deduped
     _api(lambda: svc.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id, range=f"{tab}!A1",
         valueInputOption="RAW", body={"values": out},
     ).execute())
 
-    # 5) Drop the now-empty extra columns (Z, AA, and any beyond 25).
+    # 5) Drop the now-empty extra columns (the old Z/AA residue and anything beyond).
     meta = _api(lambda: svc.spreadsheets().get(
         spreadsheetId=spreadsheet_id, ranges=[tab], fields="sheets(properties(sheetId,gridProperties/columnCount))",
     ).execute())
-    grid_cols = N_HEADERS
+    grid_cols = n_cols
     for s in meta.get("sheets", []):
         if s["properties"]["sheetId"] == ids[tab]:
             grid_cols = int(s["properties"]["gridProperties"]["columnCount"])
-    if grid_cols > N_HEADERS:
+    if grid_cols > n_cols:
         _api(lambda: svc.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": [{"deleteDimension": {"range": {
                 "sheetId": ids[tab], "dimension": "COLUMNS",
-                "startIndex": N_HEADERS, "endIndex": grid_cols,
+                "startIndex": n_cols, "endIndex": grid_cols,
             }}}]},
         ).execute())
-        print(f"Trimmed columns {N_HEADERS + 1}..{grid_cols} (dropped Z/AA residue).")
+        print(f"Trimmed columns {n_cols + 1}..{grid_cols} (dropped Z/AA residue).")
 
     print(f"\nDone. {tab} now holds {len(deduped)} rows, one per reimbursement, headers restored.")
     print("Re-run the app's Sync & Accuracy audit to confirm zero missing.")
