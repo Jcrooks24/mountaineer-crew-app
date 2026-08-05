@@ -806,7 +806,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 <select value={matSelectedName} onChange={(e) => setMatSelectedName(e.target.value)}
-                  style={{ flex: "1 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }}>
+                  style={{ flex: "1 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 16 }}>
                   <option value="">Select material…</option>
                   {MATERIAL_CATALOG.map((m) => (
                     <option key={m.name} value={m.name}>
@@ -817,7 +817,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                 </select>
                 <NumberField integer min={1} step={1} value={Number(matQty) || 1} aria-label="Material quantity"
                   onChange={(n) => setMatQty(String(n >= 1 ? Math.floor(n) : 1))}
-                  style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13, textAlign: "right" }} />
+                  style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 16, textAlign: "right" }} />
                 <button type="button" onClick={addMaterial}
                   style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--text)" }}>
                   Add
@@ -830,9 +830,9 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
               {matSelectedName === "__custom__" && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <input value={matCustomName} onChange={(e) => setMatCustomName(e.target.value)} placeholder="Custom name"
-                    style={{ flex: "2 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+                    style={{ flex: "2 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 16 }} />
                   <input value={matCustomCost} onChange={(e) => setMatCustomCost(e.target.value)} placeholder="Cost (opt.)" inputMode="decimal"
-                    style={{ flex: "1 1 120px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+                    style={{ flex: "1 1 120px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 16 }} />
                 </div>
               )}
               {matErr && <div style={{ fontSize: 12, color: "var(--danger)" }}>{matErr}</div>}
@@ -1009,9 +1009,12 @@ function LineItemRow({ item, onChange, onRemove }: {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const cellInputStyle: React.CSSProperties = {
+  // 16px, not 13: iOS Safari auto-zooms the page when a focused input's font is
+  // under 16px (the global rule in index.css). The invoice inputs override that
+  // global, so they must restate 16 or tapping a line item zooms the page.
   width: "100%", padding: "5px 8px", borderRadius: 6,
   border: "1px solid var(--border)", background: "var(--bg)",
-  color: "var(--text)", fontSize: 13, boxSizing: "border-box",
+  color: "var(--text)", fontSize: 16, boxSizing: "border-box",
 };
 const numInputStyle: React.CSSProperties = { ...cellInputStyle, textAlign: "right" };
 // Small stacked label for the per-line Qty / Rate / Disc fields (mobile-first
