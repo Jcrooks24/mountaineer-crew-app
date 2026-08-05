@@ -20,6 +20,14 @@ import {
   type JobSetupData,
 } from "../lib/jobSetupStore";
 
+// Job-type options that duplicate the dedicated Local/Long-distance toggle or the
+// "What are you doing today?" activity picker - filtered out of the job-type list
+// so the crew never log the same thing in two inputs.
+const TRIP_TASK_TAGS = new Set([
+  "local", "long-distance", "long distance", "longdistance",
+  "packing", "unpacking", "loading", "unloading", "driving",
+]);
+
 type Meta = {
   jobName: string;
   jobDate: string;
@@ -398,12 +406,18 @@ export default function JobSetupPanel({
             </div>
           </div>
 
-          {/* Job type */}
+          {/* Job type. Trip (Local/Long-distance) and the day's tasks
+              (Packing/Unpacking/Loading/Unloading/Driving) are captured by the
+              toggle + "What are you doing today?" above, so they're filtered out
+              here to avoid logging the same thing twice - this list is the move
+              TYPE (Commercial, Delivery, Storage, Labor-only, ...). */}
           <div className="col" style={{ gap: 6 }}>
             <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Job type</span>
             <div className="row wrap" style={{ gap: 8 }}>
-              {jobTypes.length === 0 && <span className="small" style={{ color: "var(--muted)" }}>No job types configured.</span>}
-              {jobTypes.map((t) => {
+              {jobTypes.filter((t) => !TRIP_TASK_TAGS.has(t.trim().toLowerCase())).length === 0 && (
+                <span className="small" style={{ color: "var(--muted)" }}>No job types configured.</span>
+              )}
+              {jobTypes.filter((t) => !TRIP_TASK_TAGS.has(t.trim().toLowerCase())).map((t) => {
                 const on = tags.includes(t);
                 return (
                   <button

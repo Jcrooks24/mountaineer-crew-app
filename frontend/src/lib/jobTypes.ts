@@ -2,12 +2,12 @@
 // steps. Mirrored on the backend in backend/app/schemas/job_report.py
 // (JOB_TYPE_TAGS / TRUCK_IDS / FULLNESS_STEPS) - keep the lists in sync.
 
+// Move TYPE only. Trip (Local/Long-distance) is the setup's LD toggle and the
+// day's tasks (Packing/Unpacking/Loading/Unloading/Driving) are the "what are
+// you doing today?" activities - those are NOT job types (they'd be logged
+// twice). See TRIP_TASK_TAGS in JobSetupPanel.
 export const JOB_TYPE_TAGS = [
-  "Local",
-  "Long-distance",
   "Labor-only",
-  "Packing",
-  "Unpacking",
   "Commercial",
   "Delivery",
   "Storage",
