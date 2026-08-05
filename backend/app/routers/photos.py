@@ -1,6 +1,6 @@
 import traceback
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -67,8 +67,12 @@ def upload_photo(
             is_estimator=(folder.strip().lower() == "estimator"),
         )
     except Exception as e:
+        # Upstream (Drive) failure. Return a real 502 so it shows up as an error
+        # server-side, not a hidden HTTP 200. Every upload caller checks both
+        # !res.ok and !json.ok, so the photo is marked failed + kept locally and
+        # is retryable either way (ADR 0013) - a 502 does not drop it.
         traceback.print_exc()
-        return {"ok": False, "photo_id": photo_id, "error": str(e)}
+        raise HTTPException(status_code=502, detail=f"Drive upload failed: {e}")
 
     # Save metadata to DB so other devices can fetch it
     row = Photo(
@@ -88,11 +92,13 @@ def upload_photo(
     except IntegrityError:
         db.rollback()  # raced a concurrent upload of the same photo_id
     except SQLAlchemyError:
-        # Non-duplicate DB failure (connection blip, etc.). Return ok=false so
-        # the client keeps the photo queued and retries, instead of a 500.
+        # Non-duplicate DB failure (connection blip, etc.). Return a real 503 so
+        # it's visible as a server error, not a hidden 200. The upload is
+        # idempotent on photo_id, so the client's retry (the photo stays failed +
+        # kept locally, ADR 0013) returns the existing record rather than a dup.
         db.rollback()
         traceback.print_exc()
-        return {"ok": False, "photo_id": photo_id, "error": "Failed to save photo record"}
+        raise HTTPException(status_code=503, detail="Failed to save photo record")
 
     # This photo belongs to an incident, so the incident's sheet row is now out
     # of date: its photo_urls column is rebuilt from the photos table on export.
