@@ -12,7 +12,7 @@ stores whatever PDF is uploaded, which also lets any form be filed as a scan now
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +39,10 @@ admin_router = APIRouter(prefix="/api/admin/dq", tags=["dq"])
 # DQ scans can be a few MB (a phone photo of a medical card); cap to keep a
 # stray huge upload off the worker. The global body limit still applies too.
 MAX_DQ_BYTES = 20 * 1024 * 1024
+
+# How far before a renewal-cadence doc lapses to start reminding the driver.
+# ~2 weeks (so the annual certification resurfaces around week 51 of 52).
+RENEWAL_LEAD_DAYS = 14
 
 
 def _load_types(db: Session) -> List[Dict[str, Any]]:
@@ -142,24 +146,45 @@ def _file_view(db: Session, user: User, admin_view: bool) -> Dict[str, Any]:
     docs = db.query(DqDocument).filter(DqDocument.user_id == user.id).all()
     by_type = {d.doc_type: d for d in docs}
     types = _load_types(db)
-    items = [
-        {
+    now = datetime.utcnow()
+
+    items: List[Dict[str, Any]] = []
+    missing_required: List[str] = []
+    for t in types:
+        doc = by_type.get(t["key"])
+        missing = doc is None
+        # Renewal: a submitted doc that lapses on a cadence (e.g. the annual
+        # certification of violations) resurfaces RENEWAL_LEAD_DAYS before it
+        # expires so the driver re-files it in time.
+        renewal_days = t.get("renewal_days")
+        renewal_due = False
+        due_date = None
+        if renewal_days and doc is not None and doc.submitted_at:
+            sub = doc.submitted_at
+            if sub.tzinfo is not None:  # normalize to naive UTC to match `now`
+                sub = sub.astimezone(timezone.utc).replace(tzinfo=None)
+            due = sub + timedelta(days=int(renewal_days))
+            due_date = due.date().isoformat()
+            if now >= due - timedelta(days=RENEWAL_LEAD_DAYS):
+                renewal_due = True
+        items.append({
             "key": t["key"],
             "name": t["name"],
             "audience": t["audience"],
             "required": t["required"],
-            "document": _doc_out(by_type.get(t["key"])),
-            "missing": t["key"] not in by_type,
-        }
-        for t in types
-    ]
-    missing_required = [
-        t["name"]
-        for t in types
-        if t["required"]
-        and t["key"] not in by_type
-        and (admin_view or t["audience"] == "driver")
-    ]
+            "document": _doc_out(doc),
+            "missing": missing,
+            "renewal_due": renewal_due,
+            "due_date": due_date,
+        })
+        # The reminder counts a required doc that is missing, or due for renewal.
+        # Admin-audience docs (road test) count only in the admin overview - the
+        # driver can't file them, so they aren't in the driver's nag count, but
+        # they still show in the file card (flagged, with a "contact the office"
+        # hint on the frontend).
+        if t["required"] and (missing or renewal_due) and (admin_view or t["audience"] == "driver"):
+            missing_required.append(t["name"])
+
     return {
         "user_id": user.id,
         "name": user.name or user.email,

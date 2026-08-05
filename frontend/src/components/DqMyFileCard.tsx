@@ -122,13 +122,24 @@ function MyDqRow({
           {item.required && <span className="small" style={{ color: "var(--muted)", fontWeight: 400 }}> · required</span>}
         </span>
         {item.document ? (
-          <a href={item.document.drive_url || "#"} target="_blank" rel="noreferrer" className="small" style={{ color: "var(--brand2)" }}>
-            View{item.document.submitted_at ? ` · filed ${item.document.submitted_at.slice(0, 10)}` : ""}
-          </a>
+          <>
+            <a href={item.document.drive_url || "#"} target="_blank" rel="noreferrer" className="small" style={{ color: "var(--brand2)" }}>
+              View{item.document.submitted_at ? ` · filed ${item.document.submitted_at.slice(0, 10)}` : ""}
+            </a>
+            {item.renewal_due && (
+              <span className="small" style={{ color: "var(--warn, #e0a800)", fontWeight: 700 }}>
+                Renewal due{item.due_date ? ` (expires ${item.due_date})` : ""} - re-file
+              </span>
+            )}
+          </>
         ) : mine ? (
           <span className="small" style={{ color: "var(--warn, #e0a800)" }}>Not submitted yet</span>
         ) : (
-          <span className="small" style={{ color: "var(--muted)" }}>Filed by the office</span>
+          // Admin-audience (office-filed) doc that isn't on file yet - the driver
+          // can't upload it, so tell them to get it scheduled.
+          <span className="small" style={{ color: "var(--warn, #e0a800)" }}>
+            Not on file - ask the office to schedule your road test
+          </span>
         )}
         {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
       </div>

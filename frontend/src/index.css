@@ -96,6 +96,17 @@ input[type="datetime-local"] {
   min-width: 0;
 }
 
+/* Checkboxes / radios must NOT inherit the `width:100%` above (that stretches
+   the box full-width and shoves its label off the screen - the DQ-form
+   "cut off" bug). Natural size, brand accent, don't shrink in a flex row. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  min-width: 0;
+  flex-shrink: 0;
+  accent-color: var(--brand);
+}
+
 textarea{ min-height: 90px; resize: vertical; }
 
 button{

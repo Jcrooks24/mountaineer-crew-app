@@ -29,6 +29,10 @@ export type DqFileItem = {
   required: boolean;
   document: DqDoc | null;
   missing: boolean;
+  // Submitted but due for renewal (e.g. the annual cert nearing its 1-year mark).
+  renewal_due?: boolean;
+  // ISO date the current submission lapses (for renewal docs).
+  due_date?: string | null;
 };
 
 export type DqFile = {

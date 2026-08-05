@@ -61,8 +61,8 @@ export default function DqEmploymentAppForm({ driverName, onDone, onCancel }: { 
   const [accidents, setAccidents] = useState<AccidentRow[]>([]);
   const [convictions, setConvictions] = useState<ConvictionRow[]>([]);
   const [licenses, setLicenses] = useState<LicenseRow[]>([]);
-  const [noAccidents, setNoAccidents] = useState(true);
-  const [noConvictions, setNoConvictions] = useState(true);
+  const [noAccidents, setNoAccidents] = useState(false);
+  const [noConvictions, setNoConvictions] = useState(false);
 
   const [signedDate, setSignedDate] = useState(todayISO());
   const sigRef = useRef<SignaturePadHandle>(null);
@@ -137,7 +137,7 @@ export default function DqEmploymentAppForm({ driverName, onDone, onCancel }: { 
         ))}
       </Section>
 
-      <Section title="Employment history" addLabel="+ Add employer" onAdd={() => setEmployers((p) => [...p, { name: "", address: "", position: "", from: "", to: "", reasonLeaving: "", subjectFmcsr: false, safetySensitive: false }])}>
+      <Section title="Employment history (past 3 years)" addLabel="+ Add employer" onAdd={() => setEmployers((p) => [...p, { name: "", address: "", position: "", from: "", to: "", reasonLeaving: "", subjectFmcsr: false, safetySensitive: false }])}>
         {employers.map((e, i) => (
           <RowCard key={i} onRemove={() => rm(setEmployers)(i)}>
             <div className="row wrap" style={{ gap: 10 }}>

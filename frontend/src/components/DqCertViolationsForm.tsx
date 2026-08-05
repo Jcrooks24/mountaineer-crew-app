@@ -28,7 +28,7 @@ export default function DqCertViolationsForm({
   const [name, setName] = useState(driverName || "");
   const [license, setLicense] = useState("");
   const [state, setState] = useState("");
-  const [noViolations, setNoViolations] = useState(true);
+  const [noViolations, setNoViolations] = useState(false);
   const [violations, setViolations] = useState<Violation[]>([]);
   const [signedDate, setSignedDate] = useState(todayISO());
   const sigRef = useRef<SignaturePadHandle>(null);

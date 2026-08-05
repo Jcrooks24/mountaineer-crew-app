@@ -19,12 +19,15 @@ AUDIENCES = ("driver", "admin")
 
 
 def default_types() -> List[Dict[str, Any]]:
+    # renewal_days: docs that must be re-filed on a cadence resurface in the
+    # reminder shortly before they lapse (the annual certification of violations
+    # is a 365-day renewal, 49 CFR 391.27). None = one-time / no renewal.
     return [
-        {"key": "medical_cert", "name": "Medical Examiner's Certificate", "audience": "driver", "required": True},
-        {"key": "annual_cert_violations", "name": "Annual Driver's Certification of Violations", "audience": "driver", "required": True},
-        {"key": "employment_application", "name": "Driver's Employment Application", "audience": "driver", "required": True},
-        {"key": "road_test_form", "name": "Driver's Road Test Form", "audience": "admin", "required": True},
-        {"key": "road_test_certificate", "name": "Driver's Road Test Certificate", "audience": "admin", "required": True},
+        {"key": "medical_cert", "name": "Medical Examiner's Certificate", "audience": "driver", "required": True, "renewal_days": None},
+        {"key": "annual_cert_violations", "name": "Annual Driver's Certification of Violations", "audience": "driver", "required": True, "renewal_days": 365},
+        {"key": "employment_application", "name": "Driver's Employment Application", "audience": "driver", "required": True, "renewal_days": None},
+        {"key": "road_test_form", "name": "Driver's Road Test Form", "audience": "admin", "required": True, "renewal_days": None},
+        {"key": "road_test_certificate", "name": "Driver's Road Test Certificate", "audience": "admin", "required": True, "renewal_days": None},
     ]
 
 
@@ -57,10 +60,18 @@ def normalize_types(raw: Any) -> List[Dict[str, Any]]:
         audience = str(it.get("audience") or "driver").strip().lower()
         if audience not in AUDIENCES:
             audience = "driver"
+        rd = it.get("renewal_days")
+        try:
+            renewal_days = int(rd) if rd not in (None, "", False) else None
+            if renewal_days is not None and renewal_days <= 0:
+                renewal_days = None
+        except (ValueError, TypeError):
+            renewal_days = None
         out.append({
             "key": key,
             "name": name,
             "audience": audience,
             "required": bool(it.get("required", True)),
+            "renewal_days": renewal_days,
         })
     return out
