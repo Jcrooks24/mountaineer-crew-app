@@ -87,6 +87,35 @@ The empty `OffJobHours` / `Incidents` / etc. PascalCase tabs (created by a defau
 before the env var was pointed at the camelCase name) are junk; the cleanup tool
 (`backend/scripts/cleanup_sheet.py --step tabs`) removes the empty strays.
 
+### Sheet integrity check (Render Cron Job) - keeps the mirror clean
+
+`backend/scripts/sheet_integrity_check.py` re-derives each tab's expected shape
+from the code's own `*_HEADERS` and asserts it against the live sheet: a missing
+KEY column (a `dfg`-style header overwrite), duplicate rows on a one-per-key tab,
+or a junk env-var-named tab are FAILs; missing non-key columns and blank residue
+rows are WARNs. On any FAIL it emails `ALERT_EMAIL`. Exit code is non-zero on FAIL.
+
+Run it nightly as a **Render Cron Job** (a separate service; Root Directory
+`backend`, so no `backend/` prefix on the command):
+
+    Command:   python scripts/sheet_integrity_check.py
+    Schedule:  0 5 * * *      # daily, ~11pm MT (Render cron is UTC)
+
+Give the Cron Job the **same environment as the prod backend service** so it reads
+the same tabs, plus one addition:
+
+| Variable | Value |
+|---|---|
+| `ALERT_EMAIL` | `jacob@mountaineermoving.com` - the only alert recipient (defaults to this in code). |
+
+It reuses `DATABASE_URL` (to read the Google token), `GOOGLE_SHEETS_SPREADSHEET_ID`,
+`POSTMARK_SERVER_TOKEN`, `SMTP_FROM`, and the `SHEETS_*_TAB` set from that service.
+Matching the prod backend's `SHEETS_*_TAB` values is load-bearing: the four
+camelCase tabs (`incidents`, `jobInventory`, ...) must be set or the check reads
+the wrong (empty) tabs and misses real drift. Related but different: Admin ->
+System Check, Sheet Syncs (`SHEET_SYNC_REGISTRY`) answers "is the sync working";
+this answers "is the data clean".
+
 ### Drive folder variables (Render backend)
 
 | Variable | Effect if unset |

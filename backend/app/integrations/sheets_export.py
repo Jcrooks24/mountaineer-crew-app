@@ -383,7 +383,7 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
 
     if tab not in existing_tabs:
         # Create the tab
-        _api(lambda: svc.spreadsheets().batchUpdate(
+        add_resp = _api(lambda: svc.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": tab}}}]},
         ).execute())
@@ -395,6 +395,22 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
             valueInputOption="RAW",
             body={"values": [headers]},
         ).execute())
+        # Protect row 1 (warning-only) the moment the tab is born, so a stray edit
+        # to the header row is caught - the same protection the 2026-08-05 audit
+        # applied by hand to the existing tabs, now automatic for every new one.
+        # Best-effort: a protection failure must never break tab creation/export.
+        try:
+            new_sheet_id = add_resp["replies"][0]["addSheet"]["properties"]["sheetId"]
+            _api(lambda: svc.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={"requests": [{"addProtectedRange": {"protectedRange": {
+                    "range": {"sheetId": new_sheet_id, "startRowIndex": 0, "endRowIndex": 1},
+                    "description": "Header row - do not overwrite (auto)",
+                    "warningOnly": True,
+                }}}]},
+            ).execute())
+        except Exception:
+            pass
         return list(headers)
 
     # Tab exists - read current header row
@@ -1871,6 +1887,19 @@ def _delete_sheet_rows_by_value(
     ).execute())
     headers_row = (hdr.get("values") or [[]])[0]
     if col_name not in headers_row:
+        if headers_row:
+            # Populated header row but the dedupe key column is gone: row 1 was
+            # renamed or overwritten. Silently returning 0 here is exactly what let
+            # the Reimbursements duplicates pile up (2026-08-05 audit) - the delete
+            # no-ops and the caller appends anyway, so every save adds another copy.
+            # Fail loud so the sync records RED instead of quietly duplicating.
+            raise SheetHeaderError(
+                f"{tab!r}: dedupe key column {col_name!r} is missing from a populated "
+                f"header row {headers_row!r}. Refusing the replace-style delete (row 1 "
+                f"was likely renamed or overwritten); fix the header before this tab "
+                f"exports again."
+            )
+        # Empty header row = tab not set up yet; genuine no-op.
         return 0
     col_letter = _col_letter(headers_row.index(col_name))
 

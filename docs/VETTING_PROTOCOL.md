@@ -221,6 +221,13 @@ write to distinct worksheets; re-submits don't accumulate rows.
   a new sync missing from the registry is a finding. The check also flags syncs
   whose `SHEETS_*_TAB` env var is unset (using the default tab - on staging that
   silently targets the prod worksheet) and any sync with a recent export error.
+- **Data integrity (run before every promotion):** run
+  `backend/scripts/sheet_integrity_check.py` against prod and confirm **zero
+  FAILs** - duplicate keys, an overwritten KEY column, or junk tabs. It re-derives
+  each tab from the code's own `*_HEADERS`, so a column this change adds is covered
+  automatically; WARNs about not-yet-promoted columns are expected pre-promotion.
+  This is the "is the data clean" companion to the "is the sync working" health
+  check above.
 
 ## Core Behavior 4 - Crew auth stays intact
 

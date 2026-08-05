@@ -190,6 +190,45 @@ Symptoms: the office says a job is missing. The crew swear they logged it.
 
 ---
 
+## The Google Sheet has junk (duplicates, blank rows, overwritten headers)
+
+The 2026-08-05 audit class: a header cell gets overwritten, the sync silently
+mis-handles it, and duplicates or blank rows pile up unnoticed. Three layers now
+cover this - detect, fix, prevent.
+
+**Detect.** `backend/scripts/sheet_integrity_check.py` runs nightly (Render Cron
+Job; emails jacob@ on any FAIL - see CREDENTIALS) and can be run by hand any time:
+
+    DATABASE_URL=<prod> GOOGLE_SHEETS_SPREADSHEET_ID=<id> \
+      POSTMARK_SERVER_TOKEN=<tok> SMTP_FROM=<from> \
+      python backend/scripts/sheet_integrity_check.py
+
+- **FAIL - KEY column missing from a header** = row 1 was overwritten (the `dfg`
+  cascade). That tab's export is ALSO failing closed now (`SheetHeaderError`) and
+  showing RED in Sheet Syncs. Fix the header text in the sheet; exports resume. If
+  duplicates already accumulated, dedupe below (or `repair_reimbursements_sheet.py`
+  for the specific Reimbursements cascade).
+- **FAIL - duplicate `<key>`** = the replace-style delete stopped matching. Run
+  the cleanup tool's `dedupe` step.
+- **FAIL - junk tab** = an env-var-named tab exists. `cleanup_sheet.py --step tabs`.
+- **WARN - missing columns** = usually staging columns not yet promoted to prod;
+  harmless, clears when the next promotion adds them.
+- **WARN - blank residue rows** = `cleanup_sheet.py --step blankrows` (after a
+  Sync & Accuracy run).
+
+**Fix.** `backend/scripts/cleanup_sheet.py` - dry-run first, per-step `--apply`:
+`tabs`, `blankrows`, `dedupe` (JobReports auto; **Events is report-only** - a naive
+"latest logged_at" rule would keep the device time and delete the admin's manual
+correction, so resolve those 3 by hand), `officehours`, `protect`.
+
+**Prevent (already in code, staging - carry to main at next promotion).**
+`_ensure_tab` fails closed on a corrupted header and auto-protects row 1 of every
+new tab (warning-only); `_delete_sheet_rows_by_value` raises instead of silently
+no-opping when its dedupe key column is gone. Existing tabs were row-1 protected
+by hand on 2026-08-05.
+
+---
+
 ## Google access is broken
 
 Symptoms: Sheets and Drive both fail in System Check. Calendar shows no jobs.
