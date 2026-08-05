@@ -46,13 +46,12 @@ from app.integrations.sheets_export import (
     _sheet_ids,
 )
 
-# Column layout, from REIMBURSEMENT_HEADERS (25 cols) + the two re-appended ones.
-COL_UUID = 0          # A - should be reimbursement_uuid
-COL_SUBMITTED = 2     # C - should be submitted_at
-COL_AMOUNT = 12       # M
-COL_UPDATED = 24      # Y - updated_at
-COL_UUID_DUP = 25     # Z - re-appended reimbursement_uuid (where new rows write it)
-COL_SUBMITTED_DUP = 26  # AA - re-appended submitted_at
+# The two corrupted headers sit at FIXED physical columns A and C (only their
+# header text was overwritten; the data is still there). Everything else is
+# resolved BY NAME from the live header row, because the sheet's physical column
+# order is not guaranteed to match REIMBURSEMENT_HEADERS.
+COL_UUID = 0          # A - legacy rows carry reimbursement_uuid here
+COL_SUBMITTED = 2     # C - legacy rows carry submitted_at here
 N_HEADERS = len(REIMBURSEMENT_HEADERS)  # 25
 
 
@@ -100,48 +99,82 @@ def main() -> None:
         return
 
     header, data = values[0], values[1:]
-    width = max(len(header), COL_SUBMITTED_DUP + 1)
 
     def cell(row, i):
-        return row[i] if i < len(row) else ""
+        return row[i] if (0 <= i < len(row)) else ""
 
-    # 1) Unify the key into column A / C, then keep only the 25 real columns.
+    def name_idx(name: str) -> int:
+        try:
+            return header.index(name)
+        except ValueError:
+            return -1
+
+    # Resolve every real column BY NAME from the live header. The two re-appended
+    # duplicates carry their real names (reimbursement_uuid, submitted_at); the
+    # legacy copies live at fixed physical A/C under the overwritten header text.
+    idx_uuid_dup = name_idx("reimbursement_uuid")   # the re-appended column (Z-ish)
+    idx_sub_dup = name_idx("submitted_at")          # the re-appended column (AA-ish)
+    idx_amount = name_idx("amount")
+    idx_updated = name_idx("updated_at")
+
+    print(f"Tab:                    {tab}  ({len(header)} columns)")
+    print(f"Header row (raw):       {header}")
+    print(f"amount @ col idx:       {idx_amount}   updated_at @ idx: {idx_updated}   "
+          f"reimbursement_uuid(dup) @ idx: {idx_uuid_dup}   submitted_at(dup) @ idx: {idx_sub_dup}")
+    if idx_amount < 0:
+        print("\nWARNING: no 'amount' column found in the header row - refusing "
+              "to proceed (the over-count sanity check can't run). Inspect the "
+              "header above; fix the lookup before --apply.", file=sys.stderr)
+        sys.exit(2)
+
+    def build_fixed(row) -> list[str]:
+        out: list[str] = []
+        for h in REIMBURSEMENT_HEADERS:
+            if h == "reimbursement_uuid":
+                v = cell(row, COL_UUID).strip() or (cell(row, idx_uuid_dup).strip() if idx_uuid_dup >= 0 else "")
+            elif h == "submitted_at":
+                v = cell(row, COL_SUBMITTED).strip() or (cell(row, idx_sub_dup).strip() if idx_sub_dup >= 0 else "")
+            else:
+                i = name_idx(h)
+                v = cell(row, i) if i >= 0 else ""
+            out.append(v)
+        return out
+
+    # 1) Rebuild each row in canonical column order, unifying the key back into A/C.
     misplaced = 0
     unified: list[list[str]] = []
     skipped_blank = 0
     for row in data:
-        uuid = cell(row, COL_UUID).strip() or cell(row, COL_UUID_DUP).strip()
-        submitted = cell(row, COL_SUBMITTED).strip() or cell(row, COL_SUBMITTED_DUP).strip()
-        if not uuid:
+        a = cell(row, COL_UUID).strip()
+        z = cell(row, idx_uuid_dup).strip() if idx_uuid_dup >= 0 else ""
+        if not (a or z):
             skipped_blank += 1
             continue
-        if not cell(row, COL_UUID).strip() and cell(row, COL_UUID_DUP).strip():
+        if not a and z:
             misplaced += 1
-        fixed = [cell(row, i) for i in range(N_HEADERS)]
-        fixed[COL_UUID] = uuid
-        fixed[COL_SUBMITTED] = submitted
-        unified.append(fixed)
+        unified.append(build_fixed(row))
 
-    # 2) Dedupe by uuid, keeping the row with the latest updated_at; preserve
-    #    first-seen order for a stable-looking result.
+    # 2) Dedupe by uuid (col 0 of the rebuilt row), keeping the latest updated_at
+    #    (which is at a known index in the rebuilt canonical order).
+    up = REIMBURSEMENT_HEADERS.index("updated_at")
+    am = REIMBURSEMENT_HEADERS.index("amount")
     best: dict[str, list[str]] = {}
     order: list[str] = []
     for row in unified:
-        u = row[COL_UUID]
+        u = row[0]
         if u not in best:
             order.append(u)
             best[u] = row
-        elif cell(row, COL_UPDATED) > cell(best[u], COL_UPDATED):
+        elif cell(row, up) > cell(best[u], up):
             best[u] = row
     deduped = [best[u] for u in order]
 
-    raw_total = sum(_f(cell(r, COL_AMOUNT)) for r in unified)
-    clean_total = sum(_f(cell(r, COL_AMOUNT)) for r in deduped)
+    raw_total = sum(_f(cell(r, am)) for r in unified)
+    clean_total = sum(_f(cell(r, am)) for r in deduped)
 
-    print(f"Tab:                    {tab}  ({len(header)} columns)")
     print(f"Data rows:              {len(data)}")
     print(f"Blank/no-uuid skipped:  {skipped_blank}")
-    print(f"Rows with uuid in Z:    {misplaced}  (moved back to A)")
+    print(f"Rows with uuid in dup:  {misplaced}  (moved back to A)")
     print(f"Distinct reimbursements {len(deduped)}")
     print(f"Duplicate rows removed: {len(unified) - len(deduped)}")
     print(f"SUM(amount) as-is:      ${raw_total:,.2f}")
