@@ -9,11 +9,12 @@ works, it just shows the raw URL.
 """
 import html as html_lib
 import ipaddress
+import json
 import re
 import socket
 import urllib.request
 from typing import Optional
-from urllib.parse import urlparse, urljoin
+from urllib.parse import parse_qs, quote, urlparse, urljoin
 
 _TIMEOUT_S = 5
 _MAX_BYTES = 262_144  # 256 KB is plenty for <head> og tags
@@ -53,6 +54,40 @@ def _meta(html: str, prop: str) -> Optional[str]:
     return None
 
 
+def _youtube_id(parsed) -> Optional[str]:
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host in ("youtube.com", "m.youtube.com"):
+        if parsed.path == "/watch":
+            return (parse_qs(parsed.query).get("v") or [None])[0]
+        for prefix in ("/shorts/", "/embed/", "/live/"):
+            if parsed.path.startswith(prefix):
+                return parsed.path[len(prefix):].split("/")[0] or None
+    if host == "youtu.be":
+        return parsed.path.lstrip("/").split("/")[0] or None
+    return None
+
+
+def _youtube_preview(url: str, vid: str) -> dict:
+    # YouTube walls its OG tags behind a consent/JS page for non-browser fetches,
+    # so build the thumbnail from the video id (always public) and get the title
+    # from the public oEmbed JSON API.
+    out = {"title": None, "description": None, "image": f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"}
+    try:
+        oembed = "https://www.youtube.com/oembed?format=json&url=" + quote(url, safe="")
+        req = urllib.request.Request(oembed, headers={"User-Agent": _UA})
+        with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as r:
+            data = json.loads(r.read(65536).decode("utf-8", "replace"))
+        out["title"] = data.get("title")
+        if data.get("thumbnail_url"):
+            out["image"] = data["thumbnail_url"]
+    except Exception:
+        pass
+    out["title"] = out["title"] or "YouTube video"
+    return out
+
+
 def fetch_link_preview(url: str) -> dict:
     """Return {title, description, image} for a URL. All keys may be None/empty.
     Never raises - a failed fetch just yields an empty preview."""
@@ -61,6 +96,9 @@ def fetch_link_preview(url: str) -> dict:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return out
+        vid = _youtube_id(parsed)
+        if vid:
+            return _youtube_preview(url, vid)
         if not _is_public_host(parsed.hostname or ""):
             return out
 
