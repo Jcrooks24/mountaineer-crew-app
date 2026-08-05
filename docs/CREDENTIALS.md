@@ -70,6 +70,23 @@ Staging value is the production name plus `Staging` (`Events` → `EventsStaging
 Admin → Advanced Settings → System Check → Sheet Syncs lists which are unset.
 Check it after any deploy that adds a new tab.
 
+**Live prod tab names that DON'T match the code default (authoritative, do not
+"correct" them).** These Render env vars were set to camelCase values, so the
+office's real data lives in the camelCase tabs, not the PascalCase code defaults.
+Renaming them (tab + env var) is a live migration; the 2026-08-05 audit chose to
+leave them and record reality here instead:
+
+| Env var | Live prod tab (has the data) | Code default (unused) |
+|---|---|---|
+| `SHEETS_INCIDENTS_TAB` | `incidents` | `Incidents` |
+| `SHEETS_JOB_INVENTORY_TAB` | `jobInventory` | `JobInventory` |
+| `SHEETS_JOB_INVENTORY_ITEMS_TAB` | `jobInventoryItems` | `JobInventoryItems` |
+| `SHEETS_OFF_JOB_TAB` | `offJob` | `OffJobHours` |
+
+The empty `OffJobHours` / `Incidents` / etc. PascalCase tabs (created by a default
+before the env var was pointed at the camelCase name) are junk; the cleanup tool
+(`backend/scripts/cleanup_sheet.py --step tabs`) removes the empty strays.
+
 ### Drive folder variables (Render backend)
 
 | Variable | Effect if unset |
