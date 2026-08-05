@@ -1458,8 +1458,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       <div className="col" style={{ gap: 0 }}>
         <div>
           <div className="microLabel" style={{ marginBottom: 6 }}>Hours</div>
-          {row("Billable", `${totalBillableHours.toFixed(2)} h`)}
-          {row("Actual", `${totalActualHours.toFixed(2)} h`)}
+          {row("Total hours", `${totalBillableHours.toFixed(2)} h`)}
           {data.hours_verified && row("Crew-lead verified", "Yes")}
           {emps.length > 0 && (
             <div style={{ marginTop: 6 }}>

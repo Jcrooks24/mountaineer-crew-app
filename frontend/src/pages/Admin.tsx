@@ -313,7 +313,7 @@ function AdminMobileNav({ current, onPick }: { current: Tab; onPick: (t: Tab) =>
   return (
     <nav
       aria-label="Admin sections"
-      style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 8, marginBottom: 12, WebkitOverflowScrolling: "touch" }}
+      style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingBottom: 8, marginBottom: 12 }}
     >
       {ADMIN_TAB_ITEMS.map((t) => {
         const active = adminTabActive(current, t.tab);
@@ -2752,6 +2752,18 @@ function SettingsTab({
 }) {
   return (
     <div>
+      <CollapsibleSection title="Company info"><CompanyInfoCard /></CollapsibleSection>
+      <CollapsibleSection title="Payroll rates"><PayrollRatesCard /></CollapsibleSection>
+      <CollapsibleSection title="Vehicle units"><VehicleUnitsCard /></CollapsibleSection>
+      <CollapsibleSection title="Employee tags"><EmployeeTagsManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Job types"><JobTypesManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Job checklist"><JobChecklistCard /></CollapsibleSection>
+      <CollapsibleSection title="DQ document types"><DqDocTypesCard /></CollapsibleSection>
+      <CollapsibleSection title="Crew skills"><SkillsManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Furniture catalogue"><FurnitureCatalogCard /></CollapsibleSection>
+      <CollapsibleSection title="Help text"><HelpTextCard /></CollapsibleSection>
+      {/* Theme + Advanced live at the very bottom - they're rarely-touched,
+          full-screen sub-pages, not day-to-day field config. */}
       <SettingsNavCard
         title="Theme & Appearance"
         desc="Theme templates, colors, fonts, button style, and map pins."
@@ -2764,16 +2776,6 @@ function SettingsTab({
         action="Open Advanced Settings →"
         onClick={onOpenAdvanced}
       />
-      <CollapsibleSection title="Company info"><CompanyInfoCard /></CollapsibleSection>
-      <CollapsibleSection title="Payroll rates"><PayrollRatesCard /></CollapsibleSection>
-      <CollapsibleSection title="Vehicle units"><VehicleUnitsCard /></CollapsibleSection>
-      <CollapsibleSection title="Employee tags"><EmployeeTagsManagerCard /></CollapsibleSection>
-      <CollapsibleSection title="Job types"><JobTypesManagerCard /></CollapsibleSection>
-      <CollapsibleSection title="Job checklist"><JobChecklistCard /></CollapsibleSection>
-      <CollapsibleSection title="DQ document types"><DqDocTypesCard /></CollapsibleSection>
-      <CollapsibleSection title="Crew skills"><SkillsManagerCard /></CollapsibleSection>
-      <CollapsibleSection title="Furniture catalogue"><FurnitureCatalogCard /></CollapsibleSection>
-      <CollapsibleSection title="Help text"><HelpTextCard /></CollapsibleSection>
     </div>
   );
 }

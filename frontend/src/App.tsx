@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
@@ -368,7 +367,6 @@ const HubIcons = {
 };
 
 export default function App() {
-  const nav = useNavigate();
   const { user } = useAuth();
   const { settings: themeSettings } = useTheme();
   const { src: logo, variant: logoVariant } = useResolvedLogo();
@@ -2121,18 +2119,9 @@ export default function App() {
           <span className="statusDot" style={{ ["--dot" as any]: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize", fontSize: 12 }}>
             {jobStatus}
           </span>
-          {/* DVIR + Profile live in the persistent bottom nav; their top-bar
-              buttons were removed as redundant. The "new patch notes" dot moved
-              to the bottom-nav Profile tab. Admin stays (not in the crew bottom
-              nav, so this is its only entry point). */}
-          {user?.role === "admin" && (
-            <button
-              onClick={() => nav("/admin")}
-              style={{ cursor: "pointer", background: "none", border: "none", color: "var(--muted)", fontSize: 13, fontWeight: 600, padding: "4px 4px" }}
-            >
-              Admin
-            </button>
-          )}
+          {/* DVIR + Profile + Admin all live off the persistent nav / Tools grid
+              now (Tools -> Admin), so their redundant top-bar buttons were
+              removed. The "new patch notes" dot moved to the bottom-nav Profile tab. */}
         </div>
       </div>
 
@@ -2331,7 +2320,7 @@ export default function App() {
 
           {/* Job checklist (C3): applicable items for this job, auto-checked
               from in-app signals + manual ticks. */}
-          {jobUuid && <JobChecklistCard key={jobUuid} jobUuid={jobUuid} longDistance={longDistance} />}
+          {jobUuid && <JobChecklistCard key={jobUuid} jobUuid={jobUuid} longDistance={longDistance} refreshKey={tab} />}
 
           {(() => {
             // Loaded weights logged for this job - visible to anyone, any time

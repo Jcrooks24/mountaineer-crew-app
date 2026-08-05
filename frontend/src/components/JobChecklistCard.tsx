@@ -22,9 +22,14 @@ import {
 export default function JobChecklistCard({
   jobUuid,
   longDistance,
+  refreshKey,
 }: {
   jobUuid: string;
   longDistance: boolean;
+  // Bump to force a re-pull of the AUTO signals. The card is persistent across
+  // in-app tabs, so finishing the job report (a tab, not a route change) would
+  // otherwise leave its "job report completed" auto-item stale until remount.
+  refreshKey?: string | number;
 }) {
   const [items, setItems] = useState<ChecklistItem[]>(() => cachedItems());
   const [status, setStatus] = useState<ChecklistStatus>(
@@ -50,7 +55,7 @@ export default function JobChecklistCard({
     }
   }, [jobUuid]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh, refreshKey]);
 
   const applicable = useMemo(
     () =>
