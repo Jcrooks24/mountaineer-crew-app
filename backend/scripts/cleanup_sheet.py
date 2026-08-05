@@ -12,8 +12,10 @@ Steps:
   blankrows    Delete fully-empty rows (partial-write residue) in the high-traffic
                tabs. Run the app's Sync & Accuracy audit FIRST and confirm zero
                missing - the reconciler re-drove the real data, these are leftovers.
-  dedupe       Remove duplicate JobReports (keep latest updated_at) and Events
-               (keep latest logged_at). Prints every dropped row.
+  dedupe       Remove duplicate JobReports (keep latest updated_at; their dupes
+               differ only in metadata). Events duplicates are REPORT ONLY - they
+               are timestamp edits with no safe automated keep rule; the step
+               prints each pair with a keep/delete recommendation for a human.
   officehours  Trim OfficeHours' 15 phantom trailing columns (K..Z).
   protect      Add a warning-only protected range on row 1 of EVERY tab, so an
                accidental header edit is caught (prevents the whole audit finding #1).
