@@ -52,6 +52,12 @@ class RodsLog(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     rods_id = Column(String, unique=True, index=True, nullable=False)
+    # Optional job link (mirrors PriorOnDutyStatement / LdDay). A RODS is per
+    # drive-day per driver and may span jobs, so this is nullable - set when the
+    # recorder is opened from a specific job. The job checklist's `rods` signal
+    # reads it.
+    job_uuid = Column(String, index=True, nullable=True)
+    job_name = Column(String, nullable=True)
 
     driver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     driver_name = Column(String, nullable=False)

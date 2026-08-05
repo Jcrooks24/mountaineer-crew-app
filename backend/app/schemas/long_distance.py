@@ -57,6 +57,8 @@ class RodsCreate(BaseModel):
     rods_id: str
     driver_name: str
     log_date: str                # YYYY-MM-DD
+    job_uuid: str | None = None  # set when the recorder is opened from a job
+    job_name: str | None = None
     co_driver_name: str | None = None
     vehicle_number: str | None = None
     trailer_number: str | None = None
@@ -84,6 +86,8 @@ class RodsResponse(BaseModel):
     driver_id: int | None
     driver_name: str
     log_date: str
+    job_uuid: str | None = None
+    job_name: str | None = None
     co_driver_name: str | None
     vehicle_number: str | None
     trailer_number: str | None
