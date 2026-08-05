@@ -89,8 +89,13 @@ def main() -> None:
         print(f"error: tab {tab!r} not found in the workbook", file=sys.stderr)
         sys.exit(1)
 
+    # UNFORMATTED_VALUE so numeric cells (amounts are stored as numbers) come back
+    # as numbers and round-trip as numbers on the RAW write below - a formatted
+    # read would return "39.98" and RAW-writing that string would silently turn
+    # every numeric amount into TEXT (and break any SUM on the column).
     values = _api(lambda: svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=tab,
+        valueRenderOption="UNFORMATTED_VALUE",
     ).execute()).get("values", [])
     if not values:
         print(f"{tab} is empty; nothing to do.")
@@ -101,17 +106,34 @@ def main() -> None:
     def cell(row, i):
         return row[i] if (0 <= i < len(row)) else ""
 
+    def s(v) -> str:
+        # str-then-strip: values may now be numbers (UNFORMATTED read), and a key
+        # column read as a number must not crash .strip(). Text columns are
+        # unaffected. Only used for the text keys (uuid / submitted_at / updated_at);
+        # every other column keeps its native value/type on the way out.
+        return str(v).strip() if v is not None else ""
+
     def name_idx(name: str) -> int:
         try:
             return header.index(name)
         except ValueError:
             return -1
 
-    # Resolve every real column BY NAME from the live header. The two re-appended
-    # duplicates carry their real names (reimbursement_uuid, submitted_at); the
-    # legacy copies live at fixed physical A/C under the overwritten header text.
-    idx_uuid_dup = name_idx("reimbursement_uuid")   # the re-appended column (Z-ish)
-    idx_sub_dup = name_idx("submitted_at")          # the re-appended column (AA-ish)
+    def dup_idx(name: str, primary: int) -> int:
+        """The re-appended duplicate column: a header named `name` that is NOT at
+        its primary physical position. Returns -1 when there is no duplicate -
+        crucial for idempotency: on an ALREADY-CLEAN tab reimbursement_uuid is at
+        column A (the primary), so there is no dup and we must not treat A itself
+        as one and drop it."""
+        for i, h in enumerate(header):
+            if h == name and i != primary:
+                return i
+        return -1
+
+    # The re-appended duplicates (Z/AA on the corrupted tab); -1 if the tab is
+    # already clean. The legacy copies live at fixed physical A/C.
+    idx_uuid_dup = dup_idx("reimbursement_uuid", COL_UUID)
+    idx_sub_dup = dup_idx("submitted_at", COL_SUBMITTED)
     idx_amount = name_idx("amount")
     idx_updated = name_idx("updated_at")
 
@@ -137,18 +159,21 @@ def main() -> None:
     up = keep.index(idx_updated) if idx_updated in keep else -1  # updated_at position in the kept row
     am = keep.index(idx_amount)                                   # amount position in the kept row
 
-    def build_kept(row) -> list[str]:
-        uuid = cell(row, COL_UUID).strip() or (cell(row, idx_uuid_dup).strip() if idx_uuid_dup >= 0 else "")
-        submitted = cell(row, COL_SUBMITTED).strip() or (cell(row, idx_sub_dup).strip() if idx_sub_dup >= 0 else "")
+    def build_kept(row) -> list:
+        # Keys (uuid / submitted_at) are coerced to clean strings; EVERY other
+        # column keeps its native value (numbers stay numbers) so the RAW write
+        # preserves cell types.
+        uuid = s(cell(row, COL_UUID)) or (s(cell(row, idx_uuid_dup)) if idx_uuid_dup >= 0 else "")
+        submitted = s(cell(row, COL_SUBMITTED)) or (s(cell(row, idx_sub_dup)) if idx_sub_dup >= 0 else "")
         return [uuid if i == COL_UUID else submitted if i == COL_SUBMITTED else cell(row, i) for i in keep]
 
     # 1) Unify + keep, skipping rows with no uuid anywhere (phantom/blank residue).
     misplaced = 0
-    unified: list[list[str]] = []
+    unified: list[list] = []
     skipped_blank = 0
     for row in data:
-        a = cell(row, COL_UUID).strip()
-        z = cell(row, idx_uuid_dup).strip() if idx_uuid_dup >= 0 else ""
+        a = s(cell(row, COL_UUID))
+        z = s(cell(row, idx_uuid_dup)) if idx_uuid_dup >= 0 else ""
         if not (a or z):
             skipped_blank += 1
             continue
@@ -156,15 +181,16 @@ def main() -> None:
             misplaced += 1
         unified.append(build_kept(row))
 
-    # 2) Dedupe by uuid (kept col 0), keeping the row with the latest updated_at.
-    best: dict[str, list[str]] = {}
+    # 2) Dedupe by uuid (kept col 0), keeping the row with the latest updated_at
+    #    (compared as strings; updated_at is an ISO text column).
+    best: dict[str, list] = {}
     order: list[str] = []
     for row in unified:
         u = row[0]
         if u not in best:
             order.append(u)
             best[u] = row
-        elif up >= 0 and cell(row, up) > cell(best[u], up):
+        elif up >= 0 and s(cell(row, up)) > s(cell(best[u], up)):
             best[u] = row
     deduped = [best[u] for u in order]
 
