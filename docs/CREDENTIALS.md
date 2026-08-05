@@ -89,11 +89,16 @@ before the env var was pointed at the camelCase name) are junk; the cleanup tool
 
 ### Sheet integrity check (Render Cron Job) - keeps the mirror clean
 
-`backend/scripts/sheet_integrity_check.py` re-derives each tab's expected shape
-from the code's own `*_HEADERS` and asserts it against the live sheet: a missing
-KEY column (a `dfg`-style header overwrite), duplicate rows on a one-per-key tab,
-or a junk env-var-named tab are FAILs; missing non-key columns and blank residue
-rows are WARNs. On any FAIL it emails `ALERT_EMAIL`. Exit code is non-zero on FAIL.
+`backend/scripts/sheet_integrity_check.py` does two things. **Structural:**
+re-derives each tab's expected shape from the code's own `*_HEADERS` and asserts
+it against the live sheet (missing KEY column = a `dfg`-style overwrite, duplicate
+rows on a one-per-key tab, or a junk env-var-named tab = FAIL; missing non-key
+columns and blank residue = WARN). **Completeness (server -> sheet):** reuses the
+app's own reconciler (`audit_sheet_backfill` + the Events/BOL counters) to confirm
+every current Postgres record is present in the sheet - a missing record is a FAIL,
+because the Sheet is the durable copy and that record could be lost if the DB ages
+out before it syncs. On any FAIL it emails `ALERT_EMAIL`; exit code is non-zero on
+FAIL. `--no-completeness` runs structural checks only.
 
 Run it nightly as a **Render Cron Job** (a separate service; Root Directory
 `backend`, so no `backend/` prefix on the command):

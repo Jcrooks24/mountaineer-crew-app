@@ -211,6 +211,13 @@ Job; emails jacob@ on any FAIL - see CREDENTIALS) and can be run by hand any tim
 - **FAIL - duplicate `<key>`** = the replace-style delete stopped matching. Run
   the cleanup tool's `dedupe` step.
 - **FAIL - junk tab** = an env-var-named tab exists. `cleanup_sheet.py --step tabs`.
+- **FAIL - completeness: N server record(s) MISSING from the sheet** = a sync is
+  stuck; those Postgres records never reached the Sheet (the message names the tab
+  and, if the sync is failing, the `last_error`). Re-drive them: Admin -> Advanced
+  Settings -> Sync & Accuracy -> Sheet Backfill (or `POST
+  /api/admin/system-check/sheet-backfill`). If they will not drain, fix the record
+  data behind `last_error`. This is the check that matters most before a DB is
+  retired/migrated - the Sheet is the long-term copy.
 - **WARN - missing columns** = usually staging columns not yet promoted to prod;
   harmless, clears when the next promotion adds them.
 - **WARN - blank residue rows** = `cleanup_sheet.py --step blankrows` (after a

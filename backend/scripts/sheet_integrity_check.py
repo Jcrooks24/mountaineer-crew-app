@@ -9,9 +9,18 @@ asserts it against the live sheet. Catches the whole class of drift behind the
       the live header row  -> a `dfg`-style header overwrite
     - duplicate rows for a one-per-key tab                       -> the dedupe broke
     - a junk env-var-named tab (sheets*Staging etc.)            -> a misconfig
+    - a server record NOT present in the sheet (server->sheet completeness) -> a
+      broken/stuck sync; that record could be lost if the DB ages out before it
+      reaches the sheet. This is the point of the nightly run: the Sheet is the
+      long-term record, so prove every current server record is in it.
   WARN (reported, emailed only with --email-warnings or alongside a FAIL):
     - expected columns absent (often just un-promoted staging work)
     - fully-blank residue rows between data rows
+
+The completeness pass reuses the app's OWN reconciler (audit_sheet_backfill for the
+diffable syncs; the Events/BOL marker-table counters for the two auto-reconciled
+ones), so it stays correct as syncs are added. Pass --no-completeness for a
+structural-only run.
 
 Reuses the code's *_HEADERS constants, so when future dev adds a column the check
 follows automatically - no second source of truth to keep in sync.
@@ -83,11 +92,55 @@ def _values(svc, sid, tab):
     ).execute()).get("values", [])
 
 
+def _completeness_checks(db, fails: list, warns: list) -> None:
+    """Server -> sheet completeness: every CURRENT Postgres record must be present
+    in the sheet. A record on the server but missing from the sheet is exactly what
+    to catch before the transient server data ages out - the Sheet is the durable
+    copy. Reuses the app's own reconciler so coverage tracks the real syncs."""
+    from app.integrations.sheet_backfill import audit_sheet_backfill
+    bf = audit_sheet_backfill(db)
+    if not bf.get("connected"):
+        fails.append(f"completeness: backfill audit could not run: {bf.get('error')}")
+        return
+    for r in bf.get("results", []):
+        if r.get("auto"):
+            continue  # Events/BOLs are counted separately below (not diffed here)
+        if r.get("error"):
+            warns.append(f"completeness: {r.get('label')} ({r.get('tab')}) "
+                         f"not audited: {r['error']}")
+            continue
+        mc = r.get("missing_count") or 0
+        if mc > 0:
+            ids = ", ".join(str(m.get("id")) for m in (r.get("missing") or [])[:5])
+            why = f"  [sync FAILING: {r.get('last_error')}]" if r.get("failing") else ""
+            fails.append(
+                f"completeness: {r.get('label')} ({r.get('tab')}) - {mc} server "
+                f"record(s) MISSING from the sheet (db={r.get('in_db')}, "
+                f"sheet={r.get('in_sheet')}) e.g. {ids}{why}")
+    # Events + BOLs are auto-reconciled and only counted, not diffed, by the audit.
+    try:
+        from app.integrations.sheets_reconcile import count_unexported_events
+        n = count_unexported_events(db)
+        if n and n > 0:
+            fails.append(f"completeness: Events - {n} server event(s) not yet in the sheet")
+    except Exception as e:  # noqa: BLE001 - a counter hiccup must not kill the check
+        warns.append(f"completeness: Events counter errored: {e}")
+    try:
+        from app.integrations.bol_reconcile import count_unexported_bols
+        n = count_unexported_bols(db)
+        if n and n > 0:
+            fails.append(f"completeness: BOLs - {n} server BOL(s) not yet in the sheet")
+    except Exception as e:  # noqa: BLE001
+        warns.append(f"completeness: BOL counter errored: {e}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--email-warnings", action="store_true")
     ap.add_argument("--force-email", action="store_true")
     ap.add_argument("--no-email", action="store_true")
+    ap.add_argument("--no-completeness", action="store_true",
+                    help="Skip the server->sheet completeness audit (structural checks only).")
     args = ap.parse_args()
 
     db_url = os.getenv("DATABASE_URL", "")
@@ -98,15 +151,13 @@ def main() -> None:
         sys.exit("error: GOOGLE_SHEETS_SPREADSHEET_ID is required (the real workbook id)")
 
     db = sessionmaker(bind=create_engine(db_url))()
-    try:
-        svc = se._get_sheets_svc(db)
-    finally:
-        db.close()
+    svc = se._get_sheets_svc(db)  # keep the session open for the completeness audit below
 
     all_tabs = se._sheet_ids(svc, sid, refresh=True)  # {name: sheetId}
     fails: list[str] = []
     warns: list[str] = []
 
+    # STRUCTURAL: is the sheet internally consistent? ----------------------------
     # 1) junk env-var-named tabs anywhere in the workbook
     for name in all_tabs:
         low = name.lower()
@@ -155,8 +206,16 @@ def main() -> None:
             warns.append(f"{tab}: {len(blanks)} fully-blank residue row(s) at {blanks[:10]}"
                          + (" ..." if len(blanks) > 10 else ""))
 
+    # COMPLETENESS: does the sheet mirror every current server record? -----------
+    # The Sheet is the long-term record; the server data is treated as transient.
+    # A record on the server but not in the sheet is the thing to catch here.
+    if not args.no_completeness:
+        _completeness_checks(db, fails, warns)
+    db.close()
+
     # ── report ──────────────────────────────────────────────────────────────────
-    lines = [f"Sheet integrity check - {sid}", f"tabs scanned: {len(all_tabs)}", ""]
+    lines = [f"Sheet integrity check - {sid}", f"tabs scanned: {len(all_tabs)}",
+             f"completeness: {'skipped' if args.no_completeness else 'checked'}", ""]
     lines.append(f"FAIL: {len(fails)}")
     lines += [f"  - {m}" for m in fails]
     lines.append(f"WARN: {len(warns)}")
