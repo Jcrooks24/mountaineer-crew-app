@@ -327,19 +327,6 @@ Live bugs that are known and not yet fixed. If you hit one of these, you have fo
 a real issue, not a misunderstanding. Keep this list honest: delete an entry when it
 is fixed, and add one when a `/vet` pass finds something you cannot fix that day.
 
-0. **Prod `Reimbursements` tab is inflated by ~189 duplicate rows / ~$17,088 over-count.**
-   Someone overwrote A1 (`reimbursement_uuid` -> `dfg`) and C1 (`submitted_at`),
-   so `_ensure_tab` re-appended those key columns at Z/AA; legacy rows keep the uuid
-   in column A, newer rows in Z, and the replace-style delete no-ops across the split,
-   appending without deleting (2026-08-05 sheet audit, report on the owner's Desktop).
-   No reimbursement DATA is lost - the tab is inflated, not damaged. **Fix:** run
-   `backend/scripts/repair_reimbursements_sheet.py` (dry-run first, then `--apply`;
-   it backs the tab up), then **protect row 1 on every tab** (Sheets -> Data ->
-   Protect) to stop recurrence. A fail-closed guard now exists (`SheetHeaderError` in
-   `sheets_export.py::_ensure_tab`): while the header stays corrupted the reimbursement
-   sync will show RED in the health check instead of duplicating further - that is
-   expected until the repair runs.
-
 1. **Staging PWA serves STALE code: fixes look "not deployed" when they are.**
    The staging frontend is a Vercel **branch-preview** deployment
    (`mountaineer-crew-app-git-staging-*.vercel.app`), and that host has **Vercel
