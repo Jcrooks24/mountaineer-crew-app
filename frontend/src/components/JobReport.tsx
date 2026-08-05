@@ -1239,6 +1239,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   );
 
   async function doSave() {
+    // First close-out (no server copy yet) vs re-saving an edit to an already
+    // closed report. Only the first one is worth a celebration - re-firing
+    // confetti on a typo fix reads as "you just filed a brand-new report".
+    const firstCloseOut = !saved;
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
     if (!driveOnly && billData !== null && billData !== undefined && !billReviewed) {
@@ -1345,7 +1349,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
       setSaved(true);
       setView("closed"); // collapse to the single closed-out tile
-      fireConfetti(); // celebrate a submitted report
+      if (firstCloseOut) fireConfetti(); // celebrate only the first close-out
       // Submit succeeded - discard the in-progress drafts (report + bill).
       // The server is now authoritative; further edits start fresh drafts.
       clearReportDraft(jobUuid);
@@ -1408,7 +1412,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     e.preventDefault();
     setErr(null);
     const problem = validateReport();
-    if (problem) return setErr(problem);
+    if (problem) {
+      setErr(problem);
+      // Scroll up to the banner + the required fields (most live near the top),
+      // so the crew aren't left staring at a bottom button that just errored.
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
     setView("review");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -1464,6 +1474,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             </div>
           )}
         </div>
+
+        {longDistance && section("Long-distance", (
+          <>
+            {row("Per-diem (out of town)", data.out_of_town ? "Yes" : "No")}
+            {mixedLd && row("Prior on-duty (PODS)", priorDone ? "Filed" : "Not filed")}
+            {mixedLd && row("Bill of Lading", bolStatus ? "Attached" : bolDeferred ? "Deferred" : "Not attached")}
+          </>
+        ))}
 
         {!driveOnly && section("Billing", (
           <>
@@ -1648,6 +1666,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         >
           {draftStatus === "saving" && "Saving draft…"}
           {draftStatus === "saved" && "✓ Draft saved"}
+        </div>
+      )}
+
+      {/* Validation error, surfaced at the TOP of the form (with a scroll-to on
+          failure) so the crew see it and the required fields together, instead
+          of a lone banner by the bottom button pointing at a field far above. */}
+      {err && (
+        <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+          {err}
         </div>
       )}
 
@@ -2190,8 +2217,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           Close-out<BetaTag feature="closeout" style={{ marginTop: 0 }} />
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 14 }}>
-          Optional, but this is what tells the office why a job ran the way it did.
-          Skip anything you cannot answer.
+          A few quick questions that tell the office why the day ran the way it
+          did. Each one leads to the next; answer them in order.
         </div>
 
         {/* Q1 - did the job run differently? "Yes" reveals the reason chips;
@@ -2563,12 +2590,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             onNeedPods={() => nav("/long-distance?section=prior")}
             tripJob={tripLink?.trip_job_uuid || jobUuid}
           />
-        </div>
-      )}
-
-      {err && (
-        <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
-          {err}
         </div>
       )}
 

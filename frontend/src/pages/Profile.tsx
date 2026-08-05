@@ -60,6 +60,17 @@ export default function Profile() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const dqRef = useRef<HTMLDivElement>(null);
+
+  // If we arrived via the DQ reminder's "Submit now" (/profile#dq), scroll the
+  // DQ card into view so the driver lands on it, not the top of the page.
+  useEffect(() => {
+    if (window.location.hash !== "#dq") return;
+    const t = window.setTimeout(() => {
+      dqRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, []);
 
   // Availability horizon - cache on mount, then refresh from server so the
   // "you need to submit" badge is current. We only need to know whether the
@@ -309,8 +320,12 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Driver qualification documents (C4) */}
-      <DqMyFileCard />
+      {/* Driver qualification documents (C4). Anchored so the DQ reminder's
+          "Submit now" (which links to /profile#dq) scrolls straight here rather
+          than dropping the driver at the top of the page. */}
+      <div ref={dqRef} id="dq">
+        <DqMyFileCard />
+      </div>
 
       {/* Worked hours - weekly regular / OT / non-billable breakdown */}
       <WorkedHoursCard />

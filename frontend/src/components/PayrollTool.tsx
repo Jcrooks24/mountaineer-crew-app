@@ -398,7 +398,7 @@ export default function PayrollTool() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ textAlign: "right", color: "var(--muted)" }}>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>Employee</th>
+                    <th style={{ textAlign: "left", padding: "6px 8px", position: "sticky", left: 0, background: "var(--card)", zIndex: 2 }}>Employee</th>
                     <th style={{ padding: "6px 8px" }}>Regular</th>
                     <th style={{ padding: "6px 8px" }}>OT</th>
                     <th style={{ padding: "6px 8px" }}>Non-bill</th>
@@ -542,7 +542,7 @@ function EmployeeRows({
   return (
     <>
       <tr style={{ borderTop: "1px solid var(--border)" }}>
-        <td style={{ padding: "6px 8px", fontWeight: 600 }}>
+        <td style={{ padding: "6px 8px", fontWeight: 600, position: "sticky", left: 0, background: "var(--card)", zIndex: 1 }}>
           {emp.name}
           {emp.correction_count > 0 && (
             <span

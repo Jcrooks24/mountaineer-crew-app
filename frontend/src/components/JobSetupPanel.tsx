@@ -340,14 +340,20 @@ export default function JobSetupPanel({
                       {c.source === "invitee" && !on && (
                         <span style={{ fontSize: 10, opacity: 0.7 }}>invited</span>
                       )}
-                      <span
-                        role="button"
-                        aria-label={`Remove ${c.name || "crew member"}`}
-                        onClick={(e) => { e.stopPropagation(); removeCrew(i); }}
-                        style={{ marginLeft: 2, fontSize: 15, lineHeight: 1, opacity: 0.65 }}
-                      >
-                        ×
-                      </span>
+                      {/* Only manually-added crew get a remove control: an invited
+                          suggestion just untoggles (it stays as a suggestion), so
+                          it needs no destructive x competing with the toggle. The
+                          x carries its own padded hit area so it isn't a mis-tap. */}
+                      {c.source !== "invitee" && (
+                        <span
+                          role="button"
+                          aria-label={`Remove ${c.name || "crew member"}`}
+                          onClick={(e) => { e.stopPropagation(); removeCrew(i); }}
+                          style={{ marginLeft: 4, padding: "2px 6px", fontSize: 16, lineHeight: 1, opacity: 0.8, borderRadius: 999 }}
+                        >
+                          ×
+                        </span>
+                      )}
                     </span>
                   );
                 })}

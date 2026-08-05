@@ -136,7 +136,9 @@ function SearchableRoster({
         value={open ? query : selectedLabel}
         placeholder="Search crew member…"
         disabled={disabled}
-        onFocus={() => { setOpen(true); setQuery(""); }}
+        // Seed the query with the current selection and select-all instead of
+        // blanking it, so the crew can still see who is set while they retype.
+        onFocus={(e) => { setOpen(true); setQuery(selectedLabel); e.currentTarget.select(); }}
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         style={{
           width: "100%", padding: "10px 12px", borderRadius: 10,

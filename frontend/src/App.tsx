@@ -2454,7 +2454,19 @@ export default function App() {
                 </div>
               );
             }
-            return null;
+            // Long-distance job with nothing picked yet: the logging tools depend
+            // on the day's activity, so instead of a blank screen, point the crew
+            // back to the job setup where "What are you doing today?" lives.
+            return (
+              <div className="card" data-component="TimelineActionsTile">
+                <div className="microLabel" style={{ marginBottom: 8 }}>Actions</div>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  Pick what you're doing today (packing, loading, unloading, unpacking, or driving)
+                  in the job setup above to start logging. Labor shows the Actions buttons; driving
+                  brings up the RODS recorder.
+                </div>
+              </div>
+            );
           })()}
 
       {/* Home: the action-tile grid. Drilled into a task: a back-to-actions bar. */}

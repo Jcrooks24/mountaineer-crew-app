@@ -37,7 +37,7 @@ export default function DqReminderBanner() {
           </div>
           <div className="small" style={{ color: "var(--muted)" }}>{missing.join(", ")}</div>
         </div>
-        <button type="button" className="btnPrimary" onClick={() => nav("/profile")} style={{ flexShrink: 0 }}>
+        <button type="button" className="btnPrimary" onClick={() => nav("/profile#dq")} style={{ flexShrink: 0 }}>
           Submit now
         </button>
       </div>

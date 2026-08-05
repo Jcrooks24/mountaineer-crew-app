@@ -815,13 +815,8 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   ))}
                   <option value="__custom__">Custom item…</option>
                 </select>
-                <input type="number" min={1} step={1} inputMode="numeric" value={matQty}
-                  onFocus={(e) => e.currentTarget.select()}
-                  onChange={(e) => setMatQty(e.target.value)}
-                  onBlur={() => {
-                    const n = Number(matQty);
-                    setMatQty(String(Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1));
-                  }}
+                <NumberField integer min={1} step={1} value={Number(matQty) || 1} aria-label="Material quantity"
+                  onChange={(n) => setMatQty(String(n >= 1 ? Math.floor(n) : 1))}
                   style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13, textAlign: "right" }} />
                 <button type="button" onClick={addMaterial}
                   style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--text)" }}>

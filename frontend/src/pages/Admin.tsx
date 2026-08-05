@@ -202,12 +202,7 @@ export default function Admin() {
       <div style={desktopMode ? { display: "flex", gap: 16, alignItems: "flex-start" } : undefined}>
         {desktopMode && <AdminSidebar current={tab} onPick={setTab} />}
         <div style={desktopMode ? { flex: 1, minWidth: 0 } : undefined}>
-          {tab === "map" && (
-            <>
-              {!desktopMode && <AdminToolMenu onPick={setTab} />}
-              <MapTab />
-            </>
-          )}
+          {tab === "map" && <MapTab />}
           {tab === "employees" && <EmployeesTab />}
           {tab === "dvir" && <DVIRTab />}
           {tab === "estimator" && <EstimatorTab />}
@@ -289,10 +284,10 @@ function DesktopModeToggle({
   );
 }
 
-// Dashboard home menu - list-style links to each admin tool. The Map is the
-// home itself, so it isn't listed here.
+// Admin tabs, shared by the desktop sidebar and the persistent mobile pill nav
+// (AdminMobileNav). The Map tab is the home dashboard.
 // Desktop admin sidebar: 200px, left-border active nav (design system). Shown
-// only in desktopMode; mobile keeps the drill-in AdminToolMenu.
+// only in desktopMode; mobile uses the persistent AdminMobileNav pill bar.
 const ADMIN_TAB_ITEMS: { tab: Tab; label: string }[] = [
   { tab: "map", label: "Map" },
   { tab: "employees", label: "Employees" },
@@ -375,47 +370,6 @@ function AdminSidebar({ current, onPick }: { current: Tab; onPick: (t: Tab) => v
         );
       })}
     </nav>
-  );
-}
-
-function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
-  const tools: { tab: Tab; label: string; hint: string }[] = [
-    { tab: "employees", label: "Employees",    hint: "Crew access and roles" },
-    { tab: "dvir",      label: "DVIR Review",  hint: "Mechanic sign-off on inspections" },
-    { tab: "estimator", label: "Estimator",    hint: "Build and price estimates" },
-    { tab: "notes",     label: "Patch Notes",  hint: "Publish app update notes to the crew" },
-    { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
-    { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
-    { tab: "payroll",   label: "Payroll",      hint: "Hours by employee for a pay period" },
-    { tab: "dq",        label: "DQ Files",     hint: "Driver qualification documents" },
-    { tab: "incidents", label: "Incidents",    hint: "Crew-reported incident log" },
-    { tab: "settings",  label: "Settings",     hint: "Theme, field config, and advanced options" },
-  ];
-  return (
-    <div className="card">
-      <div className="microLabel" style={{ marginBottom: 10 }}>Tools</div>
-      <div className="col" style={{ gap: 8 }}>
-        {tools.map((t) => (
-          <button
-            key={t.tab}
-            onClick={() => onPick(t.tab)}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-              gap: 12, width: "100%", textAlign: "left",
-              padding: "11px 14px", fontSize: 14, fontWeight: 600,
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid var(--border)",
-            }}
-          >
-            <span className="col" style={{ gap: 2 }}>
-              <span>{t.label}</span>
-              <span className="small" style={{ color: "var(--muted)" }}>{t.hint}</span>
-            </span>
-            <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -2161,7 +2115,10 @@ function MonthScheduleView({
                           style={{
                             borderBottom: "1px solid var(--border)",
                             borderRight: "1px solid var(--border)",
-                            padding: isScheduled ? "4px 6px" : 0,
+                            // Taller tap target while editing (the cells are tiny
+                            // and the grid scrolls sideways, so a small target is
+                            // an easy mis-tap on a phone).
+                            padding: isScheduled ? "4px 6px" : (editMode ? "12px 6px" : 0),
                             minHeight: 26,
                             background: cellBg,
                             cursor: cellBusy === `${u.id}:${dIso}`
@@ -5352,7 +5309,10 @@ function CollapsibleSection({ title, children }: { title: string; children: Reac
           padding: "12px 14px", cursor: "pointer", color: "var(--text)",
         }}
       >
-        <span className="microLabel" style={{ marginBottom: 0 }}>{title}</span>
+        {/* When expanded, the card inside shows its own title, so hide the
+            header's copy (kept in layout) to avoid a duplicate; collapsed, this
+            label is the only cue to what the section is. */}
+        <span className="microLabel" style={{ marginBottom: 0, visibility: open ? "hidden" : "visible" }}>{title}</span>
         <span
           aria-hidden
           style={{ color: "var(--muted)", fontSize: 20, lineHeight: 1, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}
