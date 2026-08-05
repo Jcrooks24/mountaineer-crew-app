@@ -60,9 +60,38 @@ export function createLinkPost(linkUrl: string, text: string): Promise<BulletinP
   });
 }
 
+// Resize a photo to a sane max dimension + JPEG before upload, so the bytes we
+// store server-side (and load into the worker to serve) stay small. Falls back
+// to the original file if the canvas path fails.
+async function resizeImage(file: File, maxPx = 1600, quality = 0.85): Promise<Blob> {
+  try {
+    const bmpUrl = URL.createObjectURL(file);
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = bmpUrl;
+    });
+    const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no canvas");
+    ctx.drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(bmpUrl);
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", quality));
+    return blob || file;
+  } catch {
+    return file;
+  }
+}
+
 export async function createPhotoPost(file: File, text: string): Promise<BulletinPost> {
+  const blob = await resizeImage(file);
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", new File([blob], "photo.jpg", { type: "image/jpeg" }));
   form.append("post_uuid", uuid());
   form.append("text", text);
   const res = await fetch(`${API}/api/bulletin/posts/photo`, {
@@ -73,6 +102,26 @@ export async function createPhotoPost(file: File, text: string): Promise<Bulleti
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.detail || `Upload failed (HTTP ${res.status})`);
   return json as BulletinPost;
+}
+
+// image_url is relative for server-stored images ("/api/bulletin/image/...") and
+// absolute for legacy Drive posts; resolve both to a usable <img src>.
+export function postImageSrc(post: BulletinPost): string | null {
+  const u = post.image_url;
+  if (!u) return null;
+  return u.startsWith("http") ? u : `${API}${u}`;
+}
+
+// ── "New activity" dot for the nav ──
+const SEEN_KEY = "crew_bulletin_seen_id_v1";
+export function getSeenId(): number {
+  try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; }
+}
+export function setSeenId(id: number): void {
+  try { localStorage.setItem(SEEN_KEY, String(id)); } catch { /* noop */ }
+}
+export function fetchLatestId(): Promise<{ latest_id: number }> {
+  return apiFetch<{ latest_id: number }>("/api/bulletin/latest");
 }
 
 export function toggleLike(postUuid: string): Promise<{ liked: boolean; like_count: number }> {

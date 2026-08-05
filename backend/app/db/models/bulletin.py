@@ -11,7 +11,7 @@ Idempotency: posts and comments carry a client-minted UUID so a double-tap or a
 retried request doesn't create duplicates.
 """
 
-from sqlalchemy import Column, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Integer, LargeBinary, String, Text, UniqueConstraint
 
 from app.db.session import Base
 
@@ -31,7 +31,11 @@ class BulletinPost(Base):
     # The blurb / caption (all kinds may carry text).
     text = Column(Text, nullable=False, default="")
 
-    # Photo posts: the image on Drive.
+    # Photo posts: the image is stored server-side (bytes + mime), served from a
+    # capability URL keyed by post_uuid. Server-only and transient - no Drive.
+    image_bytes = Column(LargeBinary, nullable=True)
+    image_mime = Column(String, nullable=True)
+    # Legacy: earlier photo posts uploaded to Drive. Kept so those still render.
     image_drive_file_id = Column(String, nullable=True)
     image_drive_url = Column(String, nullable=True)
     image_thumb_url = Column(String, nullable=True)

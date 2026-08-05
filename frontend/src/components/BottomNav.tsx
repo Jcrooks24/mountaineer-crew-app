@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import { hasUnseenPatchNotes } from "../lib/patchNotesSeen";
+import { fetchLatestId, getSeenId } from "../lib/bulletin";
 
 /**
  * Persistent crew bottom-nav shell (design system Phase B).
@@ -51,6 +52,15 @@ export default function BottomNav() {
   const patchNotesUnseen = hasUnseenPatchNotes(latestNote);
 
   const p = loc.pathname;
+
+  // "New bulletin activity" dot: the newest post id vs the last one the crew
+  // saw (Bulletin marks it seen on open). Re-checked on each navigation so a new
+  // post by someone else lights the dot without a full reload.
+  const [latestBulletinId, setLatestBulletinId] = useState(0);
+  useEffect(() => {
+    fetchLatestId().then((r) => setLatestBulletinId(r.latest_id)).catch(() => { /* non-fatal */ });
+  }, [p]);
+  const bulletinUnseen = latestBulletinId > getSeenId() && !(p === "/bulletin" || p.startsWith("/bulletin/"));
   if (HIDE_PREFIXES.some((h) => p === h || p.startsWith(h + "/"))) return null;
 
   // "/" matches only the hub exactly; the others match their subtree.
@@ -93,6 +103,16 @@ export default function BottomNav() {
             {t.path === "/profile" && patchNotesUnseen && (
               <span
                 title="New patch notes"
+                style={{
+                  position: "absolute", top: 8, right: "calc(50% - 16px)",
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: "var(--brand)", boxShadow: "0 0 0 2px var(--card)",
+                }}
+              />
+            )}
+            {t.path === "/bulletin" && bulletinUnseen && (
+              <span
+                title="New bulletin activity"
                 style={{
                   position: "absolute", top: 8, right: "calc(50% - 16px)",
                   width: 8, height: 8, borderRadius: "50%",

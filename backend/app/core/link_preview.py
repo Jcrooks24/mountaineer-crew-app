@@ -7,6 +7,7 @@ URL, so it is bounded (short timeout, capped read) and refuses obviously-interna
 hosts to blunt SSRF. Any failure returns an empty preview - a link post still
 works, it just shows the raw URL.
 """
+import html as html_lib
 import ipaddress
 import re
 import socket
@@ -81,13 +82,22 @@ def fetch_link_preview(url: str) -> dict:
         if not title:
             m = re.search(r"<title[^>]*>([^<]*)</title>", html, re.IGNORECASE)
             title = m.group(1).strip() if m else None
-        image = _meta(html, "og:image") or _meta(html, "twitter:image")
+        image = (
+            _meta(html, "og:image")
+            or _meta(html, "og:image:url")
+            or _meta(html, "twitter:image")
+            or _meta(html, "twitter:image:src")
+        )
+        if not image:
+            m = re.search(r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']', html, re.IGNORECASE)
+            image = m.group(1).strip() if m else None
         desc = _meta(html, "og:description") or _meta(html, "description") or _meta(html, "twitter:description")
 
         if image:
-            image = urljoin(url, image)  # resolve a relative og:image
-        out["title"] = (title or "")[:300] or None
-        out["description"] = (desc or "")[:500] or None
+            image = urljoin(url, html_lib.unescape(image))  # resolve + decode entities in a relative og:image
+        # unescape HTML entities (&amp; &#39; etc.) so the card reads cleanly.
+        out["title"] = (html_lib.unescape(title) if title else "")[:300] or None
+        out["description"] = (html_lib.unescape(desc) if desc else "")[:500] or None
         out["image"] = image
     except Exception:
         pass

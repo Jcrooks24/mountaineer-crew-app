@@ -13,6 +13,7 @@ import { useAuth } from "../auth/AuthContext";
 import {
   fetchFeed, createTextPost, createLinkPost, createPhotoPost,
   toggleLike, addComment, removePost, removeComment, timeAgo,
+  postImageSrc, setSeenId, fetchLatestId,
   type BulletinPost, type BulletinComment,
 } from "../lib/bulletin";
 
@@ -41,6 +42,12 @@ export default function Bulletin() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Opening the bulletin clears the nav "new activity" dot: mark the newest post
+  // as seen.
+  useEffect(() => {
+    fetchLatestId().then((r) => setSeenId(r.latest_id)).catch(() => {});
+  }, []);
 
   const loadMore = async () => {
     if (!nextBefore) return;
@@ -252,9 +259,15 @@ function PostCard({
         )}
       </div>
 
-      {/* Media */}
-      {post.kind === "photo" && post.image_url && (
-        <img src={post.image_url} alt="" style={{ display: "block", width: "100%", maxHeight: 520, objectFit: "cover" }} />
+      {/* Media. Use the Drive THUMBNAIL url for the <img> - the plain Drive url
+          is a webViewLink (opens Drive), which does not render in an image tag. */}
+      {post.kind === "photo" && postImageSrc(post) && (
+        <img
+          src={postImageSrc(post)!}
+          alt=""
+          loading="lazy"
+          style={{ display: "block", width: "100%", maxHeight: 520, objectFit: "cover", background: "var(--raised, rgba(0,0,0,0.04))" }}
+        />
       )}
       {post.kind === "link" && post.link_url && <LinkCard post={post} />}
 

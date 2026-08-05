@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -17,7 +17,6 @@ from app.core.deps import get_current_user, get_db, require_admin
 from app.core.link_preview import fetch_link_preview
 from app.db.models.bulletin import BulletinComment, BulletinLike, BulletinPost
 from app.db.models.user import User
-from app.integrations.drive_upload import upload_photo_to_drive
 
 router = APIRouter(prefix="/api/bulletin", tags=["bulletin"])
 
@@ -35,6 +34,15 @@ def _comment_out(c: BulletinComment) -> dict:
     }
 
 
+def _image_url(p: BulletinPost) -> Optional[str]:
+    # Server-stored bytes are served from a capability URL keyed by post_uuid
+    # (relative - the frontend prepends its API base). Legacy Drive posts fall
+    # back to the Drive thumbnail (an absolute https URL).
+    if p.image_mime:
+        return f"/api/bulletin/image/{p.post_uuid}"
+    return p.image_thumb_url
+
+
 def _post_out(p: BulletinPost, like_count: int, liked: bool, comments: list) -> dict:
     return {
         "post_uuid": p.post_uuid,
@@ -42,8 +50,8 @@ def _post_out(p: BulletinPost, like_count: int, liked: bool, comments: list) -> 
         "author_name": p.author_name,
         "kind": p.kind,
         "text": p.text,
-        "image_url": p.image_drive_url,
-        "image_thumb_url": p.image_thumb_url,
+        "image_url": _image_url(p),
+        "image_thumb_url": None,
         "link_url": p.link_url,
         "link_title": p.link_title,
         "link_description": p.link_description,
@@ -53,6 +61,22 @@ def _post_out(p: BulletinPost, like_count: int, liked: bool, comments: list) -> 
         "liked_by_me": liked,
         "comments": comments,
     }
+
+
+@router.get("/latest")
+def latest(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The newest non-removed post id, for the nav "new activity" dot. Cheap
+    enough to poll; the client compares it to the last id it has seen."""
+    row = (
+        db.query(BulletinPost.id)
+        .filter(BulletinPost.removed_at.is_(None))
+        .order_by(BulletinPost.id.desc())
+        .first()
+    )
+    return {"latest_id": int(row[0]) if row else 0}
 
 
 @router.get("/feed")
@@ -156,6 +180,9 @@ def create_post(
     return _post_out(post, 0, False, [])
 
 
+MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB after the client-side resize
+
+
 @router.post("/posts/photo")
 def create_photo_post(
     file: UploadFile = File(...),
@@ -164,25 +191,21 @@ def create_photo_post(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create a photo post: the image goes to Drive under a Bulletin folder, then
-    a post row. Idempotent on post_uuid (a retry does not re-upload)."""
+    """Create a photo post. The image is stored server-side (bytes on the row) and
+    served from a capability URL - no Drive, server-only and transient.
+    Idempotent on post_uuid."""
     existing = db.query(BulletinPost).filter(BulletinPost.post_uuid == post_uuid).first()
     if existing:
         return _post_out(existing, 0, False, [])
 
+    data = file.file.read(MAX_IMAGE_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=422, detail="Empty image.")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image too large - please try a smaller photo.")
     mime_type = file.content_type or "image/jpeg"
-    try:
-        result = upload_photo_to_drive(
-            db=db,
-            file_obj=file.file,
-            filename=post_uuid,
-            mime_type=mime_type,
-            job_name="Bulletin",
-            job_date="",
-            caption=(text or "").strip()[:200],
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Image upload failed: {e}")
+    if not mime_type.startswith("image/"):
+        mime_type = "image/jpeg"
 
     post = BulletinPost(
         post_uuid=post_uuid,
@@ -190,9 +213,8 @@ def create_photo_post(
         author_name=(current_user.name or current_user.email or "").strip(),
         kind="photo",
         text=(text or "").strip()[:MAX_TEXT],
-        image_drive_file_id=result["file_id"],
-        image_drive_url=result["url"],
-        image_thumb_url=result["thumb_url"],
+        image_bytes=data,
+        image_mime=mime_type,
         created_at=datetime.utcnow(),
     )
     db.add(post)
@@ -202,6 +224,21 @@ def create_photo_post(
         db.rollback()
         post = db.query(BulletinPost).filter(BulletinPost.post_uuid == post_uuid).first()
     return _post_out(post, 0, False, [])
+
+
+@router.get("/image/{post_uuid}")
+def get_image(post_uuid: str, db: Session = Depends(get_db)):
+    """Serve a post's image bytes. Public (no auth header) because <img> tags
+    can't send a bearer token; the random post_uuid is the capability, matching
+    how job photos are public via unguessable Drive links."""
+    p = db.query(BulletinPost).filter(BulletinPost.post_uuid == post_uuid).first()
+    if not p or p.removed_at is not None or not p.image_bytes:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    return Response(
+        content=p.image_bytes,
+        media_type=p.image_mime or "image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 def _require_post(db: Session, post_uuid: str) -> BulletinPost:
