@@ -397,14 +397,51 @@ function IncidentsAdminTab() {
   const [filter, setFilter] = useState<"all" | "" | "pending" | "resolved">("all");
   const [noteDraft, setNoteDraft] = useState<Record<number, string>>({});
 
-  useEffect(() => {
-    let cancelled = false;
+  // File-an-incident form (admin can log a billing dispute / claim that no crew
+  // member reported through the app).
+  const [showNew, setShowNew] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const blankNew = { claim_number: "", job_name: "", incident_date: "", severity: "minor", description: "", est_cost: "", attributed_crew: "" };
+  const [nc, setNc] = useState({ ...blankNew });
+
+  const reload = useCallback(() => {
+    setLoading(true);
     apiFetch<AdminIncident[]>("/api/admin/incidents")
-      .then((r) => { if (!cancelled) setIncidents(r); })
-      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .then((r) => setIncidents(r))
+      .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
   }, []);
+  useEffect(() => { reload(); }, [reload]);
+
+  async function fileIncident() {
+    if (!nc.description.trim() && !nc.claim_number.trim()) {
+      alert("Add a description or a claim number.");
+      return;
+    }
+    setCreating(true);
+    try {
+      await apiFetch("/api/incidents", {
+        method: "POST",
+        body: JSON.stringify({
+          incident_uuid: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          claim_number: nc.claim_number.trim() || null,
+          job_name: nc.job_name.trim() || null,
+          incident_date: nc.incident_date || null,
+          severity: nc.severity,
+          description: nc.description.trim(),
+          est_cost: nc.est_cost ? Number(nc.est_cost) : null,
+          attributed_crew: nc.attributed_crew.trim() || null,
+        }),
+      });
+      setNc({ ...blankNew });
+      setShowNew(false);
+      reload();
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Could not file the incident.");
+    } finally {
+      setCreating(false);
+    }
+  }
 
   async function patch(inc: AdminIncident, body: Record<string, any>) {
     setBusy(inc.id);
@@ -443,6 +480,58 @@ function IncidentsAdminTab() {
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 12 }}>
         {pendingCount} need action · {noStatusCount} unset · {incidents.length} total. Also exported to the Incidents sheet tab.
       </div>
+
+      {/* File a new incident (a billing dispute / claim the office is tracking,
+          not something a crew member reported through the app). */}
+      {!showNew ? (
+        <button type="button" onClick={() => setShowNew(true)} style={{ fontSize: 13, marginBottom: 12 }}>
+          + File an incident
+        </button>
+      ) : (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <div className="microLabel" style={{ marginBottom: 10 }}>File an incident</div>
+          <div className="row wrap" style={{ gap: 10 }}>
+            <label className="col" style={{ gap: 2, flex: "1 1 140px" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Claim number</span>
+              <input value={nc.claim_number} onChange={(e) => setNc((v) => ({ ...v, claim_number: e.target.value }))} placeholder="e.g. CLM-1042" />
+            </label>
+            <label className="col" style={{ gap: 2, flex: "1 1 160px" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Job / customer</span>
+              <input value={nc.job_name} onChange={(e) => setNc((v) => ({ ...v, job_name: e.target.value }))} placeholder="Customer or job name" />
+            </label>
+            <label className="col" style={{ gap: 2, width: 150 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Date</span>
+              <input type="date" value={nc.incident_date} onChange={(e) => setNc((v) => ({ ...v, incident_date: e.target.value }))} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 130 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Severity</span>
+              <select value={nc.severity} onChange={(e) => setNc((v) => ({ ...v, severity: e.target.value }))} style={{ fontSize: 13 }}>
+                <option value="minor">Minor</option>
+                <option value="moderate">Moderate</option>
+                <option value="major">Major</option>
+              </select>
+            </label>
+            <label className="col" style={{ gap: 2, width: 120 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Est. cost ($)</span>
+              <input inputMode="decimal" value={nc.est_cost} onChange={(e) => setNc((v) => ({ ...v, est_cost: e.target.value }))} placeholder="0" />
+            </label>
+            <label className="col" style={{ gap: 2, flex: "1 1 160px" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Attributed crew (optional)</span>
+              <input value={nc.attributed_crew} onChange={(e) => setNc((v) => ({ ...v, attributed_crew: e.target.value }))} placeholder="Name(s)" />
+            </label>
+          </div>
+          <label className="col" style={{ gap: 2, marginTop: 10 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>What happened</span>
+            <textarea rows={3} value={nc.description} onChange={(e) => setNc((v) => ({ ...v, description: e.target.value }))} placeholder="Details of the dispute / claim / damage" style={{ width: "100%", resize: "vertical" }} />
+          </label>
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <button type="button" className="btnPrimary" onClick={fileIncident} disabled={creating} style={{ fontSize: 13 }}>
+              {creating ? "Filing…" : "File incident"}
+            </button>
+            <button type="button" onClick={() => { setShowNew(false); setNc({ ...blankNew }); }} disabled={creating} style={{ fontSize: 13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
