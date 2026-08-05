@@ -496,16 +496,19 @@ type WorkedWeek = {
   office_hours: number;
   total_hours: number;
 };
+type HoursSummary = {
+  regular_hours: number;
+  ot_hours: number;
+  non_billable_hours: number;
+  other_hours: number;
+  office_hours: number;
+  total_hours: number;
+};
 type WorkedHistory = {
   weeks: WorkedWeek[];
-  summary: {
-    regular_hours: number;
-    ot_hours: number;
-    non_billable_hours: number;
-    other_hours: number;
-    office_hours: number;
-    total_hours: number;
-  };
+  // Present once a payroll has been finalized: the open pay period since then.
+  current_period: (HoursSummary & { start: string; end: string }) | null;
+  summary: HoursSummary;
 };
 
 // The endpoint defaults to a two-week window (kept small because it runs on every
@@ -513,6 +516,11 @@ type WorkedHistory = {
 // on demand - the "Show more" button below raises it, capped server-side.
 const HISTORY_DEFAULT_WEEKS = 2;
 const HISTORY_MORE_WEEKS = 12;
+
+// A single date, e.g. "Aug 4".
+function fmtDay(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString([], { month: "short", day: "numeric" });
+}
 
 // week_start is the Monday; render "Mon D - Sun D".
 function fmtWeek(iso: string): string {
@@ -551,7 +559,11 @@ function WorkedHoursCard() {
   }, [weeksWindow]);
 
   const weeks = data?.weeks ?? [];
-  const s = data?.summary;
+  // The summary tiles reflect the CURRENT PAY PERIOD (since the last finalized
+  // payroll) when the office has finalized one; otherwise they fall back to the
+  // rolling window. The weekly list below is always the rolling history.
+  const cp = data?.current_period ?? null;
+  const s = cp ?? data?.summary;
   // Only show the office column when this person actually logs office hours.
   const hasOffice = !!s && (s.office_hours > 0 || weeks.some((w) => w.office_hours > 0));
   const expanded = weeksWindow > HISTORY_DEFAULT_WEEKS;
@@ -563,8 +575,10 @@ function WorkedHoursCard() {
         <BetaTag feature="workedHours" style={{ marginTop: 0 }} />
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-        Your logged hours{expanded ? ` over the last ${weeksWindow} weeks` : " for the last two weeks"}.
-        Job + off-job{hasOffice ? " + office" : ""} time. Overtime is anything over 40 hrs in a week.
+        {cp
+          ? <>Your hours this pay period (<strong style={{ color: "var(--text)" }}>{fmtDay(cp.start)} - today</strong>, since the last payroll).</>
+          : <>Your logged hours{expanded ? ` over the last ${weeksWindow} weeks` : " for the last two weeks"}.</>}
+        {" "}Job + off-job{hasOffice ? " + office" : ""} time. Overtime is anything over 40 hrs in a week.
       </div>
       {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
       {data == null && !err && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}

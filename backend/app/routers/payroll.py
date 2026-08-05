@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_db, require_admin
 from app.core.mailer import send_email
+from app.core.payroll_period import set_last_finalized_period
 from app.core.time_utils import (
     MOUNTAIN_TZ,
     mountain_day_utc_bounds,
@@ -1388,6 +1389,10 @@ def finalize_period(
         for c in cs:
             c.notified_at = now
         sent.append({"user_id": uid, "name": name, "count": len(cs)})
+
+    # Finalizing a period advances the crew's "current pay period": their Worked
+    # Hours summary now runs from the day after this period's end.
+    set_last_finalized_period(db, s, e)
 
     # Committed after the loop: only the corrections whose email actually went
     # out (or was deliberately suppressed) carry a notified_at, so a failure is

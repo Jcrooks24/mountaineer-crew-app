@@ -31,6 +31,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
+from app.core.payroll_period import current_period_start
 from app.core.time_utils import (
     MOUNTAIN_TZ,
     mountain_day_utc_bounds,
@@ -97,7 +98,21 @@ def worked_history(
 ):
     my_name = (current_user.name or "").strip().lower()
     my_id = current_user.id
+    today_mt = datetime.now(MOUNTAIN_TZ).date()
     window_start = _window_start(weeks)
+
+    # Current pay period = day after the last finalized payroll period end. If
+    # one is set, make sure the scan reaches back to it (so the pay-period summary
+    # is complete), but never past the MAX_WINDOW_WEEKS cap - a long-stale period
+    # must not widen this per-mount query into a full-table read on the 512 MB
+    # worker (see the OOM note above).
+    period_start = current_period_start(db)
+    if period_start is not None:
+        floor = _week_start(today_mt) - timedelta(days=7 * (MAX_WINDOW_WEEKS - 1))
+        effective = max(period_start, floor)
+        if effective < window_start:
+            window_start = effective
+
     # Naive-UTC instant at the start of that Mountain day, ready to compare
     # against the naive-UTC timestamp columns.
     window_start_utc, _ = mountain_day_utc_bounds(window_start)
@@ -283,6 +298,10 @@ def worked_history(
 
     result = []
     tot = {"regular": 0.0, "ot": 0.0, "non_billable": 0.0, "other": 0.0, "office": 0.0}
+    # Pay-period totals: the same per-week figures, but only for weeks inside the
+    # current open pay period (>= its Monday-anchored start).
+    cp = {"regular": 0.0, "ot": 0.0, "non_billable": 0.0, "other": 0.0, "office": 0.0}
+    period_week_start = _week_start(period_start) if period_start is not None else None
     for ws in sorted(weeks.keys(), reverse=True):
         b = weeks[ws]["billable"]
         regular = min(OT_THRESHOLD, b)
@@ -295,6 +314,12 @@ def worked_history(
         tot["non_billable"] += nb
         tot["other"] += other
         tot["office"] += office_h
+        if period_week_start is not None and ws >= period_week_start:
+            cp["regular"] += regular
+            cp["ot"] += ot
+            cp["non_billable"] += nb
+            cp["other"] += other
+            cp["office"] += office_h
         result.append(
             {
                 "week_start": ws.isoformat(),
@@ -307,8 +332,28 @@ def worked_history(
             }
         )
 
+    current_period = None
+    if period_start is not None:
+        current_period = {
+            "start": period_start.isoformat(),
+            "end": today_mt.isoformat(),
+            "regular_hours": round(cp["regular"], 2),
+            "ot_hours": round(cp["ot"], 2),
+            "non_billable_hours": round(cp["non_billable"], 2),
+            "other_hours": round(cp["other"], 2),
+            "office_hours": round(cp["office"], 2),
+            "total_hours": round(
+                cp["regular"] + cp["ot"] + cp["non_billable"]
+                + cp["other"] + cp["office"], 2
+            ),
+        }
+
     return {
         "weeks": result,
+        # Present only once a payroll has been finalized; the frontend shows this
+        # as the primary summary ("current pay period") and falls back to the
+        # rolling `summary` otherwise.
+        "current_period": current_period,
         "summary": {
             "regular_hours": round(tot["regular"], 2),
             "ot_hours": round(tot["ot"], 2),
