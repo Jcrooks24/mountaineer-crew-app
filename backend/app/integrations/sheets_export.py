@@ -207,6 +207,12 @@ def record_sheet_sync(db: Session, fn_name: str, ok: bool, error: Optional[str] 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
 
+
+class SheetHeaderError(Exception):
+    """Raised when a tab's header row is corrupted (its key column is missing
+    from an already-populated header). Fail-closed guard so a renamed header
+    can't silently re-append a key column and manufacture duplicates."""
+
 EVENTS_HEADERS = [
     "event_id", "timestamp", "logged_at", "job_uuid", "job_name", "job_date",
     "type", "note", "lat", "lng", "accuracy_m", "device_id", "created_by", "synced",
@@ -397,6 +403,19 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
         range=f"{tab}!1:1",
     ).execute())
     current = result.get("values", [[]])[0] if result.get("values") else []
+
+    # Fail closed on header corruption. If the tab already has a header row but
+    # its KEY column (the first expected header - the entity's uuid/id) is not in
+    # it, that is a renamed/overwritten header, not a genuinely new column.
+    # Appending the key as a fresh column silently strands every existing row's
+    # key and breaks the replace-style delete - the exact Reimbursements `dfg`
+    # cascade (2026-08-05 audit). Refuse loudly instead of quietly duplicating.
+    if current and headers and headers[0] not in current:
+        raise SheetHeaderError(
+            f"{tab!r}: key column {headers[0]!r} is missing from a populated header "
+            f"row {current!r}. Refusing to re-append it (row 1 was likely renamed or "
+            f"overwritten); fix the header in the sheet before this tab exports again."
+        )
 
     # Find any columns we want but that aren't in the sheet yet
     missing = [h for h in headers if h not in current]
