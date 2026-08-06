@@ -8,10 +8,14 @@ folded into [DATA_FLOW.md](DATA_FLOW.md) at promotion.
 
 | | |
 |---|---|
-| Branch / commit | `staging` @ `78153c3` |
+| Branch / commit | `staging` @ `7fe20a4` |
 | Compared to | `main` @ `72b544a` |
 | Date verified | 2026-08-06 |
 | Verified by | reading the code, not by exercising the app |
+
+`7fe20a4` (admin Job Summary sticky nav) is presentation only: ids and
+`scrollMarginTop` in `Admin.tsx`, no queue, endpoint or export touched. Carried
+forward with no ledger change.
 
 Uncommitted work in the working tree is **not** covered. Commit first, then log here.
 
