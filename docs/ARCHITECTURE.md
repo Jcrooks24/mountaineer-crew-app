@@ -159,9 +159,18 @@ and no Background Sync API. Every feature owns its own queue and its own drain.
 
 **How a queue drains:** on the `online` event, and in several places also on mount
 or `visibilitychange`. Each drain is guarded by a module-level `syncing` flag.
-Errors are classified: a 4xx (except 401, 403, 408) is treated as permanent and
-the op is dropped; everything else stays queued. 401 and 403 are deliberately
-transient so an expired token never destroys a day of queued field work.
+Errors are classified: a 4xx (except 401, 403, 408) is treated as permanent, and
+the op is **marked failed and kept** in the queue, skipped by the drain so it
+cannot wedge the line, and surfaced to the crew with Retry and Discard. It leaves
+only when a person says so ([ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md),
+`lib/queueFailure.ts`). Everything else stays queued for the next drain. 401 and 403
+are deliberately transient so an expired token never destroys a day of queued field
+work.
+
+Per-datum detail - which trigger drains which queue, on what timing, and where each
+field lands in the Sheet - is in [DATA_FLOW.md](DATA_FLOW.md). The
+**long-distance day queue currently has no drain at all**; see the Known defects list
+in [RUNBOOKS.md](RUNBOOKS.md).
 
 **A queue must not depend on its own UI being mounted.** Most drains hang off the
 component that owns the feature, which is fine right up until that component stops

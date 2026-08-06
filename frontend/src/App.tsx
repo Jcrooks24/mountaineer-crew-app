@@ -15,6 +15,7 @@ import { drainJobSetups } from "./lib/jobSetupStore";
 import JobSetupPanel from "./components/JobSetupPanel";
 import { drainChecklistChecks } from "./lib/jobChecklistStore";
 import JobChecklistCard from "./components/JobChecklistCard";
+import JobClosedPanel from "./components/JobClosedPanel";
 import DqReminderBanner from "./components/DqReminderBanner";
 import RodsRecorder from "./components/RodsRecorder";
 import { useLdPlan } from "./components/LdWorkday";
@@ -748,6 +749,41 @@ export default function App() {
     setJobStatus(val);
     localStorage.setItem(JOB_STATUS_KEY, val);
   }
+
+  // ── Closed-job panel (backlog #2) ──────────────────────────────────────────
+  // Report save-and-close IS the job closeout: mark the job finished (+ a FINISH
+  // marker on the timeline if none exists yet) and flip the whole screen to the
+  // static JobClosedPanel. "Edit finalized job" reopens the working view; "Start
+  // / change job" clears it back to the picker.
+  function handleReportCloseOut() {
+    const finished = loadLog().some((e) => e.job_uuid === jobUuid.trim() && e.type === "FINISH");
+    if (!finished) recordEvent("FINISH");   // timeline marker (also flips status)
+    setPersistedJobStatus("closed");         // guaranteed flip even if recordEvent guards out
+    setTab("home");
+  }
+  function handleEditFinalized() {
+    setPersistedJobStatus("active");
+    setTab("report");
+  }
+  function handleChangeJobFromPanel() {
+    setPersistedJobStatus("active");
+    setSelectingJob(true);
+    setTab("home");
+  }
+
+  // Cross-device: a job whose report already exists on the server has been closed
+  // out - show the panel even on a device that never closed it locally. Keyed on
+  // jobUuid only (so it never re-fires on reopen, which keeps the same jobUuid) and
+  // only ever sets "closed", so it can't fight an intentional reopen.
+  useEffect(() => {
+    const uuid = jobUuid.trim();
+    if (!uuid || !navigator.onLine) return;
+    let cancelled = false;
+    apiFetch(`/api/job-report?job_uuid=${encodeURIComponent(uuid)}`)
+      .then(() => { if (!cancelled) setPersistedJobStatus("closed"); })
+      .catch(() => { /* 404 = no report yet; leave status as-is */ });
+    return () => { cancelled = true; };
+  }, [jobUuid]);
 
   // -----------------------
   // Geolocation + events
@@ -2138,6 +2174,17 @@ export default function App() {
       {/* DQ missing-docs reminder (C4): shows when the driver owes documents. */}
       <DqReminderBanner />
 
+      {jobUuid && jobStatus === "closed" ? (
+        <JobClosedPanel
+          jobUuid={jobUuid}
+          jobName={jobName}
+          jobDate={jobDate}
+          longDistance={longDistance}
+          onEditFinalized={handleEditFinalized}
+          onChangeJob={handleChangeJobFromPanel}
+        />
+      ) : (
+      <>
       {/* Job selector + core actions: always visible (drill-in home context). */}
       <div className="card">
             <div className="microLabel" style={{ marginBottom: 10 }}>Job</div>
@@ -3132,7 +3179,9 @@ export default function App() {
 
       {/* Report */}
       {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} />
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} onCloseOut={handleReportCloseOut} />
+      )}
+      </>
       )}
 
       {/* DVIR reminder modal - shown before START or FINISH */}

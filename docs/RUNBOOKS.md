@@ -373,7 +373,33 @@ Live bugs that are known and not yet fixed. If you hit one of these, you have fo
 a real issue, not a misunderstanding. Keep this list honest: delete an entry when it
 is fixed, and add one when a `/vet` pass finds something you cannot fix that day.
 
-1. **Staging PWA serves STALE code: fixes look "not deployed" when they are.**
+1. **The long-distance day queue never drains: `drive_day` never reaches the server.**
+   `LdWorkday.tsx:70` calls `setLdDay()` when the crew picks "Driving" in the LD day
+   plan. That writes `crew_ld_day_v1:<date>` and pushes an upsert onto
+   `crew_ld_day_queue_v1`. **Nothing in the app calls `ldDayStore.syncQueue()`** -
+   no component imports it, and the only internal caller is `retryFailedLdDay`,
+   which is itself uncalled. `POST /api/long-distance/day` therefore never fires
+   from the app, and `long_distance.py:375` is the only place `LdDay` rows are
+   created.
+
+   **Symptoms:** the `LdDays` table stays empty, the `LongDistancePay` tab stays
+   empty, Admin's job summary shows "Per-diem days: 0 · Drive days: 0"
+   (`Admin.tsx:7154`) no matter what the crew selected, and `crew_ld_day_queue_v1`
+   grows on every Driving toggle and never empties.
+
+   **Not a payroll-money bug.** `payroll.py::_per_diem_nights` takes per-diem
+   primarily from the per-employee `out_of_town` flag on job-report hours and only
+   supplements from `LdDay`, so pay is correct. The real loss is `drive_day`, which
+   has no other source. Note also that `setLdDay` is only ever called with
+   `drive_day`; `out_of_town` is never written locally either, so fixing the drain
+   alone leaves that half of the record empty.
+
+   **Confirmed on both `main` (`72b544a`) and `staging`.** Found 2026-08-06 while
+   mapping data flow, not fixed. Fix is to call a drain from `App.tsx`'s boot and
+   `online` handlers alongside the other queues, and to decide where `out_of_town`
+   should be written. See [DATA_FLOW.md](DATA_FLOW.md) Deviations.
+
+2. **Staging PWA serves STALE code: fixes look "not deployed" when they are.**
    The staging frontend is a Vercel **branch-preview** deployment
    (`mountaineer-crew-app-git-staging-*.vercel.app`), and that host has **Vercel
    Deployment Protection (Vercel Authentication)** on. Every request to it, including

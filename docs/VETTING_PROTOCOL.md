@@ -28,6 +28,34 @@ Rules:
   data-loss batch would have been caught.
 - **Staging only.** All changes go to `staging`, never `main`, unless the user
   says "promote" (see `CLAUDE.md`). Confirm `git branch --show-current` is `staging`.
+- **On a promotion vet, `docs/DATA_FLOW.md` is a gate.** See "Data-flow doc gate"
+  below. A promotion is not vetted until that doc matches what is being pushed.
+
+## Data-flow doc gate (promotion vets only)
+
+[DATA_FLOW.md](DATA_FLOW.md) is the field-level ledger of what triggers each data
+exchange and when the transfer happens. It is only useful if it is true, and its
+"Verified against" block names the commit it was last checked against. On any
+`staging -> main` promotion:
+
+1. **Diff the surface.** For everything in the promotion, list what changed in:
+   queue keys, drain functions and their triggers, debounce timings, endpoints,
+   Sheet export functions, tab env vars, write strategy (append vs replace), and
+   reconciler coverage.
+2. **Reconcile the field tables.** Every new or changed payload field appears in
+   the right domain table with an accurate `[x]` / `[ ]` / `[-]` mark. A field
+   marked `[x]` means you traced it device to Postgres to Sheet, not that you
+   assumed it.
+3. **Empty the "Not yet documented" section**, or move each remaining item there
+   with a stated reason for deferring. Silently leaving entries there defeats the
+   gate.
+4. **Re-check the Deviations list.** Anything fixed comes out; anything newly
+   found goes in and also into Known defects in [RUNBOOKS.md](RUNBOOKS.md).
+5. **Bump the "Verified against" block** to the commit being promoted, with the
+   date and whether it was verified by reading or by exercising the app.
+
+A stale DATA_FLOW.md is a promotion blocker at Medium, not a follow-up. The whole
+point of the doc is that a successor can trust it without re-deriving it.
 
 ## Standard evidence toolkit
 

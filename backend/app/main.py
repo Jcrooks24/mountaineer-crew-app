@@ -96,6 +96,7 @@ from app.routers.bug_reports import router as bug_reports_router
 from app.routers.feature_requests import router as feature_requests_router
 from app.routers.job_setup import router as job_setup_router
 from app.routers.job_checklist import router as job_checklist_router
+from app.routers.job_summary import router as job_summary_router
 from app.routers.bulletin import router as bulletin_router
 from app.routers.dq import router as dq_router, admin_router as dq_admin_router
 from app.routers.off_job import (
@@ -289,6 +290,7 @@ app.include_router(hours_router)                 # /api/hours/worked-history (pe
 app.include_router(payroll_router)               # /api/admin/payroll/* (admin payroll summary + corrections)
 app.include_router(job_setup_router)             # /api/job-setup/* (job header, ADR 0034)
 app.include_router(job_checklist_router)         # /api/job-checklist/* (C3 status + manual ticks)
+app.include_router(job_summary_router)           # /api/job-summary/{uuid} (crew: closed-job panel)
 app.include_router(bulletin_router)              # /api/bulletin/* (community feed)
 app.include_router(dq_router)                    # /api/dq/* (driver DQ file, C4)
 app.include_router(dq_admin_router)              # /api/admin/dq/* (admin DQ management, C4)

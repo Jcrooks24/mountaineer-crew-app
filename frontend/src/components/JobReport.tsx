@@ -286,6 +286,9 @@ type Props = {
   driveOnly?: boolean;
   // Long-distance day with BOTH labor and driving: LD docs are required to submit.
   mixedLd?: boolean;
+  // Fired after a successful save-and-close-out. The host (App) uses it to mark the
+  // job finished and flip the whole screen to the static closed-job panel.
+  onCloseOut?: () => void;
 };
 
 function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: string; hint?: string; onGo: () => void }) {
@@ -321,7 +324,7 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
   );
 }
 
-export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false }: Props) {
+export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false, onCloseOut }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
 
@@ -1359,6 +1362,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       clearReportDraft(jobUuid);
       billRef.current?.clearDraft?.();
       setDraftStatus("idle");
+      // The report save IS the job closeout: tell the host to finish the job and
+      // flip the whole screen to the static closed-job panel.
+      onCloseOut?.();
     } catch (e: any) {
       // "Failed to fetch" is the browser's generic for any network failure
       // including a Render cold start that exceeded the fetch timeout. The
