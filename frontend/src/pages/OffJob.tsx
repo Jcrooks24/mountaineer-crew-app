@@ -16,10 +16,11 @@ import {
   type PayStructure,
   type OffJobOut,
 } from "../lib/offJobStore";
+import { mountainDateYYYYMMDD } from "../lib/time";
 
 function todayLocalIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // Mountain date - the day the off-job hours attribute to (default; user-editable).
+  return mountainDateYYYYMMDD();
 }
 
 const PAY_OPTIONS: PayStructure[] = ["regular", "non_billable", "other"];

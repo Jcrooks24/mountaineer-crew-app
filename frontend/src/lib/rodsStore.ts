@@ -15,6 +15,7 @@
 
 import { apiFetch } from "../api/client";
 import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
+import { mountainDateYYYYMMDD, mountainHHMM } from "./time";
 
 export type DutyStatus = "off_duty" | "sleeper" | "driving" | "on_duty";
 
@@ -85,13 +86,13 @@ export function newUUID(): string {
 }
 
 export function todayLocal(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  // Mountain calendar date - the DOT log's home-terminal tz, not the device's.
+  return mountainDateYYYYMMDD();
 }
 
 export function nowHHMM(): string {
-  const d = new Date();
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // Mountain wall-clock - a phone in Central must not shift the duty time +1h.
+  return mountainHHMM(new Date());
 }
 
 export function minutesOfDay(hhmm: string): number {
@@ -182,11 +183,11 @@ export function rodsDatesFromEvents(events: MinEvent[]): string[] {
  * event's time in the activity log edits the RODS. Begins off-duty at
  * midnight. Within a single minute, the LAST tap wins - lets the crew fix
  * a misclick without leaving a stale earlier entry stuck on the log. */
-/** Local calendar date ("YYYY-MM-DD", device tz) of an ISO timestamp. */
+/** Mountain calendar date ("YYYY-MM-DD") of an ISO timestamp - the DOT log's
+ *  home-terminal tz, so a duty event does not change days when the driver's phone
+ *  crosses a timezone. */
 function localDateFromTs(ts: string): string {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return mountainDateYYYYMMDD(ts);
 }
 
 export function changesForDriver(events: MinEvent[], driver: string, fallbackDriver = "", date?: string): DutyChange[] {
@@ -205,10 +206,10 @@ export function changesForDriver(events: MinEvent[], driver: string, fallbackDri
     })
     .map((e) => {
       const p = parseDutyNote(e.note || "");
-      const d = new Date(e.timestamp);
       return {
         _ts: e.timestamp,
-        time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+        // Mountain wall-clock of the event, matching the log's home-terminal tz.
+        time: mountainHHMM(e.timestamp),
         status: p.status as DutyStatus,
         location: "",
         remarks: "",

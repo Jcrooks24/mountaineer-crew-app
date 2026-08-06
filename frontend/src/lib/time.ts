@@ -78,3 +78,20 @@ export function mountainDateYYYYMMDD(input: DateInput = new Date()): string {
     day: "2-digit",
   }).format(d);
 }
+
+/** "HH:MM" 24-hour wall-clock in Mountain - the internal-key analogue of
+ *  `mountainDateYYYYMMDD`, for STORED duty-change / shift times that must match
+ *  the Mountain-pinned backend regardless of the device's timezone. Do not use
+ *  device `getHours()` on a payroll path; a phone in Central would shift every
+ *  recorded time +1h. Defaults to now. */
+export function mountainHHMM(input: DateInput = new Date()): string {
+  const d = asDate(input);
+  if (!d) return "";
+  // en-GB + hour12:false gives 24-hour "HH:MM" with "00:00" (not "24:00") at midnight.
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: MOUNTAIN_TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}

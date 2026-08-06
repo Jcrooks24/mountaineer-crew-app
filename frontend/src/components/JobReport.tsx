@@ -87,7 +87,7 @@ function saveBolDeferred(jobUuid: string, reason: BolDeferredReason) {
 }
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
-import { formatMountainTime } from "../lib/time";
+import { formatMountainTime, mountainHHMM } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
@@ -929,11 +929,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   }
 
   function fmtHHMM(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "";
-    const h = String(d.getHours()).padStart(2, "0");
-    const m = String(d.getMinutes()).padStart(2, "0");
-    return `${h}:${m}`;
+    // Mountain wall-clock, matching the backend payroll tz (not the device's) -
+    // a phone in Central must not read an event's time an hour off.
+    return mountainHHMM(iso);
+  }
+
+  function hhmmToMinutes(hhmm: string): number | null {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+    if (!m) return null;
+    const h = Number(m[1]);
+    const mm = Number(m[2]);
+    if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+    return h * 60 + mm;
   }
 
   // Resolve a slot to minutes-of-day (0–1439). Returns null if the slot is
@@ -953,15 +960,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     }
     if (slot.selection === WRAPUP_SENTINEL) {
       // Resolves live: editing the estimator's minutes above moves this end
-      // time with it. The saved row snapshots the value at Save.
-      return wrapUpTime ? wrapUpTime.getHours() * 60 + wrapUpTime.getMinutes() : null;
+      // time with it. The saved row snapshots the value at Save. Read in Mountain.
+      if (!wrapUpTime) return null;
+      return hhmmToMinutes(fmtHHMM(wrapUpTime.toISOString()));
     }
     if (slot.selection) {
       const ev = eventById.get(slot.selection);
       if (!ev) return null;
-      const d = new Date(ev.timestamp);
-      if (Number.isNaN(d.getTime())) return null;
-      return d.getHours() * 60 + d.getMinutes();
+      // Minutes-of-day in Mountain (matches fmtHHMM + the backend tz).
+      return hhmmToMinutes(fmtHHMM(ev.timestamp));
     }
     return null;
   }

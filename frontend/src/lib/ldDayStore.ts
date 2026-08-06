@@ -10,6 +10,7 @@
 import { apiFetch } from "../api/client";
 import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 import { readActiveJob } from "./bolStore";
+import { mountainDateYYYYMMDD } from "./time";
 
 export type LdDay = {
   day_id: string;
@@ -23,11 +24,10 @@ export type LdDay = {
   updated_at: string;
 };
 
-const pad = (n: number) => String(n).padStart(2, "0");
-
 export function todayLocal(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  // Mountain calendar date - per-diem is $50/day, so the day it lands on matters;
+  // a device in Central near midnight must not book it to the wrong day.
+  return mountainDateYYYYMMDD();
 }
 
 function newUUID(): string {
