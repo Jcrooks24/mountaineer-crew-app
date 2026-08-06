@@ -42,11 +42,16 @@ user recorded in this doc with the reason. Silence is not a waiver.
 
 ### Open blockers right now
 
-All three are in "Deviations new on staging" below. None are fixed as of `78153c3`.
+Three, none fixed as of `7fe20a4`. Each is written up in full under **Known defects**
+in [RUNBOOKS.md](RUNBOOKS.md), tagged `STAGING ONLY, BLOCKS PROMOTION`. That is the
+canonical entry; this list is the index, so fix and delete in RUNBOOKS first.
 
-1. Checklist ticks are deleted on permanent rejection (ADR 0013 violation).
-2. Bug reports and feature requests retry forever with no permanent/transient split.
-3. Two failure classifiers now disagree about 429.
+1. **Checklist ticks are deleted when the server refuses them.** ADR 0013 violation.
+2. **Bug reports and feature requests retry forever.** No permanent/transient split.
+3. **Two failure classifiers disagree about 429.** Ten old queues stop, two new stores
+   keep retrying.
+
+Summaries also appear under "Deviations new on staging" below, in data-flow terms.
 
 ## How the two docs relate
 
@@ -419,9 +424,41 @@ not.
 
 ---
 
+# Open questions
+
+Not defects. Decisions nobody has made yet, which someone should make **before**
+these paths promote and become the way it has always been. Each needs a yes or a no,
+not a fix.
+
+### 1. Should job setup mirror to the Sheet?
+
+`job_setup` is the only new crew-captured domain on staging with **no Sheet export**
+at all (job checklist is the other, but its manual ticks are arguably UI state).
+Admin reads the header in-app today. Every comparable domain that admin cares about
+(reports, bills, incidents, inventory) does land in the Sheet, and the Sheet is the
+long-term record; Postgres is not.
+
+If the answer is yes, it is a new export function plus a tab env var plus a `_HEADERS`
+constant, not a config toggle. The nightly integrity check picks it up automatically
+once the constant exists. If the answer is no, write down why, because the next person
+mapping this will ask the same question.
+
+### 2. Bulletin images live in Postgres, not Drive
+
+`BulletinPost` carries `image_bytes` as a `LargeBinary` column **and**
+`image_drive_file_id` / `image_drive_url` / `image_thumb_url`. This is the only place
+in the app that stores blobs in the database; photos, receipts and signed PDFs all go
+to Drive with only a URL in Postgres.
+
+On a 512 MB Render worker this is a memory surface that grows with the feed, and it
+sits behind `GET /api/bulletin/image/{post_uuid}` which serves the bytes through the
+web worker. Worth confirming the Drive columns are the intended destination and the
+`image_bytes` path is transitional, before the feed has enough history to make the
+migration painful.
+
 # Not yet documented
 
-Nothing outstanding as of `b35aca0`.
+Nothing outstanding as of `7fe20a4`.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.

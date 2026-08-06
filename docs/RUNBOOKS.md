@@ -399,6 +399,97 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    `online` handlers alongside the other queues, and to decide where `out_of_town`
    should be written. See [DATA_FLOW.md](DATA_FLOW.md) Deviations.
 
+2. **The estimator queue drains only while its tab is mounted.** `estimatorQueue.drain`
+   is called from `EstimatorTab.tsx:524` on mount and on `estimate_uuid` change, and
+   from nowhere else. It has **no `online` listener**, so an item queued offline does
+   not ship on reconnect the way every other queue does; it waits for somebody to
+   reopen that specific estimate.
+
+   **Symptom:** an estimator item added with no signal is still "Syncing…" hours
+   later, and the crew member has no reason to suspect reopening the estimate is what
+   releases it. `pruneStale` deletes queue entries after 14 days, so an estimate never
+   reopened inside that window loses the item silently.
+
+   This is the exact failure class [ARCHITECTURE.md](ARCHITECTURE.md) warns about
+   under "A queue must not depend on its own UI being mounted", and the same shape as
+   the job-inventory bug that `drainAll()` was written to fix (ADR 0015). Fix is the
+   same: expose a `drainAll()` and call it from `App.tsx`'s boot and `online`
+   handlers. Affects `main` (`72b544a`) and `staging`. Found 2026-08-06.
+
+2. **A failed sheet write on an event note/timestamp edit is never retried.**
+   `PATCH /api/events/{id}` (`sync.py:266`) commits Postgres, then calls
+   `update_event_note_in_sheets` / `update_event_timestamp_in_sheets`
+   **synchronously**, catches any exception, and returns it as a `sheet_error` field
+   the client ignores. The auto-reconciler covers missing event **rows**, not stale
+   event **cells**, so nothing ever re-drives it.
+
+   **Symptom:** a crew member corrects a note or a clock time, the app confirms it,
+   Postgres is right, and the Events tab keeps showing the old value indefinitely.
+   Admin reading the Sheet sees the pre-correction value with no indication it is
+   stale. Only another edit to the same event fixes it.
+
+   Postgres being the source of truth means nothing is lost, but the Sheet is what
+   admin actually reads. Affects `main` (`72b544a`) and `staging`. Found 2026-08-06
+   while mapping data flow. See [DATA_FLOW.md](DATA_FLOW.md) Deviations.
+
+2. **Availability cannot be submitted offline, and fails silently to the crew's eye.**
+   `availabilityStore.submitDraft` is a direct `POST /api/availability` with no queue
+   and no drain (Class B in [DATA_FLOW.md](DATA_FLOW.md)). The draft persists in
+   `crew_availability_draft_v1`, the transmission does not happen, and there is
+   nothing to retry on reconnect.
+
+   This is by design, not a regression, but it is the only crew-facing **submission**
+   in the app with no offline path, so a crew member reporting "I submitted my
+   availability and it vanished" has found this, not a bug in the picker. Worth
+   deciding whether it should get an outbox like everything else. Affects `main` and
+   `staging`.
+
+2. **STAGING ONLY, BLOCKS PROMOTION: checklist ticks are deleted when the server
+   refuses them.** `jobChecklistStore.ts::drainChecklistChecks` does
+   `if (isPermanentFailure(e)) delete q[k]` and surfaces nothing. Every other queue in
+   the app marks the entry failed, keeps it, and shows the crew a reason with Retry
+   and Discard ([ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md)).
+
+   `setManualCheck` throws on the interactive path, so a rejection the crew member
+   caused is visible. A rejection discovered during a **background** drain vanishes
+   silently and the tick reverts with no explanation.
+
+   Defensible for a re-tickable boolean, and far less serious than losing a materials
+   line. But it is the one queue that does not follow ADR 0013, so it should either
+   adopt the pattern or the exception should be written down as its own ADR. Until
+   then it blocks promotion under the Data-flow doc gate in
+   [VETTING_PROTOCOL.md](VETTING_PROTOCOL.md). Found 2026-08-06.
+
+2. **STAGING ONLY, BLOCKS PROMOTION: bug reports and feature requests retry forever.**
+   `bugReportStore.ts::drainBugReports` and `featureRequestStore.ts::drainFeatureRequests`
+   both catch bare (`catch { remaining.push(b) }`) with no permanent/transient split at
+   all. A report the server permanently refuses (a 422 after a schema change, say) is
+   re-POSTed on every boot and every reconnect, forever.
+
+   **Symptom:** a queue that cannot drain and cannot be cleared from the UI, and a
+   crew member who is never told their report did not land. Low blast radius, cheap to
+   fix: adopt `isPermanentFailure` and the shared `queueFailure` marking the other
+   queues use. Found 2026-08-06.
+
+2. **STAGING ONLY, BLOCKS PROMOTION: two failure classifiers disagree about 429.**
+   `staging` added `isPermanentFailure` to `api/client.ts` (permanent = 400, 404, 409,
+   422 only) alongside the existing `queueFailure.isPermanentRejection` (permanent =
+   any 4xx except 401, 403, 408).
+
+   | Classifier | Used by |
+   |---|---|
+   | `isPermanentRejection` | the 10 original queues: materials, BOL, RODS, LD day, incidents, off-job, office hours, job inventory, estimator, reimbursements |
+   | `isPermanentFailure` | `jobSetupStore`, `jobChecklistStore` |
+
+   **The practical difference is 429.** The old rule treats a rate limit as permanent
+   and stops retrying; the new rule treats it as transient and keeps going. Given this
+   app's history with Google Sheets quota, the new rule is the correct one, which
+   means the ten old queues are the ones that should move.
+
+   Converging them is a behavior change across every offline queue and deserves its
+   own session, not a drive-by. Shipping two rules a successor has to discover is the
+   thing that blocks. Found 2026-08-06.
+
 2. **Staging PWA serves STALE code: fixes look "not deployed" when they are.**
    The staging frontend is a Vercel **branch-preview** deployment
    (`mountaineer-crew-app-git-staging-*.vercel.app`), and that host has **Vercel
