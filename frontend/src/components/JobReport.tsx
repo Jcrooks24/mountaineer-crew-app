@@ -519,6 +519,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Per-field validation error. On a blocked submit we jump to the offending
+  // field and show the message right there, instead of a top banner the crew
+  // has to scroll away from to hunt for what's actually missing.
+  const [fieldError, setFieldError] = useState<{ anchor: string; msg: string } | null>(null);
   const [showDVIRModal, setShowDVIRModal] = useState(false);
   // Three-stage report view:
   //  - "edit"   : the fillable form (drafts auto-save to the device throughout).
@@ -1372,39 +1376,65 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   }
 
   // Shared validation for both "Confirm and view report" and "Save and close
-  // out job". Returns an error message, or null when the report is complete.
-  function validateReport(): string | null {
-    if (!jobUuid) return "No job selected.";
+  // out job". Returns {anchor, msg} for the first missing field (anchor maps to
+  // an id on that field so we can jump to it), or null when the report is complete.
+  function validateReport(): { anchor: string; msg: string } | null {
+    if (!jobUuid) return { anchor: "top", msg: "No job selected." };
     // Mixed LD days (labor + driving): the long-distance documents are required.
     if (mixedLd) {
-      if (!priorDone) return "Complete the driver's Prior On-Duty statement before submitting.";
-      if (!bolStatus && !bolDeferred) return "Attach the trip's Bill of Lading (or mark not at destination yet) before submitting.";
+      if (!priorDone) return { anchor: "ld_docs", msg: "Complete the driver's Prior On-Duty statement before submitting." };
+      if (!bolStatus && !bolDeferred) return { anchor: "ld_docs", msg: "Attach the trip's Bill of Lading (or mark not at destination yet) before submitting." };
     }
     // Drive-only LD days skip the billing/eval questions (no labor to bill).
     if (!driveOnly) {
-      if (data.has_personal_vehicles === null) return "Indicate whether personal vehicles were at the job site.";
-      if (data.has_personal_vehicles && data.personal_vehicles < 1) return "Enter how many personal vehicles were at the job site.";
-      if (data.has_dumpster_use === null) return "Indicate whether the M1 dumpster was used on this job.";
-      if (data.has_dumpster_use && data.dumpster_pct <= 0) return "Select the M1 dumpster fill percentage.";
-      if (data.has_recycling_use === null) return "Indicate whether the M1 recycling bin was used on this job.";
-      if (data.has_recycling_use && data.recycling_pct <= 0) return "Select the M1 recycling bin fill percentage.";
-      if (!data.billing_method) return "Select a billing method.";
-      if (data.review_candidate === null) return "Indicate whether this client is a review candidate.";
-      if (data.hours_match === null) return "Indicate whether hours worked match hours billed.";
+      if (data.has_personal_vehicles === null) return { anchor: "personal_vehicles", msg: "Indicate whether personal vehicles were at the job site." };
+      if (data.has_personal_vehicles && data.personal_vehicles < 1) return { anchor: "personal_vehicles", msg: "Enter how many personal vehicles were at the job site." };
+      if (data.has_dumpster_use === null) return { anchor: "dumpster", msg: "Indicate whether the M1 dumpster was used on this job." };
+      if (data.has_dumpster_use && data.dumpster_pct <= 0) return { anchor: "dumpster", msg: "Select the M1 dumpster fill percentage." };
+      if (data.has_recycling_use === null) return { anchor: "recycling", msg: "Indicate whether the M1 recycling bin was used on this job." };
+      if (data.has_recycling_use && data.recycling_pct <= 0) return { anchor: "recycling", msg: "Select the M1 recycling bin fill percentage." };
+      if (!data.billing_method) return { anchor: "billing_method", msg: "Select a billing method." };
+      if (data.review_candidate === null) return { anchor: "review_candidate", msg: "Indicate whether this client is a review candidate." };
+      if (data.hours_match === null) return { anchor: "hours_match", msg: "Indicate whether hours worked match hours billed." };
       if (!data.hours_match && !data.hours_mismatch_reason.trim())
-        return "Please explain why the hours don't match.";
+        return { anchor: "hours_match", msg: "Please explain why the hours don't match." };
       if (data.has_crew_feedback === null)
-        return "Indicate whether you have any feedback for the office.";
+        return { anchor: "crew_feedback", msg: "Indicate whether you have any feedback for the office." };
       if (data.has_crew_feedback && !data.crew_feedback.trim())
-        return "Please share your feedback or change your answer to No.";
+        return { anchor: "crew_feedback", msg: "Please share your feedback or change your answer to No." };
       // Surface the bill-review checkbox here (not only at the final POST) so it
       // is caught before the crew leave the editable view.
       const billData = billRef.current?.getData();
       if (billData != null && !billReviewed)
-        return "Please confirm you have reviewed the auto-populated bill items before continuing.";
+        return { anchor: "bill_review", msg: "Please confirm you have reviewed the auto-populated bill items before continuing." };
     }
     return null;
   }
+
+  // Jump to (and mark) the first missing field so the crew see exactly what's
+  // blocking submit, instead of a top banner they have to scroll away from.
+  function jumpToField(p: { anchor: string; msg: string }) {
+    const el = document.getElementById("jrq-" + p.anchor);
+    if (el) {
+      setFieldError(p);   // inline message right at the field
+      setErr(null);
+      requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "center" }));
+    } else {
+      // No inline slot for this one (e.g. long-distance docs) - fall back to the
+      // top banner so the message is never lost.
+      setFieldError(null);
+      setErr(p.msg);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  // Inline error rendered right under a field's header when it's the blocker.
+  const fieldErr = (anchor: string) =>
+    fieldError?.anchor === anchor ? (
+      <div className="small" style={{ color: "var(--danger)", fontWeight: 700, marginTop: 6 }}>
+        {fieldError.msg}
+      </div>
+    ) : null;
 
   // "Confirm and view report": validate, then switch to the read-only summary.
   // No server write - the local draft already holds everything.
@@ -1412,13 +1442,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     e.preventDefault();
     setErr(null);
     const problem = validateReport();
-    if (problem) {
-      setErr(problem);
-      // Scroll up to the banner + the required fields (most live near the top),
-      // so the crew aren't left staring at a bottom button that just errored.
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
+    if (problem) { jumpToField(problem); return; }
+    setFieldError(null);
     setView("review");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -1428,7 +1453,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   function saveAndClose() {
     setErr(null);
     const problem = validateReport();
-    if (problem) return setErr(problem);
+    if (problem) return jumpToField(problem);
+    setFieldError(null);
     pendingSaveRef.current = doSave;
     setShowDVIRModal(true);
   }
@@ -2076,8 +2102,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
         {/* M1 equipment (dumpster + recycling; the sliders drive invoice lines) */}
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>M1 equipment *</div>
-        <div style={{ fontWeight: 700, fontSize: 12, marginTop: 8 }}>Dumpster (trash)</div>
+        <div id="jrq-dumpster" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 12, marginTop: 8 }}>Dumpster (trash)</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Was the M1 dumpster used on this job?</div>
+        {fieldErr("dumpster")}
         <YesNo
           value={data.has_dumpster_use}
           onChange={(v) => { setData((prev) => ({ ...prev, has_dumpster_use: v, dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0 })); setSaved(false); }}
@@ -2089,8 +2116,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             <PctSlider label="Dumpster fill estimate" value={data.dumpster_pct} onChange={(v) => set("dumpster_pct", v)} color="var(--danger)" />
           </div>
         )}
-        <div style={{ fontWeight: 700, fontSize: 12, marginTop: 14 }}>Recycling bin</div>
+        <div id="jrq-recycling" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 12, marginTop: 14 }}>Recycling bin</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Was the M1 recycling bin used on this job?</div>
+        {fieldErr("recycling")}
         <YesNo
           value={data.has_recycling_use}
           onChange={(v) => { setData((prev) => ({ ...prev, has_recycling_use: v, recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0 })); setSaved(false); }}
@@ -2104,8 +2132,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         )}
 
         {/* Personal vehicles at the job site */}
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Personal vehicles at job site *</div>
+        <div id="jrq-personal_vehicles" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Personal vehicles at job site *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Were any crew personal vehicles at the job site?</div>
+        {fieldErr("personal_vehicles")}
         <YesNo
           value={data.has_personal_vehicles}
           onChange={(v) => { setData((prev) => ({ ...prev, has_personal_vehicles: v, personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0 })); setSaved(false); }}
@@ -2161,7 +2190,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           {billSlots.totals}
           {billSlots.notes}
         </div>
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
+        {fieldErr("bill_review")}
+        <label id="jrq-bill_review" style={{ scrollMarginTop: 90, display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
           <input
             type="checkbox"
             checked={billReviewed}
@@ -2174,7 +2204,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             dumpster / recycling charges from the sliders).
           </span>
         </label>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
+        <div id="jrq-billing_method" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
+        {fieldErr("billing_method")}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
           {BILLING_OPTIONS.map(({ value, label }) => {
             const active = data.billing_method === value;
@@ -2374,10 +2405,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           </>
         )}
 
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
+        <div id="jrq-review_candidate" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
+        {fieldErr("review_candidate")}
         <ThreeWay
           value={data.review_candidate}
           onChange={(v) => set("review_candidate", v)}
@@ -2388,10 +2420,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           ]}
         />
 
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Hours reconciliation *</div>
+        <div id="jrq-hours_match" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Hours reconciliation *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Do hours worked match hours billed?
         </div>
+        {fieldErr("hours_match")}
         <YesNo
           value={data.hours_match}
           onChange={(v) => set("hours_match", v)}
@@ -2414,12 +2447,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         )}
 
         {/* Crew feedback folded into the wrap-up tile, kept at the bottom. */}
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
+        <div id="jrq-crew_feedback" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
           Crew feedback *<BetaTag feature="crewFeedback" />
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Would you like to submit any general feedback or feedback about this job in particular to the office?
         </div>
+        {fieldErr("crew_feedback")}
         <YesNo
           value={data.has_crew_feedback}
           onChange={(v) => {
