@@ -7871,6 +7871,32 @@ function JobSummaryTab() {
             </div>
           </div>
 
+          {/* Sticky section nav - jump anywhere in the job's data without scrolling
+              the whole stack. Sections carry matching ids + scrollMarginTop. */}
+          <div className="card" style={{ position: "sticky", top: 0, zIndex: 5, padding: "8px 10px" }}>
+            <div className="row" style={{ gap: 6, overflowX: "auto", flexWrap: "nowrap" }}>
+              {[
+                { id: "js-timeline", label: "Timeline" },
+                { id: "js-hours", label: "Hours" },
+                { id: "js-materials", label: "Materials" },
+                { id: "js-bill", label: "Bill" },
+                { id: "js-report", label: "Report" },
+                { id: "js-dvirs", label: "DVIRs" },
+                { id: "js-incidents", label: "Incidents" },
+                { id: "js-photos", label: "Photos" },
+              ].map((sn) => (
+                <button
+                  key={sn.id}
+                  type="button"
+                  onClick={() => document.getElementById(sn.id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  style={{ fontSize: 12, padding: "4px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
+                >
+                  {sn.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {summary.admin_notes.length > 0 && (
             <div className="card">
               <div className="microLabel" style={{ marginBottom: 10 }}>Admin Notes</div>
@@ -7889,7 +7915,7 @@ function JobSummaryTab() {
             </div>
           )}
 
-          <div className="card">
+          <div className="card" id="js-timeline" style={{ scrollMarginTop: 64 }}>
             <div className="microLabel" style={{ marginBottom: 10 }}>Timeline ({summary.events.length})</div>
             {summary.events.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>No events logged.</div>
@@ -7921,7 +7947,7 @@ function JobSummaryTab() {
             )}
           </div>
 
-          <div className="card">
+          <div className="card" id="js-materials" style={{ scrollMarginTop: 64 }}>
             <div className="microLabel" style={{ marginBottom: 10 }}>
               Materials ({summary.materials.length})
               <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
@@ -7955,7 +7981,7 @@ function JobSummaryTab() {
             )}
           </div>
 
-          <div className="card">
+          <div className="card" id="js-hours" style={{ scrollMarginTop: 64 }}>
             {(() => {
               // Round-at-end: sum actual billable hours first, round once.
               // Per-row displays show actuals so the office assistant can see
@@ -8117,7 +8143,7 @@ function JobSummaryTab() {
             )}
           />
 
-          <div className="card">
+          <div className="card" id="js-dvirs" style={{ scrollMarginTop: 64 }}>
             <div className="microLabel" style={{ marginBottom: 10 }}>DVIRs ({summary.dvirs.length})</div>
             {summary.dvirs.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
@@ -8174,7 +8200,7 @@ function JobSummaryTab() {
             />
           </div>
 
-          <div className="card">
+          <div className="card" id="js-report" style={{ scrollMarginTop: 64 }}>
             <div className="microLabel" style={{ marginBottom: 10 }}>Job Report</div>
             {!summary.job_report ? (
               <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
@@ -8244,7 +8270,7 @@ function JobSummaryTab() {
           {/* ── Incidents ──
               A liability record. It was reaching the sheet and not this page, so the
               one screen called "every source for a job" omitted the damage claims. */}
-          <div className="card" style={{ borderColor: summary.incidents.length ? "var(--danger)" : undefined }}>
+          <div className="card" id="js-incidents" style={{ scrollMarginTop: 64, borderColor: summary.incidents.length ? "var(--danger)" : undefined }}>
             <div className="microLabel" style={{ marginBottom: 10 }}>Incidents ({summary.incidents.length})</div>
             {summary.incidents.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>None reported.</div>
@@ -8381,7 +8407,7 @@ function JobSummaryTab() {
             </div>
           )}
 
-          <div className="card">
+          <div className="card" id="js-bill" style={{ scrollMarginTop: 64 }}>
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
               <div className="microLabel" style={{ marginBottom: 0 }}>
                 Bill
@@ -8439,7 +8465,7 @@ function JobSummaryTab() {
             )}
           </div>
 
-          <div className="card">
+          <div className="card" id="js-photos" style={{ scrollMarginTop: 64 }}>
             <div className="microLabel" style={{ marginBottom: 10 }}>Photos ({summary.photos.length})</div>
             {summary.photos.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>No photos uploaded.</div>

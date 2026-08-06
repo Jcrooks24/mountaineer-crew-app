@@ -10,7 +10,8 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 |---|---|
 | [README.md](README.md) | The front door. What this is, where it lives, how to run it. Start a successor here. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | What the pieces are and how they talk. Read before changing anything structural. |
-| [docs/DATA_FLOW.md](docs/DATA_FLOW.md) | The field-level ledger: for every piece of data, what triggers the exchange and when the transfer happens. Queue keys, drain functions, debounce timings, Sheet export functions, per-field adherence. |
+| [docs/DATA_FLOW.md](docs/DATA_FLOW.md) | The field-level ledger for **production**: for every piece of data, what triggers the exchange and when the transfer happens. Queue keys, drain functions, debounce timings, Sheet export functions, per-field adherence. Read this when debugging what crews are actually running. |
+| [docs/DATA_FLOW_STAGING.md](docs/DATA_FLOW_STAGING.md) | The same ledger for **unpromoted staging work**, as a delta. New dev work is logged here in the same commit as the code, and folded into DATA_FLOW.md at promotion. |
 | [docs/RUNBOOKS.md](docs/RUNBOOKS.md) | Step-by-step checklists for when something is broken. Also holds the **Known defects** list. |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md) | Every account, env var, and API. What breaks without each. **No secret values, ever.** |
 | [docs/decisions/](docs/decisions/) | Why things are the way they are. **Read before "fixing" something that looks wrong.** |
@@ -27,7 +28,7 @@ A change is not done when the code works. It is done when the next person can st
 1. **Code works**, verified by exercising it, not just by typecheck.
 2. **New env var, secret, or Google API?** → it is in `docs/CREDENTIALS.md`, and the user has been told to set it on Render/Vercel.
 3. **New service, integration, queue, or data flow?** → `docs/ARCHITECTURE.md` and its diagram still match reality.
-   **Touched a queue, a drain trigger, a debounce timing, an endpoint, or a Sheet export path?** → `docs/DATA_FLOW.md` is updated in the same commit, including the per-field table for that domain. Adding a field to a payload without adding it there is how that doc goes stale.
+   **Touched a queue, a drain trigger, a debounce timing, an endpoint, or a Sheet export path?** → `docs/DATA_FLOW_STAGING.md` is updated in the same commit, including the per-field table for that domain. Adding a field to a payload without adding it there is how that doc goes stale. `docs/DATA_FLOW.md` is the production baseline and changes only at promotion.
 4. **Made a decision someone would be tempted to undo?** → write the ADR in `docs/decisions/` now. Apply the test in that folder's README.
 5. **Found a bug you did not fix?** → add it to Known defects in `docs/RUNBOOKS.md`. **Fixed one that is listed?** → delete the entry.
 6. **Changed setup, local dev, or deploy?** → `README.md` is current.
@@ -102,7 +103,7 @@ Only run when explicitly asked to promote.
      python backend/scripts/migrate_users_staging_to_prod.py --dry-run
    ```
 4. **Verify prod env vars** (see checklist below). Missing/stale values here have caused a crew member to be unable to reset their password post-promotion.
-5. **Vet `docs/DATA_FLOW.md` against what is being pushed** and bump its "Verified against" block. See the Data-flow doc gate in [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md). A stale data-flow doc is a promotion blocker.
+5. **Vet the data-flow docs.** Fold `docs/DATA_FLOW_STAGING.md` into `docs/DATA_FLOW.md`, empty the delta, and bump "Verified against". See the Data-flow doc gate in [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md). **A new staging data flow that does not pass blocks the merge**: any `[ ]` field, any newly-introduced deviation, or any changed data path missing from the staging doc. Deviations `main` already carries do not block. A blocker clears only by fixing it or by an explicit written waiver from the user.
 
 **One-time, on the promotion that carries [ADR 0014](docs/decisions/0014-skill-rating-is-designated-not-inherited.md):** the `crew_lead` role stops granting skill rating. Every prod crew lead who should keep rating needs the **Skill rater** toggle set on them in Admin → roster. Do this in the same sitting as the promotion, or leads will quietly find the skill rows and the job-type picker gone the next morning. `ON CONFLICT DO NOTHING` means the migration script will not fix it for anyone who already exists in prod.
 

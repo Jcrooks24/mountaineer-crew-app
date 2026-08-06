@@ -17,18 +17,20 @@ was checked against the code most recently, but fix both.
 
 **This doc lives on `staging` but its baseline is `main`.** That is deliberate:
 production behavior is the thing worth pinning down, and staging moves too fast to
-re-verify every session. The gap is closed at promotion time, see below.
+re-verify every session. Unpromoted staging work is logged in its own delta doc,
+**[DATA_FLOW_STAGING.md](DATA_FLOW_STAGING.md)**, and folded in at promotion.
 
 ## How to keep this current
 
 1. **Same-commit rule.** Any change to a queue, a drain trigger, a debounce timing,
-   an endpoint, or a Sheet export path updates this doc in the same commit. This is
-   part of the Definition of done in [CLAUDE.md](../CLAUDE.md).
-2. **`/handoff` sweeps it** at the end of a working session.
-3. **`/vet` gates it at promotion.** Before `staging` merges to `main`, re-verify
-   this doc against what is actually being pushed and bump the "Verified against"
-   block. See [VETTING_PROTOCOL.md](VETTING_PROTOCOL.md). Anything in
-   "Not yet documented" below must be either documented or explicitly deferred.
+   an endpoint, or a Sheet export path is documented in the same commit. New dev work
+   on `staging` goes in [DATA_FLOW_STAGING.md](DATA_FLOW_STAGING.md), not here. This
+   doc changes only at promotion. Part of the Definition of done in
+   [CLAUDE.md](../CLAUDE.md).
+2. **`/handoff` sweeps both** at the end of a working session.
+3. **`/vet` gates both at promotion.** Fold the staging delta into this doc, empty
+   the delta, bump "Verified against". See the Data-flow doc gate in
+   [VETTING_PROTOCOL.md](VETTING_PROTOCOL.md).
 
 ## The three hops
 
@@ -561,19 +563,14 @@ edits it again.
 
 ---
 
-# Not yet documented
+# Unpromoted work
 
-`staging` carries data surfaces that this doc does not cover, because its baseline is
-`main`. Each must be documented or explicitly deferred at the next promotion vet.
+Everything `staging` adds or changes on top of this baseline is logged in
+**[DATA_FLOW_STAGING.md](DATA_FLOW_STAGING.md)**, in the same per-field format. At
+promotion those entries are folded into this doc, that one is emptied, and the
+"Verified against" block above is bumped. The procedure is the **Data-flow doc gate**
+in [VETTING_PROTOCOL.md](VETTING_PROTOCOL.md).
 
-**Backend routers:** `bug_reports.py`, `bulletin.py`, `dq.py`, `feature_requests.py`,
-`job_checklist.py`, `job_setup.py`, `payroll.py`.
-
-**Frontend stores:** `bugReportStore.ts`, `bulletin.ts`, `closeout.ts`,
-`companyInfo.ts`, `dqStore.ts`, `featureRequestStore.ts`, `hhg.ts`,
-`jobChecklistStore.ts`, `jobSetupStore.ts`, `vehicleUnits.ts`.
-
-**New Sheet exports:** `BUG_REPORT_HEADERS`, `FEATURE_REQUEST_HEADERS`.
-
-**New background work:** the nightly sheet-integrity checker (staging only), which
-adds a scheduled job to the "Background work" picture above.
+If you are debugging something a crew member reported, this doc is the one that
+describes what they are running. If you are building a feature, the staging doc is
+where it gets logged.
