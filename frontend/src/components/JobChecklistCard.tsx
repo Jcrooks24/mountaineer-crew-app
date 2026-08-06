@@ -6,7 +6,7 @@
  * read-only; MANUAL items the crew tick, offline-safe. The template comes from
  * admin config; this card only shows what is done for THIS job.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api/client";
 import { loadJobSetup } from "../lib/jobSetupStore";
 import {
@@ -73,15 +73,7 @@ export default function JobChecklistCard({
   const done = applicable.filter(isChecked).length;
   const total = applicable.length;
 
-  // Open the checklist by default the first time it loads with unfinished items
-  // - a checklist that hides what is still undone is no nudge in the field. Only
-  // auto-opens once, so it still respects the crew closing it afterward.
-  const didAutoOpen = useRef(false);
-  useEffect(() => {
-    if (didAutoOpen.current || total === 0) return;
-    didAutoOpen.current = true;
-    if (done < total) setOpen(true);
-  }, [total, done]);
+  // Defaults to collapsed; the crew open it when they want to run the checklist.
 
   const toggle = async (it: ChecklistItem) => {
     if (it.auto_key || busyKey) return; // auto items are read-only
