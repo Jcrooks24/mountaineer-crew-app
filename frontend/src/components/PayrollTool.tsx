@@ -95,7 +95,7 @@ type Summary = {
   correction_count: number;
   jobs_total: number;
   jobs_reviewed: number;
-  jobs_pending_review: { job_uuid: string; job_name: string }[];
+  jobs_pending_review: { job_uuid: string; job_name: string; reason?: string }[];
   warnings: string[];
 };
 
@@ -380,6 +380,7 @@ export default function PayrollTool() {
               <li key={j.job_uuid} className="small" style={{ marginBottom: 3 }}>
                 {j.job_name || "Unnamed job"}{" "}
                 <span className="mono" style={{ color: "var(--muted)" }}>#{j.job_uuid.slice(0, 8)}</span>
+                {j.reason ? <span style={{ color: "var(--danger)" }}> - {j.reason}</span> : null}
               </li>
             ))}
           </ul>

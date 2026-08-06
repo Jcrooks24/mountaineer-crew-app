@@ -675,6 +675,47 @@ def _roster(db: Session) -> Tuple[Dict[int, User], Dict[str, int]]:
     return roster, name_to_id
 
 
+def _report_less_jobs(db: Session, start: date, end: date) -> List[Dict[str, str]]:
+    """Jobs that had events in this period but NO job report at all. They pay
+    nobody through _job_hours (which requires employee_hours_json), so the review
+    gate would otherwise never see them - the unpaid-drive-leg case. Dated by the
+    earliest event's Mountain date, the same rule _job_hours uses."""
+    ev_lo, _ = mountain_day_utc_bounds(start - timedelta(days=1))
+    _, ev_hi = mountain_day_utc_bounds(end + timedelta(days=1))
+    event_uuids = {
+        u for (u,) in db.query(Event.job_uuid)
+        .filter(Event.timestamp >= ev_lo, Event.timestamp < ev_hi)
+        .distinct().all() if u
+    }
+    if not event_uuids:
+        return []
+    have_report = {
+        u for (u,) in db.query(JobReport.job_uuid)
+        .filter(JobReport.job_uuid.in_(list(event_uuids))).all() if u
+    }
+    missing = event_uuids - have_report
+    if not missing:
+        return []
+    earliest = {
+        u: ts for u, ts in db.query(Event.job_uuid, func.min(Event.timestamp))
+        .filter(Event.job_uuid.in_(list(missing))).group_by(Event.job_uuid).all()
+        if ts is not None
+    }
+    names = {
+        u: nm for u, nm in db.query(Event.job_uuid, func.max(Event.job_name))
+        .filter(Event.job_uuid.in_(list(missing))).group_by(Event.job_uuid).all()
+        if nm
+    }
+    out: List[Dict[str, str]] = []
+    for u in missing:
+        ts = earliest.get(u)
+        if ts is None:
+            continue
+        if start <= utc_naive_to_mountain_date(ts) <= end:
+            out.append({"job_uuid": u, "job_name": names.get(u) or u[:8]})
+    return sorted(out, key=lambda j: (j["job_name"] or "").lower())
+
+
 def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     roster, name_to_id = _roster(db)
 
@@ -746,11 +787,15 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
             u for (u,) in db.query(AdminEntryStatus.job_uuid)
             .filter(AdminEntryStatus.job_uuid.in_(list(period_jobs))).all()
         }
-    jobs_pending_review = [
-        {"job_uuid": u, "job_name": n}
+    period_pending = [
+        {"job_uuid": u, "job_name": n, "reason": "not initialed"}
         for u, n in sorted(period_jobs.items(), key=lambda kv: (kv[1] or "").lower())
         if u not in reviewed
     ]
+    # Jobs that worked this period but never got a report at all (finding 5): they
+    # pay nobody, so they never reach period_jobs and would slip past the gate.
+    report_less = [{**j, "reason": "no report filed"} for j in _report_less_jobs(db, start, end)]
+    jobs_pending_review = period_pending + report_less
 
     if _week_start(start) != start:
         warnings.append(
@@ -777,9 +822,10 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
             1 for c in corrections if c.job_uuid is None and c.notified_at is None
         ),
         "correction_count": len(corrections),
-        # Review gate: jobs feeding this period + how many still need initialing.
-        "jobs_total": len(period_jobs),
-        "jobs_reviewed": len(period_jobs) - len(jobs_pending_review),
+        # Review gate: jobs feeding this period (+ report-less jobs) and how many
+        # still need attention before finalize.
+        "jobs_total": len(period_jobs) + len(report_less),
+        "jobs_reviewed": len(period_jobs) - len(period_pending),
         "jobs_pending_review": jobs_pending_review,
         "warnings": warnings,
     }
