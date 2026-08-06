@@ -320,12 +320,19 @@ def create_rods(
 @router.get("/rods", response_model=List[RodsResponse])
 def list_my_rods(
     log_date: Optional[str] = Query(default=None),
+    driver: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List this driver's RODS logs (newest first). If log_date is given, return
-    just that day (used by the recorder to resume a day across devices)."""
-    q = db.query(RodsLog).filter(RodsLog.driver_id == current_user.id)
+    """List RODS logs (newest first). Default: this user's own days. With `driver`
+    (a resolved driver name) return THAT driver's day(s) - a shared trip record any
+    crew member can resume (a passenger who logged on the driver's behalf, or a
+    co-driver on another device), since create_rods keys the row by the named
+    driver, not the submitter. If log_date is given, just that day."""
+    if driver and driver.strip():
+        q = db.query(RodsLog).filter(RodsLog.driver_name == driver.strip())
+    else:
+        q = db.query(RodsLog).filter(RodsLog.driver_id == current_user.id)
     if log_date:
         q = q.filter(RodsLog.log_date == log_date)
     rows = q.order_by(RodsLog.created_at.desc()).limit(50).all()

@@ -436,16 +436,18 @@ export async function syncQueue(): Promise<number> {
   }
 }
 
-function queueHasDay(date: string): boolean {
-  return loadQueue().some((o) => o.log_date === date);
+function queueHasDay(date: string, driver = ""): boolean {
+  // Match the driver too - the queue is keyed by date::driver, so one driver's
+  // queued day must not block a co-driver's remote adoption for the same date.
+  return loadQueue().some((o) => o.log_date === date && (o.driver_name || "") === (driver || ""));
 }
 
 /** Resolve the working day: adopt the server copy when it's ahead (more changes,
  * or it's signed and local isn't) so the driver can resume on another device or
  * after a dead device. Skips adoption when local has unsynced queued work. */
 export async function loadOrResumeDay(date: string, driverName: string): Promise<RodsDay> {
-  const local = loadDay(date);
-  const remote = queueHasDay(date) ? null : await fetchRemoteDay(date);
+  const local = loadDay(date, driverName);
+  const remote = queueHasDay(date, driverName) ? null : await fetchRemoteDay(date, driverName);
   if (remote) {
     const adopt =
       !local ||
@@ -460,10 +462,12 @@ export async function loadOrResumeDay(date: string, driverName: string): Promise
 }
 
 /** Fetch a day from the server (signed or in-progress) for cross-device resume. */
-export async function fetchRemoteDay(date: string): Promise<RodsDay | null> {
+export async function fetchRemoteDay(date: string, driver = ""): Promise<RodsDay | null> {
   if (!date || !navigator.onLine) return null;
   try {
-    const rows = await apiFetch<any[]>(`/api/long-distance/rods?log_date=${encodeURIComponent(date)}`);
+    const q = `/api/long-distance/rods?log_date=${encodeURIComponent(date)}`
+      + (driver ? `&driver=${encodeURIComponent(driver)}` : "");
+    const rows = await apiFetch<any[]>(q);
     const r = Array.isArray(rows) && rows.length ? rows[0] : null;
     if (!r) return null;
     return {
