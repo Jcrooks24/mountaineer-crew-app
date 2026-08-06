@@ -87,7 +87,7 @@ function saveBolDeferred(jobUuid: string, reason: BolDeferredReason) {
 }
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
-import { formatMountainTime, mountainHHMM } from "../lib/time";
+import { formatMountainTime, mountainHHMM, mountainDateYYYYMMDD } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
@@ -985,6 +985,21 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     return "";
   }
 
+  // Full epoch (ms) of a slot when it carries a real date (an event or the
+  // wrap-up estimate). Manual "HH:MM" slots have no date, so they return null and
+  // the caller falls back to same-day minutes-of-day math. This is what lets a
+  // multi-day shift compute a true span instead of collapsing modulo 24h.
+  function slotToEpoch(slot: SlotPick): number | null {
+    if (slot.selection === WRAPUP_SENTINEL) return wrapUpTime ? wrapUpTime.getTime() : null;
+    if (slot.selection && slot.selection !== MANUAL_SENTINEL) {
+      const ev = eventById.get(slot.selection);
+      if (!ev) return null;
+      const t = Date.parse(ev.timestamp);
+      return Number.isFinite(t) ? t : null;
+    }
+    return null;
+  }
+
   // Clock label for the wrap-up option, e.g. "4:35 PM".
   const wrapUpLabel = useMemo(
     () =>
@@ -1061,9 +1076,21 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     const startMin = slotToMinutes(editStart);
     const endMin = slotToMinutes(editEnd);
     if (startMin === null || endMin === null) return { kind: "incomplete" };
-    let span = endMin - startMin;
-    if (span <= 0) span += 24 * 60; // crossed midnight
-    if (span <= 0) return { kind: "error", message: "End time is at or before start time." };
+
+    // Prefer the TRUE span from full timestamps when both ends carry a date (real
+    // events / wrap-up), so a multi-day shift is not silently wrapped into 24h.
+    // Manual times (no date) keep the single-midnight-wrap for a same-day shift.
+    const sEpoch = slotToEpoch(editStart);
+    const eEpoch = slotToEpoch(editEnd);
+    let span: number;
+    if (sEpoch !== null && eEpoch !== null) {
+      span = Math.round((eEpoch - sEpoch) / 60000);
+      if (span <= 0) return { kind: "error", message: "End time is at or before start time." };
+    } else {
+      span = endMin - startMin;
+      if (span <= 0) span += 24 * 60; // crossed midnight (same-day manual entry)
+      if (span <= 0) return { kind: "error", message: "End time is at or before start time." };
+    }
 
     let breakMin = 0;
     for (const b of editBreaks) {
@@ -1131,11 +1158,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       setEditError("Pick start and end times for this employee.");
       return;
     }
+    const startEpoch = slotToEpoch(editStart);
     const baseEntry: EmployeeHoursEntry = {
       user_id: editUserId ?? undefined,
       name,
       start: slotToHHMM(editStart),
       end: slotToHHMM(editEnd),
+      // Mountain date of the shift start when the start is a real event/wrap-up.
+      date: startEpoch !== null ? mountainDateYYYYMMDD(startEpoch) : undefined,
       break_hours: Number(editorPreview.breakHours.toFixed(2)),
       hours: Number(editorPreview.hours.toFixed(2)),
     };
@@ -1146,6 +1176,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         const next = prev.employee_hours.slice();
         next[editingIndex] = {
           ...baseEntry,
+          // A manual edit produces no date; keep the row's existing one.
+          date: baseEntry.date ?? prev.employee_hours[editingIndex].date,
           non_billable: prev.employee_hours[editingIndex].non_billable,
           skill_rating: prev.employee_hours[editingIndex].skill_rating,
           skill_ratings: prev.employee_hours[editingIndex].skill_ratings,
@@ -1338,6 +1370,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               name: e.name.trim(),
               start: e.start,
               end: e.end,
+              date: e.date || null,
               break_hours: Number(e.break_hours) || 0,
               hours: Number(e.hours) || 0,
               non_billable: !!e.non_billable,

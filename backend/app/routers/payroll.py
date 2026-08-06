@@ -166,6 +166,17 @@ def _row(
     }
 
 
+def _entry_date(raw: Any) -> Optional[date]:
+    """An employee-hours entry's own Mountain 'YYYY-MM-DD' date, or None if absent
+    or malformed (legacy rows) so the caller can fall back to the job's date."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return date.fromisoformat(raw.strip()[:10])
+    except (ValueError, TypeError):
+        return None
+
+
 def _job_hours(
     db: Session, start: date, end: date, roster: Dict[int, User], name_to_id: Dict[str, int]
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -257,9 +268,10 @@ def _job_hours(
         ts = earliest.get(job_uuid) or updated_at
         if ts is None:
             continue
-        d = utc_naive_to_mountain_date(ts)
-        if not (start <= d <= end):
-            continue
+        # The job's earliest-event date is only the FALLBACK now; each entry is
+        # dated by its own `date` so a multi-day job's hours land in the right pay
+        # period instead of all pinning to day one (finding 4).
+        job_date = utc_naive_to_mountain_date(ts)
         try:
             entries = json.loads(eh_json) or []
         except Exception:
@@ -282,16 +294,22 @@ def _job_hours(
                 if nm:
                     unmatched.add(nm)
                 continue
+            # Per-entry date (legacy rows with no date fall back to the job date,
+            # reproducing the old whole-job behavior). Filter each ENTRY into the
+            # window rather than skipping the whole job on its first day.
+            entry_date = _entry_date(e.get("date")) or job_date
+            if not (start <= entry_date <= end):
+                continue
             hours = float(e.get("hours") or 0)
             bucket = "non_billable" if e.get("non_billable") else "billable"
             if hours:
                 rows.append(
-                    _row(uid, roster[uid].name or nm, d, bucket, hours,
+                    _row(uid, roster[uid].name or nm, entry_date, bucket, hours,
                          "job", job_uuid, label)
                 )
             if e.get("out_of_town"):
                 rows.append(
-                    _row(uid, roster[uid].name or nm, d, "per_diem_nights", 1,
+                    _row(uid, roster[uid].name or nm, entry_date, "per_diem_nights", 1,
                          "job", job_uuid, label, detail="out of town")
                 )
 

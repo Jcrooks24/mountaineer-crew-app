@@ -201,6 +201,9 @@ class EmployeeHoursEntry(BaseModel):
     name: str
     start: str = ""           # "HH:MM" 24-hour or empty if user logged duration only
     end: str = ""             # "HH:MM" 24-hour or empty
+    # Mountain "YYYY-MM-DD" of the shift start. Lets payroll book a multi-day job's
+    # hours into the correct pay period per day; absent on legacy rows.
+    date: Optional[str] = None
     break_hours: float = 0.0  # base-10 hours subtracted from worked time
     hours: float = 0.0        # actual worked hours, base-10
     non_billable: bool = False  # excluded from total man-hours when true

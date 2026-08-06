@@ -15,6 +15,10 @@ export type EmployeeHoursEntry = {
   name: string;
   start: string;
   end: string;
+  // Mountain "YYYY-MM-DD" of the shift START. Lets payroll book a multi-day job's
+  // hours into the correct pay period per day. Absent on legacy rows -> payroll
+  // falls back to the job's earliest-event date (unchanged behavior).
+  date?: string;
   break_hours: number;
   hours: number;
   non_billable?: boolean;
