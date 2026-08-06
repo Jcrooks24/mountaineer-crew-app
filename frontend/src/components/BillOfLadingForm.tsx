@@ -436,7 +436,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   // One-time prefills for a new BOL (all still editable):
   //  - shipment reference from the job (don't retype what the app knows)
   //  - estimate type is always Non-binding (we only do non-binding estimates)
-  //  - agreed pickup defaults to today
+  // (agreed pickup is the office's agreed date, seeded from the job header, not today)
   useEffect(() => {
     if (draft.status !== "draft") return;
     const patch: Partial<BOLDraft> = {};
@@ -521,12 +521,17 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
           if (!Object.keys(p).length) return prev;
           return { ...prev, ...p, updated_at: new Date().toISOString() };
         });
-        // shipper_address has a same-as-origin mirror; only seed a DISTINCT one the
-        // office entered, and turn the mirror off so it isn't overwritten.
+        // shipper_address has a same-as-origin mirror; when the office entered a
+        // distinct one, turn the mirror off and set it. Override only a blank field
+        // or the mirror's origin-copy - never a distinct address the crew typed.
+        // (Fixes the seed/mirror race that otherwise printed the pickup address as
+        // the shipper on the signed BOL.)
         if ((bh.shipper_address || "").trim()) {
           setShipperSameAsOrigin(false);
           setDraft((prev) => {
-            if (prev.status !== "draft" || (prev.shipper_address || "").trim()) return prev;
+            if (prev.status !== "draft") return prev;
+            const cur = (prev.shipper_address || "").trim();
+            if (cur && cur !== (prev.origin_address || "").trim()) return prev;
             return { ...prev, shipper_address: bh.shipper_address, updated_at: new Date().toISOString() };
           });
         }

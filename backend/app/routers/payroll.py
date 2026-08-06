@@ -812,7 +812,11 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     ]
     # Jobs that worked this period but never got a report at all (finding 5): they
     # pay nobody, so they never reach period_jobs and would slip past the gate.
-    report_less = [{**j, "reason": "no report filed"} for j in _report_less_jobs(db, start, end)]
+    report_less = [
+        {**j, "reason": "no report filed"}
+        for j in _report_less_jobs(db, start, end)
+        if j["job_uuid"] not in period_jobs  # a job with an unmatched correction can appear in both
+    ]
     jobs_pending_review = period_pending + report_less
 
     if _week_start(start) != start:

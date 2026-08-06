@@ -93,5 +93,6 @@ export function mountainHHMM(input: DateInput = new Date()): string {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    hourCycle: "h23",  // pin 00:00 (not "24:00") at midnight even on a stale ICU
   }).format(d);
 }
