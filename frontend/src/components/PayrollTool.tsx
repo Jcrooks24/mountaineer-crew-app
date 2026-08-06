@@ -93,6 +93,9 @@ type Summary = {
   employees: Employee[];
   pending_correction_count: number;
   correction_count: number;
+  jobs_total: number;
+  jobs_reviewed: number;
+  jobs_pending_review: { job_uuid: string; job_name: string }[];
   warnings: string[];
 };
 
@@ -301,6 +304,7 @@ export default function PayrollTool() {
   };
 
   const pending = data?.pending_correction_count ?? 0;
+  const jobsPending = data?.jobs_pending_review ?? [];
 
   return (
     <div className="col" style={{ gap: 14 }}>
@@ -359,6 +363,28 @@ export default function PayrollTool() {
           </ul>
         </div>
       ) : null}
+
+      {/* Review gate: every job feeding this period must be initialed on its Job
+          Summary before payroll can be finalized (ADR 0032). */}
+      {data && data.jobs_pending_review.length > 0 && (
+        <div className="card" style={{ borderColor: "var(--danger)" }}>
+          <div className="microLabel" style={{ marginBottom: 8 }}>
+            Jobs pending review ({data.jobs_pending_review.length} of {data.jobs_total})
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+            Review and initial each of these on its Job Summary before finalizing.
+            Finalize is blocked until every job in the period is initialed.
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {data.jobs_pending_review.map((j) => (
+              <li key={j.job_uuid} className="small" style={{ marginBottom: 3 }}>
+                {j.job_name || "Unnamed job"}{" "}
+                <span className="mono" style={{ color: "var(--muted)" }}>#{j.job_uuid.slice(0, 8)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* ── Summary table ── */}
       {data && (
@@ -478,7 +504,13 @@ export default function PayrollTool() {
             </div>
           )}
 
-          <button type="button" onClick={finalize} disabled={finalizing || pending === 0}>
+          {jobsPending.length > 0 && (
+            <div className="small" style={{ color: "var(--danger)", marginBottom: 10, fontWeight: 600 }}>
+              {jobsPending.length} job(s) in this period still need review + initialing in the
+              Job Summary. Finalize is blocked until then (see the list above).
+            </div>
+          )}
+          <button type="button" onClick={finalize} disabled={finalizing || pending === 0 || jobsPending.length > 0}>
             {finalizing ? "Sending..." : `Finalize and notify (${pending})`}
           </button>
 

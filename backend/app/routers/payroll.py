@@ -64,6 +64,7 @@ from app.core.time_utils import (
     mountain_day_utc_bounds,
     utc_naive_to_mountain_date,
 )
+from app.db.models.admin_entry_status import AdminEntryStatus
 from app.db.models.event import Event
 from app.db.models.job_report import JobReport
 from app.db.models.long_distance import LdDay
@@ -731,6 +732,26 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
 
     employees.sort(key=lambda e: (e["name"] or "").lower())
 
+    # Review gate (ADR 0032): the jobs whose hours feed this period, and which of
+    # them the admin has reviewed + initialed on the Job Summary. A job is
+    # "reviewed" iff an AdminEntryStatus row exists (its write path forces all
+    # three attestations true). Finalize is blocked until none are pending.
+    period_jobs: Dict[str, str] = {}   # job_uuid -> job name (source_label)
+    for r in rows:
+        if r.get("source") == "job" and r.get("source_key"):
+            period_jobs.setdefault(r["source_key"], r.get("source_label") or "")
+    reviewed: set = set()
+    if period_jobs:
+        reviewed = {
+            u for (u,) in db.query(AdminEntryStatus.job_uuid)
+            .filter(AdminEntryStatus.job_uuid.in_(list(period_jobs))).all()
+        }
+    jobs_pending_review = [
+        {"job_uuid": u, "job_name": n}
+        for u, n in sorted(period_jobs.items(), key=lambda kv: (kv[1] or "").lower())
+        if u not in reviewed
+    ]
+
     if _week_start(start) != start:
         warnings.append(
             "The period does not start on a Monday, so the first week is only "
@@ -756,6 +777,10 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
             1 for c in corrections if c.job_uuid is None and c.notified_at is None
         ),
         "correction_count": len(corrections),
+        # Review gate: jobs feeding this period + how many still need initialing.
+        "jobs_total": len(period_jobs),
+        "jobs_reviewed": len(period_jobs) - len(jobs_pending_review),
+        "jobs_pending_review": jobs_pending_review,
         "warnings": warnings,
     }
 
@@ -1321,6 +1346,20 @@ def finalize_period(
     """
     s, e = _parse_period(body.period_start, body.period_end)
     suppress = set(body.suppress_user_ids or [])
+
+    # Review gate (ADR 0032): every job that feeds this period must be reviewed +
+    # initialed on the Job Summary first. Reuse the summary so the gate's job set
+    # is exactly what the admin sees. Block before touching anything.
+    pending_review = _build_summary(db, s, e)["jobs_pending_review"]
+    if pending_review:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{len(pending_review)} job(s) in this period still need review + "
+                "initialing in the Job Summary before payroll can be finalized: "
+                + ", ".join(p["job_name"] or p["job_uuid"][:8] for p in pending_review)
+            ),
+        )
 
     # The mailer falls back to printing to stdout when Postmark is unconfigured
     # (that fallback is what lets the backend boot without secrets). It does NOT
