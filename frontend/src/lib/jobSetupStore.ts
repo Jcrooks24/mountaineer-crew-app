@@ -16,6 +16,24 @@ export type CrewMember = {
   confirmed: boolean;
 };
 
+// The long-distance Bill of Lading shipment header the job header owns (ADR 0034).
+// Every field seeds the BOL blank-only. Keys mirror the BOLDraft shipment fields.
+export type BolHeader = {
+  shipper_name?: string;
+  shipper_phone?: string;
+  shipper_address?: string;
+  form_of_payment?: string;
+  estimate_type?: string;
+  valuation?: string;
+  agreed_pickup?: string;
+  agreed_delivery?: string;
+  cod_notify?: string;
+  cod_max?: string;
+  additional_carriers?: string;
+  third_party_insurance?: string;
+  accessorial_services?: string;
+};
+
 export type JobSetupData = {
   job_name: string | null;
   job_date: string | null;
@@ -28,6 +46,7 @@ export type JobSetupData = {
   origin: string | null;
   destination: string | null;
   stops: string[];
+  bol_header?: BolHeader | null;
   notes: string | null;
   locked: boolean;
   updated_by_name?: string | null;

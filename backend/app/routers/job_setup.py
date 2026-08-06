@@ -33,6 +33,27 @@ class CrewMember(BaseModel):
     confirmed: bool = True
 
 
+class BolHeader(BaseModel):
+    """The long-distance Bill of Lading shipment header the job header owns (ADR
+    0034). All optional; each field seeds the BOL blank-only. These are the FMCSA
+    375.505 fields not already on the job header - origin/destination live in their
+    own columns, vehicle in vehicle_unit_names, and shipment_number is derived from
+    the job name + date."""
+    shipper_name: Optional[str] = None
+    shipper_phone: Optional[str] = None
+    shipper_address: Optional[str] = None
+    form_of_payment: Optional[str] = None
+    estimate_type: Optional[str] = None
+    valuation: Optional[str] = None
+    agreed_pickup: Optional[str] = None
+    agreed_delivery: Optional[str] = None
+    cod_notify: Optional[str] = None
+    cod_max: Optional[str] = None
+    additional_carriers: Optional[str] = None
+    third_party_insurance: Optional[str] = None
+    accessorial_services: Optional[str] = None
+
+
 class JobSetupIn(BaseModel):
     job_name: Optional[str] = None
     job_date: Optional[str] = None
@@ -45,6 +66,7 @@ class JobSetupIn(BaseModel):
     origin: Optional[str] = None
     destination: Optional[str] = None
     stops: List[str] = []
+    bol_header: Optional[BolHeader] = None
     notes: Optional[str] = None
     locked: bool = False
     # Permission to overwrite a locked header (C2). Absent/false = refuse.
@@ -57,6 +79,14 @@ def _load_list(raw: Optional[str]) -> List[Any]:
         return v if isinstance(v, list) else []
     except (ValueError, TypeError):
         return []
+
+
+def _load_obj(raw: Optional[str]) -> Dict[str, Any]:
+    try:
+        v = json.loads(raw or "{}")
+        return v if isinstance(v, dict) else {}
+    except (ValueError, TypeError):
+        return {}
 
 
 def _to_out(row: JobSetup) -> Dict[str, Any]:
@@ -73,6 +103,7 @@ def _to_out(row: JobSetup) -> Dict[str, Any]:
         "origin": row.origin,
         "destination": row.destination,
         "stops": [str(s) for s in _load_list(row.stops_json)],
+        "bol_header": _load_obj(row.bol_header_json),
         "notes": row.notes,
         "locked": bool(row.locked),
         "updated_by_name": row.updated_by_name,
@@ -136,6 +167,10 @@ def upsert_job_setup(
     units = json.dumps([str(u).strip() for u in body.vehicle_unit_names if str(u).strip()])
     crew = json.dumps(_clean_crew(body.crew))
     stops = json.dumps([str(s).strip() for s in body.stops if str(s).strip()])
+    bol = json.dumps(
+        {k: (v.strip() if isinstance(v, str) and v.strip() else None)
+         for k, v in (body.bol_header.model_dump().items() if body.bol_header else [])}
+    )
 
     if existing is None:
         existing = JobSetup(job_uuid=job_uuid, created_at=now,
@@ -154,6 +189,7 @@ def upsert_job_setup(
     existing.origin = (body.origin or "").strip() or None
     existing.destination = (body.destination or "").strip() or None
     existing.stops_json = stops
+    existing.bol_header_json = bol
     existing.notes = (body.notes or "").strip() or None
     existing.locked = bool(body.locked)
     existing.updated_by_id = current_user.id

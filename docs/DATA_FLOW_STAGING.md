@@ -146,10 +146,18 @@ network failures queue and retry.
 | `job_type_tags` | `[x]` | JSON list column |
 | `vehicle_unit_names` | `[x]` | JSON list column |
 | `crew` | `[x]` | list of `{user_id, name, source, confirmed}`, `source` is `invitee` or `added` |
-| `origin` / `destination` / `stops` | `[x]` | |
+| `origin` / `destination` / `stops` | `[x]` | LD route; seeds BOL `origin_address`/`dest_address` + RODS `origin`/`destination` |
+| `bol_header` | `[x]` | JSON dict (`bol_header_json`), LD only. FMCSA BOL shipment header: shipper name/phone/address, form_of_payment, estimate_type, valuation, agreed pickup/delivery, COD, declarations. Seeds the BOL draft blank-only. |
 | `notes` | `[x]` | |
 | `locked` | `[x]` | overwriting a locked header needs `override: true` on the PUT |
 | `updated_by_name` / `updated_at` | `[-]` | server-stamped |
+
+**Seeds (ADR 0034 C1.3):** the header is the office's single entry point that
+prefills the tools **blank-only, once per job** (never overwriting a crew edit or a
+signed doc): DVIR/BOL/RODS **vehicle** from `vehicle_unit_names[0]`; BOL/RODS
+**origin/destination** from `origin`/`destination`; the **BOL shipment header** from
+`bol_header`; and the RODS day carries the job's `job_uuid`/`job_name` so the `rods`
+checklist signal auto-ticks.
 
 **No Sheet export** is a deliberate gap to confirm at promotion: admin currently
 reads this only in-app. If it should mirror to the Sheet, that is a new export
@@ -185,9 +193,10 @@ to reconcile.
 | `pods` | a `PriorOnDutyStatement` for the job |
 | `rods` | a `RodsLog` for the job |
 
-`rods` is the signal that was broken until `de27613` added `job_uuid` to `RodsLog`.
-It only ticks once the recorder passes `job_uuid`, which is the long-distance-in-
-setup backlog item.
+`rods` ticks once a `RodsLog` carries the job's `job_uuid`. The column was added in
+`de27613`; the RODS client now sends `job_uuid`/`job_name` on the day payload
+(`rodsStore.dayToPayload`) and seeds it from the job header in `RodsSignoff`, so a
+signed RODS ticks the item.
 
 **Deviation:** `drainChecklistChecks` **deletes** a permanently-rejected tick rather
 than marking it failed and keeping it. See Deviations below.

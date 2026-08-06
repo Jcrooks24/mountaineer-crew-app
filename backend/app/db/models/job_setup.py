@@ -49,6 +49,11 @@ class JobSetup(Base):
     # JSON list[str] of intermediate stops (blank OK).
     stops_json = Column(Text, nullable=True)
 
+    # JSON dict of the long-distance Bill of Lading shipment header (the FMCSA
+    # 375.505 fields not already on this row: shipper name/phone/address, form of
+    # payment, valuation, agreed pickup/delivery, etc.). Seeds the BOL blank-only.
+    bol_header_json = Column(Text, nullable=True)
+
     notes = Column(Text, nullable=True)
 
     # Overwrite protection (C2). Once set, editing the header is a deliberate act

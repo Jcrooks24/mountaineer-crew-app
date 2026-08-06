@@ -444,7 +444,8 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       patch.shipment_number = [draft.job_name, draft.job_date].filter(Boolean).join(" - ");
     }
     if (!draft.estimate_type) patch.estimate_type = "non_binding";
-    if (!draft.agreed_pickup) patch.agreed_pickup = todayLocal();
+    // agreed_pickup is the office's AGREED date - seeded from the job header below,
+    // not defaulted to today (today is captured as actual_pickup_date at signing).
     if (Object.keys(patch).length) setField(patch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -488,6 +489,51 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shipperSameAsOrigin, draft.origin_address]);
+
+  // C1.3 (ADR 0034): seed the FMCSA BOL header + vehicle from the job header on a
+  // NEW BOL draft, once per job. Separate ref from the address seed so its
+  // both-addresses-present early-return can't skip the header. Blank-only (each
+  // field re-checked in the functional update), never touching a signed BOL.
+  const seededBolHeaderRef = useRef<string>("");
+  useEffect(() => {
+    const ju = draft.job_uuid;
+    if (!ju || draft.status !== "draft" || seededBolHeaderRef.current === ju) return;
+    seededBolHeaderRef.current = ju;
+    loadJobSetup(ju)
+      .then((h) => {
+        if (!h) return;
+        const u = h.vehicle_unit_names?.[0];
+        if (u) setVehicle((cur) => cur || u);
+        const bh: any = h.bol_header;
+        if (!bh) return;
+        const keys = [
+          "shipper_name", "shipper_phone", "form_of_payment", "valuation",
+          "agreed_pickup", "agreed_delivery", "cod_notify", "cod_max",
+          "additional_carriers", "third_party_insurance", "accessorial_services",
+        ];
+        setDraft((prev) => {
+          if (prev.status !== "draft") return prev;
+          const p: any = {};
+          for (const k of keys) {
+            const v = bh[k];
+            if (v && !((prev as any)[k] || "").toString().trim()) p[k] = v;
+          }
+          if (!Object.keys(p).length) return prev;
+          return { ...prev, ...p, updated_at: new Date().toISOString() };
+        });
+        // shipper_address has a same-as-origin mirror; only seed a DISTINCT one the
+        // office entered, and turn the mirror off so it isn't overwritten.
+        if ((bh.shipper_address || "").trim()) {
+          setShipperSameAsOrigin(false);
+          setDraft((prev) => {
+            if (prev.status !== "draft" || (prev.shipper_address || "").trim()) return prev;
+            return { ...prev, shipper_address: bh.shipper_address, updated_at: new Date().toISOString() };
+          });
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.job_uuid, draft.status]);
 
   // Signed-BOL retrieval + send-to-client card state (shown once signed).
   const [clientEmail, setClientEmail] = useState("");

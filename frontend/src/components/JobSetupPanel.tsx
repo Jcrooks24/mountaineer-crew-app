@@ -18,7 +18,9 @@ import {
   saveJobSetup,
   type CrewMember,
   type JobSetupData,
+  type BolHeader,
 } from "../lib/jobSetupStore";
+import { FORM_OF_PAYMENT_OPTIONS, ESTIMATE_TYPE_OPTIONS, VALUATION_OPTIONS } from "../lib/bolContract";
 
 // Job-type options that duplicate the dedicated Local/Long-distance toggle or the
 // "What are you doing today?" activity picker - filtered out of the job-type list
@@ -75,6 +77,9 @@ export default function JobSetupPanel({
   const [destination, setDestination] = useState("");
   const [stops, setStops] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
+  const [bolHeader, setBolHeader] = useState<BolHeader>({});
+  const setBolField = (k: keyof BolHeader, v: string) =>
+    setBolHeader((p) => ({ ...p, [k]: v }));
   const [notes, setNotes] = useState("");
 
   const [busy, setBusy] = useState(false);
@@ -92,6 +97,7 @@ export default function JobSetupPanel({
       setDestination(h.destination || "");
       setStops(h.stops || []);
       setTags(h.job_type_tags || []);
+      setBolHeader(h.bol_header || {});
       setNotes(h.notes || "");
     } else {
       // Fresh job: pre-fill crew from matched invitees (unconfirmed until the
@@ -185,12 +191,13 @@ export default function JobSetupPanel({
     origin: origin.trim() || null,
     destination: destination.trim() || null,
     stops: stops.map((s) => s.trim()).filter(Boolean),
+    bol_header: bolHeader,
     notes: notes.trim() || null,
     // Overwrite protection is confirm-to-edit now, not a persistent lock, so the
     // header is never locked. Saves carry override (below) to bypass any stale
     // lock left over from the old model.
     locked: false,
-  }), [meta.jobName, meta.jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, crew, origin, destination, stops, notes]);
+  }), [meta.jobName, meta.jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, crew, origin, destination, stops, bolHeader, notes]);
 
   const doSave = async () => {
     setBusy(true);
@@ -459,6 +466,88 @@ export default function JobSetupPanel({
               <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Delivery address (blank OK)" />
             </label>
           </div>
+
+          {/* Bill of Lading details - long-distance only. The office fills these
+              once here; the crew's BOL starts prefilled with them (blank-only). */}
+          {isLD && (
+            <div className="col" style={{ gap: 6, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+              <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Bill of Lading details</span>
+              <span className="small" style={{ color: "var(--muted)" }}>
+                Fill once; the crew's Bill of Lading for this job starts prefilled with these.
+              </span>
+              <label className="col" style={{ gap: 2 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipper (customer) name</span>
+                <input value={bolHeader.shipper_name || ""} onChange={(e) => setBolField("shipper_name", e.target.value)} />
+              </label>
+              <div className="row" style={{ gap: 6 }}>
+                <label className="col" style={{ gap: 2, flex: 1 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Shipper phone</span>
+                  <input value={bolHeader.shipper_phone || ""} onChange={(e) => setBolField("shipper_phone", e.target.value)} />
+                </label>
+              </div>
+              <label className="col" style={{ gap: 2 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipper address</span>
+                <input value={bolHeader.shipper_address || ""} onChange={(e) => setBolField("shipper_address", e.target.value)} placeholder="If different from pickup" />
+              </label>
+              <div className="row" style={{ gap: 6 }}>
+                <label className="col" style={{ gap: 2, flex: 1 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Agreed pickup</span>
+                  <input value={bolHeader.agreed_pickup || ""} onChange={(e) => setBolField("agreed_pickup", e.target.value)} placeholder="Date or window" />
+                </label>
+                <label className="col" style={{ gap: 2, flex: 1 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Agreed delivery</span>
+                  <input value={bolHeader.agreed_delivery || ""} onChange={(e) => setBolField("agreed_delivery", e.target.value)} placeholder="Date or window" />
+                </label>
+              </div>
+              <div className="row" style={{ gap: 6 }}>
+                <label className="col" style={{ gap: 2, flex: 1 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Form of payment</span>
+                  <select value={bolHeader.form_of_payment || ""} onChange={(e) => setBolField("form_of_payment", e.target.value)}>
+                    <option value="">Not set</option>
+                    {FORM_OF_PAYMENT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </label>
+                <label className="col" style={{ gap: 2, flex: 1 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Estimate type</span>
+                  <select value={bolHeader.estimate_type || ""} onChange={(e) => setBolField("estimate_type", e.target.value)}>
+                    <option value="">Not set</option>
+                    {ESTIMATE_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </label>
+              </div>
+              {bolHeader.form_of_payment === "cod" && (
+                <div className="row" style={{ gap: 6 }}>
+                  <label className="col" style={{ gap: 2, flex: 1 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>COD - notify</span>
+                    <input value={bolHeader.cod_notify || ""} onChange={(e) => setBolField("cod_notify", e.target.value)} />
+                  </label>
+                  <label className="col" style={{ gap: 2, flex: 1 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>COD - max amount</span>
+                    <input value={bolHeader.cod_max || ""} onChange={(e) => setBolField("cod_max", e.target.value)} />
+                  </label>
+                </div>
+              )}
+              <label className="col" style={{ gap: 2 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Valuation</span>
+                <select value={bolHeader.valuation || ""} onChange={(e) => setBolField("valuation", e.target.value)}>
+                  <option value="">Not set</option>
+                  {VALUATION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+              <label className="col" style={{ gap: 2 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Additional carriers</span>
+                <input value={bolHeader.additional_carriers || ""} onChange={(e) => setBolField("additional_carriers", e.target.value)} placeholder="None" />
+              </label>
+              <label className="col" style={{ gap: 2 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Third-party insurance</span>
+                <input value={bolHeader.third_party_insurance || ""} onChange={(e) => setBolField("third_party_insurance", e.target.value)} placeholder="N/A" />
+              </label>
+              <label className="col" style={{ gap: 2 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Accessorial services</span>
+                <input value={bolHeader.accessorial_services || ""} onChange={(e) => setBolField("accessorial_services", e.target.value)} placeholder="None" />
+              </label>
+            </div>
+          )}
 
           {/* Notes */}
           <label className="col" style={{ gap: 2 }}>

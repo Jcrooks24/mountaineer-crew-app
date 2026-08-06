@@ -56,6 +56,9 @@ export type RodsDay = {
   log_date: string; // YYYY-MM-DD
   driver_name: string;
   changes: DutyChange[];
+  // Job link - enables seeding from the job header + the RODS checklist auto-tick.
+  job_uuid?: string;
+  job_name?: string;
   // Trip header - carried across days.
   co_driver_name?: string;
   vehicle_number?: string;
@@ -265,13 +268,15 @@ export function saveDay(day: RodsDay): void {
   } catch {}
 }
 
-export function newDay(date: string, driverName: string, carryFrom?: RodsDay | null): RodsDay {
+export function newDay(date: string, driverName: string, carryFrom?: RodsDay | null, jobUuid?: string, jobName?: string): RodsDay {
   return {
     rods_id: newUUID(),
     log_date: date,
     driver_name: driverName,
     // Start the day off-duty at 00:00 (FMCSA logs begin at midnight).
     changes: [{ time: "00:00", status: "off_duty", location: "", remarks: "" }],
+    job_uuid: jobUuid || carryFrom?.job_uuid,
+    job_name: jobName || carryFrom?.job_name,
     // Carry the trip header forward from the prior day so the driver doesn't re-enter it.
     co_driver_name: carryFrom?.co_driver_name,
     vehicle_number: carryFrom?.vehicle_number,
@@ -333,6 +338,8 @@ function dayToPayload(day: RodsDay): Record<string, unknown> {
     rods_id: day.rods_id,
     driver_name: day.driver_name,
     log_date: day.log_date,
+    job_uuid: day.job_uuid || null,
+    job_name: day.job_name || null,
     co_driver_name: day.co_driver_name || null,
     vehicle_number: day.vehicle_number || null,
     trailer_number: day.trailer_number || null,

@@ -3,6 +3,7 @@ import { useAuth } from "../auth/AuthContext";
 import type { DirectoryEntry } from "../auth/AuthContext";
 import { apiFetch } from "../api/client";
 import { ensureDirectory } from "../lib/userDirectory";
+import { loadJobSetup } from "../lib/jobSetupStore";
 import SignaturePad, { type SignaturePadHandle } from "./SignaturePad";
 import {
   type RodsDay,
@@ -106,7 +107,7 @@ function RodsDriverSection({
   date: string; driver: string; fallback: string; events: MinEvent[]; bolLink: BolLink; units: string[];
   podsFiled: boolean; onNeedPods: () => void; tripJob: string;
 }) {
-  const [day, setDay] = useState<RodsDay>(() => loadDay(date, driver) || newDay(date, driver, null));
+  const [day, setDay] = useState<RodsDay>(() => loadDay(date, driver) || newDay(date, driver, null, tripJob));
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -133,6 +134,35 @@ function RodsDriverSection({
     if (day.driver_name !== driver) setDay((prev) => ({ ...prev, driver_name: driver }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driver]);
+
+  // Link this day to the job and seed origin/destination/vehicle from the job's
+  // setup (blank-only). job_uuid is identity - set unconditionally (and even when
+  // setup can't load), so a signed RODS carries it and the job's RODS checklist
+  // item auto-ticks. Seed values never clobber what the driver has already entered.
+  useEffect(() => {
+    if (!tripJob) return;
+    loadJobSetup(tripJob)
+      .then((h) => {
+        setDay((prev) => {
+          const next = { ...prev };
+          let changed = false;
+          if (prev.job_uuid !== tripJob) { next.job_uuid = tripJob; changed = true; }
+          if (h) {
+            const veh = h.vehicle_unit_names?.[0];
+            if (h.origin && !(prev.origin || "").trim()) { next.origin = h.origin; changed = true; }
+            if (h.destination && !(prev.destination || "").trim()) { next.destination = h.destination; changed = true; }
+            if (veh && !(prev.vehicle_number || "").trim()) { next.vehicle_number = veh; changed = true; }
+          }
+          if (!changed) return prev;
+          next.updated_at = new Date().toISOString();
+          return next;
+        });
+      })
+      .catch(() => {
+        setDay((prev) => (prev.job_uuid === tripJob ? prev : { ...prev, job_uuid: tripJob, updated_at: new Date().toISOString() }));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripJob]);
 
   function patch(p: Partial<RodsDay>) { setDay((prev) => ({ ...prev, ...p, updated_at: new Date().toISOString() })); }
 
