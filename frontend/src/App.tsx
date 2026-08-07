@@ -379,6 +379,9 @@ export default function App() {
   const [jobStatus, setJobStatus] = useState<"active" | "closed">(
     () => (localStorage.getItem(JOB_STATUS_KEY) as any) || "active"
   );
+  // When true, reopening a finalized job's report drops straight into the editor
+  // instead of the read-only closed tile (set by "Edit finalized job").
+  const [openReportInEdit, setOpenReportInEdit] = useState(false);
 
   const [mode, setMode] = useState<"local" | "long_distance">(
     () => (localStorage.getItem(MODE_KEY) as any) || "local"
@@ -759,14 +762,17 @@ export default function App() {
     const finished = loadLog().some((e) => e.job_uuid === jobUuid.trim() && e.type === "FINISH");
     if (!finished) recordEvent("FINISH");   // timeline marker (also flips status)
     setPersistedJobStatus("closed");         // guaranteed flip even if recordEvent guards out
+    setOpenReportInEdit(false);
     setTab("home");
   }
   function handleEditFinalized() {
     setPersistedJobStatus("active");
+    setOpenReportInEdit(true);   // drop straight into the report editor, not the closed tile
     setTab("report");
   }
   function handleChangeJobFromPanel() {
     setPersistedJobStatus("active");
+    setOpenReportInEdit(false);
     setSelectingJob(true);
     setTab("home");
   }
@@ -776,6 +782,7 @@ export default function App() {
   // jobUuid only (so it never re-fires on reopen, which keeps the same jobUuid) and
   // only ever sets "closed", so it can't fight an intentional reopen.
   useEffect(() => {
+    setOpenReportInEdit(false);   // a job change clears any pending reopen-in-edit
     const uuid = jobUuid.trim();
     if (!uuid || !navigator.onLine) return;
     let cancelled = false;
@@ -3179,7 +3186,7 @@ export default function App() {
 
       {/* Report */}
       {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} onCloseOut={handleReportCloseOut} />
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} onCloseOut={handleReportCloseOut} openInEdit={openReportInEdit} />
       )}
       </>
       )}

@@ -289,6 +289,9 @@ type Props = {
   // Fired after a successful save-and-close-out. The host (App) uses it to mark the
   // job finished and flip the whole screen to the static closed-job panel.
   onCloseOut?: () => void;
+  // Reopened from the closed panel ("Edit finalized job") - open straight in the
+  // editable form instead of the read-only closed tile.
+  openInEdit?: boolean;
 };
 
 function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: string; hint?: string; onGo: () => void }) {
@@ -324,7 +327,7 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
   );
 }
 
-export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false, onCloseOut }: Props) {
+export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false, onCloseOut, openInEdit = false }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
 
@@ -631,9 +634,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         });
         serverUpdatedAtRef.current = (r as any).updated_at || "";
         setSaved(true);
-        // A report already exists on the server, so it has been closed out at
-        // least once: open straight to the collapsed tile (crew tap Edit to reopen).
-        setView("closed");
+        // A report already exists on the server, so it has been closed out at least
+        // once: open straight to the collapsed tile - UNLESS the crew reopened it
+        // via "Edit finalized job", in which case drop them right into the editor.
+        setView(openInEdit ? "edit" : "closed");
       })
       .catch((e) => {
         // ONLY reset to empty defaults on a real 404 (no report exists yet).

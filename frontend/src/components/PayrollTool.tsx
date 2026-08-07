@@ -177,7 +177,7 @@ function fmtHours(n: number): string {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function PayrollTool() {
+export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: string) => void } = {}) {
   const [period, setPeriod] = useState<{ start: string; end: string }>(() => {
     try {
       const raw = localStorage.getItem(PERIOD_KEY);
@@ -372,13 +372,21 @@ export default function PayrollTool() {
             Jobs pending review ({data.jobs_pending_review.length} of {data.jobs_total})
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-            Review and initial each of these on its Job Summary before finalizing.
-            Finalize is blocked until every job in the period is initialed.
+            Tap a job to open its Job Summary, then review and initial it. Finalize
+            is blocked until every job in the period is initialed.
           </div>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {data.jobs_pending_review.map((j) => (
               <li key={j.job_uuid} className="small" style={{ marginBottom: 3 }}>
-                {j.job_name || "Unnamed job"}{" "}
+                {onOpenJob ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenJob(j.job_uuid)}
+                    style={{ background: "none", border: "none", padding: 0, color: "var(--brand)", cursor: "pointer", textDecoration: "underline", font: "inherit" }}
+                  >
+                    {j.job_name || "Unnamed job"}
+                  </button>
+                ) : (j.job_name || "Unnamed job")}{" "}
                 <span className="mono" style={{ color: "var(--muted)" }}>#{j.job_uuid.slice(0, 8)}</span>
                 {j.reason ? <span style={{ color: "var(--danger)" }}> - {j.reason}</span> : null}
               </li>

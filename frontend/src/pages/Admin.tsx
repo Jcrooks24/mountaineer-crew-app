@@ -110,6 +110,8 @@ export default function Admin() {
   const nav = useNavigate();
   // The Map is the dashboard home; every other tool opens as a sub-view.
   const [tab, setTab] = useState<Tab>("map");
+  // A job_uuid to open in the Job Summary tab (deep-link from payroll pending list).
+  const [summaryDeepLink, setSummaryDeepLink] = useState<string | null>(null);
 
   // Desktop mode widens the outer container so tables, calendars, and
   // wide tools stop being squeezed by the mobile-first 860px cap. Persists
@@ -208,9 +210,9 @@ export default function Admin() {
           {tab === "dvir" && <DVIRTab />}
           {tab === "estimator" && <EstimatorTab />}
           {tab === "notes" && <NotesTab />}
-          {tab === "summary" && <JobSummaryTab />}
+          {tab === "summary" && <JobSummaryTab openJobUuid={summaryDeepLink} onOpened={() => setSummaryDeepLink(null)} />}
           {tab === "office" && <OfficeHoursPanel />}
-          {tab === "payroll" && <PayrollTool />}
+          {tab === "payroll" && <PayrollTool onOpenJob={(u) => { setSummaryDeepLink(u); setTab("summary"); }} />}
           {tab === "dq" && <DqFilesTab />}
           {tab === "incidents" && <IncidentsAdminTab />}
           {tab === "settings" && (
@@ -7518,7 +7520,7 @@ function BillCorrectionEditor({
   );
 }
 
-function JobSummaryTab() {
+function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null; onOpened?: () => void }) {
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
   const [candidates, setCandidates] = useState<JobCandidate[] | null>(null);
@@ -7544,6 +7546,12 @@ function JobSummaryTab() {
   const [entryNotify, setEntryNotify] = useState<NotifyResult | null>(null);
   const [correctionsRefresh, setCorrectionsRefresh] = useState(0);
   const [editingBill, setEditingBill] = useState(false);
+
+  // Deep-link from the payroll pending-review list: open a specific job directly.
+  useEffect(() => {
+    if (openJobUuid) { loadSummary(openJobUuid); onOpened?.(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openJobUuid]);
 
   async function search() {
     if (!date && !name.trim()) {

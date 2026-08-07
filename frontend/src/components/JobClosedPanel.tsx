@@ -61,13 +61,21 @@ function fmtTime(iso: string | null): string {
   return isNaN(d.getTime()) ? "" : d.toLocaleString();
 }
 
-function Section({ title, children, danger }: { title: string; children: React.ReactNode; danger?: boolean }) {
+function Section({ title, children, danger, id }: { title: string; children: React.ReactNode; danger?: boolean; id?: string }) {
   return (
-    <div className="card" style={danger ? { borderColor: "var(--danger)" } : undefined}>
+    <div className="card" id={id} style={{ scrollMarginTop: 64, ...(danger ? { borderColor: "var(--danger)" } : {}) }}>
       <div className="microLabel" style={{ marginBottom: 10 }}>{title}</div>
       {children}
     </div>
   );
+}
+
+const jumpBtn: React.CSSProperties = {
+  fontSize: 12, padding: "3px 10px", background: "none",
+  border: "1px solid var(--border)", borderRadius: 999, color: "var(--brand)", cursor: "pointer",
+};
+function scrollToSection(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -170,6 +178,16 @@ export default function JobClosedPanel({
       {/* 3. Checklist - reuse the live card so unchecked manual items stay tickable. */}
       <JobChecklistCard jobUuid={jobUuid} longDistance={longDistance} refreshKey={`closed-${jobUuid}`} />
 
+      {/* In-app links from the checklist area to the completed docs rendered below. */}
+      {s && (s.dvirs.length > 0 || s.incidents.length > 0 || s.photos.length > 0 || s.events.length > 0) && (
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", padding: "0 2px" }}>
+          <span className="small" style={{ color: "var(--muted)" }}>Jump to:</span>
+          {s.dvirs.length > 0 && <button type="button" onClick={() => scrollToSection("jcp-dvirs")} style={jumpBtn}>DVIRs ({s.dvirs.length})</button>}
+          {(s.incidents.length > 0 || s.photos.length > 0) && <button type="button" onClick={() => scrollToSection("jcp-incidents")} style={jumpBtn}>Incidents & photos</button>}
+          {s.events.length > 0 && <button type="button" onClick={() => scrollToSection("jcp-actions")} style={jumpBtn}>Actions</button>}
+        </div>
+      )}
+
       {/* 4. Job Report */}
       <Section title="Job report">
         {report ? (
@@ -196,7 +214,7 @@ export default function JobClosedPanel({
 
       {/* 5. DVIRs */}
       {s && s.dvirs.length > 0 && (
-        <Section title={`DVIRs (${s.dvirs.length})`}>
+        <Section id="jcp-dvirs" title={`DVIRs (${s.dvirs.length})`}>
           <div className="col" style={{ gap: 8 }}>
             {s.dvirs.map((d) => (
               <div key={d.dvir_id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
@@ -217,7 +235,7 @@ export default function JobClosedPanel({
 
       {/* 6. Incidents & Photos */}
       {s && (s.incidents.length > 0 || s.photos.length > 0) && (
-        <Section title={`Incidents & photos`} danger={s.incidents.length > 0}>
+        <Section id="jcp-incidents" title={`Incidents & photos`} danger={s.incidents.length > 0}>
           {s.incidents.map((i) => (
             <div key={i.incident_uuid} style={{ borderTop: "1px solid var(--border)", paddingTop: 8, marginTop: 8 }}>
               <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -257,7 +275,7 @@ export default function JobClosedPanel({
 
       {/* 7. Actions log (timeline) */}
       {s && s.events.length > 0 && (
-        <Section title={`Actions log (${s.events.length})`}>
+        <Section id="jcp-actions" title={`Actions log (${s.events.length})`}>
           <div className="col" style={{ gap: 4 }}>
             {s.events.map((e) => (
               <div key={e.event_id} className="row" style={{ justifyContent: "space-between", gap: 8, padding: "3px 0", borderTop: "1px solid var(--border)" }}>
