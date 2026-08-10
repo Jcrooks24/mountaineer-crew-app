@@ -93,12 +93,13 @@ The app checks for new builds on its own, periodically while it's open and whene
 App Version Name
 The current app release is Version 2.3. The Profile tab also shows a friendly two-word build name (e.g. "Brave Otter") plus a smaller build ID for the exact build you're running. When reporting a problem to Jacob, include the build name and build ID; they pinpoint exactly which build you're on.
 Tools & Resources
-Below the update button, a "Tools & Resources" card groups every feature that doesn't live on the Timeline tab:
-Scheduling Availability: submit which days you can work. Shows a warning badge when you're overdue. See Section 11.
-Log Expense / Reimbursement: mileage, personal-card reimbursement, or company-card receipts. See Section 10.
-Long Distance Compliance: Prior On-Duty Hours Statement, Record of Duty Status, and Digital Bill of Lading for interstate jobs. See Section 3.2 and 3.3.
-Log Off-Job Hours: log hours for work not tied to a customer job (shop work, errands, anything not billed to a move). Enter the date, clock in/out, any break periods, and a note; net hours calculate automatically. Works offline and syncs on reconnect.
-Document Library: browse and download company reference documents. See Section 9.
+The "Tools & Resources" card was removed from the Profile tab in August 2026. Everything that was on it now lives on the Tools tab in the bottom navigation, which is where you should go for any feature that doesn't live on the Timeline tab:
+Availability: submit which days you can work. See Section 11. (The overdue warning is now the banner that appears at the top of the app, not a badge on the Profile card.)
+Reimbursement: mileage, personal-card reimbursement, or company-card receipts. See Section 10.
+Long-distance: Prior On-Duty Hours Statement, Record of Duty Status, and Digital Bill of Lading for interstate jobs. See Section 3.2 and 3.3.
+Off-job hours: log hours for work not tied to a customer job (shop work, errands, anything not billed to a move). Enter the date, clock in/out, any break periods, and a note; net hours calculate automatically. Works offline and syncs on reconnect.
+Documents: browse and download company reference documents. See Section 9.
+DVIR, Report a bug, and Request a feature are on the same Tools tab.
 Worked Hours
 A "Worked Hours" card on the Profile tab shows your own logged hours by week: regular, overtime, and non-billable, pulled from the Employee Hours entered on job reports plus any off-job hours. It is your personal view of what you have logged; you do not edit it here.
 
@@ -144,12 +145,12 @@ When the DVIR reminder pops between jobs, select the appropriate multi-job optio
 When a job crosses state lines, additional FMCSA hours-of-service rules apply. Three tools are available under the Long Distance menu in your Profile: the Prior On-Duty Hours Statement, the Record of Duty Status, and the Digital Bill of Lading (Section 3.3).
 Prior On-Duty Hours Statement (FMCSA 395.8(j)(2))
 Required before departure on any interstate trip, from every driver on the trip. It is filed per driver, not once per trip: on a multi-driver job, each driver files their own statement. You declare how many hours you've worked over the prior 7 days and the prior 24 hours.
-Open Profile → Long Distance → Prior On-Duty Hours Statement.
+Open the Tools tab → Long-distance → Prior On-Duty Hours Statement.
 Enter your hours worked for each of the past 7 days and your hours in the last 24.
 Sign and submit before the truck leaves.
 Record of Duty Status (RODS)
 For interstate trips, federal law requires a daily log of your duty status with timestamps for every change. The four duty statuses are: Off Duty, Sleeper Berth, Driving, and On Duty (Not Driving).
-Open Profile → Long Distance → Record of Duty Status.
+Open the Tools tab → Long-distance → Record of Duty Status.
 Log each duty status change as it happens throughout the trip day.
 Add remarks for notable events (fuel stops, inspections, loading/unloading).
 Sign and submit at end of day.
@@ -157,7 +158,7 @@ MULTI-DRIVER TRIPS: The Report tab's RODS section auto-creates one sign-off bloc
 TRALA EXEMPTION (MOVERS EXEMPTION): Some interstate moving jobs qualify for a reduced RODS requirement under the TRALA movers exemption. The app documents this exemption for reference. During a traffic stop, an enforcement officer may request that you produce the TRALA document embedded within the app.
 ### 3.3 Digital Bill of Lading (BOL)  NEW
 A Bill of Lading is the shipping contract and receipt for the shipment: it declares the inventory being carried, its condition, and the terms of carriage, and federal law requires one for every interstate shipment. The app now builds, signs, and delivers this document digitally in the field instead of on paper.
-Open Profile → Long Distance → Digital Bill of Lading.
+Open the Tools tab → Long-distance → Digital Bill of Lading.
 Where It Lives
 A BOL is tied to the same job the crew already selected on the Timeline; there's no separate job picker. Opening the BOL tool shows any open (unsigned or partially signed) BOL for that job so a second crew member picks up exactly where the first left off, or lets you start a new one.
 Building the Inventory
@@ -352,7 +353,7 @@ Downloading requires signal. Browsing the cached list works offline.
 ## 10. EXPENSES & REIMBURSEMENT
 The Expenses screen lets crew log mileage, request reimbursement for out-of-pocket purchases, and record company-card purchases. It replaces texting photos of receipts and odometers to Jacob.
 ### 10.1 Opening the Expenses Screen
-Open the Profile tab and tap "Log an expense or request reimbursement" under the "Log Expense / Request Reimbursement" card.
+Open the Tools tab and tap "Reimbursement".
 The screen has two modes, chosen with the toggle at the top:
 Mileage: odometer-based mileage reimbursement
 Business expense: a purchase, either personal-card or company-card
@@ -385,7 +386,7 @@ Behind the scenes, photos upload to Google Drive and each submission is written 
 ### 10.5 Offline Behavior
 The Expenses screen works fully offline. Submissions are queued on your phone and sync automatically when you're back online; photos upload on reconnect. A submission sitting at "Pending sync" is normal when you have no signal; it will go through on its own.
 ## 11. SCHEDULING AVAILABILITY
-Scheduling Availability is how crew tell the office which days they can work, two weeks at a time. It replaces texting Jacob your availability or hoping the schedule lines up with your calendar. It lives under Profile → Tools & Resources → Scheduling Availability.
+Scheduling Availability is how crew tell the office which days they can work, two weeks at a time. It replaces texting Jacob your availability or hoping the schedule lines up with your calendar. It lives under the Tools tab → Availability.
 ### 11.1 How It Works
 Availability is submitted in rolling 2-week windows. Each day in a window gets one of three statuses:
 Available: you can be scheduled this day.

@@ -279,8 +279,30 @@ server-fetched link metadata. `removed_at` / `removed_by` are `[-]`, soft delete
 | | |
 |---|---|
 | Endpoint | `GET /api/dq/my`, `POST /api/dq/my/upload`, `GET /api/dq/doc-types`, plus admin routes |
-| Storage | Google Drive, category `DQ - <driver name>`; `DqDocument` row in Postgres holds `drive_file_id` and `drive_url` |
+| Storage | Google Drive: a per-driver subfolder named `<driver name>` under `DRIVE_DQ_FOLDER_ID`; `DqDocument` row in Postgres holds `drive_file_id`, `drive_url` and `drive_folder_id` |
 | Export | **none. No Sheet row.** |
+
+**Changed 2026-08-10.** Was `Mountaineer Crew Documents / DQ - <driver name>`,
+resolved by folder NAME. Now a dedicated top-level folder addressed by ID, with the
+driver's subfolder created on their first submission and reused after.
+
+| Field | Path | |
+|---|---|---|
+| `drive_file_id` | device -> Postgres -> Drive | [x] |
+| `drive_url` | device -> Postgres -> Drive | [x] |
+| `drive_folder_id` | Drive -> Postgres (new, migration `c3e5g7b9d1f3`) | [x] |
+
+`drive_folder_id` is denormalized onto each of the driver's rows and read back on
+the next upload so the folder is addressed **by ID**, not re-resolved by name. That
+is what keeps a driver who changes their name on one compliance folder instead of
+silently starting a second one. NULL on existing rows: they resolve by name once on
+their next upload, which reproduces the old behavior exactly.
+
+**`DRIVE_DQ_FOLDER_ID` must be set per environment.** Unset, the code falls back to
+the previous Documents-folder parent, which resolves by name and therefore points
+staging and prod at the SAME physical folder. These documents are DOT compliance
+records containing PII, so a shared folder is the failure mode that matters most
+here. There is deliberately no name-based fallback for the DQ folder itself.
 
 **One current copy per (driver, doc type).** A new upload replaces in place and
 **deletes the old Drive file** (`delete_drive_file`). There is no version history: the

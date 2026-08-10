@@ -35,6 +35,12 @@ class DqDocument(Base):
     drive_file_id = Column(String, nullable=True)
     drive_url = Column(String, nullable=True)
     filename = Column(String, nullable=True)
+    # The driver's own DQ subfolder. Denormalized onto every row of theirs (the
+    # value is per-driver, not per-document) so the folder can be addressed by
+    # ID on later uploads instead of re-resolved by name. That is what keeps a
+    # driver who changes their name on ONE compliance folder rather than
+    # silently starting a second one. Any row for the driver can supply it.
+    drive_folder_id = Column(String, nullable=True)
 
     # "submitted" once a file is present. Reserved for future states (e.g. an
     # admin-reviewed flag) without a migration churn.

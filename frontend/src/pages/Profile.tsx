@@ -11,7 +11,6 @@ import {
   checkForAppUpdate,
   type UpdateResult,
 } from "../lib/appUpdate";
-import { fetchState, isHorizonLow, loadCache } from "../lib/availabilityStore";
 import { BetaTag } from "../components/BetaTag";
 import AppHeader from "../components/AppHeader";
 
@@ -72,31 +71,12 @@ export default function Profile() {
     return () => window.clearTimeout(t);
   }, []);
 
-  // Availability horizon - cache on mount, then refresh from server so the
-  // "you need to submit" badge is current. We only need to know whether the
-  // horizon is below the 14-day threshold; the picker page itself owns the
-  // full state.
-  const [availabilityHorizonLow, setAvailabilityHorizonLow] = useState<boolean>(() => {
-    const cache = loadCache();
-    const today = new Date();
-    const y = today.getFullYear();
-    const m = String(today.getMonth() + 1).padStart(2, "0");
-    const d = String(today.getDate()).padStart(2, "0");
-    return isHorizonLow(cache.horizon, `${y}-${m}-${d}`);
-  });
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const s = await fetchState();
-      if (!s || cancelled) return;
-      const today = new Date();
-      const y = today.getFullYear();
-      const m = String(today.getMonth() + 1).padStart(2, "0");
-      const d = String(today.getDate()).padStart(2, "0");
-      setAvailabilityHorizonLow(isHorizonLow(s.horizon, `${y}-${m}-${d}`));
-    })();
-    return () => { cancelled = true; };
-  }, []);
+  // The availability-horizon state that used to drive the "you need to submit"
+  // badge on the Tools & Resources card went with that card (2026-08-10). The
+  // nag itself is unaffected: AvailabilityReminderBanner (mounted app-wide in
+  // main.tsx) computes the same horizon and is the surface crew actually see.
+  // Nothing here fetched on the banner's behalf, so this removed a duplicate
+  // fetchState() call on every Profile mount.
 
   function handleSignOut() {
     logout();
@@ -286,39 +266,11 @@ export default function Profile() {
         <AppRefreshButton />
       </div>
 
-      {/* Tools & resources - nav links grouped into one card with consistent
-          flat rows, so the page reads as a short list. */}
-      <div className="card">
-        <div className="microLabel" style={{ marginBottom: 10 }}>Tools & Resources</div>
-        <div className="col" style={{ gap: 8 }}>
-          <ProfileNavRow
-            label="Scheduling Availability"
-            hint={
-              availabilityHorizonLow
-                ? "Update needed - submit availability for the next 2 weeks"
-                : "Tap days to set available / unavailable / conditional"
-            }
-            betaFeature="schedulingAvailability"
-            badgeTone={availabilityHorizonLow ? "warn" : null}
-            onClick={() => nav("/availability")}
-          />
-          <ProfileNavRow
-            label="Log Expense / Reimbursement"
-            hint="Mileage, personal-card reimbursement, or company-card receipts"
-            onClick={() => nav("/reimbursement")}
-          />
-          <ProfileNavRow
-            label="Log Off-Job Hours"
-            hint="Hours for work not tied to a job (usually pre-approved)"
-            betaFeature="offJobHours"
-            onClick={() => nav("/off-job")}
-          />
-          <ProfileNavRow
-            label="Document Library"
-            onClick={() => nav("/documents")}
-          />
-        </div>
-      </div>
+      {/* The Tools & Resources card was removed 2026-08-10: every row in it
+          (Availability, Reimbursement, Off-job hours, Document Library) is a
+          tile on the Tools tab, so it was a second front door to the same four
+          routes. The availability nag it used to carry is unaffected -
+          AvailabilityReminderBanner is mounted app-wide in main.tsx. */}
 
       {/* Driver qualification documents (C4). Anchored so the DQ reminder's
           "Submit now" (which links to /profile#dq) scrolls straight here rather
@@ -352,63 +304,6 @@ export default function Profile() {
   );
 }
 
-// Flat, list-style navigation row - lighter than a default button so a card
-// full of links doesn't read as a wall of buttons.
-function ProfileNavRow({
-  label,
-  hint,
-  onClick,
-  betaFeature,
-  badgeTone,
-}: {
-  label: string;
-  hint?: string;
-  onClick: () => void;
-  /** Feature key to gate a "beta" subtext via the shared BetaTag component. */
-  betaFeature?: string;
-  /** Renders a small filled dot to the right of the label when set; "warn"
-   *  surfaces action-needed states (e.g. submit availability). */
-  badgeTone?: "warn" | null;
-}) {
-  const warn = badgeTone === "warn";
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        gap: 12, width: "100%", textAlign: "left",
-        padding: "11px 14px", fontSize: 14, fontWeight: 600,
-        background: "rgba(255,255,255,0.04)",
-        border: warn ? "1px solid var(--warn)" : "1px solid var(--border)",
-      }}
-    >
-      <span className="col" style={{ gap: 2 }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {label}
-          {warn && (
-            <span
-              aria-label="Action needed"
-              style={{
-                width: 8, height: 8, borderRadius: "50%",
-                background: "var(--warn)", flexShrink: 0,
-              }}
-            />
-          )}
-        </span>
-        {betaFeature && <BetaTag feature={betaFeature} />}
-        {hint && (
-          <span
-            className="small"
-            style={{ color: warn ? "var(--warn)" : "var(--muted)" }}
-          >
-            {hint}
-          </span>
-        )}
-      </span>
-      <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
-    </button>
-  );
-}
 
 function AppRefreshButton() {
   const [status, setStatus] = useState<"idle" | "checking" | "result">("idle");

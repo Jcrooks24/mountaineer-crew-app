@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import AppHeader from "../components/AppHeader";
+import BetaTag from "../components/BetaTag";
 import { Tile, TileGrid, TileIcons } from "../components/Tile";
 
 /**
@@ -20,7 +21,11 @@ export default function Tools() {
         <Tile icon={<TileIcons.dollar />} label="Reimbursement" sublabel="Mileage & expenses" onClick={() => nav("/reimbursement")} />
         <Tile icon={<TileIcons.doc />} label="Documents" sublabel="Guides & forms" onClick={() => nav("/documents")} />
         <Tile icon={<TileIcons.calendar />} label="Availability" sublabel="Set your days" onClick={() => nav("/availability")} />
-        <Tile icon={<TileIcons.clock />} label="Off-job hours" sublabel="Log non-job time" onClick={() => nav("/off-job")} />
+        {/* Carries the beta tag the removed Profile "Tools & Resources" card
+            used to own. offJobHours is still in BETA_FEATURES; BetaTag renders
+            null once it graduates, so this needs no cleanup at the next
+            APP_VERSION bump. */}
+        <Tile icon={<TileIcons.clock />} label="Off-job hours" sublabel="Log non-job time" onClick={() => nav("/off-job")} badge={<BetaTag feature="offJobHours" />} />
         <Tile icon={<TileIcons.road />} label="Long-distance" sublabel="HOS, RODS, per-diem" onClick={() => nav("/long-distance")} />
         <Tile icon={<TileIcons.bug />} label="Report a bug" sublabel="Something broken or off" onClick={() => nav("/report-bug")} />
         <Tile icon={<TileIcons.lightbulb />} label="Request a feature" sublabel="Suggest an idea or change" onClick={() => nav("/request-feature")} />

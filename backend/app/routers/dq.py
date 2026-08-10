@@ -31,7 +31,7 @@ from app.core.dq_doc_types import (
 from app.db.models.dq_document import DqDocument
 from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
-from app.integrations.drive_upload import delete_drive_file, upload_file_to_drive
+from app.integrations.drive_upload import delete_drive_file, upload_dq_file_to_drive
 
 router = APIRouter(prefix="/api/dq", tags=["dq"])
 admin_router = APIRouter(prefix="/api/admin/dq", tags=["dq"])
@@ -81,12 +81,27 @@ def _do_upload(
     if len(content) > MAX_DQ_BYTES:
         raise HTTPException(status_code=413, detail="File too large (20 MB max)")
 
-    result = upload_file_to_drive(
+    # The driver's folder is named for the driver, not the doc. Any existing row
+    # of theirs carries the folder ID from a previous submission; the first
+    # submission has none and creates the folder. Addressing it by ID afterwards
+    # is what keeps a rename from splitting their compliance file in two.
+    known_folder_id = (
+        db.query(DqDocument.drive_folder_id)
+        .filter(
+            DqDocument.user_id == user_id,
+            DqDocument.drive_folder_id.isnot(None),
+        )
+        .limit(1)
+        .scalar()
+    )
+
+    result = upload_dq_file_to_drive(
         db,
         BytesIO(content),
         file.filename or f"{doc_type}.pdf",
         file.content_type or "application/pdf",
-        category=f"DQ - {driver.name or driver.email}",
+        driver_folder_name=driver.name or driver.email,
+        known_folder_id=known_folder_id,
     )
 
     now = datetime.now(timezone.utc)
@@ -102,6 +117,7 @@ def _do_upload(
         r.doc_name = t["name"]
         r.drive_file_id = result["file_id"]
         r.drive_url = result.get("url", "")
+        r.drive_folder_id = result.get("folder_id")
         r.filename = file.filename
         r.status = "submitted"
         r.submitted_by_id = submitter.id

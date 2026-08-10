@@ -373,7 +373,24 @@ Live bugs that are known and not yet fixed. If you hit one of these, you have fo
 a real issue, not a misunderstanding. Keep this list honest: delete an entry when it
 is fixed, and add one when a `/vet` pass finds something you cannot fix that day.
 
-1. **The long-distance day queue never drains: `drive_day` never reaches the server.**
+1. **DQ documents are world-readable to anyone with the link.** Every DQ upload
+   gets a Drive `{"type": "anyone", "role": "reader"}` permission
+   (`drive_upload.py::upload_dq_file_to_drive`). These are medical cards,
+   employment applications and MVRs - PII, and DOT compliance records. Anyone
+   holding a `drive_url` can open one without authenticating.
+
+   It is this way because the frontend links straight to `webViewLink`
+   (`DqFilesTab.tsx:173`, `DqMyFileCard.tsx:126`), so a driver opening their own
+   medical card needs the link to work with no Google account. Removing the
+   permission without changing that breaks viewing for every driver.
+
+   The fix is to proxy downloads through an authenticated backend route
+   (`GET /api/dq/{id}/file`, role-gated the way the rest of DQ already is) and
+   stop granting public reader. That is its own change with its own ADR, not a
+   one-line edit. Found 2026-08-10 while moving DQ files to their own folder;
+   the folder move neither caused nor worsened it.
+
+2. **The long-distance day queue never drains: `drive_day` never reaches the server.**
    `LdWorkday.tsx:70` calls `setLdDay()` when the crew picks "Driving" in the LD day
    plan. That writes `crew_ld_day_v1:<date>` and pushes an upsert onto
    `crew_ld_day_queue_v1`. **Nothing in the app calls `ldDayStore.syncQueue()`** -
