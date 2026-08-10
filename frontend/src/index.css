@@ -25,10 +25,25 @@
   --btn-bg-to: #1a2a47;
   --btn-pad: 10px 14px;
 
-  /* Text color that sits on top of bright brand-coloured surfaces
-     (.btnPrimary, active tab). Follows the Text-Color setting so "Light
-     text" mode flips button copy to light too. */
+  /* Ink that sits on top of a filled surface: --on-brand on .btnPrimary and
+     the active tab, --on-ok on the completed-state checkbox. Both are
+     COMPUTED from their fill color at runtime by applySettings() and do NOT
+     follow the Text-Color setting - a bright brand on a dark theme needs dark
+     ink while body text stays light (ADR 0035). The values here are only the
+     pre-hydration defaults, matching the dark-ocean preset.
+     Never write `var(--on-brand, #fff)`; these are always set. */
   --on-brand: #0b1220;
+  --on-ok: #0b1220;
+
+  /* Spacing scale. These are the five layout constants DESIGN_SYSTEM.md
+     already specified in prose; they are tokens now so new work has something
+     to reference. Existing literals are converted opportunistically, not in a
+     sweep - see docs/INCREMENTAL_WORK.md. */
+  --space-page: 12px;   /* page container horizontal padding */
+  --space-gap: 8px;     /* gap between cards */
+  --space-card: 14px;   /* card padding */
+  --space-row-min: 48px;  /* min interactive-row height */
+  --space-btn-min: 36px;  /* min button height */
 }
 
 *{ box-sizing: border-box; }

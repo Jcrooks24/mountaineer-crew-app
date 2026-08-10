@@ -1368,7 +1368,7 @@ function AddItemDialog({
                       borderRadius: 99,
                       border: "1px solid var(--border)",
                       background: sub === s ? "var(--brand)" : "rgba(255,255,255,0.06)",
-                      color: sub === s ? "#0b1220" : "var(--text)",
+                      color: sub === s ? "var(--on-brand)" : "var(--text)",
                       fontSize: 13,
                       cursor: "pointer",
                       fontWeight: sub === s ? 700 : 400,

@@ -131,7 +131,7 @@ export default function JobChecklistCard({
                     flexShrink: 0, width: 20, height: 20, borderRadius: 5, marginTop: 1,
                     border: checked ? "none" : "2px solid var(--border)",
                     background: checked ? "var(--ok)" : "transparent",
-                    color: "#fff", fontSize: 14, lineHeight: "20px", textAlign: "center",
+                    color: "var(--on-ok)", fontSize: 14, lineHeight: "20px", textAlign: "center",
                   }}
                 >
                   {checked ? "✓" : ""}

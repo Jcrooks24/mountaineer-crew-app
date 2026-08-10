@@ -303,7 +303,7 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
             width: 22, height: 22, flexShrink: 0, borderRadius: 6, display: "grid", placeItems: "center",
             background: done ? "var(--ok)" : "transparent",
             border: done ? "none" : "1.5px solid var(--border)",
-            color: "#0b1f14", fontWeight: 800, fontSize: 14,
+            color: "var(--on-ok)", fontWeight: 800, fontSize: 14,
           }}
         >
           {done ? "✓" : ""}

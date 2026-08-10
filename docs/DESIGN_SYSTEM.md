@@ -18,8 +18,9 @@ almost always a bug on some theme.
 | `--muted` | Secondary / label text |
 | `--border` | Hairline borders, dividers |
 | `--brand` / `--brand2` | The single interactive color (enterprise collapses → flat solid) |
-| `--on-brand` | Ink on a brand-filled surface (button/active tab) |
+| `--on-brand` | Ink on a brand-filled surface (button/active tab). **Computed** from the brand color by contrast, never from the Text-Color setting ([ADR 0035](decisions/0035-brand-ink-is-computed-from-the-brand-color.md)). Always set, on every path - do not write a `var(--on-brand, #fff)` fallback |
 | `--ok` `--danger` `--warn` `--scheduled` | Semantic status ONLY |
+| `--on-ok` | Ink on an `--ok`-filled surface (the completed-state checkbox). Computed, same rule as `--on-brand` |
 
 - **Never** put dark text on a dark theme or light on a light one. The
   Text-Color guard in `applySettings` enforces this at the theme level; do not
@@ -61,6 +62,24 @@ switch, mono money/odo, dot status badge).
 - **Beta features:** keep the `<BetaTag feature="..." />` until the next
   `APP_VERSION` bump (unchanged by the facelift).
 
+## Intentional hardcoded colors (do NOT "fix" these)
+
+The golden rule above says a hardcoded hex is almost always a bug. These are the
+exceptions. They are deliberate, and a tool or reviewer sweeping for hardcoded
+colors will flag every one of them.
+
+| Where | Why it is correct |
+|---|---|
+| `theme/ThemeContext.tsx` | This is where the palettes are **defined**. Every preset value lives here by definition. |
+| `components/ErrorBoundary.tsx` (8 values) | It has to render when theming has failed. Referencing a var that may never have been set is exactly the failure mode it exists to catch. Tokens here would be the bug. |
+| `App.tsx` `optionStyle` | Native `<option>` elements do not reliably inherit themed colors across platforms. A fixed dark-on-white pair is the standard workaround. |
+| `components/BillOfLadingForm.tsx` (`#fff` on `rgba(0,0,0,0.55)`) | An overlay label on a photo. The scrim is its own surface, not a themed one, so the ink is fixed against the scrim rather than the theme. |
+| `pages/Admin.tsx` (~line 158, header text) | The admin backdrop is always a dark image regardless of the active theme, so `--text` would be wrong on light presets. Already commented in place. |
+
+Anything **not** on this list that hardcodes ink on a themed fill is drift. The
+pattern to reach for is a computed `--on-*` ink (see `pickInk` in
+`ThemeContext.tsx`), not a literal that happens to look right on your theme.
+
 ## Reconciliation with the external Figma spec
 
 An external design doc (Figma) specified this look in full. We adopt its
@@ -101,7 +120,11 @@ label weight is capped at 600 globally.
   (Inter 600, 0.9375rem), address (`--muted`, 0.8125rem), then a `.mono`
   metadata row (job id · crew · type). Never color the status row background.
 - Page container 12px horizontal padding; 8px gap between cards; 14px card
-  padding; 48px min interactive-row height; 36px min button height.
+  padding; 48px min interactive-row height; 36px min button height. These are
+  tokens in `index.css` - `--space-page`, `--space-gap`, `--space-card`,
+  `--space-row-min`, `--space-btn-min`. **Use the token in new work.** Existing
+  literals are converted opportunistically, never in a sweep (see
+  [INCREMENTAL_WORK.md](INCREMENTAL_WORK.md)).
 
 ## Layout — admin desktop shell (Phase C — shell + roster table + metrics strip built; see Rollout status)
 

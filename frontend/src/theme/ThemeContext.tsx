@@ -429,6 +429,43 @@ function relLuminance(hex: string | undefined): number {
   return 0.2126 * chan((n >> 16) & 255) + 0.7152 * chan((n >> 8) & 255) + 0.0722 * chan(n & 255);
 }
 
+// The two inks the app uses on a filled (non-background) surface. Same values
+// the Text-Color setting uses for body text, so a computed choice still looks
+// like it belongs to the theme.
+const FILL_INK_DARK = "#0b1220";
+const FILL_INK_LIGHT = "#f5f7fa";
+
+/** WCAG 2.x contrast ratio between two hex colors. 1 = identical, 21 = max. */
+function contrastRatio(a: string, b: string): number {
+  const l1 = relLuminance(a);
+  const l2 = relLuminance(b);
+  const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * Ink for text/glyphs sitting ON a filled surface: a primary button or active
+ * tab (`--brand`), or a completed-state checkbox (`--ok`).
+ *
+ * Decided by the FILL color, never by the body Text-Color setting. Those are
+ * different surfaces with independent polarity: Deep Forest is a dark theme
+ * (light body text) whose brand is a bright mint (#34d399, needs dark ink).
+ * Tying the two together put #f5f7fa on #34d399 at 1.79:1 - the button label was
+ * there, but effectively invisible, and crew can trigger it themselves by
+ * setting Text-Color to "Light text". Same failure on dark-ocean (1.65:1),
+ * sunset (2.11:1), steel (2.35:1) and midnight-purple (2.54:1). See ADR 0035.
+ *
+ * relLuminance returns 0.5 for anything it cannot parse, which resolves to the
+ * dark ink - the same value --on-brand defaulted to before, so an unparseable
+ * brand override degrades to the old behavior rather than to something
+ * unreadable.
+ */
+function pickInk(fill: string | undefined): string {
+  return contrastRatio(fill ?? "", FILL_INK_DARK) >= contrastRatio(fill ?? "", FILL_INK_LIGHT)
+    ? FILL_INK_DARK
+    : FILL_INK_LIGHT;
+}
+
 function applySettings(settings: ThemeSettings) {
   const preset = THEME_PRESETS[settings.themeId] ?? THEME_PRESETS["dark-ocean"];
   const root = document.documentElement;
@@ -442,9 +479,8 @@ function applySettings(settings: ThemeSettings) {
   if (settings.brandOverride) root.style.setProperty("--brand", settings.brandOverride);
   if (settings.brand2Override) root.style.setProperty("--brand2", settings.brand2Override);
 
-  // Text contrast override. Also drives `--on-brand`, the color used for
-  // text on bright brand-coloured surfaces (primary buttons, active tabs),
-  // so the whole app follows the setting end-to-end.
+  // Text contrast override, for BODY text only. `--on-brand` is deliberately
+  // NOT set here - see the brand-ink block below for why.
   //
   // The override is CONFLICT-AWARE: forcing "dark text" on a dark-background
   // theme (or "light text" on a light one) renders text-on-same-shade and is
@@ -456,25 +492,34 @@ function applySettings(settings: ThemeSettings) {
   if (settings.textMode === "light" && bgIsDark) {
     root.style.setProperty("--text", "#f5f7fa");
     root.style.setProperty("--muted", "#c6cedb");
-    root.style.setProperty("--on-brand", "#f5f7fa");
   } else if (settings.textMode === "dark" && !bgIsDark) {
     root.style.setProperty("--text", "#1a2030");
     root.style.setProperty("--muted", "#5a6a7e");
-    root.style.setProperty("--on-brand", "#0b1220");
-  } else {
-    // "preset" mode, OR a conflicting forced mode we refuse to apply: keep the
-    // preset's --text / --muted (set above) and use the preset's brand ink if
-    // it declares one (e.g. the enterprise blue needs white), else dark navy.
-    root.style.setProperty("--on-brand", preset.vars["--on-brand"] ?? "#0b1220");
   }
+  // else: "preset" mode, or a conflicting forced mode we refuse to apply -
+  // keep the preset's --text / --muted, already set above.
 
-  // A preset that declares its own brand ink always wins for --on-brand, even
-  // under an explicit Text-Color choice: the enterprise blue button needs white
-  // regardless of the body text mode. Without this, "Dark text" put dark ink on
-  // the blue button (unreadable, esp. on Enterprise Light).
-  if (preset.vars["--on-brand"]) {
-    root.style.setProperty("--on-brand", preset.vars["--on-brand"]!);
-  }
+  // Brand ink. Decided by the brand color, independent of the body Text-Color
+  // setting, because a brand-filled surface has its own polarity (see
+  // pickBrandInk). A preset that declares --on-brand wins, since that is a
+  // deliberate authored choice - but only while the brand is the preset's own.
+  // Once the user overrides the brand we must compute, because no authored
+  // value can anticipate an arbitrary color (declaring white and then picking a
+  // yellow brand would be unreadable).
+  root.style.setProperty(
+    "--on-brand",
+    settings.brandOverride
+      ? pickInk(settings.brandOverride)
+      : preset.vars["--on-brand"] ?? pickInk(preset.vars["--brand"]),
+  );
+
+  // Ink for a glyph on an --ok fill (the completed-state checkbox). Same
+  // reasoning as --on-brand: --ok is a bright green on 7 of 8 presets and a dark
+  // forest green on enterprise-light, so no single hardcoded ink works. The two
+  // call sites had drifted to opposite answers - JobChecklistCard used white
+  // (1.74:1 on midnight-purple/sunset) and JobReport used dark (3.43:1 on
+  // enterprise-light). --ok has no user override, so the preset value is final.
+  root.style.setProperty("--on-ok", pickInk(preset.vars["--ok"]));
 
   // Font
   root.style.setProperty("--font", settings.fontValue);

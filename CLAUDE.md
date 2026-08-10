@@ -20,6 +20,7 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 | [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) | Admin-facing guide: what admin can do in the app. Keep accurate against `Admin.tsx` / `admin.py`. |
 | [docs/CREW_GUIDE.md](docs/CREW_GUIDE.md) | Crew-facing reference & troubleshooting guide (every feature + failure modes). Master formatted copy lives in the shared doc. |
 | [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) | The visual contract: tokens, primitives, patterns. Read before restyling or building a screen. Rationale in [ADR 0025](docs/decisions/0025-enterprise-design-system-facelift.md). |
+| [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) | Cleanups paid down opportunistically, a few per commit, in files you are already editing. Check it whenever you touch a frontend file. |
 
 ## Definition of done
 
@@ -32,6 +33,7 @@ A change is not done when the code works. It is done when the next person can st
 4. **Made a decision someone would be tempted to undo?** → write the ADR in `docs/decisions/` now. Apply the test in that folder's README.
 5. **Found a bug you did not fix?** → add it to Known defects in `docs/RUNBOOKS.md`. **Fixed one that is listed?** → delete the entry.
 6. **Changed setup, local dev, or deploy?** → `README.md` is current.
+7. **Edited a frontend file?** → check [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) and apply any items that match **the files you already touched**. A few per commit, noted in the commit message. Do not go hunting in other files, and do not let it become the point of the commit. Skip anything not obviously safe.
 
 Run **`/handoff`** at the end of a working session to sweep all of this. Run **`/vet`** before promoting to `main`.
 

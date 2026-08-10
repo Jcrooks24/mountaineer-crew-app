@@ -846,7 +846,7 @@ const addBtnStyle: React.CSSProperties = {
   borderRadius: 10,
   border: "none",
   background: "var(--brand)",
-  color: "#00120e",
+  color: "var(--on-brand)",
   fontWeight: 700,
   fontSize: 14,
   cursor: "pointer",
