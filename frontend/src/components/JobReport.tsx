@@ -2347,7 +2347,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                     style={{
                       padding: "8px 18px", fontSize: 13, fontWeight: on ? 700 : 500, cursor: "pointer", border: "none",
                       background: on ? "var(--brand)" : "transparent",
-                      color: on ? "var(--on-brand, #fff)" : "var(--muted)",
+                      color: on ? "var(--on-brand)" : "var(--muted)",
                     }}
                   >
                     {label}
@@ -2965,7 +2965,7 @@ function ChipPicker({
               cursor: "pointer",
               border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
               background: on ? "var(--brand)" : "transparent",
-              color: on ? "var(--on-brand, #fff)" : "var(--text)",
+              color: on ? "var(--on-brand)" : "var(--text)",
               fontWeight: on ? 700 : 400,
             }}
           >
@@ -3066,7 +3066,7 @@ function DirectionToggle({
               marginLeft: idx === 0 ? 0 : -1,
               borderRadius: idx === 0 ? "999px 0 0 999px" : "0 999px 999px 0",
               background: on ? "var(--brand)" : "transparent",
-              color: on ? "var(--on-brand, #fff)" : "var(--text)",
+              color: on ? "var(--on-brand)" : "var(--text)",
               fontWeight: on ? 700 : 400,
               // The selected half must paint over its neighbour's border.
               position: "relative",
