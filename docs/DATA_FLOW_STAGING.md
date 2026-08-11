@@ -12,29 +12,83 @@ folded into [DATA_FLOW.md](DATA_FLOW.md) at promotion.
 | Compared to | `main` @ `72b544a` |
 | Date verified | 2026-08-06 |
 
-> **STALE BASELINE - reconcile before promoting.** `staging` is 18 commits past
-> `7fe20a4`, and 15 of those commits touched a data path
-> (`routers/`, `integrations/`, `lib/`). Two of those changes are written up in
-> this doc (the DQ folder move, and the queue failure-handling change below);
-> the rest have **not** been reconciled against this ledger.
->
-> Unreconciled commits touching a data path: `3750c3f` (LD job setup owns the
-> BOL header), `176a137` + `fb66575` + `de77fce` + `fe2d27f` (payroll time fixes
-> and the finalize gate), `d8709aa` (BOL shipper-address seed race), `9d9f97f`
-> (RODS driver-keying), `99adc10` (reopen-in-edit / deep links).
->
-> Per the Data-flow doc gate in VETTING_PROTOCOL, "a data path changed in the
-> promotion diff but absent from the staging doc" **blocks the merge** until it
-> is written up. This stamp is deliberately NOT bumped to the current commit:
-> doing so would claim a verification nobody performed, which is the one thing
-> this doc exists to prevent.
-| Verified by | reading the code, not by exercising the app |
+> **Reconciled 2026-08-11 against `staging` @ `7f41611`.** The stamp above is the
+> last full field-level verification. Every commit since that touches a data path
+> has been checked against this ledger; the results are in "Reconciliation
+> 7fe20a4 -> 7f41611" immediately below. The stamp itself is bumped at promotion,
+> when this delta folds into DATA_FLOW.md, per "At promotion".
 
-`7fe20a4` (admin Job Summary sticky nav) is presentation only: ids and
-`scrollMarginTop` in `Admin.tsx`, no queue, endpoint or export touched. Carried
-forward with no ledger change.
+## Reconciliation 7fe20a4 -> 7f41611
 
-Uncommitted work in the working tree is **not** covered. Commit first, then log here.
+18 commits, 7 touching a data path. Checked one by one:
+
+| Commit | Data path | Ledger status |
+|---|---|---|
+| `3750c3f` LD job setup owns the BOL header | `job_setup` PUT gains `bol_header` (migration `b2d4f6a8c1e3`); seeds BOL + RODS | **already logged** under "Job setup", incl. the per-field row and the seed rules |
+| `176a137` block finalize until every job reviewed | new precondition on `POST /api/payroll/finalize` | logged below |
+| `fb66575` gate finalize on report-less jobs | same endpoint, second precondition | logged below |
+| `fe2d27f` multi-day span + per-entry date | `payroll.py` + `employeeHours.ts`: how an entry's date is derived | logged below |
+| `d8709aa` gate de-dup + `mountainHHMM` hourCycle | `payroll.py` + `lib/time.ts` | logged below |
+| `de77fce` pin recorded times to Mountain | `ldDayStore`, `rodsStore`, `lib/time.ts`: the VALUE written | logged below |
+| `9d9f97f` RODS driver-keying | `long_distance.py` + `rodsStore.ts`: how a RODS day is keyed | logged below |
+| `99adc10` reopen-in-edit / deep links | **none** - UI only, no `routers`/`integrations`/`lib` change | not a data path |
+
+### Recorded time is Mountain, not device-local (`de77fce`, `d8709aa`)
+
+**This changes the value written, not the shape.** RODS duty-change stamps and
+LD-day times were recorded in the device's local timezone. A phone on Pacific or
+Central time therefore wrote a different clock reading than the same event on a
+Mountain phone, and payroll then summed them as if they agreed.
+
+Times are now pinned to **America/Denver** at the point of recording
+(`lib/time.ts::mountainHHMM`, using an explicit `hourCycle` so 24-hour formatting
+does not drift by locale). No field was added or removed; existing rows written
+before this carry device-local values and are **not** back-corrected.
+
+| Field | Adheres | Note |
+|---|---|---|
+| RODS `duty_changes_json[].time` | `[x]` | `mountainHHMM`. "A phone in Central must not shift the duty time +1h" |
+| RODS `log_date` | `[x]` | `mountainDateYYYYMMDD` - the DOT log's home-terminal date, not the device's. A late-evening entry from a Pacific phone no longer files under the previous day |
+| `LdDay` recorded times | `[x]` | same treatment |
+
+Rows written before `de77fce` carry device-local values and are **not**
+back-corrected.
+
+### Payroll finalize has two new preconditions (`176a137`, `fb66575`)
+
+`POST /api/payroll/finalize` now refuses when the pay period contains a job that is
+**not reviewed**, or a job with **no report at all**. Both are server-side; the UI
+mirrors them but is not the gate. `d8709aa` de-duplicates the two so a single job
+cannot raise both at once.
+
+No new fields. This is a **write-strategy** change: finalize is no longer
+unconditional, so a period can now be blocked by upstream data that has not landed.
+
+### Entry date is per-entry, not per-job (`fe2d27f`)
+
+A multi-day job used to attribute every hour entry to the job's own date. Hours are
+now attributed to **each entry's own date** (`employeeHours.ts` + `payroll.py`), so a
+job spanning a period boundary splits across periods correctly instead of landing
+wholly in one.
+
+| Field | Adheres | Note |
+|---|---|---|
+| employee-hours entry `date` | `[x]` | **optional.** When present it is authoritative for period assignment; when absent the job's earliest-event date is used, which is the old behavior. So this is additive: existing entries without a `date` are unaffected |
+
+### RODS days are keyed by driver, not by device (`9d9f97f`)
+
+The resume cluster and the shared-trip fetch keyed a RODS day inconsistently, so on a
+multi-driver trip one driver's device could resume **another driver's** day. Keying
+is now `(driver_id, log_date)` on both paths, matching the idempotency key
+VETTING_PROTOCOL already lists for RODS.
+
+| Field | Adheres | Note |
+|---|---|---|
+| RODS `driver_id` | `[x]` | now the join key on resume AND shared-trip fetch |
+
+**Pre-existing rows written before this may carry the wrong `driver_id`** on
+multi-driver trips. Not back-corrected, and worth a spot-check against the RODS tab
+before promoting.
 
 ## A failing staging flow blocks the merge
 
@@ -109,22 +163,14 @@ The full step-by-step is the **Data-flow doc gate** in
 
 # Changed behavior in existing domains
 
-## Two different failure classifiers now coexist
+## One failure classifier (converged 2026-08-11)
 
-`staging` adds `isPermanentFailure` to `frontend/src/api/client.ts` alongside the
-existing `isPermanentRejection` in `lib/queueFailure.ts`. **They do not classify the
-same way.**
+`staging` briefly carried two, and they disagreed. Converged to a single function,
+`lib/queueFailure.ts::isPermanentRejection`. `client.isPermanentFailure` is deleted.
 
-| Classifier | Permanent (op stops retrying) | Used by |
-|---|---|---|
-| `queueFailure.isPermanentRejection` | any 4xx **except** 401, 403, 408 | the 10 original queues: materials, BOL, RODS, LD day, incidents, off-job, office hours, job inventory, estimator, reimbursements |
-| `client.isPermanentFailure` | **only** 400, 404, 409, 422 | `jobSetupStore`, `jobChecklistStore` |
-
-The practical difference is **429**. The old rule treats a rate-limit response as
-permanent and stops; the new rule treats it as transient and keeps retrying. Given
-this app's history with Google Sheets quota, the new rule is the better one. Worth
-deciding whether to converge the old queues onto it before promotion, rather than
-shipping two rules that a successor has to discover.
+**Permanent = every 4xx except 401, 403, 408, 429.** Full reasoning in
+[ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md); the two facts
+that matter to data flow are recorded under "Queue failure handling" below.
 
 ## The long-distance day queue is still dead on staging
 
@@ -154,7 +200,7 @@ off.
 | Trigger | boot and `online` (`App.tsx:1878`, `:1892`) |
 | Endpoint | `GET` / `PUT /api/job-setup/{job_uuid}` |
 | Export | **none. Postgres only, no Sheet row.** |
-| Classifier | `isPermanentFailure` (400/404/409/422) |
+| Classifier | `queueFailure.isPermanentRejection` (converged 2026-08-11) |
 
 A save the server actively rejects (a locked header, 409) is **surfaced, not
 queued**: retrying a locked-header write forever would never succeed. Transient and
@@ -510,7 +556,8 @@ migration painful.
 
 # Not yet documented
 
-Nothing outstanding as of `7fe20a4`.
+Nothing outstanding as of `7f41611`. Every data path changed since the "Verified
+against" stamp is accounted for in "Reconciliation 7fe20a4 -> 7f41611" above.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.
