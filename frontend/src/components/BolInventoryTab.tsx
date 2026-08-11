@@ -13,6 +13,7 @@ import {
 } from "../lib/bolStore";
 import BetaTag from "./BetaTag";
 import SuggestInput from "./SuggestInput";
+import NumberField from "./NumberField";
 
 type Props = {
   jobUuid: string;
@@ -230,12 +231,12 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
           </label>
           <label className="col" style={{ gap: 4, width: 90 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
-            <input
-              type="number"
+            <NumberField
               min={1}
               step={1}
+              integer
               value={itemQty}
-              onChange={(e) => setItemQty(Math.max(1, Math.floor(Number(e.target.value || 1))))}
+              onChange={setItemQty}
             />
           </label>
           <button type="button" className="btnPrimary" onClick={addItem} style={{ minWidth: 90 }}>
@@ -293,11 +294,12 @@ export default function BolInventoryTab({ jobUuid, jobName, jobDate }: Props) {
                     >
                       −
                     </button>
-                    <input
-                      type="number"
+                    <NumberField
                       min={1}
+                      integer
                       value={it.qty}
-                      onChange={(e) => updateItem(it.item_no, { qty: Math.max(1, Math.floor(Number(e.target.value || 1))) })}
+                      onChange={(qty) => updateItem(it.item_no, { qty })}
+                      aria-label={`Quantity for ${it.name}`}
                       style={{ width: 56, textAlign: "center" }}
                     />
                     <button

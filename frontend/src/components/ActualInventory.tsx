@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
 import { useMergedCatalog, splitCatalogNames } from "../lib/furnitureCatalogStore";
+import { hhgWeightLbs } from "../lib/hhg";
+import { fetchRemoteBol } from "../lib/bolStore";
+import { getUnitsCached, refreshUnits, unitByName, payloadCapacity, type VehicleUnit } from "../lib/vehicleUnits";
 import { BetaTag } from "./BetaTag";
 import SuggestInput from "./SuggestInput";
 import {
@@ -78,6 +81,21 @@ export default function ActualInventory({
   const [rows, setRows] = useState<Row[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Weight-capacity flags (B5): the fleet registry + the unit selected on this
+  // job's BOL give the payload capacity to flag the running inventory weight
+  // against. No unit picked yet -> show the estimate without a capacity flag.
+  const [vehUnits, setVehUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
+  const [bolVehicle, setBolVehicle] = useState<string>("");
+  useEffect(() => { refreshUnits().then(setVehUnits).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!jobUuid) return;
+    let cancelled = false;
+    fetchRemoteBol(jobUuid)
+      .then((raw: any) => { if (!cancelled) setBolVehicle(((raw?.shipment?.vehicle || raw?.vehicle) || "").toString().trim()); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobUuid]);
 
   // Unified catalog (server + built-in), split into furniture vs box names for
   // the two search boxes. CSV-imported items show up here automatically.
@@ -206,6 +224,25 @@ export default function ActualInventory({
     }
     return { furniture, boxes, chowCuft: Math.round(chowCuft * 10) / 10, chowPiles };
   }, [rows]);
+
+  // Estimated total weight: catalog weight x qty per item; chow via its cubic
+  // feet x a medium-density planning estimate. Items missing from the catalog
+  // contribute 0 (unknown), so the total is a floor estimate for load planning.
+  const catalogWeight = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of catalog) m.set(c.name.trim().toLowerCase(), c.weight_lbs || 0);
+    return m;
+  }, [catalog]);
+  const estWeight = useMemo(() => {
+    let lbs = 0;
+    for (const r of rows) {
+      if (isChowRow(r)) { lbs += hhgWeightLbs(chowCuftFromNotes(r.notes)); continue; }
+      lbs += (catalogWeight.get((r.name || "").trim().toLowerCase()) ?? 0) * (r.qty || 0);
+    }
+    return Math.round(lbs);
+  }, [rows, catalogWeight]);
+  const unitCapacity = useMemo(() => payloadCapacity(unitByName(vehUnits, bolVehicle)), [vehUnits, bolVehicle]);
+  const weightPct = unitCapacity && unitCapacity > 0 ? estWeight / unitCapacity : null;
 
   // Live chow estimate from the L x W x H (feet) + density inputs.
   const chowPreview = useMemo(() => {
@@ -415,6 +452,30 @@ export default function ActualInventory({
         counts update automatically.
       </div>
 
+      {/* Running estimated weight + capacity flag (B5). Escalates from a quiet
+          line, to an amber warning at 75% of the unit's payload capacity, to an
+          intense red banner over capacity. */}
+      {(estWeight > 0 || unitCapacity != null) && (
+        <div style={{ marginBottom: 12 }}>
+          {weightPct != null && weightPct >= 1 ? (
+            <div style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid var(--danger)", background: "color-mix(in srgb, var(--danger) 22%, transparent)", color: "var(--text)", fontWeight: 700, fontSize: 14 }}>
+              ⚠ OVER weight capacity - est. <span className="mono">{estWeight.toLocaleString()} lb</span> of <span className="mono">{unitCapacity!.toLocaleString()} lb</span> ({Math.round(weightPct * 100)}%) on {bolVehicle}. Redistribute or reduce the load.
+            </div>
+          ) : weightPct != null && weightPct >= 0.75 ? (
+            <div style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid var(--warn)", background: "color-mix(in srgb, var(--warn) 16%, transparent)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
+              Approaching weight capacity - est. <span className="mono">{estWeight.toLocaleString()} lb</span> of <span className="mono">{unitCapacity!.toLocaleString()} lb</span> ({Math.round(weightPct * 100)}%) on {bolVehicle}.
+            </div>
+          ) : (
+            <div className="small" style={{ color: "var(--muted)" }}>
+              Est. loaded weight: <span className="mono" style={{ color: "var(--text)", fontWeight: 600 }}>{estWeight.toLocaleString()} lb</span>
+              {unitCapacity != null
+                ? <> of <span className="mono">{unitCapacity.toLocaleString()} lb</span> capacity ({Math.round((weightPct || 0) * 100)}%) on {bolVehicle}</>
+                : <> {" · "}pick a vehicle unit on the BOL to see capacity</>}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Derived counts */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
         <CountTile label="Furniture" value={counts.furniture} />
@@ -490,7 +551,7 @@ export default function ActualInventory({
                   padding: "8px 16px",
                   borderRadius: 999,
                   border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 500,
                   fontSize: 14,
@@ -561,7 +622,7 @@ export default function ActualInventory({
                   padding: "8px 14px",
                   borderRadius: 999,
                   border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 500,
                   fontSize: 14,
@@ -785,7 +846,7 @@ const addBtnStyle: React.CSSProperties = {
   borderRadius: 10,
   border: "none",
   background: "var(--brand)",
-  color: "#00120e",
+  color: "var(--on-brand)",
   fontWeight: 700,
   fontSize: 14,
   cursor: "pointer",

@@ -166,7 +166,7 @@ Symptoms: the office says a job is missing. The crew swear they logged it.
    - **Last sync = red `error …`** means the *most recent* attempt failed. A grey
      timestamp with "recovered from an error …" underneath means it failed once and
      has synced fine since; that is not something to chase. See
-     [ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md).
+     [ADR 0025](decisions/0025-sheet-writes-retry-quota-and-cache-tab-metadata.md).
    - A `429 RATE_LIMIT_EXCEEDED` or an SSL `EOF occurred` in the error text is a
      transient Google failure. Those are retried with backoff now, so a *current*
      one means the retries were exhausted (a sustained burst, not a blip) - re-save
@@ -179,9 +179,60 @@ Symptoms: the office says a job is missing. The crew swear they logged it.
    [ADR 0003](decisions/0003-staging-prod-sheet-tab-split.md).
 5. **Check the Sheets API in System Check.** If it is failing, go to
    [Google access is broken](#google-access-is-broken). Once access returns, the
-   reconciler backfills events automatically. Note that the reconciler covers
-   **events**; other record types rely on the export firing at write time, so for
-   those you may need to re-save the record to retrigger the export.
+   auto-reconciler backfills everything on its own: events and BOLs every 5
+   minutes, and all other syncs (materials, reports, RODS, reimbursements, ...)
+   every ~20 minutes via the backfill diff (ADR 0031). A record missing from the
+   sheet lands within one cycle without a re-save. App Health WARNs while the
+   Sheet is out of sync. To clear a large backlog faster, use Admin, Advanced
+   Settings, Sync & Accuracy, Sheet Backfill to re-send on demand (100 per sync
+   per click). If a sync's records will not re-send at all, that row shows the
+   export's `last_error` - fix that record's data rather than re-sending again.
+
+---
+
+## The Google Sheet has junk (duplicates, blank rows, overwritten headers)
+
+The 2026-08-05 audit class: a header cell gets overwritten, the sync silently
+mis-handles it, and duplicates or blank rows pile up unnoticed. Three layers now
+cover this - detect, fix, prevent.
+
+**Detect.** `backend/scripts/sheet_integrity_check.py` runs nightly (Render Cron
+Job; emails jacob@ on any FAIL - see CREDENTIALS) and can be run by hand any time:
+
+    DATABASE_URL=<prod> GOOGLE_SHEETS_SPREADSHEET_ID=<id> \
+      POSTMARK_SERVER_TOKEN=<tok> SMTP_FROM=<from> \
+      python backend/scripts/sheet_integrity_check.py
+
+- **FAIL - KEY column missing from a header** = row 1 was overwritten (the `dfg`
+  cascade). That tab's export is ALSO failing closed now (`SheetHeaderError`) and
+  showing RED in Sheet Syncs. Fix the header text in the sheet; exports resume. If
+  duplicates already accumulated, dedupe below (or `repair_reimbursements_sheet.py`
+  for the specific Reimbursements cascade).
+- **FAIL - duplicate `<key>`** = the replace-style delete stopped matching. Run
+  the cleanup tool's `dedupe` step.
+- **FAIL - junk tab** = an env-var-named tab exists. `cleanup_sheet.py --step tabs`.
+- **FAIL - completeness: N server record(s) MISSING from the sheet** = a sync is
+  stuck; those Postgres records never reached the Sheet (the message names the tab
+  and, if the sync is failing, the `last_error`). Re-drive them: Admin -> Advanced
+  Settings -> Sync & Accuracy -> Sheet Backfill (or `POST
+  /api/admin/system-check/sheet-backfill`). If they will not drain, fix the record
+  data behind `last_error`. This is the check that matters most before a DB is
+  retired/migrated - the Sheet is the long-term copy.
+- **WARN - missing columns** = usually staging columns not yet promoted to prod;
+  harmless, clears when the next promotion adds them.
+- **WARN - blank residue rows** = `cleanup_sheet.py --step blankrows` (after a
+  Sync & Accuracy run).
+
+**Fix.** `backend/scripts/cleanup_sheet.py` - dry-run first, per-step `--apply`:
+`tabs`, `blankrows`, `dedupe` (JobReports auto; **Events is report-only** - a naive
+"latest logged_at" rule would keep the device time and delete the admin's manual
+correction, so resolve those 3 by hand), `officehours`, `protect`.
+
+**Prevent (already in code, staging - carry to main at next promotion).**
+`_ensure_tab` fails closed on a corrupted header and auto-protects row 1 of every
+new tab (warning-only); `_delete_sheet_rows_by_value` raises instead of silently
+no-opping when its dedupe key column is gone. Existing tabs were row-1 protected
+by hand on 2026-08-05.
 
 ---
 
@@ -273,13 +324,201 @@ and is retried the next night.
 
 ---
 
+## Crew can't present or email a signed BOL
+
+Symptoms: a driver needs the signed Bill of Lading in the field (for example a
+DOT officer at a border wants the signed contract with addresses), or "Send to
+client" on the BOL fails.
+
+The signed BOL card ("Signed Bill of Lading") appears in the BOL editor as soon
+as the BOL is signed at origin. See [ADR 0022](decisions/0022-signed-bol-is-retrievable-and-emailable.md).
+
+1. **Presenting the signed BOL never needs signal.** "View / download signed BOL"
+   regenerates the PDF on-device from the local draft (signatures + addresses are
+   all local). If it does not appear, the BOL is still in `draft` (not signed at
+   origin yet) - the card only shows past `draft`.
+2. **Addresses / details missing on the document.** The FMCSA-required fields
+   (shipper, addresses, payment, valuation, estimate type, agreed dates) are
+   entered in the BOL detail cards *before* origin signing, and origin signing is
+   blocked until they are filled (ADR 0023). For a BOL signed before this feature,
+   the addresses are still editable on the "Signed Bill of Lading" card: enter
+   them, tap **Save addresses** (regenerates the Drive copy), then View / download
+   to present the corrected copy.
+2b. **"Can't sign at origin."** The app names the missing card in the error
+   ("Enter the shipper name in Shipper & shipment", etc.). Fill that field and
+   retry; this is a required-field gate, not a bug.
+3. **"Send to client" fails.** It needs connectivity (email cannot be sent
+   offline) - the crew should use View / download to hand over a copy instead, and
+   email later. A bad address returns a clear "valid email" message; a mail-send
+   failure returns "Could not send." If every send fails, the mailer is the likely
+   cause: verify `POSTMARK_SERVER_TOKEN` and `SMTP_FROM` (a verified Postmark
+   sender) on the backend - the same credentials password-reset email uses. Grep
+   Render logs for `[bol] emailed`.
+4. **"BOL not found" on send.** The signed row had not reached the server yet; the
+   send drains the queue first, so retrying once online usually clears it.
+
+5. **Wrong company name / address / DOT on the BOL.** The carrier block is
+   admin-configurable: Admin > Settings > Company information. Edit and Save; it
+   applies to all devices on next load and the crew app caches it for offline. A
+   blank field falls back to the built-in default (see `backend/app/core/company.py`
+   / `frontend/src/lib/companyInfo.ts`).
+
+Data impact: none. Retrieval is read-only; email sends a copy and changes nothing.
+
+---
+
+## Promotion gate (CI)
+
+`.github/workflows/promotion-gate.yml` runs on every PR targeting `main`. It runs
+three jobs: repo invariants (`scripts/promotion_gate.py`), the frontend build, and
+a backend byte-compile.
+
+**The workflow reports; it does not block.** Blocking is a branch protection rule,
+and it is a ONE-TIME setup on GitHub that has to be done by hand:
+
+1. Repo → **Settings** → **Branches** → **Add branch ruleset** (or Add rule) for
+   `main`.
+2. Enable **Require status checks to pass before merging**.
+3. Add these three checks by name (they only appear in the list after the workflow
+   has run at least once, so open a throwaway PR first if the search is empty):
+   - `Repo invariants (ADRs, migrations, data-flow)`
+   - `Frontend build (tsc + vite)`
+   - `Backend compiles`
+4. Enable **Require branches to be up to date before merging**, so a check cannot
+   pass against a stale base.
+5. Leave **Do not allow bypassing** OFF unless you want to lock yourself out of
+   your own emergency hotfix path. As the repo owner you can otherwise override,
+   which is the right tradeoff for a one-maintainer repo with crews in the field.
+
+Do this on `Jcrooks24` (the primary). The `management909` mirror is a mirror; it
+does not need a ruleset.
+
+### Running it locally before opening the PR
+
+```
+python scripts/promotion_gate.py --base-ref origin/main
+```
+
+Same checks, same exit code. Do this first: a failing gate on a PR is just a
+slower way to learn the same thing.
+
+### Clearing a blocker
+
+Fix it, or record a waiver in `docs/DATA_FLOW_STAGING.md`:
+
+```
+GATE-WAIVER: <check-id> <reason, including who decided and when>
+```
+
+The check-id is printed in the failure (`adr-collision`, `data-flow-deviations`,
+etc.). A reason under 15 characters is rejected, deliberately: a waiver with no
+reasoning is how a blocker becomes permanent. Per VETTING_PROTOCOL, an agent
+cannot waive its own finding.
+
+### What the gate does NOT do
+
+It is the mechanical subset of [VETTING_PROTOCOL.md](VETTING_PROTOCOL.md). Green
+means nothing mechanical is obviously broken. It cannot tell you whether a queue
+drains, whether a signed BOL survives a worker recycle, whether staging and prod
+resolve different Drive folders, or whether a screen is legible in sunlight.
+**Run `/vet` before promoting.** Treating a green gate as a vet is how the
+durability bugs shipped the first time.
+
 ## Known defects
 
 Live bugs that are known and not yet fixed. If you hit one of these, you have found
 a real issue, not a misunderstanding. Keep this list honest: delete an entry when it
 is fixed, and add one when a `/vet` pass finds something you cannot fix that day.
 
-1. **Staging PWA serves STALE code: fixes look "not deployed" when they are.**
+1. **DQ documents are world-readable to anyone with the link.** Every DQ upload
+   gets a Drive `{"type": "anyone", "role": "reader"}` permission
+   (`drive_upload.py::upload_dq_file_to_drive`). These are medical cards,
+   employment applications and MVRs - PII, and DOT compliance records. Anyone
+   holding a `drive_url` can open one without authenticating.
+
+   It is this way because the frontend links straight to `webViewLink`
+   (`DqFilesTab.tsx:173`, `DqMyFileCard.tsx:126`), so a driver opening their own
+   medical card needs the link to work with no Google account. Removing the
+   permission without changing that breaks viewing for every driver.
+
+   The fix is to proxy downloads through an authenticated backend route
+   (`GET /api/dq/{id}/file`, role-gated the way the rest of DQ already is) and
+   stop granting public reader. That is its own change with its own ADR, not a
+   one-line edit. Found 2026-08-10 while moving DQ files to their own folder;
+   the folder move neither caused nor worsened it.
+
+2. **The long-distance day queue never drains: `drive_day` never reaches the server.**
+   `LdWorkday.tsx:70` calls `setLdDay()` when the crew picks "Driving" in the LD day
+   plan. That writes `crew_ld_day_v1:<date>` and pushes an upsert onto
+   `crew_ld_day_queue_v1`. **Nothing in the app calls `ldDayStore.syncQueue()`** -
+   no component imports it, and the only internal caller is `retryFailedLdDay`,
+   which is itself uncalled. `POST /api/long-distance/day` therefore never fires
+   from the app, and `long_distance.py:375` is the only place `LdDay` rows are
+   created.
+
+   **Symptoms:** the `LdDays` table stays empty, the `LongDistancePay` tab stays
+   empty, Admin's job summary shows "Per-diem days: 0 · Drive days: 0"
+   (`Admin.tsx:7154`) no matter what the crew selected, and `crew_ld_day_queue_v1`
+   grows on every Driving toggle and never empties.
+
+   **Not a payroll-money bug.** `payroll.py::_per_diem_nights` takes per-diem
+   primarily from the per-employee `out_of_town` flag on job-report hours and only
+   supplements from `LdDay`, so pay is correct. The real loss is `drive_day`, which
+   has no other source. Note also that `setLdDay` is only ever called with
+   `drive_day`; `out_of_town` is never written locally either, so fixing the drain
+   alone leaves that half of the record empty.
+
+   **Confirmed on both `main` (`72b544a`) and `staging`.** Found 2026-08-06 while
+   mapping data flow, not fixed. Fix is to call a drain from `App.tsx`'s boot and
+   `online` handlers alongside the other queues, and to decide where `out_of_town`
+   should be written. See [DATA_FLOW.md](DATA_FLOW.md) Deviations.
+
+2. **The estimator queue drains only while its tab is mounted.** `estimatorQueue.drain`
+   is called from `EstimatorTab.tsx:524` on mount and on `estimate_uuid` change, and
+   from nowhere else. It has **no `online` listener**, so an item queued offline does
+   not ship on reconnect the way every other queue does; it waits for somebody to
+   reopen that specific estimate.
+
+   **Symptom:** an estimator item added with no signal is still "Syncing…" hours
+   later, and the crew member has no reason to suspect reopening the estimate is what
+   releases it. `pruneStale` deletes queue entries after 14 days, so an estimate never
+   reopened inside that window loses the item silently.
+
+   This is the exact failure class [ARCHITECTURE.md](ARCHITECTURE.md) warns about
+   under "A queue must not depend on its own UI being mounted", and the same shape as
+   the job-inventory bug that `drainAll()` was written to fix (ADR 0015). Fix is the
+   same: expose a `drainAll()` and call it from `App.tsx`'s boot and `online`
+   handlers. Affects `main` (`72b544a`) and `staging`. Found 2026-08-06.
+
+2. **A failed sheet write on an event note/timestamp edit is never retried.**
+   `PATCH /api/events/{id}` (`sync.py:266`) commits Postgres, then calls
+   `update_event_note_in_sheets` / `update_event_timestamp_in_sheets`
+   **synchronously**, catches any exception, and returns it as a `sheet_error` field
+   the client ignores. The auto-reconciler covers missing event **rows**, not stale
+   event **cells**, so nothing ever re-drives it.
+
+   **Symptom:** a crew member corrects a note or a clock time, the app confirms it,
+   Postgres is right, and the Events tab keeps showing the old value indefinitely.
+   Admin reading the Sheet sees the pre-correction value with no indication it is
+   stale. Only another edit to the same event fixes it.
+
+   Postgres being the source of truth means nothing is lost, but the Sheet is what
+   admin actually reads. Affects `main` (`72b544a`) and `staging`. Found 2026-08-06
+   while mapping data flow. See [DATA_FLOW.md](DATA_FLOW.md) Deviations.
+
+2. **Availability cannot be submitted offline, and fails silently to the crew's eye.**
+   `availabilityStore.submitDraft` is a direct `POST /api/availability` with no queue
+   and no drain (Class B in [DATA_FLOW.md](DATA_FLOW.md)). The draft persists in
+   `crew_availability_draft_v1`, the transmission does not happen, and there is
+   nothing to retry on reconnect.
+
+   This is by design, not a regression, but it is the only crew-facing **submission**
+   in the app with no offline path, so a crew member reporting "I submitted my
+   availability and it vanished" has found this, not a bug in the picker. Worth
+   deciding whether it should get an outbox like everything else. Affects `main` and
+   `staging`.
+
+2. **Staging PWA serves STALE code: fixes look "not deployed" when they are.**
    The staging frontend is a Vercel **branch-preview** deployment
    (`mountaineer-crew-app-git-staging-*.vercel.app`), and that host has **Vercel
    Deployment Protection (Vercel Authentication)** on. Every request to it, including
@@ -427,8 +666,41 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    `backend/scripts/recalc_estimate_totals.py --dry-run` (then without the flag) for
    that environment. It is idempotent and safe, just not required.
 
+5. **Payroll: hours belonging to a name that matches nobody on the roster are not
+   counted. The page warns; it does not guess.**
+
+   Per-employee hours on a job report written before the rows carried a `user_id`
+   have only a name string. The payroll aggregator matches those against the roster
+   by lowercased name, and anything that still does not match is surfaced in the
+   yellow "Check these first" panel by name.
+
+   **Those hours are excluded from the totals.** That is deliberate - inventing a
+   match would pay the wrong person - but it means an admin who ignores the warning
+   underpays somebody. Fix the name on the job report, or add the person to the
+   roster, then reload the period.
+
+6. **Payroll: a job with NO synced timeline events, whose report is first edited
+   more than 14 days after the pay period ends, is missed.**
+
+   Jobs are found by their events, which is what keeps the query bounded to the pay
+   period. A second query catches jobs that never synced an event, bounded to the
+   period plus `NO_EVENT_REPORT_GRACE_DAYS` (14) so it cannot degrade into a full
+   table scan. A manual job with no events at all, whose report nobody touched until
+   more than two weeks after the period closed, falls outside both.
+
+   Realistically unreachable: payroll runs within days of a period closing, and any
+   job the crew ran a timeline on is found precisely regardless of when its report was
+   edited. If it ever does bite, raise the constant in `routers/payroll.py` and note
+   the new scan cost here.
+
 ### Recently fixed (kept briefly so you do not re-report them)
 
+- BOL self-overwrite when a job ran with two trucks. Fixed 2026-07-27 (staging,
+  [ADR 0024](decisions/0024-bol-guards-against-self-overwrite.md)): the manual-job
+  start path (`startManual`) blanked the local draft and, on save, the server replaced
+  the first truck's inventory with an empty list. Both start paths now confirm before
+  opening an existing BOL (continue, don't blank), and the server refuses an
+  empty-over-non-empty item save with a 409.
 - Job photos not auto-retrying on reconnect. Fixed 2026-07-13: the `online` handler
   now drains them like every other queue.
 - Estimator and job-inventory item queues not being idempotent. Fixed 2026-07-13:

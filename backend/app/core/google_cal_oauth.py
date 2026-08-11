@@ -266,11 +266,47 @@ def list_events_for_day(date_yyyy_mm_dd: str, calendar_id: str, db=None) -> List
             # `end` powers the scheduled-duration fallback for est-vs-actual
             # hours (Phase 4). Previously fetched from Google but dropped.
             "end": end,
+            # Event body + location so the crew can see the job's context (the
+            # office writes addresses, crew, special instructions into the
+            # calendar event). Surfaced in the hub's active-job card. Google
+            # returns description as light HTML sometimes; the client strips it.
+            "description": it.get("description") or "",
+            "location": it.get("location") or "",
             # Count of invited crew (non-declined, real people, minus workspace/
             # shared mailboxes). Cached at resolve time so the schedule fallback
             # can express estimated MAN-hours (invitees x duration).
             "invitees": _count_invitees(it.get("attendees"), ignored),
         })
+    return out
+
+
+def list_event_invitee_emails(event_id: str, calendar_id: str, db=None) -> List[str]:
+    """The real crew invited to one event: attendee emails, non-declined, minus
+    room/resource entries and ignored (shared-mailbox) addresses. Same exclusion
+    rules as _count_invitees, but the addresses rather than just the count -
+    used by the job-setup capture screen to pre-fill the crew (ADR 0034)."""
+    from googleapiclient.discovery import build
+    creds = _get_creds(db)
+
+    def _fetch():
+        authorized_http = _build_authorized_http(creds)
+        svc = build("calendar", "v3", http=authorized_http, cache_discovery=False)
+        return svc.events().get(calendarId=calendar_id, eventId=event_id).execute()
+
+    it = _ssl_retry(_fetch)
+    ignored = _ignored_invitee_emails()
+    out: List[str] = []
+    seen: set = set()
+    for a in (it.get("attendees") or []):
+        if not isinstance(a, dict):
+            continue
+        email = (a.get("email") or "").strip().lower()
+        if not email or email in ignored or email in seen:
+            continue
+        if a.get("resource") is True or a.get("responseStatus") == "declined":
+            continue
+        seen.add(email)
+        out.append(email)
     return out
 
 

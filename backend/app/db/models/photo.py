@@ -13,6 +13,9 @@ class Photo(Base):
     drive_file_id = Column(String, nullable=False)
     drive_url = Column(String, nullable=False)      # webViewLink
     mime_type = Column(String, nullable=False, server_default="image/jpeg")
+    # before / after / general - the photo's role on the job. Incident photos
+    # carry incident_uuid below (their "category" is the incident itself).
+    category = Column(String, nullable=False, server_default="general")
     # Optional link to an incident this photo documents. incident_uuid is the
     # idempotency key of the incident; claim_number is denormalized for display
     # and so admin can find the photo in Drive by claim number.

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500&display=swap');
 
 :root{
   --bg: #0b1220;
@@ -25,10 +25,25 @@
   --btn-bg-to: #1a2a47;
   --btn-pad: 10px 14px;
 
-  /* Text color that sits on top of bright brand-coloured surfaces
-     (.btnPrimary, active tab). Follows the Text-Color setting so "Light
-     text" mode flips button copy to light too. */
+  /* Ink that sits on top of a filled surface: --on-brand on .btnPrimary and
+     the active tab, --on-ok on the completed-state checkbox. Both are
+     COMPUTED from their fill color at runtime by applySettings() and do NOT
+     follow the Text-Color setting - a bright brand on a dark theme needs dark
+     ink while body text stays light (ADR 0035). The values here are only the
+     pre-hydration defaults, matching the dark-ocean preset.
+     Never write `var(--on-brand, #fff)`; these are always set. */
   --on-brand: #0b1220;
+  --on-ok: #0b1220;
+
+  /* Spacing scale. These are the five layout constants DESIGN_SYSTEM.md
+     already specified in prose; they are tokens now so new work has something
+     to reference. Existing literals are converted opportunistically, not in a
+     sweep - see docs/INCREMENTAL_WORK.md. */
+  --space-page: 12px;   /* page container horizontal padding */
+  --space-gap: 8px;     /* gap between cards */
+  --space-card: 14px;   /* card padding */
+  --space-row-min: 48px;  /* min interactive-row height */
+  --space-btn-min: 36px;  /* min button height */
 }
 
 *{ box-sizing: border-box; }
@@ -37,6 +52,10 @@
    uses 100vw and the viewport has a vertical scrollbar. Vertical scrolling
    still works as normal because the body's natural overflow is auto. */
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font); overflow-x: clip; }
+/* Clear the fixed crew bottom-nav (56px) + iOS home indicator so the last of a
+   screen's content is never hidden behind it. Harmless on public routes where
+   the nav self-hides. */
+body { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
 
 .container{ max-width: 720px; margin: 0 auto; padding: 14px; }
 
@@ -64,7 +83,10 @@ input, select, textarea{
   padding: 10px 12px;
   border-radius: var(--btn-r);
   border: 1px solid var(--border);
-  background: rgba(255,255,255,0.08);
+  /* A raised surface distinct from the card so the field reads as an input.
+     rgba(255,255,255,0.08) vanished on light-theme white cards; --raised (set
+     by enterprise) fixes that, with the old overlay as the legacy fallback. */
+  background: var(--raised, rgba(255,255,255,0.08));
   color: var(--text);
   font-family: inherit;
   /* iOS Safari auto-zooms on focus when the input's computed font-size is
@@ -72,6 +94,9 @@ input, select, textarea{
      leaving it zoomed after navigation. */
   font-size: 16px;
   outline: none;
+}
+input:focus, select:focus, textarea:focus{
+  border-color: var(--border-hi, var(--brand));
 }
 
 /* Strip the native iOS styling on date/time inputs so they respect
@@ -86,16 +111,27 @@ input[type="datetime-local"] {
   min-width: 0;
 }
 
+/* Checkboxes / radios must NOT inherit the `width:100%` above (that stretches
+   the box full-width and shoves its label off the screen - the DQ-form
+   "cut off" bug). Natural size, brand accent, don't shrink in a flex row. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  min-width: 0;
+  flex-shrink: 0;
+  accent-color: var(--brand);
+}
+
 textarea{ min-height: 90px; resize: vertical; }
 
 button{
   padding: var(--btn-pad);
   border-radius: var(--btn-r);
-  border: 1px solid rgba(255,255,255,0.18);
+  border: 1px solid var(--border);
   background: linear-gradient(180deg, var(--btn-bg-from), var(--btn-bg-to));
   color: var(--text);
   font-family: inherit;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0.2px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -108,7 +144,7 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
   background: linear-gradient(90deg, var(--brand), var(--brand2));
   border: none;
   color: var(--on-brand);
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .chip{
@@ -117,11 +153,47 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--muted);
-  background: rgba(255,255,255,0.05);
+  /* Raised surface so the chip reads on a light-theme white card (the flat
+     rgba overlay was invisible there); legacy overlay as the fallback. */
+  background: var(--raised, rgba(255,255,255,0.05));
 }
 
-.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-.sectionTitle{ font-size: 14px; font-weight: 900; margin-bottom: 10px; }
+/* Data typography: DM Mono for IDs, times, hours, counts, measurements - so
+   figures align and read as data, not prose. Falls back to system mono. */
+.mono{ font-family: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-feature-settings: "tnum" 1; }
+.sectionTitle{ font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+
+/* Enterprise micro-label: small, uppercase, tracked, muted - the section-header
+   pattern from the Figma exploration. A separate utility (not a change to the
+   widely-used .label) so it can be adopted screen by screen. */
+.microLabel{
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Status as a colored dot + neutral text (color only on the dot, never a
+   filled pill). `--dot` sets the dot color per status. */
+.statusDot{ display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); }
+.statusDot::before{
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--dot, var(--muted)); flex-shrink: 0;
+}
+
+/* Segmented control - the OK/DEFECT-style toggle, reusable for any small set
+   of mutually exclusive choices (mode switches, pre/post-trip, etc.). Large
+   touch targets, hairline dividers, subtle tint on the active segment (color
+   via `--seg` per usage, defaults to --brand). */
+.seg{ display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.segBtn{
+  flex: 1; min-height: 40px; padding: 0 12px; border: none; border-radius: 0;
+  background: transparent; color: var(--muted);
+  font-weight: 600; font-size: 13px; letter-spacing: 0.03em; cursor: pointer;
+}
+.segBtn + .segBtn{ border-left: 1px solid var(--border); }
+.segBtn.on{ color: var(--seg, var(--brand)); background: color-mix(in srgb, var(--seg, var(--brand)) 16%, transparent); font-weight: 700; }
 
 /* Design-system primitives used by the RODS per-day selector (backported with
    the multi-day RODS fix). Small uppercase label + a segmented control. */
@@ -152,7 +224,7 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
 .logo{ width: 34px; height: 34px; border-radius: 10px; object-fit: contain; }
 
 .title{
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: 0.2px;
   font-size: 15px;
 }
@@ -171,7 +243,7 @@ button:disabled{ opacity: 0.5; cursor: not-allowed; }
   background: rgba(255,255,255,0.03);
   color: var(--text);
   font-family: inherit;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .tab.active{

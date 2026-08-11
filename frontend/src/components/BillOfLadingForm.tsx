@@ -14,12 +14,15 @@ import {
   type SignInput,
   autosyncDraft,
   captureItemPhoto,
+  emailBolToClient,
+  enqueueBolResync,
   enqueueSubmit,
   fetchCalendarDay,
   itemIsBox,
   listOpenBols,
   loadDraft,
   loadForJob,
+  loadForJobWithInfo,
   manualJobToJobUuid,
   newDraft,
   newUUID,
@@ -34,8 +37,17 @@ import {
   syncQueue,
   BolStorageFullError,
 } from "../lib/bolStore";
-import { BOL_CONTRACT_SECTIONS } from "../lib/bolContract";
+import {
+  BOL_CONTRACT_SECTIONS,
+  FORM_OF_PAYMENT_OPTIONS,
+  VALUATION_OPTIONS,
+} from "../lib/bolContract";
+import { getCompanyInfoCached, refreshCompanyInfo, type CompanyInfo } from "../lib/companyInfo";
+import VehicleUnitSpecs from "./VehicleUnitSpecs";
+import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
+import { loadJobSetup } from "../lib/jobSetupStore";
 import SuggestInput from "./SuggestInput";
+import NumberField from "./NumberField";
 
 /** Hand the shipper their dated copy: Web Share (with file) if available,
  * otherwise a download. Works offline. */
@@ -60,16 +72,8 @@ async function deliverPdfToClient(blob: Blob, filename: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-// Static carrier block - from the Mountaineer Moving Bill of Lading template.
-// Autofilled onto every BOL (federal law requires it to appear; §375.505(b)(1)).
-const CARRIER = {
-  name: "Mountaineer Moving LLC",
-  address: "3021 S 27th Ave. #B, Bozeman, MT 59718",
-  phone: "(406) 201-9580",
-  email: "management@mountaineermoving.com",
-  dot: "4557708",
-  mc: "1811084",
-};
+// Carrier block is admin-configurable (Admin > Settings > Company information),
+// read from the offline-safe cache. Federal law requires it on the BOL (§375.505(b)(1)).
 
 function todayLocal() {
   const d = new Date();
@@ -95,6 +99,10 @@ const STATUS_LABEL: Record<string, string> = {
 // ─────────────────────────────────────────────────────────────────────────
 export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => void; openBolId?: string }) {
   const [editing, setEditing] = useState<BOLDraft | null>(null);
+  // When the crew picks a job that ALREADY has a BOL, we don't open it silently
+  // (that let a second truck's crew blank the first's items). We stage it here
+  // and make them confirm "open the existing one" first - one BOL per job.
+  const [pendingBol, setPendingBol] = useState<{ draft: BOLDraft; itemCount: number; signed: boolean } | null>(null);
   const [openBols, setOpenBols] = useState<OpenBol[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -174,14 +182,17 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
       const job_uuid = await resolveJobUuid(value);
       const job = { job_uuid, job_name: ev.summary, job_date: selDate };
       rememberJob(job);
-      const draft = await loadForJob(job); // continue existing, or start fresh
-      setEditing(draft);
+      // Continue existing, or start fresh. If one already exists, make the crew
+      // confirm before entering so they don't overwrite the other truck's work.
+      const info = await loadForJobWithInfo(job);
+      if (info.existed) setPendingBol({ draft: info.draft, itemCount: info.itemCount, signed: info.signed });
+      else setEditing(info.draft);
     } finally {
       setBusy(false);
     }
   }
 
-  function startManual() {
+  async function startManual() {
     const name = manualName.trim();
     if (!name) return;
     // Derive job_uuid from the name+date the same way the Timeline and PODS do,
@@ -190,9 +201,52 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
     // its own BOL for the one job (defeats ADR 0018 on the manual path).
     const job = { job_uuid: manualJobToJobUuid(name, selDate), job_name: name, job_date: selDate };
     rememberJob(job);
-    const draft = newDraft(job);
-    saveDraft(draft);
-    setEditing(draft);
+    setBusy(true);
+    try {
+      // Was `newDraft(job)` unconditionally - that blanked the local draft and,
+      // on save, the server replaced the existing items with an empty list (a
+      // second truck's crew wiped the first's inventory). Go through the same
+      // existence check as the calendar path: continue the existing BOL, and
+      // make the crew confirm first so the overwrite is never silent.
+      const info = await loadForJobWithInfo(job);
+      if (info.existed) setPendingBol({ draft: info.draft, itemCount: info.itemCount, signed: info.signed });
+      else setEditing(info.draft);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (pendingBol) {
+    const { itemCount, signed } = pendingBol;
+    return (
+      <div className="container">
+        <div className="topbar" style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Bill of Lading</div>
+          <button onClick={() => setPendingBol(null)} style={backBtnStyle}>← Back</button>
+        </div>
+        <div
+          className="card"
+          style={{ padding: 16, borderLeft: "4px solid var(--danger)", display: "flex", flexDirection: "column", gap: 12 }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 15 }}>This job already has a Bill of Lading</div>
+          <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+            There is already a BOL for this job{itemCount > 0 ? ` with ${itemCount} item${itemCount === 1 ? "" : "s"}` : ""}
+            {signed ? ", and it has been signed" : ""}. A job has <strong>one</strong> Bill of Lading, so if you
+            used two trucks, put both trucks' items on this same BOL. Open it and keep adding, so you don't overwrite
+            what's already there.
+          </div>
+          <button
+            className="btnPrimary"
+            onClick={() => { setEditing(pendingBol.draft); setPendingBol(null); }}
+          >
+            Open existing BOL
+          </button>
+          <button onClick={() => setPendingBol(null)} style={{ ...backBtnStyle, padding: "6px 0" }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (editing) {
@@ -212,7 +266,7 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
 
       {/* Continue an open BOL */}
       <div className="card">
-        <div className="sectionTitle">Continue an open BOL</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Continue an open BOL</div>
         {loadingList ? (
           <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
         ) : openBols.length === 0 ? (
@@ -229,17 +283,14 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
                 <div className="row" style={{ justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontWeight: 700 }}>{o.job_name || "Untitled job"}</span>
                   <span
-                    className="small"
-                    style={{
-                      color: o.status === "origin_signed" ? "var(--brand)" : "var(--muted)",
-                      border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px", fontSize: 11,
-                    }}
+                    className="statusDot"
+                    style={{ ["--dot" as any]: o.status === "origin_signed" ? "var(--brand)" : "var(--muted)" }}
                   >
                     {STATUS_LABEL[o.status] || o.status}
                   </span>
                 </div>
                 <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-                  {o.job_date || "no date"}
+                  <span className="mono">{o.job_date || "no date"}</span>
                   {o.source === "local" ? "  ·  not synced" : ""}
                 </div>
               </button>
@@ -250,7 +301,7 @@ export default function BillOfLadingForm({ onBack, openBolId }: { onBack: () => 
 
       {/* Start a new BOL */}
       <div className="card">
-        <div className="sectionTitle">Start a new BOL</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Start a new BOL</div>
         <div className="col" style={{ gap: 12 }}>
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Date</span>
@@ -315,6 +366,11 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   // picker matches Actual Inventory and the Estimator.
   const catalog = useMergedCatalog();
 
+  // Company/carrier block (admin-configurable). Cached for offline; refreshed on
+  // mount. The PDF reads the same cache, so both stay in step.
+  const [carrier, setCarrier] = useState<CompanyInfo>(() => getCompanyInfoCached());
+  useEffect(() => { refreshCompanyInfo().then(setCarrier); }, []);
+
   // Add-item form state
   const [itemName, setItemName] = useState("");
   const [itemQty, setItemQty] = useState(1);
@@ -351,10 +407,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   // field shows the fleet's canonical units in a dropdown instead of a
   // free-text input. Preserves any pre-existing custom entry.
   const [units, setUnits] = useState<string[]>([]);
+  const [vehUnits, setVehUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
   useEffect(() => {
     apiFetch<{ units: string[] }>("/api/dvir/units")
       .then((r) => setUnits(Array.isArray(r?.units) ? r.units : []))
       .catch(() => { /* offline is fine - the input still accepts a saved custom value */ });
+    refreshUnits().then(setVehUnits).catch(() => {});
   }, []);
   const [walkNotes, setWalkNotes] = useState(draft.walkthrough_notes || "");
   const [finalCharges, setFinalCharges] = useState(draft.final_charges != null ? String(draft.final_charges) : "");
@@ -362,6 +420,134 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
   const [consent, setConsent] = useState(false);
   const [signBusy, setSignBusy] = useState(false);
   const [signErr, setSignErr] = useState<string | null>(null);
+
+  // Origin (pickup) + destination (delivery) addresses live on the draft so the
+  // same values feed the origin-signing form, the retrieval card, and the PDF.
+  function setAddress(patch: { origin_address?: string; dest_address?: string }) {
+    setDraft((prev) => ({ ...prev, ...patch, updated_at: new Date().toISOString() }));
+  }
+
+  // Generic setter for the FMCSA BOL detail fields (shipper, payment, valuation,
+  // dates, declarations). All ride the draft -> shipment_json (ADR 0023).
+  function setField(patch: Partial<BOLDraft>) {
+    setDraft((prev) => ({ ...prev, ...patch, updated_at: new Date().toISOString() }));
+  }
+
+  // One-time prefills for a new BOL (all still editable):
+  //  - shipment reference from the job (don't retype what the app knows)
+  //  - estimate type is always Non-binding (we only do non-binding estimates)
+  // (agreed pickup is the office's agreed date, seeded from the job header, not today)
+  useEffect(() => {
+    if (draft.status !== "draft") return;
+    const patch: Partial<BOLDraft> = {};
+    if (!draft.shipment_number && (draft.job_name || draft.job_date)) {
+      patch.shipment_number = [draft.job_name, draft.job_date].filter(Boolean).join(" - ");
+    }
+    if (!draft.estimate_type) patch.estimate_type = "non_binding";
+    // agreed_pickup is the office's AGREED date - seeded from the job header below,
+    // not defaulted to today (today is captured as actual_pickup_date at signing).
+    if (Object.keys(patch).length) setField(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // C1.3 (ADR 0034): seed the origin/destination from the job header on a NEW
+  // BOL draft, once per job. Only fills a blank address (the functional update
+  // re-checks emptiness), so it never overwrites what the crew has typed and
+  // leaves a signed/loaded BOL alone.
+  const seededBolAddrRef = useRef<string>("");
+  useEffect(() => {
+    const ju = draft.job_uuid;
+    if (!ju || draft.status !== "draft" || seededBolAddrRef.current === ju) return;
+    if ((draft.origin_address || "").trim() && (draft.dest_address || "").trim()) return;
+    seededBolAddrRef.current = ju;
+    loadJobSetup(ju)
+      .then((h) => {
+        if (!h) return;
+        setDraft((prev) => {
+          if (prev.status !== "draft") return prev;
+          const p: { origin_address?: string; dest_address?: string } = {};
+          if (h.origin && !(prev.origin_address || "").trim()) p.origin_address = h.origin;
+          if (h.destination && !(prev.dest_address || "").trim()) p.dest_address = h.destination;
+          if (!Object.keys(p).length) return prev;
+          return { ...prev, ...p, updated_at: new Date().toISOString() };
+        });
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.job_uuid, draft.status]);
+
+  // Shipper address defaults to the pickup (origin) address, with an override for
+  // the crew to enter a different address. Checked = mirror the origin.
+  const [shipperSameAsOrigin, setShipperSameAsOrigin] = useState<boolean>(() => {
+    const sa = (initialDraft.shipper_address || "").trim();
+    const oa = (initialDraft.origin_address || "").trim();
+    return !sa || sa === oa;
+  });
+  useEffect(() => {
+    if (shipperSameAsOrigin && (draft.shipper_address || "") !== (draft.origin_address || "")) {
+      setField({ shipper_address: draft.origin_address || "" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipperSameAsOrigin, draft.origin_address]);
+
+  // C1.3 (ADR 0034): seed the FMCSA BOL header + vehicle from the job header on a
+  // NEW BOL draft, once per job. Separate ref from the address seed so its
+  // both-addresses-present early-return can't skip the header. Blank-only (each
+  // field re-checked in the functional update), never touching a signed BOL.
+  const seededBolHeaderRef = useRef<string>("");
+  useEffect(() => {
+    const ju = draft.job_uuid;
+    if (!ju || draft.status !== "draft" || seededBolHeaderRef.current === ju) return;
+    seededBolHeaderRef.current = ju;
+    loadJobSetup(ju)
+      .then((h) => {
+        if (!h) return;
+        const u = h.vehicle_unit_names?.[0];
+        if (u) setVehicle((cur) => cur || u);
+        const bh: any = h.bol_header;
+        if (!bh) return;
+        const keys = [
+          "shipper_name", "shipper_phone", "form_of_payment", "valuation",
+          "agreed_pickup", "agreed_delivery", "cod_notify", "cod_max",
+          "additional_carriers", "third_party_insurance", "accessorial_services",
+        ];
+        setDraft((prev) => {
+          if (prev.status !== "draft") return prev;
+          const p: any = {};
+          for (const k of keys) {
+            const v = bh[k];
+            if (v && !((prev as any)[k] || "").toString().trim()) p[k] = v;
+          }
+          if (!Object.keys(p).length) return prev;
+          return { ...prev, ...p, updated_at: new Date().toISOString() };
+        });
+        // shipper_address has a same-as-origin mirror; when the office entered a
+        // distinct one, turn the mirror off and set it. Override only a blank field
+        // or the mirror's origin-copy - never a distinct address the crew typed.
+        // (Fixes the seed/mirror race that otherwise printed the pickup address as
+        // the shipper on the signed BOL.)
+        if ((bh.shipper_address || "").trim()) {
+          setShipperSameAsOrigin(false);
+          setDraft((prev) => {
+            if (prev.status !== "draft") return prev;
+            const cur = (prev.shipper_address || "").trim();
+            if (cur && cur !== (prev.origin_address || "").trim()) return prev;
+            return { ...prev, shipper_address: bh.shipper_address, updated_at: new Date().toISOString() };
+          });
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.job_uuid, draft.status]);
+
+  // Signed-BOL retrieval + send-to-client card state (shown once signed).
+  const [clientEmail, setClientEmail] = useState("");
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailNote, setEmailNote] = useState<string | null>(null);
+  const [emailErr, setEmailErr] = useState<string | null>(null);
+  const [viewBusy, setViewBusy] = useState(false);
+  const [addrNote, setAddrNote] = useState<string | null>(null);
+  const [addrErr, setAddrErr] = useState<string | null>(null);
 
   // Inventory list controls
   const [invSearch, setInvSearch] = useState("");
@@ -499,6 +685,66 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     return `${date} - ${name}.pdf`;
   }
 
+  // Regenerate the signed BOL on-device and hand it over (Web Share / download).
+  // Works offline - the signatures and addresses are all in the local draft - so
+  // the driver can produce the signed BOL at a border crossing with no signal.
+  async function viewSignedBol() {
+    setEmailErr(null);
+    setViewBusy(true);
+    try {
+      const { generateBolPdf } = await import("../lib/bolPdf");
+      const blob = await generateBolPdf(draft);
+      await deliverPdfToClient(blob, pdfFilename(draft));
+    } catch {
+      setEmailErr("Could not open the BOL. Try again.");
+    } finally {
+      setViewBusy(false);
+    }
+  }
+
+  // Persist corrected addresses to the server + regenerate the stored Drive PDF.
+  // For an already-signed BOL this is how the DOT-required addresses get onto the
+  // official copy after the fact (they are also live on the on-device PDF at once).
+  async function saveAddresses() {
+    setAddrErr(null);
+    setAddrNote(null);
+    if (!enqueueBolResync(draft)) {
+      setAddrErr("This device's storage is full, so the change could not be saved. Free up space and try again.");
+      return;
+    }
+    const synced = await syncQueue();
+    refreshFailed();
+    setAddrNote(
+      synced > 0
+        ? "Addresses saved and synced."
+        : "Addresses saved on this device - will sync when back online.",
+    );
+    window.setTimeout(() => setAddrNote(null), 4000);
+  }
+
+  // Email the signed BOL PDF to the client. Requires connectivity; drains any
+  // queued sign op first so the server row exists before we ask it to email.
+  async function sendToClient() {
+    setEmailErr(null);
+    setEmailNote(null);
+    const email = clientEmail.trim();
+    if (!email) return setEmailErr("Enter the client's email address.");
+    setEmailBusy(true);
+    try {
+      await syncQueue(); // make sure the signed row is on the server first
+      const { generateBolPdf } = await import("../lib/bolPdf");
+      const blob = await generateBolPdf(draft);
+      await emailBolToClient(draft.bol_id, blob, email);
+      setEmailNote(`Signed BOL sent to ${email}.`);
+      setClientEmail("");
+      window.setTimeout(() => setEmailNote(null), 6000);
+    } catch (e: any) {
+      setEmailErr(e?.message || "Could not send the email. Check the address and your connection, then try again.");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
   async function signSession(phase: "origin" | "destination") {
     setSignErr(null);
     if (draft.items.length === 0) return setSignErr("Add at least one item before signing.");
@@ -506,6 +752,22 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     if (shipperSigRef.current?.isEmpty()) return setSignErr("Shipper signature is required.");
     if (carrierSigRef.current?.isEmpty()) return setSignErr("Carrier representative signature is required.");
     if (!consent) return setSignErr("Both parties must accept the electronic signature consent.");
+    if (phase === "origin") {
+      // FMCSA 375.505 required fields - block origin signing until each is filled
+      // so no BOL leaves origin incomplete (ADR 0023). Entered in the detail cards.
+      const need = (v: string | undefined) => !(v || "").trim();
+      if (need(draft.shipper_name)) return setSignErr("Enter the shipper (customer) name in Shipper & shipment.");
+      if (need(draft.shipper_phone)) return setSignErr("Enter the shipper phone (or N/A) in Shipper & shipment.");
+      if (need(draft.origin_address)) return setSignErr("Enter the origin (pickup) address in Shipper & shipment.");
+      if (need(draft.dest_address)) return setSignErr("Enter the destination (delivery) address in Shipper & shipment.");
+      if (need(draft.shipper_address)) return setSignErr("Enter the shipper address in Shipper & shipment.");
+      if (need(draft.shipment_number)) return setSignErr("Enter the shipment / job reference in Shipper & shipment.");
+      if (need(draft.form_of_payment)) return setSignErr("Select the form of payment in Payment.");
+      if (draft.form_of_payment === "cod" && need(draft.cod_notify)) return setSignErr("Enter who to notify for COD in Payment.");
+      if (need(draft.valuation)) return setSignErr("Have the shipper choose a valuation option in Valuation.");
+      if (need(draft.agreed_pickup)) return setSignErr("Enter the agreed pickup date in Agreed dates.");
+      if (need(draft.agreed_delivery)) return setSignErr("Enter the agreed delivery date in Agreed dates.");
+    }
     if (phase === "destination") {
       if (finalCharges.trim() && !Number.isFinite(Number(finalCharges))) return setSignErr("Final charges must be a number.");
     }
@@ -519,7 +781,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         shipper_name: shipperName.trim() || undefined,
         signed_at: new Date().toISOString(),
         ...(phase === "origin"
-          ? { actual_pickup_date: pickupDate || undefined, vehicle: vehicle.trim() || undefined }
+          ? {
+              actual_pickup_date: pickupDate || undefined,
+              vehicle: vehicle.trim() || undefined,
+              origin_address: (draft.origin_address || "").trim() || undefined,
+              dest_address: (draft.dest_address || "").trim() || undefined,
+            }
           : { walkthrough_notes: walkNotes.trim() || undefined, final_charges: finalCharges.trim() ? Number(finalCharges) : null }),
       };
       // Persist signatures + status, queue the sign PATCH + PDF upload.
@@ -631,10 +898,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
 
       {/* Job (selected in the chooser) + crew rep */}
       <div className="card">
-        <div className="sectionTitle">Job</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Job</div>
         <div style={{ fontWeight: 700 }}>{draft.job_name || "Untitled job"}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-          {draft.job_date || "no date"}
+          <span className="mono">{draft.job_date || "no date"}</span>
           {draft.status !== "draft" ? `  ·  ${draft.status === "origin_signed" ? "origin signed" : "delivered"}` : ""}
         </div>
         <label className="col" style={{ gap: 4 }}>
@@ -643,20 +910,274 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
         </label>
       </div>
 
+      {/* Signed Bill of Lading - retrieval + send. Shown as soon as the BOL has
+          been signed at origin, so the driver can PRODUCE the signed document on
+          demand (a DOT officer at a border wanted the actual signed BOL, not just
+          a record that it was signed) and email the client a copy. Placed high so
+          it is the first thing reachable when the BOL is opened in the field. */}
+      {draft.status !== "draft" && (
+        <div className="card" style={{ borderColor: "var(--brand)" }}>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Signed Bill of Lading</div>
+          <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+            {draft.status === "delivered"
+              ? "Origin and destination signed."
+              : `Origin signed${draft.origin_signed_at ? ` on ${new Date(draft.origin_signed_at).toLocaleDateString()}` : ""}.`}
+            {" "}Produce the signed BOL to present it (for example at a border crossing) or send a copy to the client.
+          </div>
+
+          <div className="row wrap" style={{ gap: 10, alignItems: "center" }}>
+            <button className="btnPrimary" onClick={viewSignedBol} disabled={viewBusy}>
+              {viewBusy ? "Opening…" : "View / download signed BOL"}
+            </button>
+            {draft.signed_pdf_url && (
+              <a href={draft.signed_pdf_url} target="_blank" rel="noreferrer" className="small" style={{ color: "var(--brand)" }}>
+                Open signed PDF in Drive &rarr;
+              </a>
+            )}
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+            The signed copy is generated on this device and works offline.
+          </div>
+
+          {/* DOT-required addresses - editable so a BOL signed before this
+              feature (or with a typo) can be corrected and re-issued. */}
+          <div className="col" style={{ gap: 10, marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <div className="microLabel">
+              Origin &amp; destination addresses (printed on the BOL)
+            </div>
+            <label className="col" style={{ gap: 4 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Origin (pickup) address</span>
+              <input
+                value={draft.origin_address || ""}
+                onChange={(e) => setAddress({ origin_address: e.target.value })}
+                placeholder="Street, City, ST ZIP"
+              />
+            </label>
+            <label className="col" style={{ gap: 4 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Destination (delivery) address</span>
+              <input
+                value={draft.dest_address || ""}
+                onChange={(e) => setAddress({ dest_address: e.target.value })}
+                placeholder="Street, City, ST ZIP"
+              />
+            </label>
+            <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
+              {addrErr && <span className="small" style={{ color: "var(--danger)" }}>{addrErr}</span>}
+              {addrNote && <span className="small" style={{ color: "var(--ok)" }}>{addrNote}</span>}
+              <button onClick={saveAddresses}>Save addresses</button>
+            </div>
+          </div>
+
+          {/* Send to client - emails the signed PDF. Needs connectivity. */}
+          <div className="col" style={{ gap: 8, marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <div className="microLabel">Send a copy to the client</div>
+            <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
+              <label className="col" style={{ gap: 4, flex: "1 1 200px" }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Client email</span>
+                <input
+                  type="email"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={clientEmail}
+                  onChange={(e) => setClientEmail(e.target.value)}
+                  placeholder="client@example.com"
+                />
+              </label>
+              <button className="btnPrimary" onClick={sendToClient} disabled={emailBusy} style={{ minWidth: 120 }}>
+                {emailBusy ? "Sending…" : "Send to client"}
+              </button>
+            </div>
+            {emailErr && <div style={{ color: "var(--danger)", fontSize: 13 }}>{emailErr}</div>}
+            {emailNote && <div className="small" style={{ color: "var(--ok)" }}>{emailNote}</div>}
+          </div>
+        </div>
+      )}
+
       {/* Static carrier block */}
       <div className="card">
-        <div className="sectionTitle">Carrier</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Carrier</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
-          <strong>{CARRIER.name}</strong><br />
-          {CARRIER.address}<br />
-          {CARRIER.phone} · {CARRIER.email}<br />
-          <span style={{ color: "var(--muted)" }}>U.S. DOT {CARRIER.dot} · MC {CARRIER.mc}</span>
+          <strong>{carrier.name}</strong><br />
+          {carrier.address}<br />
+          <span className="mono">{carrier.phone}</span> · {carrier.email}<br />
+          <span style={{ color: "var(--muted)" }}>U.S. DOT <span className="mono">{carrier.dot}</span> · MC <span className="mono">{carrier.mc}</span></span>
         </div>
       </div>
 
+      {/* ── FMCSA-required BOL detail cards (crew-entered; ADR 0023). Shown only
+          while building the BOL, before it is signed at origin. Bite-size like
+          the Job Report tab: one card per group, * marks a field required to
+          sign. ── */}
+      {draft.status === "draft" && (
+        <>
+          {/* Card 1: Shipper & shipment */}
+          <div className="card">
+            <div className="microLabel" style={{ marginBottom: 10 }}>Shipper &amp; shipment</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+              Look these up in the job's Google Calendar description and type them in.
+              They print on the Bill of Lading and are required to sign at origin.
+            </div>
+            <div className="col" style={{ gap: 10 }}>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipper (customer) name *</span>
+                <input value={draft.shipper_name || ""} onChange={(e) => setField({ shipper_name: e.target.value })} placeholder="Full name" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipper phone *</span>
+                <input className="mono" type="tel" inputMode="tel" value={draft.shipper_phone || ""} onChange={(e) => setField({ shipper_phone: e.target.value })} placeholder="(406) 555-0100" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Origin (pickup) address *</span>
+                <input value={draft.origin_address || ""} onChange={(e) => setAddress({ origin_address: e.target.value })} placeholder="Street, City, ST ZIP" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Destination (delivery) address *</span>
+                <input value={draft.dest_address || ""} onChange={(e) => setAddress({ dest_address: e.target.value })} placeholder="Street, City, ST ZIP" />
+              </label>
+              <div className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipper address *</span>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    checked={shipperSameAsOrigin}
+                    onChange={(e) => {
+                      setShipperSameAsOrigin(e.target.checked);
+                      if (e.target.checked) setField({ shipper_address: draft.origin_address || "" });
+                    }}
+                    style={{ accentColor: "var(--brand)", width: 16, height: 16, flexShrink: 0 }}
+                  />
+                  <span>Same as pickup address</span>
+                </label>
+                {shipperSameAsOrigin ? (
+                  <div className="small" style={{ color: "var(--muted)", padding: "2px 0" }}>
+                    {draft.origin_address ? draft.origin_address : "Enter the pickup address above."}
+                  </div>
+                ) : (
+                  <input value={draft.shipper_address || ""} onChange={(e) => setField({ shipper_address: e.target.value })} placeholder="Shipper's own address" />
+                )}
+              </div>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Shipment / job reference *</span>
+                <input value={draft.shipment_number || ""} onChange={(e) => setField({ shipment_number: e.target.value })} placeholder="Job / shipment number" />
+              </label>
+            </div>
+          </div>
+
+          {/* Card 2: Payment. Estimate type is always Non-binding (we only do
+              non-binding estimates), set on mount - no field needed. */}
+          <div className="card">
+            <div className="microLabel" style={{ marginBottom: 10 }}>Payment</div>
+            <div className="col" style={{ gap: 10 }}>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Form of payment honored at delivery *</span>
+                <select value={draft.form_of_payment || ""} onChange={(e) => setField({ form_of_payment: e.target.value })}>
+                  <option value="">Select&hellip;</option>
+                  {FORM_OF_PAYMENT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+              {draft.form_of_payment === "cod" && (
+                <div className="col" style={{ gap: 10, borderLeft: "2px solid var(--border)", paddingLeft: 10 }}>
+                  <label className="col" style={{ gap: 4 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>COD - who to notify about charges *</span>
+                    <input value={draft.cod_notify || ""} onChange={(e) => setField({ cod_notify: e.target.value })} placeholder="Name + phone/email, or 'same as shipper'" />
+                  </label>
+                  <label className="col" style={{ gap: 4 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>COD - maximum amount demanded at delivery</span>
+                    <input className="mono" value={draft.cod_max || ""} onChange={(e) => setField({ cod_max: e.target.value })} inputMode="decimal" placeholder="$" />
+                  </label>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Card 3: Valuation election */}
+          <div className="card">
+            <div className="microLabel" style={{ marginBottom: 10 }}>Valuation *</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+              Federal law requires the shipper to choose one liability option, freely
+              and in writing. Have the shipper pick one before signing.
+            </div>
+            <div className="col" style={{ gap: 10 }}>
+              {VALUATION_OPTIONS.map((o) => {
+                const selected = draft.valuation === o.value;
+                return (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => setField({ valuation: o.value })}
+                    style={{
+                      textAlign: "left",
+                      padding: 12,
+                      borderRadius: "var(--btn-r)",
+                      border: `2px solid ${selected ? "var(--brand)" : "var(--border)"}`,
+                      background: selected ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "transparent",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                      <span
+                        style={{
+                          width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
+                          border: `2px solid ${selected ? "var(--brand)" : "var(--muted)"}`,
+                          background: selected ? "var(--brand)" : "transparent",
+                        }}
+                      />
+                      <span style={{ fontWeight: 700, color: "var(--text)" }}>{o.label}</span>
+                    </div>
+                    <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginTop: 6 }}>{o.blurb}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Card 4: Agreed dates */}
+          <div className="card">
+            <div className="microLabel" style={{ marginBottom: 10 }}>Agreed dates</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+              The pickup and delivery dates or windows agreed with the shipper. A single
+              date or a range is fine.
+            </div>
+            <div className="row wrap" style={{ gap: 10 }}>
+              <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Agreed pickup *</span>
+                <input value={draft.agreed_pickup || ""} onChange={(e) => setField({ agreed_pickup: e.target.value })} placeholder="e.g. Jul 25, or week of Jul 25" />
+              </label>
+              <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Agreed delivery *</span>
+                <input value={draft.agreed_delivery || ""} onChange={(e) => setField({ agreed_delivery: e.target.value })} placeholder="e.g. Jul 27, or Jul 27 to 30" />
+              </label>
+            </div>
+          </div>
+
+          {/* Card 5: Other required declarations (default None / N/A) */}
+          <div className="card">
+            <div className="microLabel" style={{ marginBottom: 10 }}>Other required declarations</div>
+            <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5, marginBottom: 10 }}>
+              Leave blank if none - the Bill of Lading records None / N/A.
+            </div>
+            <div className="col" style={{ gap: 10 }}>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Additional motor carriers</span>
+                <input value={draft.additional_carriers || ""} onChange={(e) => setField({ additional_carriers: e.target.value })} placeholder="None" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Third-party insurance (insurer + premium)</span>
+                <input value={draft.third_party_insurance || ""} onChange={(e) => setField({ third_party_insurance: e.target.value })} placeholder="None" />
+              </label>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Special / accessorial services</span>
+                <input value={draft.accessorial_services || ""} onChange={(e) => setField({ accessorial_services: e.target.value })} placeholder="N/A" />
+              </label>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Add item */}
       <div className="card">
-        <div className="sectionTitle">Add Item</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Add Item</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
           For boxes, indicate <strong>CP</strong> (Company Packed - carrier is
           responsible for loss / damage of contents) or <strong>PBO</strong>{" "}
@@ -678,12 +1199,13 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
           </label>
           <label className="col" style={{ gap: 4, width: 90 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
-            <input
-              type="number"
+            <NumberField
+              className="mono"
               min={1}
               step={1}
+              integer
               value={itemQty}
-              onChange={(e) => setItemQty(Math.max(1, Math.floor(Number(e.target.value || 1))))}
+              onChange={setItemQty}
             />
           </label>
           <button type="button" className="btnPrimary" onClick={addItem} style={{ minWidth: 90 }}>
@@ -698,9 +1220,9 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       {/* Inventory */}
       <div className="card">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-          <div className="sectionTitle" style={{ marginBottom: 0 }}>Inventory</div>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Inventory</div>
           <span className="small" style={{ color: "var(--muted)" }}>
-            {draft.items.length} item{draft.items.length === 1 ? "" : "s"} · {totalPieces} pc
+            <span className="mono">{draft.items.length}</span> item{draft.items.length === 1 ? "" : "s"} · <span className="mono">{totalPieces}</span> pc
           </span>
         </div>
 
@@ -727,7 +1249,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
               >
                 <div className="row" style={{ justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                   <div style={{ fontWeight: 700 }}>
-                    <span style={{ color: "var(--muted)", marginRight: 6 }}>#{it.item_no}</span>
+                    <span className="mono" style={{ color: "var(--muted)", marginRight: 6 }}>#{it.item_no}</span>
                     {it.name}
                   </div>
                   <button
@@ -744,11 +1266,13 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
                   <div className="row" style={{ gap: 6, alignItems: "center" }}>
                     <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
                     <button type="button" onClick={() => adjustQty(it.item_no, -1)} style={qtyBtnStyle} aria-label="Decrease quantity">−</button>
-                    <input
-                      type="number"
+                    <NumberField
+                      className="mono"
                       min={1}
+                      integer
                       value={it.qty}
-                      onChange={(e) => updateItem(it.item_no, { qty: Math.max(1, Math.floor(Number(e.target.value || 1))) })}
+                      onChange={(qty) => updateItem(it.item_no, { qty })}
+                      aria-label={"Quantity for " + it.name}
                       style={{ width: 56, textAlign: "center" }}
                     />
                     <button type="button" onClick={() => adjustQty(it.item_no, 1)} style={qtyBtnStyle} aria-label="Increase quantity">+</button>
@@ -847,7 +1371,7 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       {/* Contract clauses + required disclosures - preview is always visible;
           expand to review the full 16 CFR §375.505 text before signing. */}
       <div className="card">
-        <div className="sectionTitle">Contract clauses &amp; required disclosures</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Contract clauses &amp; required disclosures</div>
         <div className="small" style={{ color: "var(--muted)", lineHeight: 1.6, marginBottom: 8 }}>
           This Bill of Lading incorporates the 16 CFR §375.505 clauses below (valuation,
           right to rescind, claims, arbitration, and required federal publications). By
@@ -884,29 +1408,17 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       {/* Signing */}
       {draft.status === "delivered" ? (
         <div className="card">
-          <div className="sectionTitle">Signing Complete</div>
-          <div className="small" style={{ color: "var(--ok)", marginBottom: 10 }}>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Signing Complete</div>
+          <div className="small" style={{ color: "var(--ok)" }}>
             ✓ Origin and destination signed. The signed Bill of Lading has been delivered to the shipper and stored.
           </div>
-          {draft.signed_pdf_url && (
-            <a href={draft.signed_pdf_url} target="_blank" rel="noreferrer" className="small" style={{ color: "var(--brand)" }}>
-              Open signed PDF in Drive →
-            </a>
-          )}
-          <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 10 }}>
-            <button
-              onClick={async () => {
-                const { generateBolPdf } = await import("../lib/bolPdf");
-                await deliverPdfToClient(await generateBolPdf(draft), pdfFilename(draft));
-              }}
-            >
-              Download a copy
-            </button>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+            Use <strong>Signed Bill of Lading</strong> above to view, download, or email the client a copy.
           </div>
         </div>
       ) : (
         <div className="card">
-          <div className="sectionTitle">
+          <div className="microLabel" style={{ marginBottom: 10 }}>
             {draft.status === "origin_signed" ? "Destination Signing - upon delivery" : "Origin Signing - before loading"}
           </div>
 
@@ -921,26 +1433,34 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
               </label>
               <label className="col" style={{ gap: 4, marginBottom: 12, maxWidth: 200 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Final actual charges ($)</span>
-                <input value={finalCharges} onChange={(e) => setFinalCharges(e.target.value)} inputMode="decimal" placeholder="0.00" />
+                <input className="mono" value={finalCharges} onChange={(e) => setFinalCharges(e.target.value)} inputMode="decimal" placeholder="0.00" />
               </label>
             </>
           ) : (
-            <div className="row wrap" style={{ gap: 10, marginBottom: 12 }}>
-              <label className="col" style={{ gap: 4, flex: "1 1 150px" }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Actual pickup date</span>
-                <input type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} />
-              </label>
-              <label className="col" style={{ gap: 4, flex: "1 1 150px" }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Vehicle (unit)</span>
-                <select value={vehicle} onChange={(e) => setVehicle(e.target.value)}>
-                  <option value="">Select&hellip;</option>
-                  {units.map((u) => <option key={u} value={u}>{u}</option>)}
-                  {vehicle && !units.includes(vehicle) && (
-                    <option value={vehicle}>{vehicle}</option>
-                  )}
-                </select>
-              </label>
-            </div>
+            <>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+                The shipper, addresses, payment, valuation, and dates are entered in
+                the BOL detail cards above. Record the loading-time facts below, then
+                sign.
+              </div>
+              <div className="row wrap" style={{ gap: 10, marginBottom: 12 }}>
+                <label className="col" style={{ gap: 4, flex: "1 1 150px" }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Actual pickup date</span>
+                  <input type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} />
+                </label>
+                <label className="col" style={{ gap: 4, flex: "1 1 150px" }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Vehicle (unit)</span>
+                  <select value={vehicle} onChange={(e) => setVehicle(e.target.value)}>
+                    <option value="">Select&hellip;</option>
+                    {units.map((u) => <option key={u} value={u}>{u}</option>)}
+                    {vehicle && !units.includes(vehicle) && (
+                      <option value={vehicle}>{vehicle}</option>
+                    )}
+                  </select>
+                </label>
+              </div>
+              <VehicleUnitSpecs unit={unitByName(vehUnits, vehicle)} />
+            </>
           )}
 
           <label className="col" style={{ gap: 4, marginBottom: 12 }}>

@@ -22,6 +22,7 @@ import {
 } from "../lib/materialsStore";
 import { roundBillableQuarter, DEFAULT_LABOR_RATE, type EmployeeHoursEntry } from "../lib/employeeHours";
 import BetaTag from "./BetaTag";
+import NumberField from "./NumberField";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -170,6 +171,9 @@ export type BillSlots = {
   billHelper: ReactNode;
   totals: ReactNode;
   notes: ReactNode;
+  /** Grand total (line items + materials, after global discount). Lets a caller
+   *  show the bill amount in a read-only recap without the editable totals card. */
+  total: number;
 };
 
 type Props = {
@@ -682,7 +686,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         Select a job to build a bill.
       </div>
     );
-    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null })}</>;
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null, total: 0 })}</>;
     return placeholder;
   }
 
@@ -690,7 +694,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     const placeholder = (
       <div className="card" style={{ color: "var(--muted)", fontSize: 13, padding: 14 }}>Loading bill…</div>
     );
-    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null })}</>;
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null, total: 0 })}</>;
     return placeholder;
   }
 
@@ -714,30 +718,10 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       )}
 
       {/* ── Line items ──
-          Card owns the horizontal scroll so the six-column grid can stay
-          intact on a narrow phone rather than wrapping chaotically. Every
-          inner row uses minWidth: 430 so the scroll position lines up. */}
-      <div className="card" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
-        {/* Header */}
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
-          minWidth: 430,
-          gap: 6, padding: "10px 12px",
-          background: "rgba(255,255,255,0.08)",
-          borderBottom: "1px solid var(--border)",
-          fontSize: 11, fontWeight: 800, color: "var(--text)",
-          opacity: 0.85,
-          textTransform: "uppercase", letterSpacing: "0.04em",
-        }}>
-          <span>Description</span>
-          <span style={{ textAlign: "right" }}>Qty</span>
-          <span style={{ textAlign: "right" }}>Rate ($)</span>
-          <span style={{ textAlign: "right" }}>Disc %</span>
-          <span style={{ textAlign: "right" }}>Amount</span>
-          <span />
-        </div>
-
+          Each row is a self-labeled stacked block (description on top, then
+          Qty / Rate / Disc that wrap), so the invoice fits a phone without any
+          horizontal scroll. No fixed-width grid, no column header. */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         {bill.items.length === 0 && (
           <div style={{ padding: "20px 14px", color: "var(--muted)", fontSize: 13, textAlign: "center" }}>
             No line items - add some below.
@@ -750,24 +734,17 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
 
         {/* ── Materials summary + live list ── */}
         <div style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px",
-          minWidth: 430,
-          gap: 6, padding: "10px 12px",
-          background: "rgba(93,214,194,0.06)",
+          display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+          padding: "10px 12px",
+          background: "color-mix(in srgb, var(--brand) 6%, transparent)",
           borderBottom: "1px solid var(--border)",
           borderTop: bill.items.length > 0 ? "1px solid var(--border)" : undefined,
-          alignItems: "center",
           fontSize: 13, fontWeight: 700,
         }}>
           <span>Materials</span>
-          <span />
-          <span />
-          <span />
           <span style={{ textAlign: "right", color: materialsTotal > 0 ? "var(--brand)" : "var(--muted)" }}>
             {fmt(materialsTotal)}
           </span>
-          <span />
         </div>
 
         {materials.length > 0 && (
@@ -778,25 +755,22 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
               return (
                 <div key={m.submissionId}>
                   <div style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 60px 90px 80px 28px",
-                    gap: 6, padding: "6px 12px 6px 28px",
+                    display: "flex", gap: 8, padding: "6px 12px 6px 28px",
                     borderBottom: m.failed ? "none" : "1px solid var(--border)",
                     alignItems: "center",
                     fontSize: 12, color: "var(--text)",
                     opacity: m.pending && !m.failed ? 0.75 : 1,
                   }}>
-                    <span style={{ color: "var(--muted)" }}>
+                    <span style={{ color: "var(--muted)", flex: 1, minWidth: 0 }}>
                       • {m.name}
+                      <span style={{ color: "var(--muted)" }}> ×{m.qty} @ {unit}</span>
                       {m.failed
                         ? <span style={{ marginLeft: 6, fontSize: 10, color: "var(--danger)", fontWeight: 700 }}>NOT SENT</span>
                         : m.pending && <span title="Waiting to sync" style={{ marginLeft: 6, fontSize: 10, color: "var(--brand)" }}>• syncing</span>}
                     </span>
-                    <span style={{ textAlign: "right", color: "var(--muted)" }}>×{m.qty}</span>
-                    <span style={{ textAlign: "right", color: "var(--muted)" }}>{unit}</span>
-                    <span style={{ textAlign: "right", fontWeight: 600 }}>{ext}</span>
+                    <span style={{ textAlign: "right", fontWeight: 600, flexShrink: 0 }}>{ext}</span>
                     <button type="button" onClick={() => removeMaterial(m.submissionId)}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1, flexShrink: 0 }}
                       aria-label="Remove material">×</button>
                   </div>
                   {/* The server refused this item. It is kept, not deleted (ADR
@@ -832,7 +806,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 <select value={matSelectedName} onChange={(e) => setMatSelectedName(e.target.value)}
-                  style={{ flex: "1 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }}>
+                  style={{ flex: "1 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 16 }}>
                   <option value="">Select material…</option>
                   {MATERIAL_CATALOG.map((m) => (
                     <option key={m.name} value={m.name}>
@@ -841,14 +815,9 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
                   ))}
                   <option value="__custom__">Custom item…</option>
                 </select>
-                <input type="number" min={1} step={1} inputMode="numeric" value={matQty}
-                  onFocus={(e) => e.currentTarget.select()}
-                  onChange={(e) => setMatQty(e.target.value)}
-                  onBlur={() => {
-                    const n = Number(matQty);
-                    setMatQty(String(Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1));
-                  }}
-                  style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13, textAlign: "right" }} />
+                <NumberField integer min={1} step={1} value={Number(matQty) || 1} aria-label="Material quantity"
+                  onChange={(n) => setMatQty(String(n >= 1 ? Math.floor(n) : 1))}
+                  style={{ width: 64, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 16, textAlign: "right" }} />
                 <button type="button" onClick={addMaterial}
                   style={{ padding: "6px 14px", fontSize: 13, borderRadius: 8, borderColor: "var(--brand)", color: "var(--text)" }}>
                   Add
@@ -861,9 +830,9 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
               {matSelectedName === "__custom__" && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <input value={matCustomName} onChange={(e) => setMatCustomName(e.target.value)} placeholder="Custom name"
-                    style={{ flex: "2 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+                    style={{ flex: "2 1 200px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 16 }} />
                   <input value={matCustomCost} onChange={(e) => setMatCustomCost(e.target.value)} placeholder="Cost (opt.)" inputMode="decimal"
-                    style={{ flex: "1 1 120px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }} />
+                    style={{ flex: "1 1 120px", padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 16 }} />
                 </div>
               )}
               {matErr && <div style={{ fontSize: 12, color: "var(--danger)" }}>{matErr}</div>}
@@ -919,9 +888,9 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <label style={{ fontSize: 13, color: "var(--muted)" }}>Global discount (%)</label>
-          <input type="number" min={0} max={100} step={1} value={bill.globalDiscount}
-            onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => setBill((prev) => ({ ...prev, globalDiscount: Math.min(100, Math.max(0, Number(e.target.value) || 0)) }))}
+          <NumberField min={0} max={100} step={1} value={bill.globalDiscount}
+            aria-label="Global discount percent"
+            onChange={(globalDiscount) => setBill((prev) => ({ ...prev, globalDiscount }))}
             style={{ ...numInputStyle, width: 80 }} />
         </div>
         <div style={{ height: 1, background: "var(--border)" }} />
@@ -969,7 +938,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   );
 
   if (children) {
-    return <>{children({ billHelper: billHelperSlot, totals: totalsSlot, notes: notesSlot })}</>;
+    return <>{children({ billHelper: billHelperSlot, totals: totalsSlot, notes: notesSlot, total: grandTotal })}</>;
   }
 
   return (
@@ -992,34 +961,47 @@ function LineItemRow({ item, onChange, onRemove }: {
 }) {
   const subtotal = lineSubtotal(item);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) 72px 90px 72px 80px 28px", minWidth: 430, gap: 6, padding: "8px 12px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
-      <input value={item.label} onChange={(e) => onChange({ label: e.target.value })} placeholder="Description" style={{ ...cellInputStyle, fontSize: 13 }} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <input type="number" min={0} step={0.25} value={item.qty}
-          onFocus={(e) => e.currentTarget.select()}
-          onChange={(e) => onChange({ qty: Math.max(0, Number(e.target.value) || 0) })} style={numInputStyle} />
-        <select value={item.unit} onChange={(e) => onChange({ unit: e.target.value as Unit })} style={{ ...selectStyle, fontSize: 10 }}>
-          <option value="hr">hr</option>
-          <option value="ea">ea</option>
-          <option value="flat">flat</option>
-          <option value="mi">mi</option>
-          <option value="day">day</option>
-          <option value="lb">lb</option>
-          <option value="cu ft">cu ft</option>
-        </select>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+      {/* Description + running amount + remove. */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input value={item.label} onChange={(e) => onChange({ label: e.target.value })} placeholder="Description"
+          style={{ ...cellInputStyle, fontSize: 13, flex: 1, minWidth: 0 }} />
+        <div style={{ minWidth: 64, textAlign: "right", fontSize: 13, fontWeight: 700, color: subtotal > 0 ? "var(--text)" : "var(--muted)", flexShrink: 0 }}>
+          {fmt(subtotal)}
+        </div>
+        <button type="button" onClick={onRemove}
+          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1, flexShrink: 0 }}
+          aria-label="Remove">×</button>
       </div>
-      <input type="number" min={0} step={0.01} value={item.rate}
-        onFocus={(e) => e.currentTarget.select()}
-        onChange={(e) => onChange({ rate: Math.max(0, Number(e.target.value) || 0) })} placeholder="0.00" style={numInputStyle} />
-      <input type="number" min={0} max={100} step={1} value={item.discount}
-        onFocus={(e) => e.currentTarget.select()}
-        onChange={(e) => onChange({ discount: Math.min(100, Math.max(0, Number(e.target.value) || 0)) })} style={numInputStyle} />
-      <div style={{ textAlign: "right", fontSize: 13, fontWeight: 600, color: subtotal > 0 ? "var(--text)" : "var(--muted)" }}>
-        {fmt(subtotal)}
+      {/* Qty (+ unit), Rate, Disc - self-labeled, wrap on a narrow phone. */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={fieldLabelStyle}>
+          <span>Qty</span>
+          <div style={{ display: "flex", gap: 4 }}>
+            <NumberField min={0} step={0.25} value={item.qty} aria-label="Quantity"
+              onChange={(qty) => onChange({ qty })} style={{ ...numInputStyle, width: 60 }} />
+            <select value={item.unit} onChange={(e) => onChange({ unit: e.target.value as Unit })} style={{ ...selectStyle, width: 62, fontSize: 12 }}>
+              <option value="hr">hr</option>
+              <option value="ea">ea</option>
+              <option value="flat">flat</option>
+              <option value="mi">mi</option>
+              <option value="day">day</option>
+              <option value="lb">lb</option>
+              <option value="cu ft">cu ft</option>
+            </select>
+          </div>
+        </label>
+        <label style={fieldLabelStyle}>
+          <span>Rate ($)</span>
+          <NumberField min={0} step={0.01} value={item.rate} aria-label="Rate"
+            onChange={(rate) => onChange({ rate })} placeholder="0.00" style={{ ...numInputStyle, width: 84 }} />
+        </label>
+        <label style={fieldLabelStyle}>
+          <span>Disc %</span>
+          <NumberField min={0} max={100} step={1} value={item.discount} aria-label="Line discount percent"
+            onChange={(discount) => onChange({ discount })} style={{ ...numInputStyle, width: 64 }} />
+        </label>
       </div>
-      <button type="button" onClick={onRemove}
-        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: 0, lineHeight: 1 }}
-        aria-label="Remove">×</button>
     </div>
   );
 }
@@ -1027,11 +1009,20 @@ function LineItemRow({ item, onChange, onRemove }: {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const cellInputStyle: React.CSSProperties = {
+  // 16px, not 13: iOS Safari auto-zooms the page when a focused input's font is
+  // under 16px (the global rule in index.css). The invoice inputs override that
+  // global, so they must restate 16 or tapping a line item zooms the page.
   width: "100%", padding: "5px 8px", borderRadius: 6,
   border: "1px solid var(--border)", background: "var(--bg)",
-  color: "var(--text)", fontSize: 13, boxSizing: "border-box",
+  color: "var(--text)", fontSize: 16, boxSizing: "border-box",
 };
 const numInputStyle: React.CSSProperties = { ...cellInputStyle, textAlign: "right" };
+// Small stacked label for the per-line Qty / Rate / Disc fields (mobile-first
+// invoice rows: the label sits above the field so no column header is needed).
+const fieldLabelStyle: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 2,
+  fontSize: 11, color: "var(--muted)", fontWeight: 600,
+};
 const selectStyle: React.CSSProperties = {
   width: "100%", padding: "3px 4px", borderRadius: 4,
   border: "1px solid var(--border)", background: "var(--bg)",

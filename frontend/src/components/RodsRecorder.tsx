@@ -71,13 +71,13 @@ export default function RodsRecorder({
       {/* Title changes when the tile also hosts the "Actions - job labor"
           slot on mixed drive+labor days - "Record of Duty Status" alone is
           misleading in that case. */}
-      <div className="sectionTitle">
+      <div className="microLabel" style={{ marginBottom: 10 }}>
         {actionsSlot ? "Timeline actions" : "Record of Duty Status - driver"}
       </div>
 
       {actionsSlot && (
         <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
-          <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>Actions - job labor</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Actions - job labor</div>
           {actionsSlot}
         </div>
       )}
@@ -88,7 +88,10 @@ export default function RodsRecorder({
           borderRadius: 8, borderLeft: `5px solid ${cur ? STATUS_COLORS[cur] : "var(--border)"}`,
           // Deeper fill so the "Current status" label reads on both dark
           // and light themes (the prior 0.04 was invisible on light).
-          background: "rgba(255,255,255,0.08)",
+          // Tint by the current duty-status color so it follows the theme.
+          background: cur
+            ? `color-mix(in srgb, ${STATUS_COLORS[cur]} 10%, transparent)`
+            : "color-mix(in srgb, var(--muted) 8%, transparent)",
           border: "1px solid var(--border)",
           borderLeftWidth: 5,
           borderLeftColor: cur ? STATUS_COLORS[cur] : "var(--border)",
@@ -139,20 +142,26 @@ export default function RodsRecorder({
         </div>
       )}
 
-      <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>RODS - tap the duty status</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>RODS - tap the duty status</div>
+      <div className="seg" style={{ marginBottom: 8 }}>
+        {DUTY_STATUSES.map((s) => {
+          const active = cur === s;
+          return (
+            <button
+              key={s}
+              type="button"
+              aria-pressed={active}
+              className={"segBtn" + (active ? " on" : "")}
+              style={{ ["--seg" as any]: STATUS_COLORS[s] }}
+              onClick={() => tap(s)}
+              disabled={active}
+            >
+              {STATUS_LABELS[s]}
+            </button>
+          );
+        })}
+      </div>
       <div className="row wrap" style={{ gap: 8 }}>
-        {DUTY_STATUSES.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className="btnPrimary"
-            onClick={() => tap(s)}
-            disabled={cur === s}
-            style={{ opacity: cur === s ? 0.55 : 1 }}
-          >
-            {STATUS_LABELS[s]}
-          </button>
-        ))}
         <button type="button" className="btnPrimary" onClick={addNote} style={{ background: "transparent", color: "var(--text)", borderColor: "var(--border)" }}>+ Note</button>
       </div>
     </div>

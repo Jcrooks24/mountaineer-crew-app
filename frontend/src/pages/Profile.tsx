@@ -4,14 +4,15 @@ import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { refreshDirectory } from "../lib/userDirectory";
 import { markPatchNotesSeenNow } from "../lib/patchNotesSeen";
+import DqMyFileCard from "../components/DqMyFileCard";
 import {
   APP_BUILD_ID,
   APP_VERSION_NAME,
   checkForAppUpdate,
   type UpdateResult,
 } from "../lib/appUpdate";
-import { fetchState, isHorizonLow, loadCache } from "../lib/availabilityStore";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
@@ -58,32 +59,24 @@ export default function Profile() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const dqRef = useRef<HTMLDivElement>(null);
 
-  // Availability horizon - cache on mount, then refresh from server so the
-  // "you need to submit" badge is current. We only need to know whether the
-  // horizon is below the 14-day threshold; the picker page itself owns the
-  // full state.
-  const [availabilityHorizonLow, setAvailabilityHorizonLow] = useState<boolean>(() => {
-    const cache = loadCache();
-    const today = new Date();
-    const y = today.getFullYear();
-    const m = String(today.getMonth() + 1).padStart(2, "0");
-    const d = String(today.getDate()).padStart(2, "0");
-    return isHorizonLow(cache.horizon, `${y}-${m}-${d}`);
-  });
+  // If we arrived via the DQ reminder's "Submit now" (/profile#dq), scroll the
+  // DQ card into view so the driver lands on it, not the top of the page.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const s = await fetchState();
-      if (!s || cancelled) return;
-      const today = new Date();
-      const y = today.getFullYear();
-      const m = String(today.getMonth() + 1).padStart(2, "0");
-      const d = String(today.getDate()).padStart(2, "0");
-      setAvailabilityHorizonLow(isHorizonLow(s.horizon, `${y}-${m}-${d}`));
-    })();
-    return () => { cancelled = true; };
+    if (window.location.hash !== "#dq") return;
+    const t = window.setTimeout(() => {
+      dqRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
+    return () => window.clearTimeout(t);
   }, []);
+
+  // The availability-horizon state that used to drive the "you need to submit"
+  // badge on the Tools & Resources card went with that card (2026-08-10). The
+  // nag itself is unaffected: AvailabilityReminderBanner (mounted app-wide in
+  // main.tsx) computes the same horizon and is the surface crew actually see.
+  // Nothing here fetched on the banner's behalf, so this removed a duplicate
+  // fetchState() call on every Profile mount.
 
   function handleSignOut() {
     logout();
@@ -154,21 +147,11 @@ export default function Profile() {
 
   const initials = user?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? "?";
 
-  const backBtnStyle: React.CSSProperties = {
-    background: "none", border: "none", color: "var(--muted)",
-    cursor: "pointer", fontSize: 13, padding: "4px 8px",
-  };
-
   // ── My Profile sub-page - photo + account config ──────────────────────────
   if (view === "profile") {
     return (
       <div className="container" style={{ maxWidth: 480 }}>
-        <div className="topbar" style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 900, fontSize: 15 }}>My Profile</div>
-          <button onClick={() => setView("main")} style={backBtnStyle}>
-            &larr; Profile
-          </button>
-        </div>
+        <AppHeader title="My Profile" onBack={() => setView("main")} />
 
         {/* Avatar */}
         <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
@@ -211,15 +194,15 @@ export default function Profile() {
 
         {/* Account - read-only identity plus editable display name */}
         <div className="card">
-          <div className="sectionTitle">Account</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Account</div>
           <div className="col" style={{ gap: 14 }}>
             <div className="row" style={{ gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
               <div style={{ flex: 1, minWidth: 150 }}>
-                <div className="label">Email</div>
+                <div className="microLabel">Email</div>
                 <div style={{ marginTop: 4 }}>{user?.email}</div>
               </div>
               <div style={{ flex: 1, minWidth: 100 }}>
-                <div className="label">Role</div>
+                <div className="microLabel">Role</div>
                 <div style={{ marginTop: 4, textTransform: "capitalize" }}>{user?.role ?? "user"}</div>
               </div>
             </div>
@@ -228,7 +211,7 @@ export default function Profile() {
               className="col"
               style={{ gap: 8, borderTop: "1px solid var(--border)", paddingTop: 12 }}
             >
-              <label className="label">Display name</label>
+              <label className="microLabel">Display name</label>
               <input
                 value={name}
                 onChange={(e) => { setName(e.target.value); setSaved(false); }}
@@ -249,12 +232,7 @@ export default function Profile() {
   return (
     <div className="container" style={{ maxWidth: 480 }}>
       {/* Header */}
-      <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Profile</div>
-        <button onClick={() => nav(-1)} style={backBtnStyle}>
-          &larr; Back
-        </button>
-      </div>
+      <AppHeader title="Profile" />
 
       {/* My Profile entry - tap to open photo + account config */}
       <div
@@ -288,38 +266,17 @@ export default function Profile() {
         <AppRefreshButton />
       </div>
 
-      {/* Tools & resources - nav links grouped into one card with consistent
-          flat rows, so the page reads as a short list. */}
-      <div className="card">
-        <div className="sectionTitle">Tools & Resources</div>
-        <div className="col" style={{ gap: 8 }}>
-          <ProfileNavRow
-            label="Scheduling Availability"
-            hint={
-              availabilityHorizonLow
-                ? "Update needed - submit availability for the next 2 weeks"
-                : "Tap days to set available / unavailable / conditional"
-            }
-            betaFeature="schedulingAvailability"
-            badgeTone={availabilityHorizonLow ? "warn" : null}
-            onClick={() => nav("/availability")}
-          />
-          <ProfileNavRow
-            label="Log Expense / Reimbursement"
-            hint="Mileage, personal-card reimbursement, or company-card receipts"
-            onClick={() => nav("/reimbursement")}
-          />
-          <ProfileNavRow
-            label="Log Off-Job Hours"
-            hint="Hours for work not tied to a job (usually pre-approved)"
-            betaFeature="offJobHours"
-            onClick={() => nav("/off-job")}
-          />
-          <ProfileNavRow
-            label="Document Library"
-            onClick={() => nav("/documents")}
-          />
-        </div>
+      {/* The Tools & Resources card was removed 2026-08-10: every row in it
+          (Availability, Reimbursement, Off-job hours, Document Library) is a
+          tile on the Tools tab, so it was a second front door to the same four
+          routes. The availability nag it used to carry is unaffected -
+          AvailabilityReminderBanner is mounted app-wide in main.tsx. */}
+
+      {/* Driver qualification documents (C4). Anchored so the DQ reminder's
+          "Submit now" (which links to /profile#dq) scrolls straight here rather
+          than dropping the driver at the top of the page. */}
+      <div ref={dqRef} id="dq">
+        <DqMyFileCard />
       </div>
 
       {/* Worked hours - weekly regular / OT / non-billable breakdown */}
@@ -334,7 +291,7 @@ export default function Profile() {
           onClick={handleSignOut}
           style={{
             width: "100%", padding: 12,
-            background: "rgba(255,107,107,0.08)",
+            background: "color-mix(in srgb, var(--danger) 8%, transparent)",
             color: "var(--danger)",
             border: "1px solid var(--danger)",
             borderRadius: 12, cursor: "pointer", fontSize: 15, fontWeight: 700,
@@ -347,63 +304,6 @@ export default function Profile() {
   );
 }
 
-// Flat, list-style navigation row - lighter than a default button so a card
-// full of links doesn't read as a wall of buttons.
-function ProfileNavRow({
-  label,
-  hint,
-  onClick,
-  betaFeature,
-  badgeTone,
-}: {
-  label: string;
-  hint?: string;
-  onClick: () => void;
-  /** Feature key to gate a "beta" subtext via the shared BetaTag component. */
-  betaFeature?: string;
-  /** Renders a small filled dot to the right of the label when set; "warn"
-   *  surfaces action-needed states (e.g. submit availability). */
-  badgeTone?: "warn" | null;
-}) {
-  const warn = badgeTone === "warn";
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        gap: 12, width: "100%", textAlign: "left",
-        padding: "11px 14px", fontSize: 14, fontWeight: 600,
-        background: "rgba(255,255,255,0.04)",
-        border: warn ? "1px solid var(--warn)" : "1px solid var(--border)",
-      }}
-    >
-      <span className="col" style={{ gap: 2 }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {label}
-          {warn && (
-            <span
-              aria-label="Action needed"
-              style={{
-                width: 8, height: 8, borderRadius: "50%",
-                background: "var(--warn)", flexShrink: 0,
-              }}
-            />
-          )}
-        </span>
-        {betaFeature && <BetaTag feature={betaFeature} />}
-        {hint && (
-          <span
-            className="small"
-            style={{ color: warn ? "var(--warn)" : "var(--muted)" }}
-          >
-            {hint}
-          </span>
-        )}
-      </span>
-      <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
-    </button>
-  );
-}
 
 function AppRefreshButton() {
   const [status, setStatus] = useState<"idle" | "checking" | "result">("idle");
@@ -471,10 +371,10 @@ function AppRefreshButton() {
       ) : (
         <div style={{ textAlign: "center" }}>
           <div className="small" style={{ color: "var(--muted)" }}>
-            Version <strong style={{ color: "var(--text)" }}>{APP_VERSION_NAME}</strong>
+            Version <strong className="mono" style={{ color: "var(--text)" }}>{APP_VERSION_NAME}</strong>
           </div>
           <div style={{ fontSize: 10, color: "var(--muted)", opacity: 0.65, marginTop: 1 }}>
-            build {APP_BUILD_ID}
+            build <span className="mono">{APP_BUILD_ID}</span>
           </div>
         </div>
       )}
@@ -488,23 +388,34 @@ type WorkedWeek = {
   ot_hours: number;
   non_billable_hours: number;
   other_hours: number;
+  office_hours: number;
+  total_hours: number;
+};
+type HoursSummary = {
+  regular_hours: number;
+  ot_hours: number;
+  non_billable_hours: number;
+  other_hours: number;
+  office_hours: number;
   total_hours: number;
 };
 type WorkedHistory = {
   weeks: WorkedWeek[];
-  summary: {
-    regular_hours: number;
-    ot_hours: number;
-    non_billable_hours: number;
-    other_hours: number;
-    total_hours: number;
-  };
+  // Present once a payroll has been finalized: the open pay period since then.
+  current_period: (HoursSummary & { start: string; end: string }) | null;
+  summary: HoursSummary;
 };
 
-// The endpoint returns a hard two-week window (see routers/hours.py): it used to
-// load every job report ever written on every Profile mount, which is an OOM risk
-// on the 512 MB worker. There is deliberately no "show older weeks" expander,
-// because there is nothing older to show.
+// The endpoint defaults to a two-week window (kept small because it runs on every
+// Profile mount), but accepts a `weeks` param so the crew can expand their history
+// on demand - the "Show more" button below raises it, capped server-side.
+const HISTORY_DEFAULT_WEEKS = 2;
+const HISTORY_MORE_WEEKS = 12;
+
+// A single date, e.g. "Aug 4".
+function fmtDay(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString([], { month: "short", day: "numeric" });
+}
 
 // week_start is the Monday; render "Mon D - Sun D".
 function fmtWeek(iso: string): string {
@@ -518,7 +429,7 @@ function fmtWeek(iso: string): string {
 function HoursTile({ label, value, accent }: { label: string; value: number; accent?: string }) {
   return (
     <div style={{ flex: "1 1 70px", minWidth: 70, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px", textAlign: "center" }}>
-      <div style={{ fontSize: 20, fontWeight: 800, color: accent || "var(--text)" }}>{value.toFixed(1)}</div>
+      <div className="mono" style={{ fontSize: 20, fontWeight: 800, color: accent || "var(--text)" }}>{value.toFixed(1)}</div>
       <div className="small" style={{ color: "var(--muted)" }}>{label}</div>
     </div>
   );
@@ -529,24 +440,40 @@ function HoursTile({ label, value, accent }: { label: string; value: number; acc
 function WorkedHoursCard() {
   const [data, setData] = useState<WorkedHistory | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [weeksWindow, setWeeksWindow] = useState(HISTORY_DEFAULT_WEEKS);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
-    apiFetch<WorkedHistory>("/api/hours/worked-history")
-      .then(setData)
-      .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"));
-  }, []);
+    let cancelled = false;
+    setLoadingMore(weeksWindow > HISTORY_DEFAULT_WEEKS);
+    apiFetch<WorkedHistory>(`/api/hours/worked-history?weeks=${weeksWindow}`)
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch((e: any) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoadingMore(false); });
+    return () => { cancelled = true; };
+  }, [weeksWindow]);
 
   const weeks = data?.weeks ?? [];
-  const s = data?.summary;
+  // The summary tiles reflect the CURRENT PAY PERIOD (since the last finalized
+  // payroll) when the office has finalized one; otherwise they fall back to the
+  // rolling window. The weekly list below is always the rolling history.
+  const cp = data?.current_period ?? null;
+  const s = cp ?? data?.summary;
+  // Only show the office column when this person actually logs office hours.
+  const hasOffice = !!s && (s.office_hours > 0 || weeks.some((w) => w.office_hours > 0));
+  const expanded = weeksWindow > HISTORY_DEFAULT_WEEKS;
 
   return (
     <div className="card">
       <div className="row" style={{ alignItems: "center", gap: 8 }}>
-        <div className="sectionTitle" style={{ marginBottom: 0 }}>Worked Hours</div>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Worked Hours</div>
         <BetaTag feature="workedHours" style={{ marginTop: 0 }} />
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
-        Your logged hours for the last two weeks. Overtime is anything over 40 hrs in a week.
+        {cp
+          ? <>Your hours this pay period (<strong style={{ color: "var(--text)" }}>{fmtDay(cp.start)} - today</strong>, since the last payroll).</>
+          : <>Your logged hours{expanded ? ` over the last ${weeksWindow} weeks` : " for the last two weeks"}.</>}
+        {" "}Job + off-job{hasOffice ? " + office" : ""} time. Overtime is anything over 40 hrs in a week.
       </div>
       {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
       {data == null && !err && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
@@ -556,6 +483,7 @@ function WorkedHoursCard() {
             <HoursTile label="Regular" value={s.regular_hours} />
             <HoursTile label="Overtime" value={s.ot_hours} accent="var(--warn)" />
             <HoursTile label="Non-billable" value={s.non_billable_hours} />
+            {hasOffice && <HoursTile label="Office" value={s.office_hours} />}
             {s.other_hours > 0 && <HoursTile label="Other" value={s.other_hours} />}
             <HoursTile label="Total" value={s.total_hours} accent="var(--brand)" />
           </div>
@@ -568,15 +496,35 @@ function WorkedHoursCard() {
                 <span style={{ width: 52, textAlign: "right" }}>Reg</span>
                 <span style={{ width: 42, textAlign: "right" }}>OT</span>
                 <span style={{ width: 56, textAlign: "right" }}>N-bill</span>
+                {hasOffice && <span style={{ width: 52, textAlign: "right" }}>Office</span>}
               </div>
               {weeks.map((w) => (
                 <div key={w.week_start} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
-                  <span style={{ flex: "1 1 auto" }}>{fmtWeek(w.week_start)}</span>
-                  <span style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
-                  <span style={{ width: 42, textAlign: "right", color: w.ot_hours > 0 ? "var(--warn)" : "var(--muted)", fontWeight: w.ot_hours > 0 ? 700 : 400 }}>{w.ot_hours.toFixed(1)}</span>
-                  <span style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
+                  <span className="mono" style={{ flex: "1 1 auto" }}>{fmtWeek(w.week_start)}</span>
+                  <span className="mono" style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
+                  <span className="mono" style={{ width: 42, textAlign: "right", color: w.ot_hours > 0 ? "var(--warn)" : "var(--muted)", fontWeight: w.ot_hours > 0 ? 700 : 400 }}>{w.ot_hours.toFixed(1)}</span>
+                  <span className="mono" style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
+                  {hasOffice && <span className="mono" style={{ width: 52, textAlign: "right", color: "var(--muted)" }}>{w.office_hours.toFixed(1)}</span>}
                 </div>
               ))}
+              <div style={{ marginTop: 10 }}>
+                {!expanded ? (
+                  <button
+                    onClick={() => setWeeksWindow(HISTORY_MORE_WEEKS)}
+                    disabled={loadingMore}
+                    style={{ background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontWeight: 600, fontSize: 13, padding: "4px 0" }}
+                  >
+                    {loadingMore ? "Loading…" : "Show more history"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setWeeksWindow(HISTORY_DEFAULT_WEEKS)}
+                    style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontWeight: 600, fontSize: 13, padding: "4px 0" }}
+                  >
+                    Show less
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </>
@@ -612,7 +560,7 @@ function PatchNoteItem({ note }: { note: PatchNote }) {
     <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
       <div style={{ fontWeight: 700, fontSize: 14 }}>{note.title}</div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
-        {new Date(note.updated_at).toLocaleDateString()}
+        <span className="mono">{new Date(note.updated_at).toLocaleDateString()}</span>
         {note.created_by_name ? ` · ${note.created_by_name}` : ""}
       </div>
       <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>
@@ -650,7 +598,7 @@ function PatchNotesCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Patch Notes</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Patch Notes</div>
       {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
       {notes == null && !err && (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>

@@ -441,6 +441,161 @@ def _get_bol_folder_id(svc, db: Optional[Session]) -> str:
     return folder_id
 
 
+# ── Driver Qualification (DQ) files ───────────────────────────────────────────
+# DQ documents are DOT compliance records and carry PII (medical cards,
+# employment applications). They live in their own top-level folder, one
+# subfolder per driver, so the office can hand an auditor a single driver's
+# folder without exposing anyone else's.
+#
+# ID-only on purpose. There is NO name-based fallback here, unlike BOL: a name
+# fallback is what let staging and prod resolve the same physical folder, and
+# these are the documents where that matters most. If the env var is unset we
+# fall back to the previous behavior (the Documents folder) rather than invent a
+# folder, so an unset var degrades to the old layout instead of scattering PII
+# somewhere new.
+DQ_FOLDER_ID_ENV_VAR = "DRIVE_DQ_FOLDER_ID"
+
+
+def _dq_parent_folder_id(svc, db: Optional[Session]) -> str:
+    """Top-level folder that holds the per-driver DQ subfolders."""
+    folder_id_env = os.getenv(DQ_FOLDER_ID_ENV_VAR, "").strip()
+    if folder_id_env:
+        return folder_id_env
+    # Unset: keep the pre-existing behavior so uploads never fail closed.
+    return _get_documents_folder_id(svc, db)
+
+
+def sweep_dq_orphans(db: Session, folder_id: str, doc_type: str, keep_file_id: str) -> int:
+    """Delete leftover files of this doc type in the driver's folder, keeping one.
+
+    The upload writes to Drive BEFORE the Postgres row is committed. A `kill -9`
+    between the two (Render recycles workers and this app has OOM history)
+    leaves a file no row points at: the app still says the document is missing,
+    the driver uploads again, and the orphan sits there forever because the
+    most-recent-wins delete keys off a row that never existed.
+
+    A handled failure is compensated at the call site. This covers the case that
+    cannot be compensated, by self-healing on the NEXT successful upload of the
+    same doc type: anything sharing the `<doc_type>__` prefix that is not the
+    file we just committed is a leftover, so drop it.
+
+    Best-effort by design. Never raise: the document is already safely stored and
+    recorded, and failing the request over tidy-up would be the worse trade.
+    """
+    if not (folder_id and doc_type and keep_file_id):
+        return 0
+    removed = 0
+    try:
+        svc = _get_drive_service(db)
+        prefix = f"{_safe(doc_type)[:40]}__"
+        escaped = prefix.replace("'", "\\'")
+        resp = svc.files().list(
+            q=(
+                f"'{folder_id}' in parents and trashed=false"
+                f" and name contains '{escaped}'"
+                f" and mimeType != 'application/vnd.google-apps.folder'"
+            ),
+            fields="files(id, name)",
+            spaces="drive",
+        ).execute()
+        for f in resp.get("files", []):
+            # `contains` is a substring match, so confirm it is really our prefix
+            # before deleting anything.
+            if f["id"] == keep_file_id or not str(f.get("name", "")).startswith(prefix):
+                continue
+            try:
+                delete_drive_file(db, f["id"])
+                removed += 1
+                print(f"[dq] swept orphaned {doc_type} file {f['id']} ({f.get('name')})")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[dq] orphan sweep could not delete {f['id']}: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[dq] orphan sweep failed in folder {folder_id}: {exc}")
+    return removed
+
+
+def upload_dq_file_to_drive(
+    db: Session,
+    file_obj: BinaryIO,
+    filename: str,
+    mime_type: str,
+    driver_folder_name: str,
+    known_folder_id: Optional[str] = None,
+    doc_type: str = "",
+) -> dict:
+    """Upload one DQ document into the driver's own subfolder.
+
+    `known_folder_id` is the folder we already created for this driver on a
+    previous submission. Passing it is what makes a rename safe: the folder is
+    addressed by ID, so a driver who changes their name keeps ONE compliance
+    file instead of silently starting a second folder under the new name. It
+    also skips a Drive list call per upload.
+
+    Returns the usual file_id/url plus `folder_id`, which the caller is expected
+    to persist against the driver.
+    """
+    svc = _get_drive_service(db)
+
+    folder_id = known_folder_id
+    if folder_id:
+        # Confirm it still exists and is not trashed - a folder deleted by hand
+        # in Drive would otherwise make every future upload fail.
+        try:
+            meta = svc.files().get(fileId=folder_id, fields="id, trashed").execute()
+            if meta.get("trashed"):
+                folder_id = None
+        except Exception as exc:
+            print(f"[dq] stored folder {folder_id} unusable, recreating: {exc}")
+            folder_id = None
+
+    if not folder_id:
+        parent_id = _dq_parent_folder_id(svc, db)
+        safe_name = _safe(driver_folder_name or "")[:80] or "Unnamed Driver"
+        folder_id = _get_or_create_folder(svc, safe_name, parent_id)
+
+    # Prefix with the doc type so the file is identifiable in the folder by an
+    # auditor AND by us: sweep_dq_orphans below uses it to recognize leftovers
+    # from a crashed upload of this same document type.
+    prefix = f"{_safe(doc_type)[:40]}__" if doc_type else ""
+    safe_filename = prefix + (_safe(filename)[:160] or "document")
+
+    file_obj.seek(0)
+    media = MediaIoBaseUpload(
+        file_obj,
+        mimetype=mime_type,
+        resumable=True,
+        chunksize=DRIVE_UPLOAD_CHUNK_SIZE,
+    )
+    request = svc.files().create(
+        body={"name": safe_filename, "parents": [folder_id]},
+        media_body=media,
+        fields="id, webViewLink",
+    )
+    result = _execute_resumable(request)
+
+    # Anyone-with-the-link reader, matching upload_file_to_drive and preserving
+    # how DQ files behaved before this folder change.
+    #
+    # This is NOT ideal and is deliberately left alone here: the frontend links
+    # straight to webViewLink (DqFilesTab.tsx:173, DqMyFileCard.tsx:126), so a
+    # driver opening their own medical card needs the link to work without a
+    # Google account. Tightening it means proxying downloads through the
+    # authenticated backend, which is a separate change with its own UX and ADR.
+    # Doing it silently here would break every driver's "view" link.
+    # Tracked in docs/RUNBOOKS.md Known defects.
+    svc.permissions().create(
+        fileId=result["id"],
+        body={"type": "anyone", "role": "reader"},
+        fields="id",
+    ).execute()
+
+    return {
+        "file_id": result["id"],
+        "url": result.get("webViewLink", ""),
+        "folder_id": folder_id,
+    }
+
+
 def _pdf_media(file_obj: BinaryIO) -> MediaIoBaseUpload:
     file_obj.seek(0)
     return MediaIoBaseUpload(

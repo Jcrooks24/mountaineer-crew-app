@@ -55,6 +55,7 @@ from app.db.models import job_inventory      # noqa: F401,E402
 from app.db.models import job_type           # noqa: F401,E402
 from app.db.models import admin_entry_status  # noqa: F401,E402
 from app.db.models import sheet_sync_status  # noqa: F401,E402
+from app.db.models import payroll_correction  # noqa: F401,E402
 target_metadata = Base.metadata
 
 

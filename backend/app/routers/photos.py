@@ -1,6 +1,6 @@
 import traceback
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ def upload_photo(
     job_date: str = Form(default=""),
     caption: str = Form(default=""),
     folder: str = Form(default=""),  # "estimator" routes to the estimator parent folder
+    category: str = Form(default="general"),  # before / after / general
     incident_uuid: str = Form(default=""),  # tags this photo to an incident
     claim_number: str = Form(default=""),   # denormalized for display / Drive search
     db: Session = Depends(get_db),
@@ -36,6 +37,9 @@ def upload_photo(
 
     incident_uuid = (incident_uuid or "").strip()
     claim_number = (claim_number or "").strip()
+    category = (category or "general").strip().lower()
+    if category not in ("before", "after", "general"):
+        category = "general"
     # Prefix the Drive caption with the claim number so an incident's photos are
     # findable in Drive by claim, mirroring the incident's claim_number in the
     # sheet. The DB fields below are the primary link; this is admin convenience.
@@ -67,8 +71,12 @@ def upload_photo(
             is_estimator=(folder.strip().lower() == "estimator"),
         )
     except Exception as e:
+        # Upstream (Drive) failure. Return a real 502 so it shows up as an error
+        # server-side, not a hidden HTTP 200. Every upload caller checks both
+        # !res.ok and !json.ok, so the photo is marked failed + kept locally and
+        # is retryable either way (ADR 0013) - a 502 does not drop it.
         traceback.print_exc()
-        return {"ok": False, "photo_id": photo_id, "error": str(e)}
+        raise HTTPException(status_code=502, detail=f"Drive upload failed: {e}")
 
     # Save metadata to DB so other devices can fetch it
     row = Photo(
@@ -79,6 +87,7 @@ def upload_photo(
         drive_file_id=result["file_id"],
         drive_url=result["url"],
         mime_type=mime_type,
+        category=category,
         incident_uuid=incident_uuid or None,
         claim_number=claim_number or None,
     )
@@ -88,11 +97,13 @@ def upload_photo(
     except IntegrityError:
         db.rollback()  # raced a concurrent upload of the same photo_id
     except SQLAlchemyError:
-        # Non-duplicate DB failure (connection blip, etc.). Return ok=false so
-        # the client keeps the photo queued and retries, instead of a 500.
+        # Non-duplicate DB failure (connection blip, etc.). Return a real 503 so
+        # it's visible as a server error, not a hidden 200. The upload is
+        # idempotent on photo_id, so the client's retry (the photo stays failed +
+        # kept locally, ADR 0013) returns the existing record rather than a dup.
         db.rollback()
         traceback.print_exc()
-        return {"ok": False, "photo_id": photo_id, "error": "Failed to save photo record"}
+        raise HTTPException(status_code=503, detail="Failed to save photo record")
 
     # This photo belongs to an incident, so the incident's sheet row is now out
     # of date: its photo_urls column is rebuilt from the photos table on export.
@@ -125,9 +136,15 @@ def update_caption(
     or edit a note on an individual photo from the Saved gallery. Persists to
     the DB (so it syncs across devices) and best-effort mirrors it onto the
     Drive file description so admin sees the note in Drive too."""
+    # Both failures below used to `return {"ok": False, ...}` with an HTTP 200.
+    # apiFetch throws only on !res.ok, so a 200 reads as success: the UI said
+    # "Note saved", cleared the draft, and the note was gone. For an incident
+    # photo the note IS the record (damage description, claim context), so that
+    # is a lying success on data with no second copy. Status codes now match
+    # what happened - 404 permanent, 5xx retryable.
     row = db.query(Photo).filter(Photo.id == payload.photo_id).first()
     if not row:
-        return {"ok": False, "error": "Photo not found"}
+        raise HTTPException(status_code=404, detail="Photo not found")
 
     caption = (payload.caption or "").strip()
     row.caption = caption
@@ -136,7 +153,9 @@ def update_caption(
     except SQLAlchemyError:
         db.rollback()
         traceback.print_exc()
-        return {"ok": False, "error": "Failed to save note"}
+        # 500, not 4xx: a DB failure is retryable and the caller should be able
+        # to try again rather than being told its payload was bad.
+        raise HTTPException(status_code=500, detail="Could not save the note. Try again.")
 
     # Best-effort: keep the Drive description in sync. Never fail the request
     # on a Drive hiccup - the note is already saved to the DB.
@@ -178,6 +197,7 @@ def get_photos(
                 "thumb_url": f"https://drive.google.com/thumbnail?id={r.drive_file_id}&sz=w800",
                 "created_at": r.created_at.isoformat(),
                 "mime_type": r.mime_type,
+                "category": getattr(r, "category", None) or "general",
                 "incident_uuid": r.incident_uuid,
                 "claim_number": r.claim_number,
             }

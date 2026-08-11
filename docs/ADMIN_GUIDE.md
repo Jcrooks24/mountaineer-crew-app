@@ -26,6 +26,7 @@ FMCSA compliance paperwork and the Digital Bill of Lading.
 - Submit materials used on a job
 - Log actual inventory on long-distance jobs: furniture and boxes with pack type, plus a loose-item "chow" volume estimate
 - Fill out the Job Report and Bill at the end of a job, including the job type, how full each truck ended up, employee hours pulled from the roster, and skill ratings (entered by admins and designated Skill raters)
+- Answer three optional close-out questions on the Job Report: why the job ran differently than quoted (tick every reason, in either direction), whether the client was ready, and anything added or changed on site
 - Get a projected wrap-up finish time and a return-trip drive estimate on the Job Report
 - File interstate compliance paperwork: Prior On Duty Hours Statement, Record of Duty Status, per-diem and drive days, and the Digital Bill of Lading
 - Submit mileage and expense / reimbursement requests
@@ -42,6 +43,7 @@ FMCSA compliance paperwork and the Digital Bill of Lading.
 - Customize the app's appearance: theme presets, fonts, button styling, and pin colors, and save/apply custom presets
 - Sign off on defective DVIRs, in person or by emailing a mechanic a sign off link
 - Log non job Office Hours
+- Run Payroll for a pay period: hours by employee in the QuickBooks column shape, correct crew reporting errors without touching what they submitted, and email each affected crew member what changed
 - Review any job in full from Job Summary (timeline, DVIRs, materials, employee hours with skill ratings, incidents, actual inventory, BOL, long-distance per-diem, reimbursements, bill, photos, notes)
 - Review the Incident log: claim numbers, estimated cost, and whether each is resolved
 - Publish app Patch Notes to the crew, and global or per-job admin notes
@@ -88,7 +90,7 @@ picker will not appear for them.
 Tap the **Admin** chip in the top right (requires admin role). A **Desktop mode**
 toggle in the topbar widens every admin screen for a laptop or monitor, remembered
 per device. Tabs: Map, Employees, DVIR Review, Estimator, Patch Notes, Job
-Summary, Office Hours, Incidents, and Settings.
+Summary, Office Hours, Payroll, Incidents, and Settings.
 
 ### Employees
 All accounts with name, email, role, status. Per-row: toggle Active/Disabled,
@@ -134,9 +136,104 @@ total, photos, and admin notes. Two crew on the same job (same calendar event or
 same typed manual entry) are grouped together automatically. A copy-paste invoice
 block gives the office a plain-text summary for invoicing software.
 
+**Correcting hours.** Under Employee Hours, **Hour corrections** is where you fix
+a wrong hours entry for this job (ADR 0032). Pick the employee, the bucket
+(billable / non-billable / per-diem), enter what it should be, and write a
+reason. This never changes what the crew submitted - it records an override, and
+both numbers stay visible. The correction flows into whichever pay period the
+job falls in, and the payroll page shows it read-only.
+
+**Correcting the bill.** The Bill card has a **Correct bill** button: edit the
+line items, global discount and notes, and the job-report billing fields
+(billing method, M1 dumpster/recycling %, personal vehicles). It shows the new
+total against the old as you type. Write a reason and **Save & notify crew** -
+the corrected bill and report re-export to the Sheet, and each crew member on the
+job is emailed the total change and your reason. Untick the notify box to save
+without emailing. Unlike hours, the bill is edited in place (it is the office's
+invoice), so there is no separate override - the pre-edit total is captured for
+the email.
+
+**Initialing the job.** At the bottom, **Initial this job** is your sign-off.
+Tick all three - you reviewed the record, made any corrections, and confirmed
+the job's data landed in the Google Sheet (you look and tick; it is not
+auto-verified) - then enter your initials. Saving writes your initials into the
+job's sheet rows and **emails each crew member any correction made to their
+hours** for this job. It is idempotent: re-initialing does not re-send a
+correction that already went out. Add a correction after initialing? Its "not
+yet sent" note tells you to re-initial to mail it.
+
 ### Office Hours
 Admin-only logging of non-job office/shop time: date, clock in/out, any number of
 break periods, notes. Net hours calculate automatically.
+
+### Payroll
+Every hour the app collected for a pay period, per employee, in the shape you
+type into QuickBooks. Nothing here is a new source of data; it is everything
+already in the app assembled onto one page.
+
+**What it reports.** One row per employee: Regular, Overtime, Non-billable,
+Other, Total hours, per-diem nights, approved reimbursement dollars, and
+mileage. **Copy for spreadsheet** puts the whole table on the clipboard as
+tab-separated text, so it pastes straight into a sheet or lines up next to the
+QuickBooks entry grid.
+
+**Where each number comes from.** Billable and non-billable hours come from the
+per-employee hours on job reports (dated by the job's first timeline event) plus
+off-job entries. Office hours land in non-billable. "Other" is an off-job entry
+on a pay structure management approved case by case. Per-diem counts nights
+flagged out-of-town, from the long-distance day log and the per-employee
+out-of-town flag, de-duplicated so a night marked in both places is owed once.
+Reimbursements are approved, personally-paid expenses only; company-card
+expenses are an expense log and are excluded.
+
+**No hourly wages, on purpose.** The app has never stored an hourly rate and
+this tool does not add one, so it reports hours rather than gross pay ([ADR
+0029](decisions/0029-payroll-corrections-are-an-override-layer.md)). Tips are not
+tracked per employee anywhere in the app, so they stay manual.
+
+**Mileage and per-diem pay.** Those two are reimbursement rates, not wages, so
+they *are* configurable ([ADR
+0033](decisions/0033-reimbursement-rates-live-in-config.md)). Set them in
+**Settings -> Payroll rates** (mileage $/mile, per-diem $/night). The payroll
+page then multiplies each person's logged miles and out-of-town nights by the
+rate and shows the dollar figure under the count, and the spreadsheet export
+gains **Per-diem $** and **Mileage $** columns. Leave a rate at 0 and that column
+stays a count only, priced by you. Rates apply live: re-opening an old period
+shows it at today's rate, so copy the numbers out at run time if a rate later
+changes.
+
+**Overtime.** Billable hours over 40 in a Monday-to-Sunday week. Non-billable
+and Other do not count toward the 40. Run periods that start on a Monday and end
+on a Sunday: any week hanging outside the period gets flagged `partial`, because
+its overtime cannot be settled without the rest of that week.
+
+**Check these first.** A yellow panel at the top lists anything that would make
+the numbers wrong, most importantly a name on a job report that matches nobody
+on the roster. Those hours are **not counted**, so fix the name or add the
+person before you run payroll.
+
+**Correcting a crew mistake.** Open an employee's **Detail** to see their week
+by week overtime, hours by day, and every line the totals were built from.
+Corrections never change what the crew submitted - they are an override, and
+both numbers stay visible ("Corrected from 8: clocked out at 3:30"). Overtime is
+recalculated after corrections, so moving hours out of billable can correctly
+remove someone's OT.
+
+**Job hours are corrected on the Job Summary, not here** (ADR 0032). A `Job`
+line shows the corrected number with an **at Job Summary** marker and no Correct
+button; open that job in Job Summary to change it, and the crew member is emailed
+when you initial the job. Off-job, office and manual lines are still corrected
+here: hit **Correct** on the line, or **+ Add a line** for something with no
+underlying entry at all (a bonus, say).
+
+**Finalizing.** When the off-job/office/manual corrections are right, **Finalize
+and notify** emails each affected crew member one summary of exactly what changed
+and why (your reason text is the body of that email, so write it for them). Job
+corrections are not mailed from here - they go out when you initial the job. It
+is safe to run repeatedly: a correction is mailed once, so if you fix one more
+thing afterwards, only that one goes out. Tick anyone you have already spoken to
+in person to mark them done without an email. If a send fails, the page says so
+and that correction is left unsent, so finalizing again retries it.
 
 ### Incidents
 The log of every incident crew report from the field. Each carries an automatic
@@ -152,6 +249,10 @@ per-device setup). Contains:
 - **DVIR unit list:** add, edit, remove vehicles from the DVIR dropdown
 - **Employee Tags:** the free-form tag list used across the roster and digest
 - **Job Types:** the job type tags crew pick from on the Job Report
+- **Job Checklist:** the checklist shown on a job. Each item is either manual (the crew tick it) or auto (it ticks itself when the app sees the thing happen - a DVIR filed, the report saved, the BOL signed, PODS/RODS filed, etc.). Limit an item to long-distance jobs and/or specific job types; leave job types empty for every job. The crew see the applicable items on the hub once a job is set up
+- **DQ document types:** the documents that make up a driver's DQ file. Each type is driver-filled (a medical card, the certification of violations) or office-filed (the road-test form and certificate), and required or not. Required documents show in the driver's missing-docs reminder
+
+The **DQ Files** admin tab is a per-driver board of who is missing which required documents; open a driver to upload or replace any document. Drivers see their own DQ file in Profile, upload the ones they own, and get a reminder on the hub when they owe a required document. (In-app fillable forms are coming; for now a document is a scan or filled PDF uploaded to the driver's Drive folder, most-recent-per-type.)
 - **Crew Skills (registry):** define each skill, mark it core (rated on every job) or job-specific, choose which job types it applies to, and keep a per-employee skill matrix
 - **Furniture Catalogue:** import and export the shared catalogue as CSV, with item dimensions and custom fields. One catalogue feeds the Estimator, actual inventory, and the BOL item pickers
 - **Help Text:** labels and hints shown on the crew timeline and other fields
@@ -180,6 +281,18 @@ with one tap.
 - **System Check:** a one-tap health snapshot. Confirms the database, the Google Sheets connection, the Google Drive connection, and required settings are working; checks that every app-to-sheet sync points at the right worksheet; and flags any records that have drifted out of the sheet (events or signed BOLs). Copy and send to Jacob if something looks wrong. In the Sheet Syncs table, `not yet` under Exists is normal (nothing has used that feature, so the worksheet has not been created); `missing` is not. A red `error` date means the last attempt failed; a grey date with "recovered from an error" underneath means it failed once and has been fine since.
 - **Sheet Backfill - what never made it:** answers a different question than System Check. System Check tells you whether a sync is working *now*; this compares the app's records against the Sheet and lists the ones that were saved but whose sheet row never landed, usually the leftovers of an outage. Nothing is lost when this happens - the app is the system of record and the Sheet is a mirror. "Run audit" only reads. "Re-send" queues those records through the normal export, up to 100 at a time; it is safe to press twice, because a re-send overwrites the row in place rather than duplicating it. Timeline events and BOLs are not listed here - the background reconciler already re-sends those on its own.
 - **Diagnostics:** read-only checks confirming the Crew Resources calendar connection is wired up correctly.
+
+### Close-out data on the job report
+
+Three columns groups arrive on the JobReports tab from every report submitted after this deploy. All three are optional for crew, so a blank cell means "not answered", not "nothing happened" - worth remembering the first time you chart them.
+
+- `variance_cause` / `variance_note` - every reason the job ran differently than quoted, from a fixed list, plus free text. **Multi-select since 2026-07-28**, so the cell holds a comma-separated list and the causes across all reports will out-number the reports. Count selections, not rows, when you chart it. The column header stays singular so existing formulas keep resolving. The list runs in both directions: `Overestimated volume`, `Easier access than expected`, `Client further along than expected`, `Scope reduced on site`, and `Crew faster than expected` mean the job beat its estimate. Those are the ones worth watching - a job that runs long generates a complaint, a job that runs short quietly overcharges the client and never does.
+- `client_readiness` / `client_unready` - how ready the client was on arrival, and (when they were not fully ready) a comma-separated list of what specifically was not ready. Readiness stays single-select; it is one answer about one moment.
+- `scope_change_count` / `scope_change_hours` / `scope_changes` - how many things changed on site, the **net** hours those changes moved the day by, and one readable line per change. Each change can now carry several reasons and a direction, so a line reads `Fewer items, Stop dropped (-2.5h): garage already empty`. `scope_change_hours` nets additions against reductions (it was a gross total of additions before 2026-07-28), and is blank rather than 0 when nobody estimated, so "not estimated" stays distinguishable from "netted out to nothing". `scope_change_count` counts changes, not reasons: a change with three reasons is still one change.
+
+Reports submitted before this deploy have these columns empty and will stay that way; there is nothing to backfill, because the crew was never asked.
+
+The `truck_fullness` cell now also carries cubic feet, e.g. `26Int: V75×H50 (38%, 672 cu ft)`. That volume is derived from the truck's interior dimensions in `backend/app/schemas/job_report.py` (`TRUCK_SPECS`), which are **estimated from box length and typical interior width and height - measure the fleet and correct them**. The percentage is what the crew observed and is stored; the cubic feet are computed at export time, so fixing a spec fixes future exports rather than rewriting history.
 
 ## 4. Troubleshooting Common Issues
 

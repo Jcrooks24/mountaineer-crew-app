@@ -232,7 +232,7 @@ export default function MechanicSign() {
                         padding: "10px 0",
                         borderRadius: 10,
                         border: repairsMade === value ? "2px solid var(--brand)" : "1px solid var(--border)",
-                        background: repairsMade === value ? "rgba(93,214,194,0.12)" : "var(--card)",
+                        background: repairsMade === value ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
                         color: repairsMade === value ? "var(--brand)" : "var(--muted)",
                         cursor: "pointer",
                         fontWeight: repairsMade === value ? 700 : 400,

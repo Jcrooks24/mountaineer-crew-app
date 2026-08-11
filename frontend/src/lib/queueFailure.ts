@@ -26,9 +26,26 @@ export type MaybeFailed = Partial<QueueFailure>;
  * Did the server permanently refuse this payload, as opposed to failing for a
  * reason that retrying can fix?
  *
- * 401 / 403 / 408 are deliberately TRANSIENT. An expired token is not a bad
- * payload, and treating it as one would throw away a whole day of a crew
- * member's queued work the moment their session lapsed.
+ * **This is the ONLY failure classifier in the app.** `api/client.ts` briefly
+ * carried a second one (`isPermanentFailure`, an allowlist of 400/404/409/422)
+ * and the two disagreed, so which of a crew member's queues survived a given
+ * error depended on which store happened to be draining. Converged 2026-08-11.
+ *
+ * The rule is a DENYLIST: every 4xx is permanent except the four that retrying
+ * genuinely fixes. That shape was chosen over an allowlist deliberately -
+ * an allowlist silently treats every unlisted 4xx as transient, and the
+ * unlisted one that bites is **413**. The backend returns 413 from the body-size
+ * middleware and from three upload endpoints; an oversized photo retried
+ * forever never gets smaller, so it wedges the queue and burns the crew
+ * member's data every reconnect.
+ *
+ * The transient four:
+ * - **401 / 403** - an expired token is not a bad payload. Treating it as one
+ *   would throw away a whole day of queued work the moment a session lapsed.
+ * - **408** - a timeout is the definition of "try again".
+ * - **429** - a rate limit. This app's history with the Google Sheets quota
+ *   makes this the one that matters: the old rule called 429 permanent and
+ *   would discard real field work the moment we got throttled.
  */
 export function isPermanentRejection(e: unknown): e is ApiError {
   return (
@@ -37,7 +54,8 @@ export function isPermanentRejection(e: unknown): e is ApiError {
     e.status < 500 &&
     e.status !== 401 &&
     e.status !== 403 &&
-    e.status !== 408
+    e.status !== 408 &&
+    e.status !== 429
   );
 }
 

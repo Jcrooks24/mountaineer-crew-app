@@ -112,6 +112,38 @@ captured offline land on the same job even though neither has talked to the serv
 This is load-bearing and is described in
 [ADR 0005](decisions/0005-client-derived-job-uuid.md).
 
+## Payroll: a read-only view that never writes back
+
+`backend/app/routers/payroll.py` is the one admin feature that reads across every
+other feature's data and adds a source of its own. Worth knowing its shape before
+changing anything it depends on.
+
+**It aggregates, it does not own.** Per-employee job-report hours, off-job
+entries, office hours, long-distance out-of-town days and approved
+reimbursements are flattened into one list of contribution rows, bucketed
+(billable / non-billable / other / per-diem nights) and summed per employee.
+Nothing in that path writes. Change the shape of `employee_hours_json`, of
+`OffJobEntry.pay_structure`, or of `LdDay.out_of_town` and this is a caller you
+have to update.
+
+**The only thing it owns is `payroll_corrections`**: an admin override layer over
+the aggregate, applied at read time. Crew-submitted rows are never mutated
+([ADR 0029](decisions/0029-payroll-corrections-are-an-override-layer.md)). A
+correction replaces its target's contribution and is keyed by `(period, user,
+source, source_key, bucket)`, which is a loose pair rather than a foreign key
+because one of the four sources is a JSON blob with no row identity.
+
+**Query cost is bounded by the pay period, not by the age of the company.** Jobs
+in range are found by their events (indexed on `timestamp`) rather than by
+scanning job reports, the same lesson `routers/hours.py` was rewritten for. A
+second query catches jobs with no events at all, bounded to the period plus a
+14-day grace window. `MAX_PERIOD_DAYS` caps the range at 62 days so a mistyped
+year cannot read the whole database on a 512 MB worker.
+
+**It does not export to the Sheet.** Payroll is a view assembled on demand; the
+underlying records already sync on their own, and a payroll tab would be a second
+copy of numbers that can change when a correction is added.
+
 ## The offline layer, in detail
 
 This is the part a naive refactor breaks. There is **no central sync coordinator**
@@ -127,9 +159,18 @@ and no Background Sync API. Every feature owns its own queue and its own drain.
 
 **How a queue drains:** on the `online` event, and in several places also on mount
 or `visibilitychange`. Each drain is guarded by a module-level `syncing` flag.
-Errors are classified: a 4xx (except 401, 403, 408) is treated as permanent and
-the op is dropped; everything else stays queued. 401 and 403 are deliberately
-transient so an expired token never destroys a day of queued field work.
+Errors are classified: a 4xx (except 401, 403, 408) is treated as permanent, and
+the op is **marked failed and kept** in the queue, skipped by the drain so it
+cannot wedge the line, and surfaced to the crew with Retry and Discard. It leaves
+only when a person says so ([ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md),
+`lib/queueFailure.ts`). Everything else stays queued for the next drain. 401 and 403
+are deliberately transient so an expired token never destroys a day of queued field
+work.
+
+Per-datum detail - which trigger drains which queue, on what timing, and where each
+field lands in the Sheet - is in [DATA_FLOW.md](DATA_FLOW.md). The
+**long-distance day queue currently has no drain at all**; see the Known defects list
+in [RUNBOOKS.md](RUNBOOKS.md).
 
 **A queue must not depend on its own UI being mounted.** Most drains hang off the
 component that owns the feature, which is fine right up until that component stops
@@ -186,18 +227,30 @@ All of it is in-process threads. No Celery, no cron, no queue service.
   record and pushes them, then does the same sweep for signed BOLs
   (`bol_reconcile.py`) - a scheduled BOL export whose pool thread died leaves the
   BOL in Postgres but not the sheet (ADR 0020). Holds a Postgres advisory lock so
-  only one worker does it.
-- **Sheet backfill** (`sheet_backfill.py`), admin-triggered, not scheduled. The
-  reconciler above covers events and BOLs; the other seventeen syncs fire once at
-  write time and nothing re-drives them, so an export that died leaves a record in
-  Postgres with no sheet row and no trace of which record it was (`sheet_sync_status`
-  tracks one state per export *function*). This module diffs the two sides - source
-  query per sync vs. the tab's key column read back - and re-drives the real export
-  for whatever is missing. Three Sheets reads total for the whole audit, batched, so
-  the audit cannot itself trip the quota that caused the gap
-  ([ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md)).
+  only one worker does it. Every ~20 minutes (every 4th cycle) it also runs the
+  generic self-heal (`reconcile_all_missing`, ADR 0031): the backfill diff for the
+  other seventeen syncs, re-driving whatever never landed, capped per cycle so it
+  cannot flood the export pool. So all nineteen syncs are now eventually
+  consistent, not just events and BOLs.
+- **Sheet backfill** (`sheet_backfill.py`), the shared audit + re-export path used
+  both by the reconciler above and by the admin Sync & Accuracy tool. The other
+  seventeen syncs fire once at write time; if an export died it left a record in
+  Postgres with no sheet row and no trace of which one (`sheet_sync_status` tracks
+  one state per export *function*). This module diffs the two sides - source query
+  per sync vs. the tab's key column read back - and re-drives the real export for
+  whatever is missing, joining `sheet_sync_status.last_error` per sync so a record
+  that will not re-send shows *why* (the export throwing, not a lost write). Three
+  Sheets reads total for the whole audit, batched, so the audit cannot itself trip
+  the quota that caused the gap
+  ([ADR 0025](decisions/0025-sheet-writes-retry-quota-and-cache-tab-metadata.md)).
+  App Health runs this audit live and WARNs when the Sheet is out of sync
+  ([ADR 0031](decisions/0031-sync-accuracy-is-one-surface.md)).
 - **Crew-resources loop**, hourly, **off unless `CREW_RESOURCES_ENABLED=true`**.
   Maintains a daily availability summary event on Google Calendar.
+- **Payroll finalize emails** are NOT background work. They are sent inline,
+  per-employee, inside the `POST /api/admin/payroll/finalize` request, because
+  the admin needs to be told which sends failed. A failed send is left unstamped
+  and retried on the next finalize (ADR 0029).
 
 ## Deployment shape
 

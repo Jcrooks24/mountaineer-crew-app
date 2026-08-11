@@ -1,4 +1,4 @@
-# 0026. An empty BOL inherits the job's Actual Inventory
+# 0030. An empty BOL inherits the job's Actual Inventory
 
 **Status:** Active. Shipped 2026-07-30 as a production hotfix. Amends [0015](0015-inventory-logging-is-paused-on-local-jobs.md).
 

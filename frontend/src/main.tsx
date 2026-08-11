@@ -13,6 +13,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateBanner from "./components/UpdateBanner";
 import AvailabilityReminderBanner from "./components/AvailabilityReminderBanner";
 import RolePreviewSwitch from "./components/RolePreviewSwitch";
+import BottomNav from "./components/BottomNav";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -27,6 +28,10 @@ import DocumentLibrary from "./pages/DocumentLibrary";
 import Reimbursement from "./pages/Reimbursement";
 import OffJob from "./pages/OffJob";
 import Availability from "./pages/Availability";
+import ReportBug from "./pages/ReportBug";
+import RequestFeature from "./pages/RequestFeature";
+import Tools from "./pages/Tools";
+import Bulletin from "./pages/Bulletin";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -56,7 +61,11 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/documents" element={<RequireAuth><DocumentLibrary /></RequireAuth>} />
           <Route path="/reimbursement" element={<RequireAuth><Reimbursement /></RequireAuth>} />
           <Route path="/off-job" element={<RequireAuth><OffJob /></RequireAuth>} />
+          <Route path="/report-bug" element={<RequireAuth><ReportBug /></RequireAuth>} />
+          <Route path="/request-feature" element={<RequireAuth><RequestFeature /></RequireAuth>} />
           <Route path="/availability" element={<RequireAuth><Availability /></RequireAuth>} />
+          <Route path="/tools" element={<RequireAuth><Tools /></RequireAuth>} />
+          <Route path="/bulletin" element={<RequireAuth><Bulletin /></RequireAuth>} />
 
           {/* Everything else requires auth */}
           <Route
@@ -68,6 +77,8 @@ createRoot(document.getElementById("root")!).render(
             }
           />
         </Routes>
+        {/* Persistent crew bottom nav; self-hides on public + admin routes */}
+        <BottomNav />
         </ErrorBoundary>
       </BrowserRouter>
     </AuthProvider>

@@ -94,6 +94,30 @@ export type BOLDraft = {
   origin_signed_at?: string;
   actual_pickup_date?: string;
   vehicle?: string;
+  // Pickup + delivery addresses, printed ON the BOL. A DOT officer at a border
+  // crossing needs these (they are not derivable from the job name). Captured at
+  // origin signing, editable afterwards, and rendered on the PDF.
+  origin_address?: string;
+  dest_address?: string;
+  // ── FMCSA 49 CFR 375.505 required BOL fields (crew-entered, not from an
+  // estimate the crew cannot see - ADR 0023). All ride shipment_json, no
+  // migration. See bolContract.ts for the option/label maps. ──
+  shipper_name?: string;          // 375.505(b)(3)
+  shipper_phone?: string;         // 375.505(b)(3)
+  shipper_address?: string;       // 375.505(b)(3) - shipper's own address
+  shipment_number?: string;       // 375.505(b)(16) - our shipment/job reference
+  form_of_payment?: string;       // 375.505(b)(4) - option value (see FORM_OF_PAYMENT_OPTIONS)
+  estimate_type?: string;         // 375.505(b)(15) - "binding" | "non_binding"
+  valuation?: string;             // 375.505(b)(12) - "full_value" | "released"
+  agreed_pickup?: string;         // 375.505(b)(6) - agreed pickup date or window
+  agreed_delivery?: string;       // 375.505(b)(6) - agreed delivery date or window
+  // COD-only (375.505(b)(5),(11)); shown only when form_of_payment == "cod".
+  cod_notify?: string;
+  cod_max?: string;
+  // Conditional declarations, default "None"/"N/A" (375.505(b)(2),(13),(14)).
+  additional_carriers?: string;
+  third_party_insurance?: string;
+  accessorial_services?: string;
   dest_shipper_sig?: string;
   dest_carrier_sig?: string;
   dest_signed_at?: string;
@@ -116,6 +140,8 @@ export type SignInput = {
   signed_at: string;
   actual_pickup_date?: string;
   vehicle?: string;
+  origin_address?: string;
+  dest_address?: string;
   walkthrough_notes?: string;
   final_charges?: number | null;
 };
@@ -471,6 +497,22 @@ function draftFromServer(s: any, job: { job_uuid: string; job_name: string; job_
     origin_shipper_name: shipment.origin_shipper_name || undefined,
     actual_pickup_date: shipment.actual_pickup_date || undefined,
     vehicle: shipment.vehicle || undefined,
+    origin_address: shipment.origin_address || undefined,
+    dest_address: shipment.dest_address || undefined,
+    shipper_name: shipment.shipper_name || undefined,
+    shipper_phone: shipment.shipper_phone || undefined,
+    shipper_address: shipment.shipper_address || undefined,
+    shipment_number: shipment.shipment_number || undefined,
+    form_of_payment: shipment.form_of_payment || undefined,
+    estimate_type: shipment.estimate_type || undefined,
+    valuation: shipment.valuation || undefined,
+    agreed_pickup: shipment.agreed_pickup || undefined,
+    agreed_delivery: shipment.agreed_delivery || undefined,
+    cod_notify: shipment.cod_notify || undefined,
+    cod_max: shipment.cod_max || undefined,
+    additional_carriers: shipment.additional_carriers || undefined,
+    third_party_insurance: shipment.third_party_insurance || undefined,
+    accessorial_services: shipment.accessorial_services || undefined,
     dest_shipper_sig: s.dest_shipper_sig || undefined,
     dest_carrier_sig: s.dest_carrier_sig || undefined,
     dest_signed_at: s.dest_signed_at || undefined,
@@ -499,6 +541,18 @@ function queueHasOpsForBol(bolId: string): boolean {
   return loadQueue().some((o) => o.bol_id === bolId);
 }
 
+/** What `loadForJobWithInfo` returns: the resolved draft, plus whether a BOL
+ * ALREADY existed for this job (so the caller can warn the crew that they are
+ * continuing one document, not creating a second - there is one BOL per job). */
+export type LoadForJobResult = {
+  draft: BOLDraft;
+  /** A BOL already exists for this job (on the server, or a local draft that
+   * already has items / has been signed). A fresh, empty draft is `false`. */
+  existed: boolean;
+  itemCount: number;
+  signed: boolean;
+};
+
 /** Bridge: the crew logs actual inventory in the Inventory tab, which writes to
  * `job_inventory_items` (keyed by job_uuid) - a store the BOL never read. On a
  * non-loading LD leg the BOL-inventory tab is hidden, so the crew's only
@@ -508,7 +562,7 @@ function queueHasOpsForBol(bolId: string): boolean {
  * the item's uuid/id so a re-open (or the two-device merge) dedupes instead of
  * duplicating. Best-effort + online-only: a failure or offline just returns []
  * and the BOL is unchanged. Amends ADR 0015's strict separation - see ADR
- * 0026. */
+ * 0030. */
 // One seed attempt per BOL per session. loadForJob re-runs on every tab
 // focus / visibilitychange, so without this an empty BOL would re-fetch
 // inventory on every refocus, and items the crew deliberately deleted would
@@ -546,13 +600,24 @@ async function seedItemsFromInventory(jobUuid: string): Promise<BOLItem[]> {
 /** Resolve the working draft for a job: adopt the server BOL as the source of
  * truth (so any rep/device can continue a job's BOL at any stage, with the
  * earlier signatures intact) UNLESS there is unsynced local work, or the local
- * draft is newer than the server (autosaved edits not yet pushed). */
-export async function loadForJob(job: { job_uuid: string; job_name: string; job_date: string }): Promise<BOLDraft> {
+ * draft is newer than the server (autosaved edits not yet pushed).
+ *
+ * Also reports whether a BOL already existed for the job. A job has exactly ONE
+ * BOL (id derived from job_uuid), so a crew who picks the same job again is
+ * continuing the existing document, not making a new one - the caller uses
+ * `existed` to make that explicit and stop an accidental self-overwrite. */
+export async function loadForJobWithInfo(job: { job_uuid: string; job_name: string; job_date: string }): Promise<LoadForJobResult> {
   const local = loadDraft(job.job_uuid);
   const pendingLocal = local ? queueHasOpsForBol(local.bol_id) : false;
   const server = await fetchRemoteBol(job.job_uuid);
 
+  // A local draft "counts" as an existing BOL only if it holds real work
+  // (items or a signature) - an empty autosaved shell is not something the crew
+  // needs warning about overwriting.
+  const localHasWork = !!local && (local.items.length > 0 || local.status !== "draft");
+
   let draft: BOLDraft;
+  let existed: boolean;
   // Persist only what the pre-bridge code persisted (an adopted/merged server
   // draft), plus a draft the seed actually populated. A bare newDraft in the
   // no-server path is left UNSAVED, exactly as before - otherwise merely opening
@@ -561,6 +626,7 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
   let shouldPersist = false;
   if (!server) {
     draft = local || newDraft(job);
+    existed = localHasWork;
   } else {
     const serverDraft = draftFromServer(server, job, local?.crew_rep);
     if (!local || !pendingLocal) {
@@ -578,6 +644,8 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
       // Signatures/status stay local while a signing op is queued, else server.
       draft = mergeBolDrafts(local, serverDraft);
     }
+    // A server BOL exists, so the crew is continuing an existing document.
+    existed = true;
     shouldPersist = true; // prior behavior saved the adopted/merged server draft
   }
 
@@ -586,7 +654,9 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
   // the BOL instead of the crew signing an empty one. Gated on status "draft"
   // so a signed BOL is never re-seeded, and on an empty item list so crew-added
   // BOL items are never duplicated. Best-effort: offline / no inventory / a
-  // fetch error just leaves the draft untouched.
+  // fetch error just leaves the draft untouched. `existed` is computed BEFORE
+  // the seed: seeding inventory into a fresh BOL does not make it a pre-existing
+  // document, so the self-overwrite warning still keys off a real prior BOL.
   if (draft.items.length === 0 && draft.status === "draft" && !_seedAttempted.has(draft.bol_id)) {
     _seedAttempted.add(draft.bol_id); // once per BOL per session, whatever the result
     const seeded = await seedItemsFromInventory(job.job_uuid);
@@ -597,7 +667,13 @@ export async function loadForJob(job: { job_uuid: string; job_name: string; job_
   }
 
   if (shouldPersist) saveDraft(draft);
-  return draft;
+  return { draft, existed, itemCount: draft.items.length, signed: draft.status !== "draft" };
+}
+
+/** Thin wrapper: the resolved draft only (callers that don't need the
+ * existed/warn signal - e.g. reopening a BOL the crew explicitly picked). */
+export async function loadForJob(job: { job_uuid: string; job_name: string; job_date: string }): Promise<BOLDraft> {
+  return (await loadForJobWithInfo(job)).draft;
 }
 
 /** Union two drafts' items by item id (local wins per-item), preserving both
@@ -698,6 +774,36 @@ function saveQueue(q: QueueOp[]): boolean {
 /** Only uploaded photos (with a drive_url) are sent to the server; pending ones
  * backfill on a later re-enqueue after retryPendingPhotos(). */
 function draftToPayload(d: BOLDraft): Record<string, unknown> {
+  // Echo the full known shipment so a plain submit / autosync carries the
+  // addresses to the server (the sign PATCH is not the only path that sets
+  // them - they can be edited on an already-signed BOL). The server replaces
+  // shipment_json wholesale when `shipment` is present, so we include every
+  // shipment field the draft holds - all of them round-trip via draftFromServer
+  // - and omit `shipment` entirely when nothing is set, so an early autosync on
+  // a fresh draft does not wipe a value the server already has.
+  const shipment: Record<string, string> = {};
+  if (d.origin_address) shipment.origin_address = d.origin_address;
+  if (d.dest_address) shipment.dest_address = d.dest_address;
+  if (d.actual_pickup_date) shipment.actual_pickup_date = d.actual_pickup_date;
+  if (d.vehicle) shipment.vehicle = d.vehicle;
+  if (d.origin_shipper_name) shipment.origin_shipper_name = d.origin_shipper_name;
+  if (d.dest_shipper_name) shipment.dest_shipper_name = d.dest_shipper_name;
+  // FMCSA required fields (ADR 0023). Truthy-only, so a blank does not clobber a
+  // value the server already holds.
+  if (d.shipper_name) shipment.shipper_name = d.shipper_name;
+  if (d.shipper_phone) shipment.shipper_phone = d.shipper_phone;
+  if (d.shipper_address) shipment.shipper_address = d.shipper_address;
+  if (d.shipment_number) shipment.shipment_number = d.shipment_number;
+  if (d.form_of_payment) shipment.form_of_payment = d.form_of_payment;
+  if (d.estimate_type) shipment.estimate_type = d.estimate_type;
+  if (d.valuation) shipment.valuation = d.valuation;
+  if (d.agreed_pickup) shipment.agreed_pickup = d.agreed_pickup;
+  if (d.agreed_delivery) shipment.agreed_delivery = d.agreed_delivery;
+  if (d.cod_notify) shipment.cod_notify = d.cod_notify;
+  if (d.cod_max) shipment.cod_max = d.cod_max;
+  if (d.additional_carriers) shipment.additional_carriers = d.additional_carriers;
+  if (d.third_party_insurance) shipment.third_party_insurance = d.third_party_insurance;
+  if (d.accessorial_services) shipment.accessorial_services = d.accessorial_services;
   return {
     id: d.bol_id,
     created_at: d.updated_at,
@@ -705,6 +811,7 @@ function draftToPayload(d: BOLDraft): Record<string, unknown> {
     job_name: d.job_name,
     job_date: d.job_date,
     status: d.status,
+    ...(Object.keys(shipment).length ? { shipment } : {}),
     items: d.items.map((it) => ({
       item_no: it.item_no,
       id: it.id,
@@ -766,6 +873,17 @@ function enqueuePdf(bolId: string, jobUuid: string): boolean {
   return saveQueue(q);
 }
 
+/** Re-push an already-created BOL after a non-signature edit - specifically,
+ * correcting the origin/destination address on a signed BOL. Queues the submit
+ * (updates the row + sheet) and, once the BOL is past draft, a PDF regeneration
+ * so the copy stored in Drive reflects the corrected addresses. Returns false if
+ * the queue could not be persisted (quota). */
+export function enqueueBolResync(d: BOLDraft): boolean {
+  const okSubmit = enqueueSubmit(d);
+  const okPdf = d.status === "draft" ? true : enqueuePdf(d.bol_id, d.job_uuid);
+  return okSubmit && okPdf;
+}
+
 export function pendingSubmitCount(): number {
   return loadQueue().filter((o) => !o.failed_at).length;
 }
@@ -815,6 +933,30 @@ async function uploadBolPdfBlob(bolId: string, blob: Blob): Promise<void> {
   if (!res.ok || !json.ok) {
     const err = new ApiError(res.status, json);
     throw err;
+  }
+}
+
+/** Email the signed BOL PDF to the client. Sending mail needs connectivity
+ * (unlike building / signing / presenting a BOL, which are offline-capable), so
+ * this throws if offline - the caller surfaces a clear message rather than
+ * pretending it sent. The PDF is generated on-device and posted with the
+ * client's address; the server attaches it and sends via Postmark. */
+export async function emailBolToClient(bolId: string, blob: Blob, toEmail: string): Promise<void> {
+  if (!navigator.onLine) {
+    throw new ApiError(0, { detail: "You are offline. Connect to the internet to email the client." });
+  }
+  const form = new FormData();
+  form.append("to_email", toEmail);
+  form.append("file", blob, "bol.pdf");
+  const token = getToken() || "";
+  const res = await fetch(`${API}/api/bol/${encodeURIComponent(bolId)}/email`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    throw new ApiError(res.status, json);
   }
 }
 
@@ -946,6 +1088,8 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
       origin_shipper_name: input.shipper_name || draft.origin_shipper_name,
       actual_pickup_date: input.actual_pickup_date || draft.actual_pickup_date,
       vehicle: input.vehicle || draft.vehicle,
+      origin_address: input.origin_address ?? draft.origin_address,
+      dest_address: input.dest_address ?? draft.dest_address,
       status: "origin_signed",
       updated_at: now,
     };
@@ -980,6 +1124,8 @@ export function applySignature(draft: BOLDraft, input: SignInput): BOLDraft {
   if (input.phase === "origin") {
     signPayload.actual_pickup_date = input.actual_pickup_date || "";
     signPayload.vehicle = input.vehicle || "";
+    if (input.origin_address) signPayload.origin_address = input.origin_address;
+    if (input.dest_address) signPayload.dest_address = input.dest_address;
   } else {
     signPayload.walkthrough_notes = input.walkthrough_notes || "";
     if (input.final_charges != null) signPayload.final_charges = input.final_charges;

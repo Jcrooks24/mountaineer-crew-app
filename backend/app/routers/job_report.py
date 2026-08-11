@@ -21,6 +21,7 @@ from app.schemas.job_report import (
     EmployeeHoursEntry,
     JobReportResponse,
     JobReportUpsert,
+    ScopeChangeEntry,
     TruckFullnessEntry,
 )
 
@@ -63,6 +64,54 @@ def _decode_truck_fullness(raw: Optional[str]) -> Optional[list[TruckFullnessEnt
         return None
 
 
+def _decode_str_list(raw: Optional[str]) -> Optional[list[str]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        return [str(t) for t in data]
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _decode_scope_changes(raw: Optional[str]) -> Optional[list[ScopeChangeEntry]]:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        out: list[ScopeChangeEntry] = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            try:
+                # Rows stored before 2026-07-28 carry {kind, ...}; the entry
+                # model upgrades them to {kinds[], direction} on construction.
+                out.append(ScopeChangeEntry(**row))
+            except ValueError:
+                # A row whose kind was retired from the vocabulary should not
+                # make the whole report unreadable. Drop it and keep the rest.
+                continue
+        return out
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _decode_variance_causes(r: JobReport) -> Optional[list[str]]:
+    """Close-out variance causes, from whichever column holds them.
+
+    The JSON column is the current write target. Reports written 2026-07-27 to
+    2026-07-28 only have the singular string column, which is never written
+    again but is still the only record of their cause (ADR 0028).
+    """
+    from_json = _decode_str_list(r.variance_causes_json)
+    if from_json is not None:
+        return from_json
+    return [r.variance_cause] if r.variance_cause else None
+
 def _to_response(r: JobReport) -> JobReportResponse:
     return JobReportResponse(
         id=r.id,
@@ -83,6 +132,11 @@ def _to_response(r: JobReport) -> JobReportResponse:
         job_type_tags=_decode_job_type_tags(r.job_type_tags_json),
         truck_fullness=_decode_truck_fullness(r.truck_fullness_json),
         overage_note=r.overage_note,
+        variance_causes=_decode_variance_causes(r),
+        variance_note=r.variance_note,
+        client_readiness=r.client_readiness,
+        client_unready=_decode_str_list(r.client_unready_json),
+        scope_changes=_decode_scope_changes(r.scope_changes_json),
         hours_verified=bool(r.hours_verified),
         employee_hours=_decode_employee_hours(r.employee_hours_json),
         created_at=r.created_at,
@@ -142,6 +196,11 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "furniture_count": "" if furniture_count is None else furniture_count,
         "box_count": "" if box_count is None else box_count,
         "overage_note": report.overage_note or "",
+        "variance_causes": _decode_variance_causes(report) or [],
+        "variance_note": report.variance_note or "",
+        "client_readiness": report.client_readiness or "",
+        "client_unready": _decode_str_list(report.client_unready_json) or [],
+        "scope_changes": [c.model_dump() for c in (_decode_scope_changes(report.scope_changes_json) or [])],
         "hours_verified": bool(report.hours_verified),
         "employee_hours": [e.model_dump() for e in employees] if employees else [],
         "created_at": report.created_at,
@@ -225,6 +284,18 @@ def upsert_job_report(
         else None
     )
 
+    client_unready_json = (
+        json.dumps(body.client_unready) if body.client_unready else None
+    )
+    variance_causes_json = (
+        json.dumps(body.variance_causes) if body.variance_causes else None
+    )
+    scope_changes_json = (
+        json.dumps([c.model_dump() for c in body.scope_changes])
+        if body.scope_changes
+        else None
+    )
+
     if existing:
         existing.submitted_by_id = current_user.id
         existing.submitted_by_name = current_user.name or current_user.email
@@ -242,6 +313,16 @@ def upsert_job_report(
         existing.job_type_tags_json = job_type_tags_json
         existing.truck_fullness_json = truck_fullness_json
         existing.overage_note = body.overage_note
+        # Write the list; clear the legacy singular column so a report that
+        # predates multi-select cannot keep answering from two places at once
+        # (_decode_variance_causes prefers the JSON, but leaving a stale string
+        # behind is a trap for the next person reading the table directly).
+        existing.variance_causes_json = variance_causes_json
+        existing.variance_cause = None
+        existing.variance_note = body.variance_note
+        existing.client_readiness = body.client_readiness
+        existing.client_unready_json = client_unready_json
+        existing.scope_changes_json = scope_changes_json
         existing.hours_verified = body.hours_verified
         existing.employee_hours_json = employee_hours_json
         existing.updated_at = now
@@ -268,6 +349,11 @@ def upsert_job_report(
         job_type_tags_json=job_type_tags_json,
         truck_fullness_json=truck_fullness_json,
         overage_note=body.overage_note,
+        variance_causes_json=variance_causes_json,
+        variance_note=body.variance_note,
+        client_readiness=body.client_readiness,
+        client_unready_json=client_unready_json,
+        scope_changes_json=scope_changes_json,
         hours_verified=body.hours_verified,
         employee_hours_json=employee_hours_json,
         created_at=now,

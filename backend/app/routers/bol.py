@@ -13,12 +13,14 @@ Mirrors the materials / long-distance idempotency pattern; the export is fired
 on the bounded background pool so a slow Google call never blocks the request.
 """
 
+import base64
 import json
+import re
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -28,7 +30,15 @@ from app.db.models.bol import DigitalBOL
 from app.integrations.sheets_export import schedule_bol_export
 from app.integrations.drive_upload import upload_bol_pdf_to_drive
 from app.core.deps import get_current_user
+from app.core.mailer import send_email
 from app.db.models.user import User
+
+# Deliberately permissive - just enough to reject an obvious typo before we hand
+# the address to Postmark. Real deliverability is Postmark's job.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Cap the attachment so one request can't blow the worker's memory (the global
+# BodySizeLimitMiddleware allows up to 100 MB; a BOL PDF is a few hundred KB).
+_MAX_BOL_PDF_BYTES = 25 * 1024 * 1024
 
 router = APIRouter(prefix="/api/bol", tags=["bol"])
 
@@ -105,6 +115,16 @@ def _to_dict(row: DigitalBOL) -> Dict[str, Any]:
     }
 
 
+def _existing_item_count(row: DigitalBOL) -> int:
+    """How many items the stored BOL currently has. Used to refuse a save that
+    would blank a non-empty inventory (see the blank-over-full guard below)."""
+    try:
+        items = json.loads(row.items_json or "[]")
+        return len(items) if isinstance(items, list) else 0
+    except Exception:
+        return 0
+
+
 @router.post("")
 def submit_bol(
     payload: BOLIn,
@@ -161,7 +181,28 @@ def submit_bol(
             row.carrier_json = json.dumps(payload.carrier)
         if payload.shipment is not None:
             row.shipment_json = json.dumps(payload.shipment)
-        row.items_json = json.dumps(payload.items or [])
+        # Blank-over-full guard: never let a save REPLACE a non-empty inventory
+        # with an empty one. A second truck's crew who started a fresh (blank)
+        # BOL for a job that already has items would otherwise wipe the first
+        # crew's inventory on submit. The client routes every "start" through
+        # loadForJobWithInfo (which unions items first), so a legitimate save
+        # always carries the full list; an empty payload against a non-empty row
+        # means a stale/blank device. Refuse it with 409 - a permanent rejection
+        # (isPermanentRejection) so the offline queue surfaces it to the crew as
+        # a failed op to retry/discard, instead of silently dropping their work
+        # or retrying a doomed write. items being None (field omitted, e.g. a
+        # photo-link backfill) is NOT a wipe - only an explicit empty list is.
+        incoming_items = payload.items
+        if incoming_items is not None:
+            if len(incoming_items) == 0 and _existing_item_count(row) > 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This job's Bill of Lading already has items. Open the existing "
+                        "BOL and add to it instead of replacing it with an empty one."
+                    ),
+                )
+            row.items_json = json.dumps(incoming_items)
         if payload.inventory_verified is not None:
             row.inventory_verified = 1 if payload.inventory_verified else 0
         if payload.inventory_note is not None:
@@ -226,6 +267,12 @@ class BOLSignIn(BaseModel):
     # origin extras (stored in shipment_json)
     actual_pickup_date: Optional[str] = None
     vehicle: Optional[str] = None
+    # Origin + destination addresses. A DOT officer at a border crossing needs
+    # the pickup and delivery addresses printed ON the BOL (they are not derivable
+    # from the job name), so they are captured at origin signing and rendered on
+    # the PDF. Stored in shipment_json alongside the other shipment details.
+    origin_address: Optional[str] = None
+    dest_address: Optional[str] = None
     # destination extras
     walkthrough_notes: Optional[str] = None
     final_charges: Optional[float] = None
@@ -255,6 +302,14 @@ def sign_bol(
         shipment = json.loads(row.shipment_json) if row.shipment_json else {}
     except Exception:
         shipment = {}
+
+    # Addresses belong to the shipment as a whole, so accept them in either
+    # signing phase (they are collected at origin). Empty strings do not
+    # overwrite a previously-captured address.
+    if payload.origin_address:
+        shipment["origin_address"] = payload.origin_address
+    if payload.dest_address:
+        shipment["dest_address"] = payload.dest_address
 
     if payload.phase == "origin":
         # PODS is tracked per-driver on the Report tab (see the "As the
@@ -346,3 +401,70 @@ def upload_bol_pdf(
     schedule_bol_export(row.bol_id)
     print(f"[bol] pdf uploaded bol_id={row.bol_id} url={row.signed_pdf_url}")
     return {"ok": True, "drive_url": result["url"]}
+
+
+@router.post("/{bol_id}/email")
+def email_bol_to_client(
+    bol_id: str,
+    to_email: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Email the signed BOL PDF to the client from the field.
+
+    The crew generates the signed PDF on-device (it holds the signatures) and
+    posts it here with the client's email. We attach it and send via Postmark.
+    Requires connectivity - unlike building/signing a BOL, sending mail cannot
+    be done offline - so the client handles the offline case before calling this.
+
+    Fails honestly (4xx for a bad address, 502 for a mail-send failure) rather
+    than a 200-with-ok:false, so a caller can tell the crew the truth.
+    """
+    to = (to_email or "").strip()
+    if not _EMAIL_RE.match(to):
+        raise HTTPException(status_code=400, detail="Enter a valid client email address.")
+
+    row = db.query(DigitalBOL).filter(DigitalBOL.bol_id == bol_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="BOL not found")
+
+    data = file.file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The BOL PDF was empty.")
+    if len(data) > _MAX_BOL_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="The BOL PDF is too large to email.")
+
+    job_name = (row.job_name or "Bill of Lading").strip()
+    job_date = (row.job_date or "").strip()
+    safe_name = re.sub(r'[\\/:*?"<>|]', "-", job_name) or "Bill of Lading"
+    filename = f"{(job_date + ' - ') if job_date else ''}{safe_name}.pdf"
+
+    # NOTE: subject and body are intentionally em-dash free (company invariant).
+    from app.core import app_communication as comms
+    subject, body = comms.render(db, "signed_bol", {
+        "job_name": job_name,
+        "job_date_suffix": (" on " + job_date) if job_date else "",
+        "company_name": "Mountaineer Moving LLC",
+        "company_phone": "(406) 201-9580",
+    })
+
+    try:
+        send_email(
+            to_email=to,
+            subject=subject,
+            text=body,
+            attachments=[{
+                "name": filename,
+                "content": base64.b64encode(data).decode("ascii"),
+                "content_type": "application/pdf",
+            }],
+        )
+    except Exception as e:
+        traceback.print_exc()
+        # 502: a mail-provider failure is upstream and retryable, not a silent
+        # success. The crew sees a clear "could not send" and can retry.
+        raise HTTPException(status_code=502, detail=f"Could not send the email: {e}")
+
+    print(f"[bol] emailed bol_id={bol_id} to={to} by={current_user.email}")
+    return {"ok": True, "sent_to": to}

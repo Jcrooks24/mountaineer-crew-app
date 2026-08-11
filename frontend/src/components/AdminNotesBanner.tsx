@@ -45,7 +45,7 @@ export default function AdminNotesBanner({ scope }: { scope: string }) {
       className="card"
       style={{
         border: "1px solid var(--brand)",
-        background: "rgba(93,214,194,0.08)",
+        background: "color-mix(in srgb, var(--brand) 8%, transparent)",
       }}
     >
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>

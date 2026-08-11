@@ -15,13 +15,11 @@ import {
   type OfficeHoursEntry,
   type OfficeHoursInput,
 } from "../lib/officeHoursStore";
+import { mountainDateYYYYMMDD } from "../lib/time";
 
 function todayISO(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  // Mountain date - the day the office hours attribute to (default; user-editable).
+  return mountainDateYYYYMMDD();
 }
 
 type FormState = {

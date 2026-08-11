@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import logoLight from "../assets/logo_light.png";
 import logoDark from "../assets/logo_dark.png";
@@ -26,6 +26,16 @@ export interface ThemeVars {
   // can tell at a glance whether yellow means scheduled vs conditional.
   "--scheduled": string;
   "--scheduled-bg": string;
+  // Ink color for text on bright brand surfaces (primary buttons, active
+  // tabs). Optional: when a preset omits it, the default Text-Color setting
+  // drives `--on-brand` as before. A preset sets it when its brand color needs
+  // a specific ink (e.g. the enterprise blue needs white, not the default dark
+  // navy) so the button reads correctly without the user touching Text-Color.
+  "--on-brand"?: string;
+  // Optional "raised" surface (secondary buttons) distinct from the card.
+  // Enterprise sets it so flat secondary buttons read on-theme instead of the
+  // legacy navy button gradient. Presets that omit it are unaffected.
+  "--raised"?: string;
 }
 
 export interface ThemePreset {
@@ -159,6 +169,62 @@ export const THEME_PRESETS: Record<string, ThemePreset> = {
       // yellow background. yellow-700 with a 18% tint.
       "--scheduled": "#a16207",
       "--scheduled-bg": "rgba(161,98,7,0.18)",
+    },
+  },
+  // ── Enterprise (extracted from the Figma Make "PWA Improvement Workflow"
+  // exploration): 95% neutral, corporate blue as the ONLY interactive color,
+  // no gradients. The flat look is delivered purely through these values:
+  // --card2 == --card collapses the .card gradient, --brand2 == --brand
+  // collapses the .btnPrimary gradient, and --on-brand forces white button ink.
+  // For the fullest effect also pick "Sharp" button radius in theme settings
+  // (tighter corners); Card Glow is already off by default (hairline borders).
+  "enterprise-dark": {
+    label: "Enterprise Dark",
+    emoji: "🏢",
+    vars: {
+      // Field-robust dark: surfaces are lifted off near-black so cards
+      // separate clearly and the screen stays readable in sunlight (a pure
+      // black field app washes out and reads as a murky blur outdoors).
+      // Text/muted are high-contrast, borders are visible hairlines, and the
+      // blue is bright enough to read as an accent while carrying white ink.
+      "--bg": "#12151d",
+      "--card": "#1e2532",
+      "--card2": "#1e2532",
+      "--text": "#edf1f7",
+      "--muted": "#aebaca",
+      "--border": "#3d4762",
+      "--brand": "#4574d6",
+      "--brand2": "#4574d6",
+      "--danger": "#f4726f",
+      "--ok": "#3ac583",
+      "--warn": "#e89a3c",
+      "--warn-bg": "rgba(232,154,60,0.16)",
+      "--scheduled": "#eec53f",
+      "--scheduled-bg": "rgba(238,197,63,0.26)",
+      "--on-brand": "#ffffff",
+      "--raised": "#262d3d",
+    },
+  },
+  "enterprise-light": {
+    label: "Enterprise Light",
+    emoji: "🏛️",
+    vars: {
+      "--bg": "#eef1f6",
+      "--card": "#ffffff",
+      "--card2": "#ffffff",
+      "--text": "#0f1724",
+      "--muted": "#5a6b82",
+      "--border": "#d1d9e6",
+      "--brand": "#1a44b8",
+      "--brand2": "#1a44b8",
+      "--danger": "#b91c1c",
+      "--ok": "#15803d",
+      "--warn": "#b45309",
+      "--warn-bg": "rgba(180,83,9,0.12)",
+      "--scheduled": "#a16207",
+      "--scheduled-bg": "rgba(161,98,7,0.18)",
+      "--on-brand": "#ffffff",
+      "--raised": "#e8ecf4",
     },
   },
 };
@@ -312,7 +378,10 @@ const STORAGE_KEY = "crew_theme_settings";
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export const DEFAULT_SETTINGS: ThemeSettings = {
-  themeId: "dark-ocean",
+  // Enterprise Dark is the app's default identity (the facelift). Existing
+  // users keep whatever they already saved in localStorage; only new users and
+  // anyone who never picked a theme land here. See ADR 0030.
+  themeId: "enterprise-light",
   brandOverride: null,
   brand2Override: null,
   textMode: "preset",
@@ -346,6 +415,57 @@ function loadSettings(): ThemeSettings {
   }
 }
 
+/** WCAG relative luminance (0 = black, 1 = white) of a "#rrggbb" color.
+ * Returns 0.5 (neutral) for anything unparseable, so a bad value never
+ * triggers the dark/light-text conflict guard. */
+function relLuminance(hex: string | undefined): number {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec((hex ?? "").trim());
+  if (!m) return 0.5;
+  const n = parseInt(m[1], 16);
+  const chan = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * chan((n >> 16) & 255) + 0.7152 * chan((n >> 8) & 255) + 0.0722 * chan(n & 255);
+}
+
+// The two inks the app uses on a filled (non-background) surface. Same values
+// the Text-Color setting uses for body text, so a computed choice still looks
+// like it belongs to the theme.
+const FILL_INK_DARK = "#0b1220";
+const FILL_INK_LIGHT = "#f5f7fa";
+
+/** WCAG 2.x contrast ratio between two hex colors. 1 = identical, 21 = max. */
+function contrastRatio(a: string, b: string): number {
+  const l1 = relLuminance(a);
+  const l2 = relLuminance(b);
+  const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * Ink for text/glyphs sitting ON a filled surface: a primary button or active
+ * tab (`--brand`), or a completed-state checkbox (`--ok`).
+ *
+ * Decided by the FILL color, never by the body Text-Color setting. Those are
+ * different surfaces with independent polarity: Deep Forest is a dark theme
+ * (light body text) whose brand is a bright mint (#34d399, needs dark ink).
+ * Tying the two together put #f5f7fa on #34d399 at 1.79:1 - the button label was
+ * there, but effectively invisible, and crew can trigger it themselves by
+ * setting Text-Color to "Light text". Same failure on dark-ocean (1.65:1),
+ * sunset (2.11:1), steel (2.35:1) and midnight-purple (2.54:1). See ADR 0035.
+ *
+ * relLuminance returns 0.5 for anything it cannot parse, which resolves to the
+ * dark ink - the same value --on-brand defaulted to before, so an unparseable
+ * brand override degrades to the old behavior rather than to something
+ * unreadable.
+ */
+function pickInk(fill: string | undefined): string {
+  return contrastRatio(fill ?? "", FILL_INK_DARK) >= contrastRatio(fill ?? "", FILL_INK_LIGHT)
+    ? FILL_INK_DARK
+    : FILL_INK_LIGHT;
+}
+
 function applySettings(settings: ThemeSettings) {
   const preset = THEME_PRESETS[settings.themeId] ?? THEME_PRESETS["dark-ocean"];
   const root = document.documentElement;
@@ -359,21 +479,47 @@ function applySettings(settings: ThemeSettings) {
   if (settings.brandOverride) root.style.setProperty("--brand", settings.brandOverride);
   if (settings.brand2Override) root.style.setProperty("--brand2", settings.brand2Override);
 
-  // Text contrast override. Also drives `--on-brand`, the color used for
-  // text on bright brand-coloured surfaces (primary buttons, active tabs),
-  // so the whole app follows the setting end-to-end.
-  if (settings.textMode === "light") {
+  // Text contrast override, for BODY text only. `--on-brand` is deliberately
+  // NOT set here - see the brand-ink block below for why.
+  //
+  // The override is CONFLICT-AWARE: forcing "dark text" on a dark-background
+  // theme (or "light text" on a light one) renders text-on-same-shade and is
+  // never readable - it is always a mistake, not a preference. So we apply a
+  // forced mode only when it matches the theme's background polarity; on a
+  // conflict we keep the preset's own text (already set above). This is what
+  // made Enterprise Dark unreadable when Text-Color was left on "Dark text".
+  const bgIsDark = relLuminance(preset.vars["--bg"]) < 0.5;
+  if (settings.textMode === "light" && bgIsDark) {
     root.style.setProperty("--text", "#f5f7fa");
     root.style.setProperty("--muted", "#c6cedb");
-    root.style.setProperty("--on-brand", "#f5f7fa");
-  } else if (settings.textMode === "dark") {
+  } else if (settings.textMode === "dark" && !bgIsDark) {
     root.style.setProperty("--text", "#1a2030");
     root.style.setProperty("--muted", "#5a6a7e");
-    root.style.setProperty("--on-brand", "#0b1220");
-  } else {
-    // "preset": brand buttons stay on their default dark ink.
-    root.style.setProperty("--on-brand", "#0b1220");
   }
+  // else: "preset" mode, or a conflicting forced mode we refuse to apply -
+  // keep the preset's --text / --muted, already set above.
+
+  // Brand ink. Decided by the brand color, independent of the body Text-Color
+  // setting, because a brand-filled surface has its own polarity (see
+  // pickBrandInk). A preset that declares --on-brand wins, since that is a
+  // deliberate authored choice - but only while the brand is the preset's own.
+  // Once the user overrides the brand we must compute, because no authored
+  // value can anticipate an arbitrary color (declaring white and then picking a
+  // yellow brand would be unreadable).
+  root.style.setProperty(
+    "--on-brand",
+    settings.brandOverride
+      ? pickInk(settings.brandOverride)
+      : preset.vars["--on-brand"] ?? pickInk(preset.vars["--brand"]),
+  );
+
+  // Ink for a glyph on an --ok fill (the completed-state checkbox). Same
+  // reasoning as --on-brand: --ok is a bright green on 7 of 8 presets and a dark
+  // forest green on enterprise-light, so no single hardcoded ink works. The two
+  // call sites had drifted to opposite answers - JobChecklistCard used white
+  // (1.74:1 on midnight-purple/sunset) and JobReport used dark (3.43:1 on
+  // enterprise-light). --ok has no user override, so the preset value is final.
+  root.style.setProperty("--on-ok", pickInk(preset.vars["--ok"]));
 
   // Font
   root.style.setProperty("--font", settings.fontValue);
@@ -406,6 +552,26 @@ function applySettings(settings: ThemeSettings) {
       ? `${brand}44`
       : preset.vars["--border"]
   );
+
+  // Enterprise presets are intentionally FLAT and tight (per the design system):
+  // 4px cards, 3px buttons, no shadow, hairline borders - the look must not
+  // depend on the user's radius / shadow / glow settings, so force these last
+  // (they win over the settings applied above). Other presets keep honoring the
+  // user's choices. Undo this block to let enterprise follow the radius setting.
+  if (settings.themeId.startsWith("enterprise")) {
+    root.style.setProperty("--r", "4px");
+    root.style.setProperty("--btn-r", "3px");
+    root.style.setProperty("--shadow", "none");
+    root.style.setProperty("--border", preset.vars["--border"]);
+    // Secondary/base buttons: a flat "raised" surface instead of the legacy
+    // navy button gradient (which read as the old palette on enterprise, e.g.
+    // the Photos "Refresh" button). --btn-r/border keep them tight + hairline.
+    const raised = preset.vars["--raised"];
+    if (raised) {
+      root.style.setProperty("--btn-bg-from", raised);
+      root.style.setProperty("--btn-bg-to", raised);
+    }
+  }
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -420,19 +586,32 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<ThemeSettings>(loadSettings);
+  // Did this device already have a saved theme when the app started? If so the
+  // user has a preference, and the admin-saved server theme must NOT clobber it.
+  // Captured before the first applySettings writes localStorage, so it is true
+  // first-run detection. Fixes "theme drops on navigation": a remount (error-
+  // boundary reload, service-worker update) re-fetched the server theme and
+  // overrode the user's choice every time.
+  const hadLocalTheme = useRef(localStorage.getItem(STORAGE_KEY) != null);
 
-  // On mount: fetch admin-saved theme from server and apply it for all users
+  // On mount: fetch the admin-saved theme from the server. It is the DEFAULT for
+  // a device with no local choice yet; a user's own saved theme wins. Either
+  // way the admin-managed global content (help texts, pin colors) always syncs.
   useEffect(() => {
     fetch(`${API}/api/config/theme`)
       .then((r) => r.ok ? r.json() : null)
       .then((serverSettings: Partial<ThemeSettings> | null) => {
         if (!serverSettings) return;
-        setSettings((prev) => ({
-          ...prev,
-          ...serverSettings,
-          pinColors: { ...DEFAULT_PIN_COLORS, ...(serverSettings.pinColors ?? {}) },
-          helpTexts: { ...DEFAULT_HELP_TEXTS, ...(serverSettings.helpTexts ?? {}) },
-        }));
+        setSettings((prev) => {
+          const globalContent = {
+            pinColors: { ...DEFAULT_PIN_COLORS, ...(serverSettings.pinColors ?? {}) },
+            helpTexts: { ...DEFAULT_HELP_TEXTS, ...(serverSettings.helpTexts ?? {}) },
+          };
+          // User already chose a theme on this device: keep it, sync only the
+          // global content. A new device adopts the admin theme as its start.
+          if (hadLocalTheme.current) return { ...prev, ...globalContent };
+          return { ...prev, ...serverSettings, ...globalContent };
+        });
       })
       .catch(() => { /* network unavailable - use localStorage fallback */ });
   }, []);

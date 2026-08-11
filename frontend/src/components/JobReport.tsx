@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
+import { loadJobSetup } from "../lib/jobSetupStore";
 import { fetchRemoteBol, listOpenBols, type OpenBol } from "../lib/bolStore";
 import RodsSignoff from "./RodsSignoff";
 import RosterPicker from "./RosterPicker";
@@ -86,7 +87,7 @@ function saveBolDeferred(jobUuid: string, reason: BolDeferredReason) {
 }
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
-import { formatMountainTime } from "../lib/time";
+import { formatMountainTime, mountainHHMM, mountainDateYYYYMMDD } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
@@ -99,11 +100,26 @@ import { fireConfetti } from "../lib/confetti";
 export { roundBillableQuarter, type EmployeeHoursEntry } from "../lib/employeeHours";
 import type { EmployeeHoursEntry } from "../lib/employeeHours";
 import { roundBillableQuarter } from "../lib/employeeHours";
+import { hhgWeightLbs } from "../lib/hhg";
 import {
   TRUCK_IDS,
+  filledCuFt,
+  truckCapacityCuFt,
   type TruckFullnessEntry,
 } from "../lib/jobTypes";
-import { useJobTypes } from "../lib/jobTypesStore";
+import TruckDeckGauge from "./TruckDeckGauge";
+import {
+  CLIENT_READINESS,
+  CLIENT_UNREADY_REASONS,
+  SCOPE_CHANGE_KINDS,
+  VARIANCE_CAUSES,
+  normalizeScopeChanges,
+  normalizeVarianceCauses,
+  readinessNeedsDetail,
+  type Option as CloseoutOption,
+  type ScopeChangeEntry,
+} from "../lib/closeout";
+import NumberField from "./NumberField";
 import { useSkills, skillsForJobTypes, type Skill } from "../lib/skillsStore";
 
 // Compact subset of EventRecord - enough to populate the Employee Hours
@@ -164,10 +180,25 @@ type ReportData = {
   truck_fullness: TruckFullnessEntry[];
   // Crew's note when actual inventory ran over the linked estimate.
   overage_note: string;
+  // Close-out: why the job differed, how ready the client was, what changed.
+  // Multi-select since 2026-07-28 - a long day usually has more than one cause.
+  variance_causes: string[];
+  variance_note: string;
+  client_readiness: string | null;
+  client_unready: string[];
+  scope_changes: ScopeChangeEntry[];
   // Crew-lead sign-off that the per-employee hours are correct.
   hours_verified: boolean;
   employee_hours: EmployeeHoursEntry[];
 };
+
+type ReportView = "edit" | "review" | "closed";
+
+// Resolve a stored option key to its human label (falls back to the raw key so
+// a retired option still reads sensibly in the summary).
+function labelOf(list: { key: string; label: string }[], key: string): string {
+  return list.find((o) => o.key === key)?.label ?? key;
+}
 
 // Pre-3-state-migration drafts/responses stored review_candidate as a
 // boolean. Coerce on load so a saved draft from before this deploy still
@@ -230,6 +261,14 @@ function normalizeDraftData(d: ReportData): ReportData {
     hours_mismatch_reason: d.hours_mismatch_reason ?? "",
     crew_feedback: d.crew_feedback ?? "",
     overage_note: d.overage_note ?? "",
+    // Both close-out fields changed shape on 2026-07-28. A draft written by the
+    // previous build is still sitting in localStorage on crew devices, so these
+    // upgrade rather than assume - see normalize* in lib/closeout.
+    variance_causes: normalizeVarianceCauses(d.variance_causes, (d as any).variance_cause),
+    variance_note: d.variance_note ?? "",
+    client_readiness: d.client_readiness ?? null,
+    client_unready: Array.isArray(d.client_unready) ? d.client_unready : [],
+    scope_changes: normalizeScopeChanges(d.scope_changes),
     hours_verified: !!d.hours_verified,
     job_type_tags: Array.isArray(d.job_type_tags) ? d.job_type_tags : [],
     truck_fullness: Array.isArray(d.truck_fullness) ? d.truck_fullness : [],
@@ -247,6 +286,12 @@ type Props = {
   driveOnly?: boolean;
   // Long-distance day with BOTH labor and driving: LD docs are required to submit.
   mixedLd?: boolean;
+  // Fired after a successful save-and-close-out. The host (App) uses it to mark the
+  // job finished and flip the whole screen to the static closed-job panel.
+  onCloseOut?: () => void;
+  // Reopened from the closed panel ("Edit finalized job") - open straight in the
+  // editable form instead of the read-only closed tile.
+  openInEdit?: boolean;
 };
 
 function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: string; hint?: string; onGo: () => void }) {
@@ -258,7 +303,7 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
             width: 22, height: 22, flexShrink: 0, borderRadius: 6, display: "grid", placeItems: "center",
             background: done ? "var(--ok)" : "transparent",
             border: done ? "none" : "1.5px solid var(--border)",
-            color: "#0b1f14", fontWeight: 800, fontSize: 14,
+            color: "var(--on-ok)", fontWeight: 800, fontSize: 14,
           }}
         >
           {done ? "✓" : ""}
@@ -282,7 +327,7 @@ function ChecklistItem({ done, label, hint, onGo }: { done: boolean; label: stri
   );
 }
 
-export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false }: Props) {
+export default function JobReport({ jobUuid, jobName, events = [], longDistance = false, driveOnly = false, mixedLd = false, onCloseOut, openInEdit = false }: Props) {
   const nav = useNavigate();
   const { user } = useAuth();
 
@@ -467,6 +512,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     job_type_tags: [],
     truck_fullness: [],
     overage_note: "",
+    variance_causes: [],
+    variance_note: "",
+    client_readiness: null,
+    client_unready: [],
+    scope_changes: [],
     hours_verified: false,
     employee_hours: [],
   });
@@ -475,10 +525,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Per-field validation error. On a blocked submit we jump to the offending
+  // field and show the message right there, instead of a top banner the crew
+  // has to scroll away from to hunt for what's actually missing.
+  const [fieldError, setFieldError] = useState<{ anchor: string; msg: string } | null>(null);
   const [showDVIRModal, setShowDVIRModal] = useState(false);
-  // Admin-configurable job-type tags (server, cached). Union with any tags
-  // already saved on this report so a since-deactivated tag still shows.
-  const jobTypes = useJobTypes();
+  // Three-stage report view:
+  //  - "edit"   : the fillable form (drafts auto-save to the device throughout).
+  //  - "review" : a read-only, data-rich summary of every answer (no server
+  //               write yet - "Confirm and view report" only previews).
+  //  - "closed" : the collapsed single tile shown after "Save and close out job"
+  //               commits to the server. A submitted report loads straight here.
+  const [view, setView] = useState<ReportView>("edit");
   // Skill registry + the subset relevant to this job's type(s) - the only
   // skills crew are asked to rate per employee.
   const skills = useSkills();
@@ -511,6 +569,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     setLoaded(false);
     setSaved(false);
     setBillReviewed(false);
+    // Reset the view on every job switch. The load below re-opens the closed
+    // tile only if THIS job already has a submitted report; without this reset
+    // the previous job's "closed" view would stick to a fresh/unsubmitted job.
+    setView("edit");
+    // Same for the close-out tree gates - they re-seed from this job's data.
+    setRanDiff(null);
+    setScopeChanged(null);
+    setVarianceDir(null);
 
     // Safety net: force `loaded` true after 15 seconds even if the fetch is
     // stuck. Previously a hung /api/job-report request could leave the tab
@@ -553,11 +619,25 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           job_type_tags: (r as any).job_type_tags ?? [],
           truck_fullness: (r as any).truck_fullness ?? [],
           overage_note: (r as any).overage_note ?? "",
+          // Server may still answer with a pre-2026-07-28 report (singular
+          // cause, {kind}-shaped changes); normalize both to the new shape.
+          variance_causes: normalizeVarianceCauses(
+            (r as any).variance_causes,
+            (r as any).variance_cause,
+          ),
+          variance_note: (r as any).variance_note ?? "",
+          client_readiness: (r as any).client_readiness ?? null,
+          client_unready: (r as any).client_unready ?? [],
+          scope_changes: normalizeScopeChanges((r as any).scope_changes),
           hours_verified: !!(r as any).hours_verified,
           employee_hours: r.employee_hours ?? [],
         });
         serverUpdatedAtRef.current = (r as any).updated_at || "";
         setSaved(true);
+        // A report already exists on the server, so it has been closed out at least
+        // once: open straight to the collapsed tile - UNLESS the crew reopened it
+        // via "Edit finalized job", in which case drop them right into the editor.
+        setView(openInEdit ? "edit" : "closed");
       })
       .catch((e) => {
         // ONLY reset to empty defaults on a real 404 (no report exists yet).
@@ -584,6 +664,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             job_type_tags: [],
             truck_fullness: [],
             overage_note: "",
+            variance_causes: [],
+            variance_note: "",
+            client_readiness: null,
+            client_unready: [],
+            scope_changes: [],
             hours_verified: false,
             employee_hours: [],
           });
@@ -617,6 +702,68 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     return () => { window.clearTimeout(bail); };
   }, [jobUuid]);
 
+  // Job type and the assigned trucks are captured in Job setup now (the single
+  // source), so neither is entered a second time here. Seed both from the
+  // header once per job:
+  //  - Job type is mirrored onto the report silently. It still exports to the
+  //    sheet and still decides which skills are rated per employee below; the
+  //    crew just edit it in Job setup, not here (no job-type UI on the report).
+  //  - The trucks assigned in setup prefill the volume estimator (only when the
+  //    crew haven't started it yet), so they don't re-add trucks they already
+  //    picked. They can still add or remove trucks in the estimator.
+  const headerSeedRef = useRef<string>("");
+  useEffect(() => {
+    if (!loaded || !jobUuid || headerSeedRef.current === jobUuid) return;
+    headerSeedRef.current = jobUuid;
+    loadJobSetup(jobUuid)
+      .then((h) => {
+        if (!h) return;
+        const tags = (h.job_type_tags ?? []).filter(Boolean);
+        const units = (h.vehicle_unit_names ?? []).filter(Boolean);
+        setData((prev) => {
+          let next = prev;
+          if (tags.length) {
+            const same = prev.job_type_tags.length === tags.length && prev.job_type_tags.every((t, i) => t === tags[i]);
+            if (!same) next = { ...next, job_type_tags: tags };
+          }
+          if (units.length && next.truck_fullness.length === 0) {
+            const fleet = TRUCK_IDS as readonly string[];
+            next = {
+              ...next,
+              truck_fullness: units.map((name) =>
+                fleet.includes(name)
+                  ? { truck: name, vertical_pct: 0, horizontal_pct: 0 }
+                  : { truck: name, vertical_pct: 0, horizontal_pct: 0, is_rental: true },
+              ),
+            };
+          }
+          return next;
+        });
+      })
+      .catch(() => {});
+  }, [loaded, jobUuid]);
+
+  // C1.3 (ADR 0034): the job header's crew, offered as quick-add chips in the
+  // Employee Hours editor. Tapping one just targets the editor at that person
+  // (like the roster picker) - the crew still enter times and save a real row,
+  // so no empty 0-hour rows are ever written to the payroll source.
+  const [jobCrew, setJobCrew] = useState<{ user_id: number; name: string }[]>([]);
+  useEffect(() => {
+    if (!jobUuid) { setJobCrew([]); return; }
+    let cancelled = false;
+    loadJobSetup(jobUuid)
+      .then((h) => {
+        if (cancelled) return;
+        setJobCrew(
+          (h?.crew || [])
+            .filter((m) => typeof m.user_id === "number")
+            .map((m) => ({ user_id: m.user_id as number, name: m.name })),
+        );
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobUuid]);
+
   // Debounced draft autosave. Triggers on every change to `data` or
   // `billReviewed` once the form is loaded; skipped during the first render
   // after hydration so we don't write back the just-loaded values.
@@ -647,6 +794,23 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
   function set<K extends keyof ReportData>(key: K, val: ReportData[K]) {
     setData((prev) => ({ ...prev, [key]: val }));
+    setSaved(false);
+  }
+
+  /** `set`, but the new value is derived from the CURRENT value rather than
+   *  from whatever the render closure captured.
+   *
+   *  Use this for anything that reads the old value to compute the new one -
+   *  every multi-select toggle, and the repeating-row editors. `set("x", [...data.x, k])`
+   *  reads a captured `data`, so two updates that land in the same React batch
+   *  both start from the same snapshot and the first one is lost. Discrete
+   *  click events normally flush one at a time, which is why this has not bitten
+   *  anyone, but the correct form costs nothing and does not depend on that. */
+  function setWith<K extends keyof ReportData>(
+    key: K,
+    fn: (prev: ReportData[K]) => ReportData[K],
+  ) {
+    setData((prev) => ({ ...prev, [key]: fn(prev[key]) }));
     setSaved(false);
   }
 
@@ -685,6 +849,31 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // calculates one. Offered as an End option only - it's a projection of when
   // the job finishes, so it's never a valid start or break bound.
   const [wrapUpTime, setWrapUpTime] = useState<Date | null>(null);
+  // The wrap-up estimator isn't needed on most jobs, so it stays collapsed until
+  // the crew ask for it (keeps the hours record uncluttered).
+  const [showWrapUp, setShowWrapUp] = useState(false);
+
+  // Close-out surfaces one question at a time (a small tree) instead of all at
+  // once. Two yes/no gates drive the reveal; they seed from any saved answers so
+  // a reopened report shows what was already filled rather than hiding it.
+  const [ranDiff, setRanDiff] = useState<boolean | null>(null);
+  const [scopeChanged, setScopeChanged] = useState<boolean | null>(null);
+  // Which way the job differed (longer vs shorter). Drives the second branch of
+  // Q1 so only that direction's reasons are shown.
+  const [varianceDir, setVarianceDir] = useState<"more" | "less" | null>(null);
+  useEffect(() => { if (data.variance_causes.length > 0) setRanDiff((p) => (p == null ? true : p)); }, [data.variance_causes.length]);
+  useEffect(() => { if (data.scope_changes.length > 0) setScopeChanged((p) => (p == null ? true : p)); }, [data.scope_changes.length]);
+  useEffect(() => {
+    setVarianceDir((prev) => {
+      if (prev != null || data.variance_causes.length === 0) return prev;
+      // Seed the direction from any saved grouped cause; if only "Other" was
+      // picked we can't tell, so default to "longer".
+      const g = data.variance_causes
+        .map((k) => VARIANCE_CAUSES.find((o) => o.key === k)?.group)
+        .find((x) => x === "more" || x === "less");
+      return g ?? "more";
+    });
+  }, [data.variance_causes]);
 
   // First START on the timeline + last FINISH = the natural bookends for a
   // typical crew day. Prefilling these means the common case (everyone
@@ -744,11 +933,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   }
 
   function fmtHHMM(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "";
-    const h = String(d.getHours()).padStart(2, "0");
-    const m = String(d.getMinutes()).padStart(2, "0");
-    return `${h}:${m}`;
+    // Mountain wall-clock, matching the backend payroll tz (not the device's) -
+    // a phone in Central must not read an event's time an hour off.
+    return mountainHHMM(iso);
+  }
+
+  function hhmmToMinutes(hhmm: string): number | null {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+    if (!m) return null;
+    const h = Number(m[1]);
+    const mm = Number(m[2]);
+    if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+    return h * 60 + mm;
   }
 
   // Resolve a slot to minutes-of-day (0–1439). Returns null if the slot is
@@ -768,15 +964,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     }
     if (slot.selection === WRAPUP_SENTINEL) {
       // Resolves live: editing the estimator's minutes above moves this end
-      // time with it. The saved row snapshots the value at Save.
-      return wrapUpTime ? wrapUpTime.getHours() * 60 + wrapUpTime.getMinutes() : null;
+      // time with it. The saved row snapshots the value at Save. Read in Mountain.
+      if (!wrapUpTime) return null;
+      return hhmmToMinutes(fmtHHMM(wrapUpTime.toISOString()));
     }
     if (slot.selection) {
       const ev = eventById.get(slot.selection);
       if (!ev) return null;
-      const d = new Date(ev.timestamp);
-      if (Number.isNaN(d.getTime())) return null;
-      return d.getHours() * 60 + d.getMinutes();
+      // Minutes-of-day in Mountain (matches fmtHHMM + the backend tz).
+      return hhmmToMinutes(fmtHHMM(ev.timestamp));
     }
     return null;
   }
@@ -791,6 +987,21 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       return ev ? fmtHHMM(ev.timestamp) : "";
     }
     return "";
+  }
+
+  // Full epoch (ms) of a slot when it carries a real date (an event or the
+  // wrap-up estimate). Manual "HH:MM" slots have no date, so they return null and
+  // the caller falls back to same-day minutes-of-day math. This is what lets a
+  // multi-day shift compute a true span instead of collapsing modulo 24h.
+  function slotToEpoch(slot: SlotPick): number | null {
+    if (slot.selection === WRAPUP_SENTINEL) return wrapUpTime ? wrapUpTime.getTime() : null;
+    if (slot.selection && slot.selection !== MANUAL_SENTINEL) {
+      const ev = eventById.get(slot.selection);
+      if (!ev) return null;
+      const t = Date.parse(ev.timestamp);
+      return Number.isFinite(t) ? t : null;
+    }
+    return null;
   }
 
   // Clock label for the wrap-up option, e.g. "4:35 PM".
@@ -869,9 +1080,21 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     const startMin = slotToMinutes(editStart);
     const endMin = slotToMinutes(editEnd);
     if (startMin === null || endMin === null) return { kind: "incomplete" };
-    let span = endMin - startMin;
-    if (span <= 0) span += 24 * 60; // crossed midnight
-    if (span <= 0) return { kind: "error", message: "End time is at or before start time." };
+
+    // Prefer the TRUE span from full timestamps when both ends carry a date (real
+    // events / wrap-up), so a multi-day shift is not silently wrapped into 24h.
+    // Manual times (no date) keep the single-midnight-wrap for a same-day shift.
+    const sEpoch = slotToEpoch(editStart);
+    const eEpoch = slotToEpoch(editEnd);
+    let span: number;
+    if (sEpoch !== null && eEpoch !== null) {
+      span = Math.round((eEpoch - sEpoch) / 60000);
+      if (span <= 0) return { kind: "error", message: "End time is at or before start time." };
+    } else {
+      span = endMin - startMin;
+      if (span <= 0) span += 24 * 60; // crossed midnight (same-day manual entry)
+      if (span <= 0) return { kind: "error", message: "End time is at or before start time." };
+    }
 
     let breakMin = 0;
     for (const b of editBreaks) {
@@ -939,11 +1162,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       setEditError("Pick start and end times for this employee.");
       return;
     }
+    const startEpoch = slotToEpoch(editStart);
     const baseEntry: EmployeeHoursEntry = {
       user_id: editUserId ?? undefined,
       name,
       start: slotToHHMM(editStart),
       end: slotToHHMM(editEnd),
+      // Mountain date of the shift start when the start is a real event/wrap-up.
+      date: startEpoch !== null ? mountainDateYYYYMMDD(startEpoch) : undefined,
       break_hours: Number(editorPreview.breakHours.toFixed(2)),
       hours: Number(editorPreview.hours.toFixed(2)),
     };
@@ -954,6 +1180,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         const next = prev.employee_hours.slice();
         next[editingIndex] = {
           ...baseEntry,
+          // A manual edit produces no date; keep the row's existing one.
+          date: baseEntry.date ?? prev.employee_hours[editingIndex].date,
           non_billable: prev.employee_hours[editingIndex].non_billable,
           skill_rating: prev.employee_hours[editingIndex].skill_rating,
           skill_ratings: prev.employee_hours[editingIndex].skill_ratings,
@@ -984,6 +1212,35 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     // Editor is already visible; nudge focus toward it so the crew notices
     // the swap (especially with longer saved tables).
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // Duplicate a saved hours row with a BLANK employee, keeping the times/hours.
+  // Big crews often share a shift; this saves re-keying it. The new row renders
+  // an inline employee picker (its name is blank) so the crew just pick a
+  // person - the hours copy over exactly, with no editor round-trip that would
+  // drop the break detail.
+  function duplicateEmployee(i: number) {
+    const emp = data.employee_hours[i];
+    if (!emp) return;
+    setData((prev) => ({
+      ...prev,
+      employee_hours: [
+        ...prev.employee_hours,
+        { ...emp, user_id: undefined, name: "", skill_rating: undefined, skill_ratings: undefined },
+      ],
+    }));
+    setSaved(false);
+  }
+
+  // Assign a roster person to a row that has no employee yet (a duplicated row).
+  function assignEmployeeToRow(i: number, userId: number | null, name: string) {
+    setData((prev) => ({
+      ...prev,
+      employee_hours: prev.employee_hours.map((e, idx) =>
+        idx === i ? { ...e, user_id: userId ?? undefined, name } : e,
+      ),
+    }));
+    setSaved(false);
   }
 
 
@@ -1032,6 +1289,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   );
 
   async function doSave() {
+    // First close-out (no server copy yet) vs re-saving an edit to an already
+    // closed report. Only the first one is worth a celebration - re-firing
+    // confetti on a typo fix reads as "you just filed a brand-new report".
+    const firstCloseOut = !saved;
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
     if (!driveOnly && billData !== null && billData !== undefined && !billReviewed) {
@@ -1085,6 +1346,25 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             (t) => t.truck && t.vertical_pct > 0 && t.horizontal_pct > 0,
           ),
           overage_note: data.overage_note.trim() || null,
+          variance_causes: data.variance_causes,
+          variance_note: data.variance_note.trim() || null,
+          client_readiness: data.client_readiness || null,
+          // Only meaningful when something was NOT ready; sending the list
+          // alongside "fully ready" would contradict itself in the sheet.
+          client_unready: readinessNeedsDetail(data.client_readiness)
+            ? data.client_unready
+            : [],
+          // Drop rows where the crew picked nothing - an empty row is an
+          // accidental tap on "Add", not a scope change. The server rejects a
+          // kinds:[] entry outright, so this filter is load-bearing, not tidying.
+          scope_changes: data.scope_changes
+            .filter((c) => c.kinds.length > 0)
+            .map((c) => ({
+              kinds: c.kinds,
+              direction: c.direction,
+              hours: c.hours ?? null,
+              note: (c.note || "").trim() || null,
+            })),
           hours_verified: !!data.hours_verified,
           // Strip empty rows so the sheet column doesn't get noise from
           // accidentally-added employees the crew didn't fill in.
@@ -1094,6 +1374,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               name: e.name.trim(),
               start: e.start,
               end: e.end,
+              date: e.date || null,
               break_hours: Number(e.break_hours) || 0,
               hours: Number(e.hours) || 0,
               non_billable: !!e.non_billable,
@@ -1118,12 +1399,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       }
 
       setSaved(true);
-      fireConfetti(); // celebrate a submitted report
+      setView("closed"); // collapse to the single closed-out tile
+      if (firstCloseOut) fireConfetti(); // celebrate only the first close-out
       // Submit succeeded - discard the in-progress drafts (report + bill).
       // The server is now authoritative; further edits start fresh drafts.
       clearReportDraft(jobUuid);
       billRef.current?.clearDraft?.();
       setDraftStatus("idle");
+      // The report save IS the job closeout: tell the host to finish the job and
+      // flip the whole screen to the static closed-job panel.
+      onCloseOut?.();
     } catch (e: any) {
       // "Failed to fetch" is the browser's generic for any network failure
       // including a Render cold start that exceeded the fetch timeout. The
@@ -1140,38 +1425,245 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     }
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-
-    if (!jobUuid) return setErr("No job selected.");
+  // Shared validation for both "Confirm and view report" and "Save and close
+  // out job". Returns {anchor, msg} for the first missing field (anchor maps to
+  // an id on that field so we can jump to it), or null when the report is complete.
+  function validateReport(): { anchor: string; msg: string } | null {
+    if (!jobUuid) return { anchor: "top", msg: "No job selected." };
     // Mixed LD days (labor + driving): the long-distance documents are required.
     if (mixedLd) {
-      if (!priorDone) return setErr("Complete the driver's Prior On-Duty statement before submitting.");
-      if (!bolStatus && !bolDeferred) return setErr("Attach the trip's Bill of Lading (or mark not at destination yet) before submitting.");
+      if (!priorDone) return { anchor: "ld_docs", msg: "Complete the driver's Prior On-Duty statement before submitting." };
+      if (!bolStatus && !bolDeferred) return { anchor: "ld_docs", msg: "Attach the trip's Bill of Lading (or mark not at destination yet) before submitting." };
     }
     // Drive-only LD days skip the billing/eval questions (no labor to bill).
     if (!driveOnly) {
-      if (data.has_personal_vehicles === null) return setErr("Indicate whether personal vehicles were at the job site.");
-      if (data.has_personal_vehicles && data.personal_vehicles < 1) return setErr("Enter how many personal vehicles were at the job site.");
-      if (data.has_dumpster_use === null) return setErr("Indicate whether the M1 dumpster was used on this job.");
-      if (data.has_dumpster_use && data.dumpster_pct <= 0) return setErr("Select the M1 dumpster fill percentage.");
-      if (data.has_recycling_use === null) return setErr("Indicate whether the M1 recycling bin was used on this job.");
-      if (data.has_recycling_use && data.recycling_pct <= 0) return setErr("Select the M1 recycling bin fill percentage.");
-      if (!data.billing_method) return setErr("Select a billing method.");
-      if (data.review_candidate === null) return setErr("Indicate whether this client is a review candidate.");
-      if (data.hours_match === null) return setErr("Indicate whether hours worked match hours billed.");
+      if (data.has_personal_vehicles === null) return { anchor: "personal_vehicles", msg: "Indicate whether personal vehicles were at the job site." };
+      if (data.has_personal_vehicles && data.personal_vehicles < 1) return { anchor: "personal_vehicles", msg: "Enter how many personal vehicles were at the job site." };
+      if (data.has_dumpster_use === null) return { anchor: "dumpster", msg: "Indicate whether the M1 dumpster was used on this job." };
+      if (data.has_dumpster_use && data.dumpster_pct <= 0) return { anchor: "dumpster", msg: "Select the M1 dumpster fill percentage." };
+      if (data.has_recycling_use === null) return { anchor: "recycling", msg: "Indicate whether the M1 recycling bin was used on this job." };
+      if (data.has_recycling_use && data.recycling_pct <= 0) return { anchor: "recycling", msg: "Select the M1 recycling bin fill percentage." };
+      if (!data.billing_method) return { anchor: "billing_method", msg: "Select a billing method." };
+      if (data.review_candidate === null) return { anchor: "review_candidate", msg: "Indicate whether this client is a review candidate." };
+      if (data.hours_match === null) return { anchor: "hours_match", msg: "Indicate whether hours worked match hours billed." };
       if (!data.hours_match && !data.hours_mismatch_reason.trim())
-        return setErr("Please explain why the hours don't match.");
+        return { anchor: "hours_match", msg: "Please explain why the hours don't match." };
       if (data.has_crew_feedback === null)
-        return setErr("Indicate whether you have any feedback for the office.");
+        return { anchor: "crew_feedback", msg: "Indicate whether you have any feedback for the office." };
       if (data.has_crew_feedback && !data.crew_feedback.trim())
-        return setErr("Please share your feedback or change your answer to No.");
+        return { anchor: "crew_feedback", msg: "Please share your feedback or change your answer to No." };
+      // Surface the bill-review checkbox here (not only at the final POST) so it
+      // is caught before the crew leave the editable view.
+      const billData = billRef.current?.getData();
+      if (billData != null && !billReviewed)
+        return { anchor: "bill_review", msg: "Please confirm you have reviewed the auto-populated bill items before continuing." };
     }
+    return null;
+  }
 
-    // Show DVIR reminder before saving
+  // Jump to (and mark) the first missing field so the crew see exactly what's
+  // blocking submit, instead of a top banner they have to scroll away from.
+  function jumpToField(p: { anchor: string; msg: string }) {
+    const el = document.getElementById("jrq-" + p.anchor);
+    if (el) {
+      setFieldError(p);   // inline message right at the field
+      setErr(null);
+      requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "center" }));
+    } else {
+      // No inline slot for this one (e.g. long-distance docs) - fall back to the
+      // top banner so the message is never lost.
+      setFieldError(null);
+      setErr(p.msg);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  // Inline error rendered right under a field's header when it's the blocker.
+  const fieldErr = (anchor: string) =>
+    fieldError?.anchor === anchor ? (
+      <div className="small" style={{ color: "var(--danger)", fontWeight: 700, marginTop: 6 }}>
+        {fieldError.msg}
+      </div>
+    ) : null;
+
+  // "Confirm and view report": validate, then switch to the read-only summary.
+  // No server write - the local draft already holds everything.
+  function handleConfirmView(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    const problem = validateReport();
+    if (problem) { jumpToField(problem); return; }
+    setFieldError(null);
+    setView("review");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // "Save and close out job": validate again, then the DVIR reminder gates the
+  // actual POST (doSave), which collapses the report to the closed-out tile.
+  function saveAndClose() {
+    setErr(null);
+    const problem = validateReport();
+    if (problem) return jumpToField(problem);
+    setFieldError(null);
     pendingSaveRef.current = doSave;
     setShowDVIRModal(true);
+  }
+
+  // Read-only, data-rich recap of every answer, shown in the review and closed
+  // views. `billTotals` is the bill total node from the bill calculator.
+  function renderSummary(billTotal: number) {
+    const row = (label: string, value: React.ReactNode) => (
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "3px 0" }}>
+        <span className="small" style={{ color: "var(--muted)", flexShrink: 0 }}>{label}</span>
+        <span style={{ fontSize: 13, fontWeight: 600, textAlign: "right", minWidth: 0 }}>{value}</span>
+      </div>
+    );
+    const section = (title: string, children: React.ReactNode) => (
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 12 }}>
+        <div className="microLabel" style={{ marginBottom: 6 }}>{title}</div>
+        {children}
+      </div>
+    );
+
+    const emps = data.employee_hours.filter((e) => e.name.trim() || e.hours > 0);
+    const trucks = data.truck_fullness.filter((t) => (t.truck || "").trim() && t.vertical_pct > 0 && t.horizontal_pct > 0);
+    const scope = data.scope_changes.filter((c) => c.kinds.length > 0);
+    const billingLabel = BILLING_OPTIONS.find((o) => o.value === data.billing_method)?.label;
+
+    return (
+      <div className="col" style={{ gap: 0 }}>
+        <div>
+          <div className="microLabel" style={{ marginBottom: 6 }}>Hours</div>
+          {row("Total hours", `${totalBillableHours.toFixed(2)} h`)}
+          {data.hours_verified && row("Crew-lead verified", "Yes")}
+          {emps.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {emps.map((e, i) => (
+                <div key={i} className="row" style={{ justifyContent: "space-between", gap: 8, padding: "2px 0" }}>
+                  <span style={{ fontSize: 13, minWidth: 0 }}>
+                    {e.name || "(unnamed)"}{e.out_of_town ? " · out of town" : ""}{e.non_billable ? " · non-billable" : ""}
+                  </span>
+                  <span className="small mono" style={{ flexShrink: 0 }}>{roundBillableQuarter(e.hours).toFixed(2)} h</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {longDistance && section("Long-distance", (
+          <>
+            {row("Per-diem (out of town)", data.out_of_town ? "Yes" : "No")}
+            {mixedLd && row("Prior on-duty (PODS)", priorDone ? "Filed" : "Not filed")}
+            {mixedLd && row("Bill of Lading", bolStatus ? "Attached" : bolDeferred ? "Deferred" : "Not attached")}
+          </>
+        ))}
+
+        {!driveOnly && section("Billing", (
+          <>
+            {row("Method", billingLabel ?? (data.billing_method || "Not set"))}
+            {row("Bill total", billTotal.toLocaleString("en-US", { style: "currency", currency: "USD" }))}
+          </>
+        ))}
+
+        {trucks.length > 0 && section("Truck fullness", (
+          <>
+            {trucks.map((t, i) => {
+              const cuft = filledCuFt(t);
+              const pct = Math.round((t.vertical_pct * t.horizontal_pct) / 100);
+              return (
+                <div key={i}>
+                  {row(t.truck || "Truck", `${pct}% full${cuft !== null ? ` · ${cuft.toLocaleString()} cu ft · ~${hhgWeightLbs(cuft).toLocaleString()} lbs` : ""}`)}
+                </div>
+              );
+            })}
+          </>
+        ))}
+
+        {!driveOnly && section("Extras", (
+          <>
+            {row("Personal vehicles", data.has_personal_vehicles ? `${data.personal_vehicles}${data.bill_personal_vehicles ? " (billed)" : ""}` : "None")}
+            {row("M1 dumpster", data.has_dumpster_use ? `${data.dumpster_pct}%` : "Not used")}
+            {row("M1 recycling", data.has_recycling_use ? `${data.recycling_pct}%` : "Not used")}
+          </>
+        ))}
+
+        {!driveOnly && section("Close-out", (
+          <>
+            {row("Ran differently", ranDiff === true
+              ? `Yes - ran ${varianceDir === "less" ? "shorter" : "longer"}`
+              : ranDiff === false ? "No, as quoted" : "Not answered")}
+            {data.variance_causes.length > 0 && row("Reasons", data.variance_causes.map((k) => labelOf(VARIANCE_CAUSES, k)).join(", "))}
+            {data.variance_note.trim() && row("Note", data.variance_note.trim())}
+            {row("Client readiness", data.client_readiness ? labelOf(CLIENT_READINESS, data.client_readiness) : "Not answered")}
+            {data.client_unready.length > 0 && row("Not ready", data.client_unready.map((k) => labelOf(CLIENT_UNREADY_REASONS, k)).join(", "))}
+            {row("Scope changes", scope.length === 0 ? "None" : String(scope.length))}
+            {scope.map((c, i) => (
+              <div key={i} className="small" style={{ color: "var(--muted)", padding: "2px 0" }}>
+                • {c.kinds.map((k) => labelOf(SCOPE_CHANGE_KINDS, k)).join(", ")} ({c.direction}{c.hours != null ? `, ~${c.hours}h` : ""}){c.note ? ` - ${c.note}` : ""}
+              </div>
+            ))}
+          </>
+        ))}
+
+        {!driveOnly && section("Wrap-up", (
+          <>
+            {row("Review candidate", data.review_candidate === "yes" ? "Yes - reach out" : data.review_candidate === "no" ? "No" : data.review_candidate === "na" ? "N/A" : "Not answered")}
+            {row("Hours match billed", data.hours_match === true ? "Yes" : data.hours_match === false ? "No" : "Not answered")}
+            {data.hours_match === false && data.hours_mismatch_reason.trim() && row("Discrepancy", data.hours_mismatch_reason.trim())}
+            {row("Crew feedback", data.has_crew_feedback ? "Yes" : data.has_crew_feedback === false ? "No" : "Not answered")}
+            {data.has_crew_feedback && data.crew_feedback.trim() && row("Feedback", data.crew_feedback.trim())}
+          </>
+        ))}
+      </div>
+    );
+  }
+
+  // The review + closed-out views share the summary; they differ only in the
+  // action row below it.
+  function renderReviewOrClosed(billTotal: number) {
+    return (
+      <div className="col" style={{ gap: 14 }}>
+        <div className="card">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <div className="microLabel" style={{ marginBottom: 0 }}>
+              {view === "closed" ? "Job report - closed out" : "Review job report"}
+            </div>
+            {view === "closed" && (
+              <button type="button" onClick={() => { setView("edit"); setErr(null); }} style={{ fontSize: 12 }}>
+                Edit report
+              </button>
+            )}
+          </div>
+          {view === "closed" ? (
+            <div className="small" style={{ color: "var(--ok)", marginBottom: 10 }}>
+              ✓ Saved and closed out{user?.name ? ` by ${user.name}` : ""}. Tap Edit to reopen.
+            </div>
+          ) : (
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+              Check every answer reads right, then save and close out the job.
+            </div>
+          )}
+          {renderSummary(billTotal)}
+        </div>
+
+        {err && (
+          <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+            {err}
+          </div>
+        )}
+
+        {view === "review" && (
+          <div className="row" style={{ gap: 8, marginBottom: 32 }}>
+            <button type="button" className="btnPrimary" disabled={busy} onClick={saveAndClose}>
+              {busy ? "Saving…" : "Save and close out job"}
+            </button>
+            <button type="button" disabled={busy} onClick={() => { setView("edit"); setErr(null); }}>
+              Back to editing
+            </button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   if (!jobUuid) {
@@ -1224,8 +1716,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           : undefined
       }
     >
-      {(billSlots) => (
-    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {(billSlots) =>
+        view !== "edit" ? (
+          renderReviewOrClosed(billSlots.total)
+        ) : (
+    <form onSubmit={handleConfirmView} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
       {/* Draft autosave indicator. Hidden once the report is submitted
           (the existing "✓ Report saved" banner below covers that state). */}
@@ -1246,6 +1741,15 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         >
           {draftStatus === "saving" && "Saving draft…"}
           {draftStatus === "saved" && "✓ Draft saved"}
+        </div>
+      )}
+
+      {/* Validation error, surfaced at the TOP of the form (with a scroll-to on
+          failure) so the crew see it and the required fields together, instead
+          of a lone banner by the bottom button pointing at a field far above. */}
+      {err && (
+        <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+          {err}
         </div>
       )}
 
@@ -1293,53 +1797,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           below. */}
       {!driveOnly && (
       <div className="card">
-        <div className="sectionTitle">Job data</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Job data</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Hours, equipment, and vehicles - the data used to build the invoice line items.
         </div>
 
-        {/* Job type comes first: it decides which skills are rated per employee
-            below, so the crew must pick it before the skill rows are meaningful.
-            Deliberately NOT gated on canRate: a job with no designated rater on
-            site still needs its job type recorded. Any crew member sets it. */}
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
-          Job type<BetaTag feature="jobTypeTags" />
-        </div>
-        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
-          {ht.jobTypeHint}
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
-          {Array.from(new Set([...jobTypes, ...data.job_type_tags])).map((tag) => {
-            const active = data.job_type_tags.includes(tag);
-            return (
-              <button
-                key={tag}
-                type="button"
-                onClick={() => {
-                  setData((prev) => ({
-                    ...prev,
-                    job_type_tags: active
-                      ? prev.job_type_tags.filter((t) => t !== tag)
-                      : [...prev.job_type_tags, tag],
-                  }));
-                  setSaved(false);
-                }}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: 999,
-                  border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
-                  color: active ? "var(--brand)" : "var(--text)",
-                  fontWeight: active ? 700 : 400,
-                  fontSize: 13,
-                  cursor: "pointer",
-                }}
-              >
-                {tag}
-              </button>
-            );
-          })}
-        </div>
+        {/* Job type is captured in Job setup (the single source) and no longer
+            shown here - it is mirrored onto the report silently above and still
+            decides which skills are rated per employee below. */}
 
         {/* Inventory is logged on long-distance jobs only (ADR 0015). On a local
             job there is no Inventory tab, so this line would be a permanent
@@ -1348,10 +1813,27 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
         {/* Wrap-up estimator sits directly above the hours record because it
             feeds it: the projected wrap-up time is offered as an End option in
-            the start/end pickers below. */}
-        <WrapUpEstimator jobUuid={jobUuid} onWrapUpChange={setWrapUpTime} />
+            the start/end pickers below. Hidden by default (not needed on most
+            jobs); expanded on demand. */}
+        <button
+          type="button"
+          onClick={() => setShowWrapUp((v) => !v)}
+          aria-expanded={showWrapUp}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6, alignSelf: "flex-start",
+            padding: "6px 12px", fontSize: 13, fontWeight: 700, borderRadius: 8,
+            border: "1px solid var(--border)", background: "transparent", color: "var(--text)", cursor: "pointer",
+          }}
+        >
+          {showWrapUp ? "Hide wrap-up estimate" : "Estimate wrap-up time"}
+        </button>
+        {showWrapUp && (
+          <div style={{ marginTop: 10 }}>
+            <WrapUpEstimator jobUuid={jobUuid} onWrapUpChange={setWrapUpTime} />
+          </div>
+        )}
 
-        <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 6, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Employee man-hours</span>
           <BetaTag feature="rosterTypeahead" style={{ marginTop: 0 }} />
           {canRate && <BetaTag feature="employeeSkillRating" style={{ marginTop: 0 }} />}
@@ -1427,8 +1909,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   className="small"
                   style={{
                     color: "var(--brand2)",
-                    background: "rgba(106,167,255,0.08)",
-                    border: "1px solid rgba(106,167,255,0.3)",
+                    background: "color-mix(in srgb, var(--brand2) 8%, transparent)",
+                    border: "1px solid color-mix(in srgb, var(--brand2) 30%, transparent)",
                     borderRadius: 6,
                     padding: "6px 10px",
                   }}
@@ -1436,6 +1918,35 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   Editing entry #{editingIndex + 1}. Save replaces the row; Cancel keeps the original.
                 </div>
               )}
+              {/* Quick-add crew from the job header (C1.3). Sets the editor's
+                  person; the crew then pick times and Save employee as usual. */}
+              {(() => {
+                const already = new Set(
+                  data.employee_hours.map((e) => e.user_id).filter((v): v is number => typeof v === "number"),
+                );
+                const toAdd = jobCrew.filter((c) => !already.has(c.user_id) && c.user_id !== editUserId);
+                if (toAdd.length === 0) return null;
+                return (
+                  <div className="col" style={{ gap: 4 }}>
+                    <span className="small" style={{ color: "var(--muted)" }}>Add crew from job setup:</span>
+                    <div className="row wrap" style={{ gap: 6 }}>
+                      {toAdd.map((c) => (
+                        <button
+                          key={c.user_id}
+                          type="button"
+                          onClick={() => { setEditUserId(c.user_id); setEditName(c.name); setEditError(null); }}
+                          style={{
+                            padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
+                            border: "1px solid var(--border)", background: "transparent", color: "var(--text)",
+                          }}
+                        >
+                          + {c.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               <RosterPicker
                 userId={editUserId}
                 legacyName={editUserId == null && editName ? editName : undefined}
@@ -1484,10 +1995,10 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
               {editorPreview.kind === "ok" && (
                 <div className="small" style={{ color: "var(--muted)" }}>
                   Worked:{" "}
-                  <strong style={{ color: "var(--text)" }}>
+                  <strong className="mono" style={{ color: "var(--text)" }}>
                     {editorPreview.hours.toFixed(2)} hrs
                   </strong>{" "}
-                  <span style={{ color: "var(--muted)" }}>
+                  <span className="mono" style={{ color: "var(--muted)" }}>
                     (span {editorPreview.spanHours.toFixed(2)}
                     {editorPreview.breakHours > 0 ? ` − break ${editorPreview.breakHours.toFixed(2)}` : ""})
                   </span>
@@ -1539,7 +2050,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                     padding: "8px 0",
                     borderBottom: "1px solid var(--border)",
                     opacity: emp.non_billable ? 0.7 : 1,
-                    background: isEditing ? "rgba(106,167,255,0.06)" : undefined,
+                    background: isEditing ? "color-mix(in srgb, var(--brand2) 6%, transparent)" : undefined,
                   }}
                 >
                   {/* Name + hours on the left, Edit/Remove on the right. Skill
@@ -1549,9 +2060,18 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                       block below this row (see further down). */}
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-                      <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name}</div>
-                      </div>
+                      {emp.name || emp.user_id != null ? (
+                        <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>{emp.name || "(no name)"}</div>
+                        </div>
+                      ) : (
+                        <div style={{ marginBottom: 6 }}>
+                          <div className="small" style={{ color: "var(--brand)", marginBottom: 4, fontWeight: 600 }}>
+                            Assign this duplicated shift to a crew member
+                          </div>
+                          <RosterPicker userId={null} onChange={(id, nm) => assignEmployeeToRow(i, id, nm)} />
+                        </div>
+                      )}
                       <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                         {emp.start && emp.end ? `${emp.start}–${emp.end}` : ""}
                         {emp.break_hours > 0 ? ` · break ${emp.break_hours.toFixed(2)}h` : ""}
@@ -1572,6 +2092,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                         disabled={isEditing}
                       >
                         {isEditing ? "Editing…" : "Edit"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => duplicateEmployee(i)}
+                        title="Duplicate this shift for another crew member"
+                      >
+                        Duplicate
                       </button>
                       <button
                         type="button"
@@ -1609,11 +2136,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                 fontWeight: 700,
               }}
             >
-              <span>Total man-hours</span>
+              <span className="microLabel">Total man-hours</span>
               <span>
-                {totalBillableHours.toFixed(2)}h
+                <span className="mono">{totalBillableHours.toFixed(2)}h</span>
                 <span
-                  className="small"
+                  className="small mono"
                   style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}
                 >
                   (actual {totalActualHours.toFixed(2)}h)
@@ -1625,8 +2152,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
         {/* M1 equipment (dumpster + recycling; the sliders drive invoice lines) */}
         <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>M1 equipment *</div>
-        <div style={{ fontWeight: 700, fontSize: 12, marginTop: 8 }}>Dumpster (trash)</div>
+        <div id="jrq-dumpster" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 12, marginTop: 8 }}>Dumpster (trash)</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Was the M1 dumpster used on this job?</div>
+        {fieldErr("dumpster")}
         <YesNo
           value={data.has_dumpster_use}
           onChange={(v) => { setData((prev) => ({ ...prev, has_dumpster_use: v, dumpster_pct: v ? Math.max(5, prev.dumpster_pct) : 0 })); setSaved(false); }}
@@ -1638,8 +2166,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             <PctSlider label="Dumpster fill estimate" value={data.dumpster_pct} onChange={(v) => set("dumpster_pct", v)} color="var(--danger)" />
           </div>
         )}
-        <div style={{ fontWeight: 700, fontSize: 12, marginTop: 14 }}>Recycling bin</div>
+        <div id="jrq-recycling" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 12, marginTop: 14 }}>Recycling bin</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Was the M1 recycling bin used on this job?</div>
+        {fieldErr("recycling")}
         <YesNo
           value={data.has_recycling_use}
           onChange={(v) => { setData((prev) => ({ ...prev, has_recycling_use: v, recycling_pct: v ? Math.max(5, prev.recycling_pct) : 0 })); setSaved(false); }}
@@ -1653,8 +2182,9 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         )}
 
         {/* Personal vehicles at the job site */}
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Personal vehicles at job site *</div>
+        <div id="jrq-personal_vehicles" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Personal vehicles at job site *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>Were any crew personal vehicles at the job site?</div>
+        {fieldErr("personal_vehicles")}
         <YesNo
           value={data.has_personal_vehicles}
           onChange={(v) => { setData((prev) => ({ ...prev, has_personal_vehicles: v, personal_vehicles: v ? Math.max(1, prev.personal_vehicles) : 0 })); setSaved(false); }}
@@ -1704,13 +2234,14 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       <>
       {/* ── Billing (bill helper + totals + notes + review + method in one tile) ── */}
       <div className="card">
-        <div className="sectionTitle">Billing</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Billing</div>
         <div style={{ marginBottom: 12 }}>
           {billSlots.billHelper}
           {billSlots.totals}
           {billSlots.notes}
         </div>
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
+        {fieldErr("bill_review")}
+        <label id="jrq-bill_review" style={{ scrollMarginTop: 90, display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
           <input
             type="checkbox"
             checked={billReviewed}
@@ -1723,7 +2254,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             dumpster / recycling charges from the sliders).
           </span>
         </label>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
+        <div id="jrq-billing_method" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
+        {fieldErr("billing_method")}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
           {BILLING_OPTIONS.map(({ value, label }) => {
             const active = data.billing_method === value;
@@ -1736,7 +2268,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
                   padding: "11px 14px",
                   borderRadius: 10,
                   border: active ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: active ? "rgba(93,214,194,0.18)" : "transparent",
+                  background: active ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                   color: active ? "var(--brand)" : "var(--text)",
                   fontWeight: active ? 700 : 400,
                   fontSize: 13,
@@ -1753,13 +2285,181 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
       {/* ── The rest of the tiles (any order at the bottom of the tab). */}
 
-      {/* ── Personal vehicles ── */}
+      {/* ── Job wrap-up (close-out + review candidate + hours + crew feedback) ── */}
       <div className="card">
-        <div className="sectionTitle">Job wrap-up</div>
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Review candidate *</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Job wrap-up</div>
+
+        {/* Close-out (merged into the wrap-up tile): why the day differed, whether
+            the client was ready, and what got added on site. All optional - a crew
+            member who cannot answer must still be able to submit, nothing here
+            gates Save. */}
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+          Close-out<BetaTag feature="closeout" style={{ marginTop: 0 }} />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 14 }}>
+          A few quick questions that tell the office why the day ran the way it
+          did. Each one leads to the next; answer them in order.
+        </div>
+
+        {/* Q1 - did the job run differently? "Yes" reveals the reason chips;
+            either answer unlocks Q2. */}
+        <div style={{ fontWeight: 700, fontSize: 13 }}>Did the job run differently than quoted?</div>
+        <div style={{ marginTop: 8 }}>
+          <YesNo
+            value={ranDiff}
+            onChange={(v) => {
+              setRanDiff(v);
+              if (!v) { set("variance_causes", []); set("variance_note", ""); setVarianceDir(null); }
+              setSaved(false);
+            }}
+            yesLabel="Yes, it differed"
+            noLabel="No, as quoted"
+          />
+        </div>
+        {ranDiff === true && (
+          <div style={{ marginTop: 12 }}>
+            {/* Branch again: which way, then only that direction's reasons -
+                keeps the list short and the follow-up specific. */}
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>Which way?</div>
+            <div
+              role="group"
+              aria-label="Ran longer or shorter"
+              style={{ display: "inline-flex", gap: 0, border: "1px solid var(--border)", borderRadius: 999, overflow: "hidden" }}
+            >
+              {([["more", "Ran longer"], ["less", "Ran shorter"]] as const).map(([dir, label]) => {
+                const on = varianceDir === dir;
+                return (
+                  <button
+                    key={dir}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => {
+                      setVarianceDir(dir);
+                      // Drop any reasons that belonged to the other direction so
+                      // the two can't mix; "Other" (ungrouped) survives.
+                      setWith("variance_causes", (prev) =>
+                        prev.filter((k) => {
+                          const o = VARIANCE_CAUSES.find((x) => x.key === k);
+                          return !o?.group || o.group === dir;
+                        }));
+                      setSaved(false);
+                    }}
+                    style={{
+                      padding: "8px 18px", fontSize: 13, fontWeight: on ? 700 : 500, cursor: "pointer", border: "none",
+                      background: on ? "var(--brand)" : "transparent",
+                      color: on ? "var(--on-brand)" : "var(--muted)",
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {varianceDir && (
+              <div style={{ marginTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                  Tick every reason that applied. The note is for anything the list misses.
+                </div>
+                <ChipPicker
+                  options={VARIANCE_CAUSES.filter((o) => o.group === varianceDir || !o.group)}
+                  selected={data.variance_causes}
+                  onToggle={(key) =>
+                    setWith("variance_causes", (prev) =>
+                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
+                  }
+                />
+                {data.variance_causes.length > 0 && (
+                  <textarea
+                    value={data.variance_note}
+                    onChange={(e) => { set("variance_note", e.target.value); setSaved(false); }}
+                    placeholder="What happened? (optional)"
+                    rows={2}
+                    style={{ width: "100%", marginTop: 8, resize: "vertical" }}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Q2 - client readiness, revealed once Q1 is answered (or if a saved
+            answer exists downstream). */}
+        {(ranDiff !== null || data.client_readiness != null || data.scope_changes.length > 0) && (
+          <>
+            <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+              Was the client ready when you arrived?
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <ChipPicker
+                options={CLIENT_READINESS}
+                selected={data.client_readiness ? [data.client_readiness] : []}
+                onToggle={(key) => {
+                  const next = data.client_readiness === key ? null : key;
+                  set("client_readiness", next);
+                  // Clearing back to ready (or to no answer) drops the detail, so the
+                  // two answers can never contradict each other in the sheet.
+                  if (!readinessNeedsDetail(next)) set("client_unready", []);
+                  setSaved(false);
+                }}
+              />
+            </div>
+            {readinessNeedsDetail(data.client_readiness) && (
+              <div style={{ marginTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+                  What was not ready? Tick all that applied.
+                </div>
+                <ChipPicker
+                  options={CLIENT_UNREADY_REASONS}
+                  selected={data.client_unready}
+                  onToggle={(key) =>
+                    setWith("client_unready", (prev) =>
+                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
+                  }
+                />
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Q3 - on-site scope changes, revealed once Q2 is answered. "Yes"
+            reveals the change editor. */}
+        {(data.client_readiness != null || data.scope_changes.length > 0) && (
+          <>
+            <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+              Anything added or changed on site?
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <YesNo
+                value={scopeChanged}
+                onChange={(v) => {
+                  setScopeChanged(v);
+                  if (!v) set("scope_changes", []);
+                  setSaved(false);
+                }}
+                yesLabel="Yes"
+                noLabel="No"
+              />
+            </div>
+            {scopeChanged === true && (
+              <div style={{ marginTop: 12 }}>
+                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                  One entry per change, added or dropped. Tick every reason that fits it.
+                  Hours are a rough guess at the time it cost you or gave back, not a bill.
+                </div>
+                <ScopeChangeEditor
+                  value={data.scope_changes}
+                  onChange={(fn) => setWith("scope_changes", fn)}
+                />
+              </div>
+            )}
+          </>
+        )}
+
+        <div id="jrq-review_candidate" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Is this client a good candidate for the office to seek a review from?
         </div>
+        {fieldErr("review_candidate")}
         <ThreeWay
           value={data.review_candidate}
           onChange={(v) => set("review_candidate", v)}
@@ -1770,10 +2470,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           ]}
         />
 
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Hours reconciliation *</div>
+        <div id="jrq-hours_match" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Hours reconciliation *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Do hours worked match hours billed?
         </div>
+        {fieldErr("hours_match")}
         <YesNo
           value={data.hours_match}
           onChange={(v) => set("hours_match", v)}
@@ -1796,12 +2497,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         )}
 
         {/* Crew feedback folded into the wrap-up tile, kept at the bottom. */}
-        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
+        <div id="jrq-crew_feedback" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
           Crew feedback *<BetaTag feature="crewFeedback" />
         </div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>
           Would you like to submit any general feedback or feedback about this job in particular to the office?
         </div>
+        {fieldErr("crew_feedback")}
         <YesNo
           value={data.has_crew_feedback}
           onChange={(v) => {
@@ -1838,7 +2540,7 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           required to submit. */}
       {longDistance && (
         <div className="card" style={{ borderColor: "var(--brand)" }}>
-          <div className="sectionTitle">Long-distance</div>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Long-distance</div>
 
           <div data-component="ReportDocuments" style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Documents</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
@@ -1974,28 +2676,28 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         </div>
       )}
 
-      {err && (
-        <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
-          {err}
-        </div>
-      )}
-
       {saved && !busy && (
         <div style={{ color: "var(--ok)", fontSize: 13, padding: "8px 12px", background: "rgba(45,212,191,0.1)", borderRadius: 8 }}>
           ✓ Report saved{user?.name ? ` by ${user.name}` : ""}
         </div>
       )}
 
-      <button
-        type="submit"
-        className="btnPrimary"
-        disabled={busy}
-        style={{ marginBottom: 32 }}
-      >
-        {busy ? "Saving…" : saved ? "Update Report" : "Save Report"}
-      </button>
+      {/* No "Save" here anymore: the report keeps auto-saving a local draft;
+          this only moves to the read-only review. The server write happens on
+          "Save and close out job" in the review view. */}
+      <div className="row" style={{ gap: 8, marginBottom: 32 }}>
+        <button type="submit" className="btnPrimary" disabled={busy}>
+          Confirm and view report
+        </button>
+        {saved && (
+          <button type="button" disabled={busy} onClick={() => { setView("closed"); setErr(null); }}>
+            Back to summary
+          </button>
+        )}
+      </div>
     </form>
-      )}
+        )
+      }
     </BillCalculator>
     </>
   );
@@ -2048,33 +2750,21 @@ function ThreeWay<T extends string>({
   options: { value: T; label: string; tone: "ok" | "danger" | "muted" }[];
 }) {
   return (
-    <div style={{ display: "flex", gap: 10 }}>
+    <div className="seg">
       {options.map(({ value: v, label, tone }) => {
         const active = value === v;
-        const accent =
-          tone === "ok" ? "var(--brand)" :
+        const seg =
           tone === "danger" ? "var(--danger)" :
-          "var(--muted)";
-        const accentBg =
-          tone === "ok" ? "rgba(93,214,194,0.18)" :
-          tone === "danger" ? "rgba(255,107,107,0.16)" :
-          "rgba(148,163,184,0.12)";
+          tone === "muted" ? "var(--muted)" :
+          "var(--ok)";
         return (
           <button
             key={String(v)}
             type="button"
+            aria-pressed={active}
+            className={"segBtn" + (active ? " on" : "")}
+            style={{ ["--seg" as any]: seg }}
             onClick={() => onChange(v)}
-            style={{
-              flex: 1,
-              padding: "10px 0",
-              borderRadius: 10,
-              border: active ? `2px solid ${accent}` : "1px solid var(--border)",
-              background: active ? accentBg : "transparent",
-              color: active ? accent : "var(--muted)",
-              fontWeight: active ? 700 : 400,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
           >
             {label}
           </button>
@@ -2096,34 +2786,20 @@ function YesNo({
   noLabel: string;
 }) {
   return (
-    <div style={{ display: "flex", gap: 10 }}>
+    <div className="seg">
       {[
-        { v: true, label: yesLabel },
-        { v: false, label: noLabel },
-      ].map(({ v, label }) => {
+        { v: true, label: yesLabel, seg: "var(--ok)" },
+        { v: false, label: noLabel, seg: "var(--danger)" },
+      ].map(({ v, label, seg }) => {
         const active = value === v;
         return (
           <button
             key={String(v)}
             type="button"
+            aria-pressed={active}
+            className={"segBtn" + (active ? " on" : "")}
+            style={{ ["--seg" as any]: seg }}
             onClick={() => onChange(v)}
-            style={{
-              flex: 1,
-              padding: "10px 0",
-              borderRadius: 10,
-              border: active
-                ? `2px solid ${v ? "var(--brand)" : "var(--danger)"}`
-                : "1px solid var(--border)",
-              background: active
-                ? v ? "rgba(93,214,194,0.18)" : "rgba(255,107,107,0.16)"
-                : "transparent",
-              color: active
-                ? v ? "var(--brand)" : "var(--danger)"
-                : "var(--muted)",
-              fontWeight: active ? 700 : 400,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
           >
             {label}
           </button>
@@ -2150,7 +2826,7 @@ function EmployeeSkillRatings({
   if (skills.length === 0) {
     return (
       <div className="small" style={{ color: "var(--muted)" }}>
-        Pick a job type above to rate skills.
+        Set this job's type in Job setup to rate skills.
       </div>
     );
   }
@@ -2221,7 +2897,7 @@ function SkillRatingRow({
               <button key={label} type="button" disabled={disabled} onClick={() => onChange(on ? null : num)}
                 style={{ padding: "2px 10px", borderRadius: 8, fontSize: 12, cursor: disabled ? "not-allowed" : "pointer",
                   border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                  background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                  background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                   color: on ? "var(--brand)" : "var(--muted)" }}>
                 {label}
               </button>
@@ -2259,6 +2935,276 @@ function SkillRatingRow({
 // Truck fullness: add one reading per truck used, each a composite of a
 // vertical and a horizontal 25%-step fill estimate. Estimated fill is
 // vertical×horizontal/100, matching the interior marks.
+// Single- or multi-select chips, shared by every fixed-vocabulary close-out
+// question so they all behave the same: tap to pick, tap again to clear.
+// Clearing matters - a crew member who taps the wrong chip has to be able to
+// get back to "no answer", which a radio group cannot do.
+function ChipPicker({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: { key: string; label: string }[];
+  selected: string[];
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <div className="row wrap" style={{ gap: 8 }}>
+      {options.map((o) => {
+        const on = selected.includes(o.key);
+        return (
+          <button
+            key={o.key}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onToggle(o.key)}
+            style={{
+              padding: "7px 13px",
+              borderRadius: 999,
+              fontSize: 13,
+              cursor: "pointer",
+              border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+              background: on ? "var(--brand)" : "transparent",
+              color: on ? "var(--on-brand)" : "var(--text)",
+              fontWeight: on ? 700 : 400,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ChipPicker split into "more work" / "less work" halves with a heading over
+// each. Both close-out lists run in two directions now, and a flat 13-chip wrap
+// on a phone makes the crew read every label to find the one they want. Options
+// with no `group` (i.e. "Other") fall through to an ungrouped row at the bottom,
+// since they belong to neither side.
+function GroupedChipPicker({
+  options,
+  selected,
+  onToggle,
+  moreLabel,
+  lessLabel,
+}: {
+  options: CloseoutOption[];
+  selected: string[];
+  onToggle: (key: string) => void;
+  moreLabel: string;
+  lessLabel: string;
+}) {
+  const more = options.filter((o) => o.group === "more");
+  const less = options.filter((o) => o.group === "less");
+  const ungrouped = options.filter((o) => !o.group);
+
+  const heading = (text: string) => (
+    <div
+      className="small"
+      style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6, marginTop: 2 }}
+    >
+      {text}
+    </div>
+  );
+
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      {more.length > 0 && (
+        <div>
+          {heading(moreLabel)}
+          <ChipPicker options={more} selected={selected} onToggle={onToggle} />
+        </div>
+      )}
+      {less.length > 0 && (
+        <div>
+          {heading(lessLabel)}
+          <ChipPicker options={less} selected={selected} onToggle={onToggle} />
+        </div>
+      )}
+      {ungrouped.length > 0 && (
+        <ChipPicker options={ungrouped} selected={selected} onToggle={onToggle} />
+      )}
+    </div>
+  );
+}
+
+// Two-state segmented control for a scope change's direction. A checkbox would
+// be smaller, but "Saved time" has to be as visible as "Added time" or crew
+// will never notice a job CAN report a reduction - which is the whole point of
+// the field.
+function DirectionToggle({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: ScopeChangeEntry["direction"];
+  onChange: (next: ScopeChangeEntry["direction"]) => void;
+  ariaLabel: string;
+}) {
+  const opts: { key: ScopeChangeEntry["direction"]; label: string }[] = [
+    { key: "added", label: "Added time" },
+    { key: "saved", label: "Saved time" },
+  ];
+  return (
+    <div role="radiogroup" aria-label={ariaLabel} className="row" style={{ gap: 0 }}>
+      {opts.map((o, idx) => {
+        const on = value === o.key;
+        return (
+          <button
+            key={o.key}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(o.key)}
+            style={{
+              padding: "7px 14px",
+              fontSize: 13,
+              cursor: "pointer",
+              border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+              // Collapse the shared edge so the pair reads as one control.
+              marginLeft: idx === 0 ? 0 : -1,
+              borderRadius: idx === 0 ? "999px 0 0 999px" : "0 999px 999px 0",
+              background: on ? "var(--brand)" : "transparent",
+              color: on ? "var(--on-brand)" : "var(--text)",
+              fontWeight: on ? 700 : 400,
+              // The selected half must paint over its neighbour's border.
+              position: "relative",
+              zIndex: on ? 1 : 0,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Repeating list of on-site scope changes. Rows are keyed and edited by index,
+// not by kind: two "Added items" entries on one job are legitimate and must not
+// collide.
+//
+// Each row carries MULTIPLE kinds and a direction (2026-07-28). One real change
+// is often two reasons at once, and a change can give time back as easily as it
+// can take it - `hours` is the magnitude, `direction` is the sign.
+function ScopeChangeEditor({
+  value,
+  onChange,
+}: {
+  value: ScopeChangeEntry[];
+  /** Takes an UPDATER, not a value. Every edit in here derives the next list
+   *  from the current one, so passing a pre-computed array would reintroduce
+   *  the stale-snapshot problem `setWith` exists to avoid. */
+  onChange: (fn: (prev: ScopeChangeEntry[]) => ScopeChangeEntry[]) => void;
+}) {
+  const patchAt = (i: number, patch: Partial<ScopeChangeEntry>) =>
+    onChange((prev) => prev.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  const removeAt = (i: number) => onChange((prev) => prev.filter((_, idx) => idx !== i));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {value.map((c, i) => (
+        <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>
+              Change {i + 1}
+            </span>
+            <button type="button" onClick={() => removeAt(i)} style={{ color: "var(--danger)" }}>
+              Remove
+            </button>
+          </div>
+          <GroupedChipPicker
+            options={SCOPE_CHANGE_KINDS}
+            selected={c.kinds}
+            moreLabel="Added / more work"
+            lessLabel="Dropped / less work"
+            onToggle={(key) =>
+              onChange((prev) =>
+                prev.map((row, idx) => {
+                  if (idx !== i) return row;
+                  const has = row.kinds.includes(key);
+                  const kinds = has
+                    ? row.kinds.filter((k) => k !== key)
+                    : [...row.kinds, key];
+                  // Picking the first reason from a side is a strong hint at
+                  // which way this change went, so set the direction to match -
+                  // but only on the first pick, never overriding a deliberate
+                  // later change.
+                  const picked = SCOPE_CHANGE_KINDS.find((o) => o.key === key);
+                  const direction =
+                    !has && row.kinds.length === 0 && picked?.group
+                      ? picked.group === "less" ? "saved" : "added"
+                      : row.direction;
+                  return { ...row, kinds, direction };
+                }),
+              )
+            }
+          />
+          <div className="row wrap" style={{ gap: 10, alignItems: "flex-end", marginTop: 12 }}>
+            <label className="col" style={{ gap: 4 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Impact</span>
+              <DirectionToggle
+                value={c.direction}
+                onChange={(direction) => patchAt(i, { direction })}
+                ariaLabel={"Impact for change " + (i + 1)}
+              />
+            </label>
+            <label className="col" style={{ gap: 2, width: 130 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>
+                {c.direction === "saved" ? "Hours saved" : "Extra hours"}
+              </span>
+              <NumberField
+                min={0}
+                max={48}
+                step={0.25}
+                allowEmpty
+                value={c.hours ?? null}
+                onEmpty={() => patchAt(i, { hours: null })}
+                onChange={(hours) => patchAt(i, { hours })}
+                placeholder="optional"
+                aria-label={
+                  (c.direction === "saved" ? "Hours saved on change " : "Extra hours for change ") +
+                  (i + 1)
+                }
+              />
+            </label>
+            <label className="col" style={{ gap: 2, flex: 1, minWidth: 160 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Note</span>
+              <input
+                value={c.note || ""}
+                onChange={(e) => patchAt(i, { note: e.target.value })}
+                placeholder={
+                  c.direction === "saved"
+                    ? "e.g. garage was already empty"
+                    : "e.g. client added garage shelving"
+                }
+              />
+            </label>
+          </div>
+        </div>
+      ))}
+      <div>
+        <button
+          type="button"
+          onClick={() =>
+            onChange((prev) => [
+              ...prev,
+              { kinds: [], direction: "added", hours: null, note: "" },
+            ])
+          }
+          style={{
+            padding: "6px 12px", borderRadius: 999, border: "1px dashed var(--border)",
+            background: "transparent", color: "var(--text)", fontSize: 13, cursor: "pointer",
+          }}
+        >
+          + Add scope change
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TruckFullnessEditor({
   value,
   onChange,
@@ -2283,10 +3229,9 @@ function TruckFullnessEditor({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {value.map((t, i) => {
-        const combined = Math.round((t.vertical_pct * t.horizontal_pct) / 100);
         return (
           <div key={t.is_rental ? `rental-${i}` : t.truck} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div className="row" style={{ alignItems: "center", gap: 8 }}>
               {t.is_rental ? (
                 <input
                   value={t.truck}
@@ -2297,49 +3242,48 @@ function TruckFullnessEditor({
               ) : (
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{t.truck}</div>
               )}
-              <button
-                type="button"
-                onClick={() => removeAt(i)}
-                style={{ color: "var(--danger)", flexShrink: 0 }}
-              >
-                Remove
-              </button>
             </div>
             {t.is_rental && (
               <label className="col" style={{ gap: 2, marginTop: 8 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Truck length (ft)</span>
-                <input
-                  type="number"
+                <NumberField
                   min={0}
                   step={1}
-                  inputMode="numeric"
-                  value={t.length_ft ?? ""}
-                  onChange={(e) => patchAt(i, { length_ft: e.target.value === "" ? undefined : Number(e.target.value) })}
+                  integer
+                  allowEmpty
+                  value={t.length_ft ?? null}
+                  onEmpty={() => patchAt(i, { length_ft: undefined })}
+                  onChange={(length_ft) => patchAt(i, { length_ft })}
                   placeholder="e.g. 26"
+                  aria-label="Rental truck length in feet"
                   style={{ width: 120 }}
                 />
               </label>
             )}
-            <FullnessSlider
-              label="Vertical fill"
-              value={t.vertical_pct}
-              onChange={(p) => patchAt(i, { vertical_pct: p })}
+            <TruckDeckGauge
+              verticalPct={t.vertical_pct}
+              horizontalPct={t.horizontal_pct}
+              capacityCuFt={truckCapacityCuFt(t)}
+              filledCuFt={filledCuFt(t)}
+              isRental={t.is_rental}
+              onChange={(patch) => patchAt(i, patch)}
             />
-            <FullnessSlider
-              label="Horizontal fill"
-              value={t.horizontal_pct}
-              onChange={(p) => patchAt(i, { horizontal_pct: p })}
-            />
-            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-              {t.vertical_pct > 0 && t.horizontal_pct > 0
-                ? `Estimated fill: ${combined}% (V${t.vertical_pct} × H${t.horizontal_pct})${t.is_rental ? " · best guess" : ""}`
-                : "Pick vertical and horizontal fill"}
-            </div>
             {t.is_rental && (
               <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
                 Rental trucks have no interior 25% markers - estimate the fill as best you can.
               </div>
             )}
+            {/* Remove sits at the bottom, away from the fill grid, so it isn't a
+                mis-tap while tapping the deck to set the load. */}
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+              <button
+                type="button"
+                onClick={() => removeAt(i)}
+                style={{ color: "var(--danger)", fontSize: 13 }}
+              >
+                Remove truck
+              </button>
+            </div>
           </div>
         );
       })}
@@ -2366,41 +3310,6 @@ function TruckFullnessEditor({
         >
           + Rental truck
         </button>
-      </div>
-    </div>
-  );
-}
-
-// Continuous slider for truck fill, matching the M1 dumpster/recycling sliders
-// (PctSlider). Replaces the old 25/50/75/100 button row.
-function FullnessSlider({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (pct: number) => void;
-}) {
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span className="small" style={{ color: "var(--muted)" }}>{label}</span>
-        <span style={{ fontWeight: 700, fontSize: 15, color: "var(--brand)" }}>{value}%</span>
-      </div>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        step={5}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ width: "100%", accentColor: "var(--brand)" }}
-      />
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 10, color: "var(--muted)" }}>Empty</span>
-        <span style={{ fontSize: 10, color: "var(--muted)" }}>Half</span>
-        <span style={{ fontSize: 10, color: "var(--muted)" }}>Full</span>
       </div>
     </div>
   );

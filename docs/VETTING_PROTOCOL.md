@@ -28,6 +28,92 @@ Rules:
   data-loss batch would have been caught.
 - **Staging only.** All changes go to `staging`, never `main`, unless the user
   says "promote" (see `CLAUDE.md`). Confirm `git branch --show-current` is `staging`.
+- **On a promotion vet, `docs/DATA_FLOW.md` is a gate.** See "Data-flow doc gate"
+  below. A promotion is not vetted until that doc matches what is being pushed.
+
+## Data-flow doc gate
+
+The field-level ledger of what triggers each data exchange and when the transfer
+happens lives in two files:
+
+- **[DATA_FLOW.md](DATA_FLOW.md)** covers production, verified against `main`. It
+  changes only at promotion.
+- **[DATA_FLOW_STAGING.md](DATA_FLOW_STAGING.md)** is the delta: everything
+  `staging` adds or changes on top of that. It changes with every feature.
+
+### On every staging commit (not just promotions)
+
+If the change touches a queue key, a drain function or its trigger, a debounce
+timing, an endpoint, a Sheet export function, a tab env var, a write strategy, or
+reconciler coverage, then **DATA_FLOW_STAGING.md is updated in the same commit**,
+with the domain's per-field table. Adding a field to a payload without adding it
+there is exactly how the doc goes stale. A `/vet` on a diff that changed a data path
+and left the staging doc untouched is a finding.
+
+### On a `staging -> main` promotion
+
+1. **Diff the surface.** For everything in the promotion, list what changed in:
+   queue keys, drain functions and their triggers, debounce timings, endpoints,
+   Sheet export functions, tab env vars, write strategy (append vs replace), and
+   reconciler coverage. Check it against what DATA_FLOW_STAGING.md claims; a gap
+   means somebody skipped the same-commit rule and the doc is under-reporting.
+2. **Reconcile the field tables.** Every new or changed payload field appears in
+   the right domain table with an accurate `[x]` / `[ ]` / `[-]` mark. A field
+   marked `[x]` means you traced it device to Postgres to Sheet, not that you
+   assumed it.
+3. **Fold the delta up.** Merge each DATA_FLOW_STAGING.md section into the matching
+   place in DATA_FLOW.md: new domains become new sections, changed rows are edited
+   in place, new deviations join the Deviations list.
+4. **Empty DATA_FLOW_STAGING.md** back to its skeleton and reset its "Verified
+   against" to the new `main`. Anything deliberately not folded up stays, with a
+   written reason. An entry left there without one is a lie about what is unreleased.
+5. **Re-check the Deviations list.** Anything fixed comes out; anything newly
+   found goes in and also into Known defects in [RUNBOOKS.md](RUNBOOKS.md).
+6. **Bump DATA_FLOW.md's "Verified against" block** to the commit being promoted,
+   with the date and whether it was verified by reading or by exercising the app.
+
+### Blocking conditions
+
+A new staging data flow that does not pass **blocks the merge**. It is not a
+follow-up and it does not ride along to be fixed later. Report each as Critical or
+High in the findings table, never Med/Low.
+
+A flow passes when every field in its table is `[x]` or `[-]` and it does what its
+flow class promises. These stop a promotion:
+
+1. **Any `[ ]` in DATA_FLOW_STAGING.md.** A field that does not complete its path is
+   data the app collects and then loses. Promoting it puts that loss in front of
+   crews.
+2. **Any entry under "Deviations new on staging".** A new path that does not honor
+   its class's contract, most often ADR 0013's never-delete-queued-work rule.
+3. **A data path changed in the promotion diff but absent from the staging doc.**
+   You cannot vet what was never logged. Treat it as failing until it is written up,
+   then vet it on its merits.
+
+**Inherited deviations do not block.** Anything `main` already carries and
+[RUNBOOKS.md](RUNBOOKS.md) already lists under Known defects is pre-existing;
+promoting it changes nothing about production. Only deviations **introduced on
+staging** stop a merge. Do not let a long-standing known defect hold a promotion
+hostage, and do not let a new one through because the list looks similar.
+
+**Clearing a blocker** takes one of two things: fix it, or an explicit written waiver
+from the user recorded in DATA_FLOW_STAGING.md with the reason. An agent cannot waive
+its own finding, and silence is not a waiver. A stale or under-reported doc is itself
+a blocker, because the whole point is that a successor can trust it without
+re-deriving it.
+
+## Run the mechanical gate first
+
+```
+python scripts/promotion_gate.py --base-ref origin/main
+```
+
+Duplicate ADR numbers, a split migration chain, `[ ]` fields and open deviations
+in DATA_FLOW_STAGING.md are all machine-checkable, and CI runs the same script on
+every PR into `main` (see "Promotion gate" in [RUNBOOKS.md](RUNBOOKS.md)). Clear
+those before spending a human pass on the checks below, and do not mistake a
+green gate for a vet: everything that actually matters in this document is still
+unautomated and still yours to check.
 
 ## Standard evidence toolkit
 
@@ -221,6 +307,13 @@ write to distinct worksheets; re-submits don't accumulate rows.
   a new sync missing from the registry is a finding. The check also flags syncs
   whose `SHEETS_*_TAB` env var is unset (using the default tab - on staging that
   silently targets the prod worksheet) and any sync with a recent export error.
+- **Data integrity (run before every promotion):** run
+  `backend/scripts/sheet_integrity_check.py` against prod and confirm **zero
+  FAILs** - duplicate keys, an overwritten KEY column, or junk tabs. It re-derives
+  each tab from the code's own `*_HEADERS`, so a column this change adds is covered
+  automatically; WARNs about not-yet-promoted columns are expected pre-promotion.
+  This is the "is the data clean" companion to the "is the sync working" health
+  check above.
 
 ## Core Behavior 4 - Crew auth stays intact
 

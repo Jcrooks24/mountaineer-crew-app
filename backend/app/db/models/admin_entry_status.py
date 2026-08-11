@@ -1,12 +1,18 @@
 """
 AdminEntryStatus model.
 
-Tracks admin "I've reviewed and entered this job's data into our books"
-checkpoints. One row per job_uuid; updated when admin saves their initials
-and the date on the Job Summary view.
+Tracks the admin's per-job sign-off. Under ADR 0032 the initials are a
+three-part attestation, not just "I typed this into a spreadsheet":
+
+  validated           I reviewed this job's record.
+  corrected           I made any needed hour corrections (or there were none).
+  confirmed_in_sheet  I confirmed the row landed in the Google Sheet.
+
+One row per job_uuid; updated when the admin saves on the Job Summary view.
+Saving is what fires the per-job correction emails to affected crew.
 """
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from app.db.session import Base
 
 
@@ -22,6 +28,13 @@ class AdminEntryStatus(Base):
     # ISO YYYY-MM-DD; stored as Text so it round-trips into the sheet column
     # untouched (no naive→aware datetime conversions).
     entered_on = Column(String, nullable=False)
+
+    # The three-part attestation (ADR 0032). Nullable in the column for the
+    # migration backfill; the API requires all three true before it will record
+    # initials, so a live row always has them set.
+    validated = Column(Boolean, nullable=True)
+    corrected = Column(Boolean, nullable=True)
+    confirmed_in_sheet = Column(Boolean, nullable=True)
 
     updated_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_by_name = Column(String, nullable=True)

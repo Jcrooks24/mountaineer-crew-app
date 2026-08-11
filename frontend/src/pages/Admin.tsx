@@ -1,7 +1,10 @@
-import { Children, Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
+import { getCompanyInfoCached, setCompanyInfoCache, type CompanyInfo } from "../lib/companyInfo";
+import { useJobTypes } from "../lib/jobTypesStore";
+import { newClaimNumber } from "../lib/incidentStore";
 
 const ADMIN_API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 import { useAuth } from "../auth/AuthContext";
@@ -26,6 +29,9 @@ import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePa
 import EstimatorTab from "../components/EstimatorTab";
 import { FURNITURE_CATALOG } from "../data/furnitureCatalog";
 import OfficeHoursPanel from "./OfficeHours";
+import PayrollTool from "../components/PayrollTool";
+import DqFilesTab from "../components/DqFilesTab";
+import DqDocTypesCard from "../components/DqDocTypesCard";
 import { roundBillableQuarter } from "../components/JobReport";
 import {
   formatMountainDate,
@@ -79,7 +85,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents";
+type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents" | "payroll" | "dq";
 
 const TAB_TITLES: Record<Tab, string> = {
   map: "Admin Dashboard",
@@ -89,6 +95,8 @@ const TAB_TITLES: Record<Tab, string> = {
   notes: "Notes",
   summary: "Job Summary",
   office: "Office Hours",
+  payroll: "Payroll",
+  dq: "DQ Files",
   settings: "Settings",
   advanced: "Advanced Settings",
   appearance: "Theme & Appearance",
@@ -102,6 +110,8 @@ export default function Admin() {
   const nav = useNavigate();
   // The Map is the dashboard home; every other tool opens as a sub-view.
   const [tab, setTab] = useState<Tab>("map");
+  // A job_uuid to open in the Job Summary tab (deep-link from payroll pending list).
+  const [summaryDeepLink, setSummaryDeepLink] = useState<string | null>(null);
 
   // Desktop mode widens the outer container so tables, calendars, and
   // wide tools stop being squeezed by the mobile-first 860px cap. Persists
@@ -186,27 +196,35 @@ export default function Admin() {
         </div>
       </div>
 
-      {tab === "map" && (
-        <>
-          <AdminToolMenu onPick={setTab} />
-          <MapTab />
-        </>
-      )}
-      {tab === "employees" && <EmployeesTab />}
-      {tab === "dvir" && <DVIRTab />}
-      {tab === "estimator" && <EstimatorTab />}
-      {tab === "notes" && <NotesTab />}
-      {tab === "summary" && <JobSummaryTab />}
-      {tab === "office" && <OfficeHoursPanel />}
-      {tab === "incidents" && <IncidentsAdminTab />}
-      {tab === "settings" && (
-        <SettingsTab
-          onOpenAdvanced={() => setTab("advanced")}
-          onOpenAppearance={() => setTab("appearance")}
-        />
-      )}
-      {tab === "advanced" && <AdvancedSettingsPage />}
-      {tab === "appearance" && <ThemeAppearancePage />}
+      {/* Mobile: a persistent horizontal tab nav so admin can jump between
+          sections from anywhere (desktop uses the left sidebar below). */}
+      {!desktopMode && <AdminMobileNav current={tab} onPick={setTab} />}
+
+      {/* Desktop: persistent left sidebar + content. Mobile: the drill-in
+          tool menu (rendered inside the map tab) with a back button. */}
+      <div style={desktopMode ? { display: "flex", gap: 16, alignItems: "flex-start" } : undefined}>
+        {desktopMode && <AdminSidebar current={tab} onPick={setTab} />}
+        <div style={desktopMode ? { flex: 1, minWidth: 0 } : undefined}>
+          {tab === "map" && <MapTab />}
+          {tab === "employees" && <EmployeesTab />}
+          {tab === "dvir" && <DVIRTab />}
+          {tab === "estimator" && <EstimatorTab />}
+          {tab === "notes" && <NotesTab />}
+          {tab === "summary" && <JobSummaryTab openJobUuid={summaryDeepLink} onOpened={() => setSummaryDeepLink(null)} />}
+          {tab === "office" && <OfficeHoursPanel />}
+          {tab === "payroll" && <PayrollTool onOpenJob={(u) => { setSummaryDeepLink(u); setTab("summary"); }} />}
+          {tab === "dq" && <DqFilesTab />}
+          {tab === "incidents" && <IncidentsAdminTab />}
+          {tab === "settings" && (
+            <SettingsTab
+              onOpenAdvanced={() => setTab("advanced")}
+              onOpenAppearance={() => setTab("appearance")}
+            />
+          )}
+          {tab === "advanced" && <AdvancedSettingsPage />}
+          {tab === "appearance" && <ThemeAppearancePage />}
+        </div>
+      </div>
     </div>
     </>
   );
@@ -269,53 +287,109 @@ function DesktopModeToggle({
   );
 }
 
-// Dashboard home menu - list-style links to each admin tool. The Map is the
-// home itself, so it isn't listed here.
-function AdminToolMenu({ onPick }: { onPick: (t: Tab) => void }) {
-  const tools: { tab: Tab; label: string; hint: string }[] = [
-    { tab: "employees", label: "Employees",    hint: "Crew access and roles" },
-    { tab: "dvir",      label: "DVIR Review",  hint: "Mechanic sign-off on inspections" },
-    { tab: "estimator", label: "Estimator",    hint: "Build and price estimates" },
-    { tab: "notes",     label: "Patch Notes",  hint: "Publish app update notes to the crew" },
-    { tab: "summary",   label: "Job Summary",  hint: "Every source for a job, one page" },
-    { tab: "office",    label: "Office Hours", hint: "Office time tracking" },
-    { tab: "incidents", label: "Incidents",    hint: "Crew-reported incident log" },
-    { tab: "settings",  label: "Settings",     hint: "Theme, field config, and advanced options" },
-  ];
+// Admin tabs, shared by the desktop sidebar and the persistent mobile pill nav
+// (AdminMobileNav). The Map tab is the home dashboard.
+// Desktop admin sidebar: 200px, left-border active nav (design system). Shown
+// only in desktopMode; mobile uses the persistent AdminMobileNav pill bar.
+const ADMIN_TAB_ITEMS: { tab: Tab; label: string }[] = [
+  { tab: "map", label: "Map" },
+  { tab: "employees", label: "Employees" },
+  { tab: "dvir", label: "DVIR Review" },
+  { tab: "estimator", label: "Estimator" },
+  { tab: "notes", label: "Patch Notes" },
+  { tab: "summary", label: "Job Summary" },
+  { tab: "office", label: "Office Hours" },
+  { tab: "payroll", label: "Payroll" },
+  { tab: "dq", label: "DQ Files" },
+  { tab: "incidents", label: "Incidents" },
+  { tab: "settings", label: "Settings" },
+];
+
+function adminTabActive(current: Tab, t: Tab): boolean {
+  return current === t || (t === "settings" && (current === "advanced" || current === "appearance"));
+}
+
+// Persistent horizontal nav for the admin console on mobile (desktop uses the
+// left sidebar). Without this, mobile admin could only switch tabs by backing
+// out to the tool menu each time.
+function AdminMobileNav({ current, onPick }: { current: Tab; onPick: (t: Tab) => void }) {
   return (
-    <div className="card">
-      <div className="sectionTitle">Tools</div>
-      <div className="col" style={{ gap: 8 }}>
-        {tools.map((t) => (
+    <nav
+      aria-label="Admin sections"
+      style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingBottom: 8, marginBottom: 12 }}
+    >
+      {ADMIN_TAB_ITEMS.map((t) => {
+        const active = adminTabActive(current, t.tab);
+        return (
           <button
             key={t.tab}
+            type="button"
+            aria-current={active ? "page" : undefined}
             onClick={() => onPick(t.tab)}
             style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-              gap: 12, width: "100%", textAlign: "left",
-              padding: "11px 14px", fontSize: 14, fontWeight: 600,
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid var(--border)",
+              flex: "0 0 auto", padding: "6px 12px", borderRadius: 999, fontSize: 13, whiteSpace: "nowrap", cursor: "pointer",
+              border: active ? "1px solid var(--brand)" : "1px solid var(--border)",
+              background: active ? "var(--brand)" : "var(--card)",
+              color: active ? "var(--on-brand)" : "var(--text)", fontWeight: active ? 700 : 500,
             }}
           >
-            <span className="col" style={{ gap: 2 }}>
-              <span>{t.label}</span>
-              <span className="small" style={{ color: "var(--muted)" }}>{t.hint}</span>
-            </span>
-            <span style={{ color: "var(--muted)", fontSize: 16, flexShrink: 0 }}>›</span>
+            {t.label}
           </button>
-        ))}
-      </div>
-    </div>
+        );
+      })}
+    </nav>
   );
 }
 
+function AdminSidebar({ current, onPick }: { current: Tab; onPick: (t: Tab) => void }) {
+  const items = ADMIN_TAB_ITEMS;
+  return (
+    <nav
+      style={{
+        width: 200, flexShrink: 0, alignSelf: "flex-start",
+        background: "var(--card)", border: "1px solid var(--border)", borderRadius: 4, overflow: "hidden",
+      }}
+    >
+      {items.map((t) => {
+        const active =
+          current === t.tab || (t.tab === "settings" && (current === "advanced" || current === "appearance"));
+        return (
+          <button
+            key={t.tab}
+            type="button"
+            aria-current={active ? "page" : undefined}
+            onClick={() => onPick(t.tab)}
+            style={{
+              display: "block", width: "100%", textAlign: "left",
+              padding: "10px 14px", fontSize: 14, fontWeight: active ? 600 : 500,
+              background: active ? "var(--card2)" : "transparent",
+              color: active ? "var(--brand)" : "var(--text)",
+              border: "none", borderLeft: active ? "3px solid var(--brand)" : "3px solid transparent",
+              borderRadius: 0, cursor: "pointer",
+            }}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+type ConvoNote = { at: string; by: string; text: string };
 type AdminIncident = {
   id: number; incident_uuid: string; job_uuid: string | null; job_name: string | null;
   incident_date: string | null; reported_by_name: string | null; attributed_crew: string | null;
   severity: string; attributable: string; description: string; est_cost: number | null;
-  resolved: boolean; notes: string | null; photo_urls: string[]; created_at: string;
+  resolved: boolean; status: string; settled_amount: number | null; conversation_log: ConvoNote[];
+  notes: string | null; photo_urls: string[]; created_at: string;
 };
+
+const INCIDENT_STATUS_OPTS = [
+  { value: "", label: "No status" },
+  { value: "pending", label: "Needs action" },
+  { value: "resolved", label: "Resolved" },
+];
 
 // Admin log of crew-reported incidents. Read + resolve/reopen + edit notes/cost.
 function IncidentsAdminTab() {
@@ -323,18 +397,58 @@ function IncidentsAdminTab() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
-  const [showResolved, setShowResolved] = useState(true);
+  const [filter, setFilter] = useState<"all" | "" | "pending" | "resolved">("all");
+  const [noteDraft, setNoteDraft] = useState<Record<number, string>>({});
 
-  useEffect(() => {
-    let cancelled = false;
+  // File-an-incident form (admin can log a billing dispute / claim that no crew
+  // member reported through the app).
+  const [showNew, setShowNew] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const blankNew = { job_name: "", incident_date: "", severity: "minor", description: "", est_cost: "", attributed_crew: "" };
+  const [nc, setNc] = useState({ ...blankNew });
+
+  const reload = useCallback(() => {
+    setLoading(true);
     apiFetch<AdminIncident[]>("/api/admin/incidents")
-      .then((r) => { if (!cancelled) setIncidents(r); })
-      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .then((r) => setIncidents(r))
+      .catch((e) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
   }, []);
+  useEffect(() => { reload(); }, [reload]);
 
-  async function patch(inc: AdminIncident, body: Partial<Pick<AdminIncident, "resolved" | "notes" | "est_cost">>) {
+  async function fileIncident() {
+    if (!nc.description.trim()) {
+      alert("Add a description of the claim.");
+      return;
+    }
+    setCreating(true);
+    try {
+      const incidentUuid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      await apiFetch("/api/incidents", {
+        method: "POST",
+        body: JSON.stringify({
+          incident_uuid: incidentUuid,
+          // Auto-generated, unique, same format the crew flow uses - no manual entry.
+          claim_number: newClaimNumber(nc.incident_date || null, incidentUuid),
+          job_name: nc.job_name.trim() || null,
+          incident_date: nc.incident_date || null,
+          severity: nc.severity,
+          description: nc.description.trim(),
+          est_cost: nc.est_cost ? Number(nc.est_cost) : null,
+          attributed_crew: nc.attributed_crew.trim() || null,
+        }),
+      });
+      setNc({ ...blankNew });
+      setShowNew(false);
+      reload();
+    } catch (e: any) {
+      alert(e instanceof ApiError ? e.message : "Could not file the incident.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function patch(inc: AdminIncident, body: Record<string, any>) {
     setBusy(inc.id);
     try {
       const updated = await apiFetch<AdminIncident>(`/api/admin/incidents/${inc.id}`, {
@@ -346,21 +460,83 @@ function IncidentsAdminTab() {
     } finally { setBusy(null); }
   }
 
-  const shown = incidents.filter((i) => showResolved || !i.resolved);
-  const openCount = incidents.filter((i) => !i.resolved).length;
+  async function addNote(inc: AdminIncident) {
+    const text = (noteDraft[inc.id] || "").trim();
+    if (!text) return;
+    await patch(inc, { add_note: text });
+    setNoteDraft((prev) => ({ ...prev, [inc.id]: "" }));
+  }
+
+  const shown = incidents.filter((i) => filter === "all" || (i.status || "") === filter);
+  const pendingCount = incidents.filter((i) => (i.status || "") === "pending").length;
+  const noStatusCount = incidents.filter((i) => !(i.status || "")).length;
 
   return (
     <div className="card">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <div className="sectionTitle" style={{ marginBottom: 0 }}>Incidents</div>
-        <label className="row small" style={{ gap: 6, alignItems: "center", cursor: "pointer" }}>
-          <input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} style={{ accentColor: "var(--brand)" }} />
-          Show resolved
-        </label>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Incidents</div>
+        <select value={filter} onChange={(e) => setFilter(e.target.value as any)} style={{ width: "auto", fontSize: 13, padding: "4px 8px" }}>
+          <option value="all">All</option>
+          <option value="pending">Needs action</option>
+          <option value="">No status</option>
+          <option value="resolved">Resolved</option>
+        </select>
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 12 }}>
-        {openCount} open · {incidents.length} total. Also exported to the Incidents sheet tab.
+        {pendingCount} need action · {noStatusCount} unset · {incidents.length} total. Also exported to the Incidents sheet tab.
       </div>
+
+      {/* File a new incident (a billing dispute / claim the office is tracking,
+          not something a crew member reported through the app). */}
+      {!showNew ? (
+        <button type="button" onClick={() => setShowNew(true)} style={{ fontSize: 13, marginBottom: 12 }}>
+          + File an incident
+        </button>
+      ) : (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <div className="microLabel" style={{ marginBottom: 10 }}>File an incident</div>
+          <div className="row wrap" style={{ gap: 10 }}>
+            <label className="col" style={{ gap: 2, flex: "1 1 140px" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Claim number</span>
+              <input value="Auto-generated on file" disabled style={{ color: "var(--muted)", fontStyle: "italic" }} />
+            </label>
+            <label className="col" style={{ gap: 2, flex: "1 1 160px" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Job / customer</span>
+              <input value={nc.job_name} onChange={(e) => setNc((v) => ({ ...v, job_name: e.target.value }))} placeholder="Customer or job name" />
+            </label>
+            <label className="col" style={{ gap: 2, width: 150 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Date</span>
+              <input type="date" value={nc.incident_date} onChange={(e) => setNc((v) => ({ ...v, incident_date: e.target.value }))} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 130 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Severity</span>
+              <select value={nc.severity} onChange={(e) => setNc((v) => ({ ...v, severity: e.target.value }))} style={{ fontSize: 13 }}>
+                <option value="minor">Minor</option>
+                <option value="moderate">Moderate</option>
+                <option value="major">Major</option>
+              </select>
+            </label>
+            <label className="col" style={{ gap: 2, width: 120 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Est. cost ($)</span>
+              <input inputMode="decimal" value={nc.est_cost} onChange={(e) => setNc((v) => ({ ...v, est_cost: e.target.value }))} placeholder="0" />
+            </label>
+            <label className="col" style={{ gap: 2, flex: "1 1 160px" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Attributed crew (optional)</span>
+              <input value={nc.attributed_crew} onChange={(e) => setNc((v) => ({ ...v, attributed_crew: e.target.value }))} placeholder="Name(s)" />
+            </label>
+          </div>
+          <label className="col" style={{ gap: 2, marginTop: 10 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>What happened</span>
+            <textarea rows={3} value={nc.description} onChange={(e) => setNc((v) => ({ ...v, description: e.target.value }))} placeholder="Details of the dispute / claim / damage" style={{ width: "100%", resize: "vertical" }} />
+          </label>
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <button type="button" className="btnPrimary" onClick={fileIncident} disabled={creating} style={{ fontSize: 13 }}>
+              {creating ? "Filing…" : "File incident"}
+            </button>
+            <button type="button" onClick={() => { setShowNew(false); setNc({ ...blankNew }); }} disabled={creating} style={{ fontSize: 13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
@@ -372,10 +548,17 @@ function IncidentsAdminTab() {
         <div className="col" style={{ gap: 10 }}>
           {shown.map((inc) => {
             const color = inc.severity === "major" ? "var(--danger)" : inc.severity === "moderate" ? "var(--warn)" : "var(--ok)";
+            const st = inc.status || "";
+            const statusColor = st === "resolved" ? "var(--ok)" : st === "pending" ? "var(--warn)" : "var(--muted)";
             return (
-              <div key={inc.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, opacity: inc.resolved ? 0.6 : 1 }}>
+              <div key={inc.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, opacity: st === "resolved" ? 0.7 : 1 }}>
                 <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{inc.severity}</span>
+                  <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color }}>{inc.severity}</span>
+                    <span className="statusDot" style={{ ["--dot" as any]: statusColor, fontSize: 11 }}>
+                      {INCIDENT_STATUS_OPTS.find((o) => o.value === st)?.label || "No status"}
+                    </span>
+                  </div>
                   <span className="small" style={{ color: "var(--muted)" }}>{inc.incident_date || inc.created_at.slice(0, 10)}</span>
                 </div>
                 <div style={{ fontSize: 14, marginTop: 4 }}>{inc.description}</div>
@@ -384,15 +567,62 @@ function IncidentsAdminTab() {
                     inc.job_name ? `Job: ${inc.job_name}` : null,
                     inc.attributed_crew ? `Attributed: ${inc.attributed_crew}` : null,
                     `Attributable: ${inc.attributable}`,
-                    inc.est_cost != null ? `Est. $${inc.est_cost}` : null,
+                    inc.est_cost != null ? `Est. $${inc.est_cost.toLocaleString()}` : null,
+                    inc.settled_amount != null ? `Settled $${inc.settled_amount.toLocaleString()}` : null,
                     inc.reported_by_name ? `by ${inc.reported_by_name}` : null,
                   ].filter(Boolean).join(" · ")}
                 </div>
                 {inc.notes && <div className="small" style={{ marginTop: 4 }}>Notes: {inc.notes}</div>}
-                <div className="row" style={{ gap: 6, marginTop: 8 }}>
-                  <button disabled={busy === inc.id} onClick={() => patch(inc, { resolved: !inc.resolved })}
-                    style={{ fontSize: 12, padding: "4px 12px" }}>
-                    {inc.resolved ? "Reopen" : "Mark resolved"}
+
+                <div className="row wrap" style={{ gap: 10, marginTop: 10, alignItems: "center" }}>
+                  <label className="row small" style={{ gap: 4, alignItems: "center" }}>
+                    <span style={{ color: "var(--muted)" }}>Status</span>
+                    <select value={st} disabled={busy === inc.id} onChange={(e) => patch(inc, { status: e.target.value })}
+                      style={{ width: "auto", fontSize: 13, padding: "4px 8px" }}>
+                      {INCIDENT_STATUS_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="row small" style={{ gap: 4, alignItems: "center" }}>
+                    <span style={{ color: "var(--muted)" }}>Settled $</span>
+                    <input
+                      type="number" defaultValue={inc.settled_amount ?? ""} placeholder="0" disabled={busy === inc.id}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim();
+                        const n = v === "" ? null : Number(v);
+                        if (n !== (inc.settled_amount ?? null)) patch(inc, { settled_amount: n });
+                      }}
+                      style={{ width: 96, fontSize: 13, padding: "4px 8px" }}
+                    />
+                  </label>
+                </div>
+
+                {inc.conversation_log.length > 0 && (
+                  <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div className="microLabel" style={{ marginBottom: 6 }}>Conversation notes</div>
+                    <div className="col" style={{ gap: 6 }}>
+                      {inc.conversation_log.map((c, ci) => (
+                        <div key={ci} className="small">
+                          <span style={{ color: "var(--muted)" }}>
+                            {c.at ? new Date(c.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}
+                            {c.by ? ` · ${c.by}` : ""}:
+                          </span>{" "}
+                          {c.text}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="row" style={{ gap: 6, marginTop: 8, alignItems: "center" }}>
+                  <input
+                    value={noteDraft[inc.id] ?? ""}
+                    onChange={(e) => setNoteDraft((prev) => ({ ...prev, [inc.id]: e.target.value }))}
+                    placeholder="Add a conversation / resolution note…"
+                    disabled={busy === inc.id}
+                    onKeyDown={(e) => { if (e.key === "Enter") addNote(inc); }}
+                    style={{ flex: "1 1 auto", fontSize: 13, padding: "6px 8px" }}
+                  />
+                  <button disabled={busy === inc.id || !(noteDraft[inc.id] || "").trim()} onClick={() => addNote(inc)} style={{ fontSize: 12, padding: "4px 12px" }}>
+                    Add note
                   </button>
                 </div>
               </div>
@@ -554,19 +784,21 @@ function EmployeesTab() {
         {/* Clean, consistent ghost-pill action buttons. */}
         <style>{`
           .roster-btn { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; transition: background .12s, border-color .12s; }
-          .roster-btn:hover:not(:disabled) { background: rgba(93,214,194,0.10); border-color: var(--brand); }
+          .roster-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--brand) 10%, transparent); border-color: var(--brand); }
           .roster-btn:disabled { opacity: .45; cursor: default; }
-          .roster-btn.danger { color: var(--danger); border-color: rgba(255,107,107,0.35); }
-          .roster-btn.danger:hover:not(:disabled) { background: rgba(255,107,107,0.12); border-color: var(--danger); }
-          .roster-btn.ok { color: var(--ok); border-color: rgba(45,212,191,0.35); }
-          .roster-btn.ok:hover:not(:disabled) { background: rgba(45,212,191,0.12); border-color: var(--ok); }
+          .roster-btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+          .roster-btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: var(--danger); }
+          .roster-btn.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+          .roster-btn.ok:hover:not(:disabled) { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: var(--ok); }
+          /* Phase C data-table: row hover is a background shift only (no border/scale/shadow). */
+          .roster-table tbody tr:hover { background: var(--card2); }
         `}</style>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+        <table className="roster-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
           <thead>
-            <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+            <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--card2)" }}>
               {["Name", "Contacts", "Role", "Status", "Tags", "Actions"].map((h) => (
-                <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
+                <th key={h} className="mono" style={{ padding: "8px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600, fontSize: 11, letterSpacing: "0.03em" }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -612,11 +844,7 @@ function EmployeesTab() {
                 </td>
                 <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
                 <td style={{ padding: "10px 14px" }}>
-                  <span style={{
-                    fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
-                    background: u.is_active ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
-                    color: u.is_active ? "var(--ok)" : "var(--danger)",
-                  }}>
+                  <span className="statusDot" style={{ ["--dot" as any]: u.is_active ? "var(--ok)" : "var(--danger)", fontSize: 12 }}>
                     {u.is_active ? "Active" : "Disabled"}
                   </span>
                 </td>
@@ -636,7 +864,7 @@ function EmployeesTab() {
                               fontSize: 11, fontWeight: 700,
                               padding: "2px 8px", borderRadius: 999,
                               // Theme-text label keeps tags legible on light themes.
-                              background: "var(--tag-bg, rgba(93,214,194,0.16))",
+                              background: "var(--tag-bg, color-mix(in srgb, var(--brand) 16%, transparent))",
                               color: "var(--text)",
                               border: "1px solid var(--brand)",
                             }}
@@ -837,7 +1065,7 @@ function SkillMatrixPicker({
     <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="card" style={{ maxWidth: 520, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-        <div className="sectionTitle">Skills - {user.name || user.email}</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Skills - {user.name || user.email}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           0 = none/very poor · 5 = mastery · blank (0) = not yet assessed.
         </div>
@@ -861,7 +1089,7 @@ function SkillMatrixPicker({
                               <button key={v} type="button" onClick={() => setLevel(s.id, v)}
                                 style={{ padding: "4px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
                                   border: lvl === v ? "2px solid var(--brand)" : "1px solid var(--border)",
-                                  background: lvl === v ? "rgba(93,214,194,0.18)" : "transparent",
+                                  background: lvl === v ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                                   color: lvl === v ? "var(--brand)" : "var(--muted)" }}>
                                 {v === 0 ? "No" : "Yes"}
                               </button>
@@ -873,7 +1101,7 @@ function SkillMatrixPicker({
                               <button key={v} type="button" onClick={() => setLevel(s.id, v)}
                                 style={{ width: 28, height: 28, borderRadius: 6, fontSize: 12, cursor: "pointer",
                                   border: lvl === v ? "2px solid var(--brand)" : "1px solid var(--border)",
-                                  background: lvl === v ? "rgba(93,214,194,0.18)" : "transparent",
+                                  background: lvl === v ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                                   color: lvl === v ? "var(--brand)" : "var(--muted)", fontWeight: lvl === v ? 700 : 400 }}>
                                 {v}
                               </button>
@@ -1027,7 +1255,7 @@ function EmailAliasesPicker({
               alignItems: "center", gap: 8,
               padding: "8px 10px", borderRadius: 8,
               border: "1px solid var(--brand)",
-              background: "rgba(93,214,194,0.08)",
+              background: "color-mix(in srgb, var(--brand) 8%, transparent)",
             }}
           >
             <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{primaryEmail}</span>
@@ -1260,7 +1488,7 @@ function AvailabilityUnlocksPicker({
 
         <div style={{ height: 1, background: "var(--border)" }} />
 
-        <div className="sectionTitle" style={{ marginBottom: 0 }}>Existing unlocks</div>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Existing unlocks</div>
         {loading ? (
           <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
         ) : unlocks.length === 0 ? (
@@ -1354,8 +1582,8 @@ type MonthStatusPalette = Record<AvailabilityRangeRow["status"], StatusColor>;
 type MonthScheduledPalette = { bg: string; fg: string; label: string };
 
 const MONTH_STATUS_COLORS: MonthStatusPalette = {
-  available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
-  unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
+  available:   { bg: "color-mix(in srgb, var(--ok) 18%, transparent)",  fg: "var(--ok)",     label: "Available" },
+  unavailable: { bg: "color-mix(in srgb, var(--danger) 18%, transparent)", fg: "var(--danger)", label: "Unavailable" },
   conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
 };
 
@@ -1454,20 +1682,30 @@ function MonthScheduleView({
   // the day cell to pin it; click again to unpin.
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Pull the window's availability + scheduled blocks from the server. Runs on
+  // mount and whenever the range changes; also wired to the Refresh button so an
+  // admin can re-pull crew submissions without reloading the page. The optional
+  // `signal` lets the effect drop a stale response when the range moves mid-flight.
+  const loadRange = useCallback(async (signal?: { cancelled: boolean }) => {
     setLoading(true);
     setErr(null);
-    apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${rangeStart}&end=${rangeEnd}`)
-      .then((r) => {
-        if (cancelled) return;
-        setRows(r.days);
-        setScheduledRows(r.scheduled);
-      })
-      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    try {
+      const r = await apiFetch<AvailabilityRangeResponse>(`/api/admin/availability/range?start=${rangeStart}&end=${rangeEnd}`);
+      if (signal?.cancelled) return;
+      setRows(r.days);
+      setScheduledRows(r.scheduled);
+    } catch (e) {
+      if (!signal?.cancelled) setErr(e instanceof ApiError ? e.message : "Failed to load");
+    } finally {
+      if (!signal?.cancelled) setLoading(false);
+    }
   }, [rangeStart, rangeEnd]);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    loadRange(signal);
+    return () => { signal.cancelled = true; };
+  }, [loadRange]);
 
   const tagsById = useMemo(() => {
     const m = new Map<number, EmployeeTag>();
@@ -1683,6 +1921,25 @@ function MonthScheduleView({
           />
           <span>High contrast (saturated fills)</span>
         </label>
+        {/* Pull the latest crew availability from the server (crew submit on
+            their own devices, so the grid can be stale without a manual re-pull). */}
+        <button
+          type="button"
+          onClick={() => loadRange()}
+          disabled={loading}
+          title="Pull the latest crew availability from the server"
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "6px 14px", fontSize: 13, fontWeight: 700, borderRadius: 8,
+            cursor: loading ? "default" : "pointer",
+            border: "1px solid var(--border)",
+            background: "transparent",
+            color: "var(--text)",
+            opacity: loading ? 0.6 : 1,
+          }}
+        >
+          {loading ? "Refreshing…" : "↻ Refresh availability"}
+        </button>
         {/* Edit toggle. Off by default so tapping a cell does nothing until the
             admin opts in; on, it is clearly flagged so it is obvious the grid is
             now live. */}
@@ -1814,8 +2071,8 @@ function MonthScheduleView({
                             style={{
                               fontSize: 9,
                               color: "var(--brand)",
-                              border: "1px solid rgba(93,214,194,0.35)",
-                              background: "rgba(93,214,194,0.12)",
+                              border: "1px solid color-mix(in srgb, var(--brand) 35%, transparent)",
+                              background: "color-mix(in srgb, var(--brand) 12%, transparent)",
                               borderRadius: 3,
                               padding: "0 4px",
                               lineHeight: "13px",
@@ -1856,7 +2113,7 @@ function MonthScheduleView({
                               style={{
                                 fontSize: 9, fontWeight: 700,
                                 padding: "1px 5px", borderRadius: 3,
-                                background: "var(--tag-bg, rgba(93,214,194,0.16))",
+                                background: "var(--tag-bg, color-mix(in srgb, var(--brand) 16%, transparent))",
                                 color: "var(--text)",
                                 border: "1px solid var(--brand)",
                                 overflowWrap: "anywhere",
@@ -1905,7 +2162,7 @@ function MonthScheduleView({
                         background: isSelected
                           ? "var(--card2)"
                           : isToday
-                            ? "rgba(93,214,194,0.10)"
+                            ? "color-mix(in srgb, var(--brand) 10%, transparent)"
                             : "var(--card)",
                         borderBottom: "1px solid var(--border)",
                         borderRight: "1px solid var(--border)",
@@ -1952,7 +2209,10 @@ function MonthScheduleView({
                           style={{
                             borderBottom: "1px solid var(--border)",
                             borderRight: "1px solid var(--border)",
-                            padding: isScheduled ? "4px 6px" : 0,
+                            // Taller tap target while editing (the cells are tiny
+                            // and the grid scrolls sideways, so a small target is
+                            // an easy mis-tap on a phone).
+                            padding: isScheduled ? "4px 6px" : (editMode ? "12px 6px" : 0),
                             minHeight: 26,
                             background: cellBg,
                             cursor: cellBusy === `${u.id}:${dIso}`
@@ -2109,7 +2369,7 @@ function MonthScheduleView({
           submitted availability for the visible window so admin knows who to
           nudge. No em dashes (per house style). */}
       <div className="card">
-        <div className="sectionTitle">Availability reminder</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Availability reminder</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
           Copy this into Google Voice to remind crew to set their availability.
         </div>
@@ -2226,7 +2486,7 @@ function EmployeeTagsPicker({
                   onClick={() => toggle(t.id)}
                   style={{
                     fontSize: 13, padding: "6px 12px", borderRadius: 999,
-                    background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                    background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                     color: on ? "var(--brand)" : "var(--text)",
                     border: `1px solid ${on ? "var(--brand)" : "var(--border)"}`,
                     fontWeight: 600, cursor: "pointer",
@@ -2423,7 +2683,7 @@ function MapTab() {
                 onClick={() => toggleJob(j.uuid)}
                 style={{
                   fontSize: 11, padding: "3px 9px", borderRadius: 999,
-                  background: active ? "rgba(93,214,194,0.15)" : "rgba(255,255,255,0.04)",
+                  background: active ? "color-mix(in srgb, var(--brand) 15%, transparent)" : "rgba(255,255,255,0.04)",
                   border: `1px solid ${active ? "var(--brand)" : "var(--border)"}`,
                   color: active ? "var(--brand)" : "var(--muted)",
                   fontWeight: 600, cursor: "pointer",
@@ -2509,12 +2769,12 @@ function CalendarTab() {
     <div>
       {/* Status card */}
       <div className="card">
-        <div className="sectionTitle">Google Calendar OAuth</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Google Calendar OAuth</div>
 
         <div className="row" style={{ marginBottom: 12 }}>
           <span style={{
             fontSize: 12, fontWeight: 700, padding: "4px 10px", borderRadius: 999,
-            background: status?.ok && status?.valid ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+            background: status?.ok && status?.valid ? "color-mix(in srgb, var(--ok) 15%, transparent)" : "color-mix(in srgb, var(--danger) 15%, transparent)",
             color: statusColor,
           }}>
             {statusLabel}
@@ -2537,7 +2797,7 @@ function CalendarTab() {
 
       {/* Update token card */}
       <div className="card">
-        <div className="sectionTitle">Update OAuth Token</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Update OAuth Token</div>
         <p className="small" style={{ marginBottom: 12 }}>
           If the calendar stops working, regenerate <code>token.json</code> locally then paste its contents below.
           This saves the token to the database so it persists across restarts.
@@ -2586,6 +2846,19 @@ function SettingsTab({
 }) {
   return (
     <div>
+      <CollapsibleSection title="Company info"><CompanyInfoCard /></CollapsibleSection>
+      <CollapsibleSection title="Payroll rates"><PayrollRatesCard /></CollapsibleSection>
+      <CollapsibleSection title="Vehicle units"><VehicleUnitsCard /></CollapsibleSection>
+      <CollapsibleSection title="Employee tags"><EmployeeTagsManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Job types"><JobTypesManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Job checklist"><JobChecklistCard /></CollapsibleSection>
+      <CollapsibleSection title="DQ document types"><DqDocTypesCard /></CollapsibleSection>
+      <CollapsibleSection title="Crew skills"><SkillsManagerCard /></CollapsibleSection>
+      <CollapsibleSection title="Furniture catalogue"><FurnitureCatalogCard /></CollapsibleSection>
+      <CollapsibleSection title="App communication"><AppCommunicationCard /></CollapsibleSection>
+      <CollapsibleSection title="Help text"><HelpTextCard /></CollapsibleSection>
+      {/* Theme + Advanced live at the very bottom - they're rarely-touched,
+          full-screen sub-pages, not day-to-day field config. */}
       <SettingsNavCard
         title="Theme & Appearance"
         desc="Theme templates, colors, fonts, button style, and map pins."
@@ -2598,12 +2871,6 @@ function SettingsTab({
         action="Open Advanced Settings →"
         onClick={onOpenAdvanced}
       />
-      <DVIRUnitsCard />
-      <EmployeeTagsManagerCard />
-      <JobTypesManagerCard />
-      <SkillsManagerCard />
-      <FurnitureCatalogCard />
-      <HelpTextCard />
     </div>
   );
 }
@@ -2728,7 +2995,7 @@ function EmployeeTagsManagerCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Employee Tags</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Employee Tags</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Tag list shown when assigning tags on the Employees tab (e.g. Driver,
         Has CC, Tier I). Renaming a tag updates it everywhere it's already
@@ -2884,7 +3151,7 @@ function JobTypesManagerCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Job Types</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Job Types</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         The "Job type" tags crew pick on the Job Report. These also drive which
         skills are shown to rate on a job (Crew Skills). Deactivate to hide a
@@ -3061,7 +3328,7 @@ function FurnitureCatalogCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Furniture Catalog</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Furniture Catalog</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Maintain the catalog in a spreadsheet: <strong>Export CSV</strong>, fill in
         dimensions and other data, then <strong>Upload CSV</strong> to push it back.
@@ -3214,7 +3481,7 @@ function SkillsManagerCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Crew Skills</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Crew Skills</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         The skill types crew get rated on. "Core" skills are rated on every job;
         others only appear on the Job Report when the job's type matches. Set
@@ -3269,7 +3536,7 @@ function SkillsManagerCard() {
                 <button key={label} type="button" onClick={() => setNewBinary(bin)}
                   style={{ padding: "3px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
                     border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                    background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                    background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                     color: on ? "var(--brand)" : "var(--muted)" }}>
                   {label}
                 </button>
@@ -3308,7 +3575,7 @@ function SkillsManagerCard() {
                         fontSize: 12,
                         cursor: "pointer",
                         border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                        background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                        background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                         color: on ? "var(--brand)" : "var(--muted)",
                       }}
                     >
@@ -3361,7 +3628,7 @@ function SkillEditModal({
     <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
       <div className="card" style={{ maxWidth: 460, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-        <div className="sectionTitle">Edit skill</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Edit skill</div>
         <div className="col" style={{ gap: 10 }}>
           <label className="col" style={{ gap: 4 }}>
             <span className="small" style={{ color: "var(--muted)" }}>Name</span>
@@ -3393,7 +3660,7 @@ function SkillEditModal({
                   <button key={t} type="button" onClick={() => toggleRel(t)}
                     style={{ padding: "4px 10px", borderRadius: 99, fontSize: 12, cursor: "pointer",
                       border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                      background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                       color: on ? "var(--brand)" : "var(--text)" }}>
                     {t}
                   </button>
@@ -3428,7 +3695,7 @@ function SettingsNavCard({
 }) {
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div className="sectionTitle" style={{ marginBottom: 0 }}>{title}</div>
+      <div className="microLabel" style={{ marginBottom: 0 }}>{title}</div>
       <div className="small" style={{ color: "var(--muted)" }}>{desc}</div>
       <button
         onClick={onClick}
@@ -3545,7 +3812,7 @@ function ThemeAppearancePage() {
     <div>
       {/* ── Theme templates ── */}
       <div className="card">
-        <div className="sectionTitle">Theme Template</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Theme Template</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
           {Object.entries(THEME_PRESETS).map(([id, p]) => {
             const active = !activeCustomId && settings.themeId === id;
@@ -3673,7 +3940,7 @@ function ThemeAppearancePage() {
 
       {/* ── Text contrast + logo variant ── */}
       <div className="card">
-        <div className="sectionTitle">Text Color</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Text Color</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Override body text for readability on customized themes.
         </div>
@@ -3707,7 +3974,7 @@ function ThemeAppearancePage() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">Logo Variant</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Logo Variant</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           "Auto" picks the light logo for dark themes and the dark logo for the
           Light preset. Drop replacements at <code>frontend/src/assets/logo_light.png</code>
@@ -3741,7 +4008,7 @@ function ThemeAppearancePage() {
 
       {/* ── Button colors ── */}
       <div className="card">
-        <div className="sectionTitle">Button Colors</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Button Colors</div>
         <div className="col" style={{ gap: 16 }}>
           <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
             <div className="col" style={{ gap: 6, flex: 1, minWidth: 140 }}>
@@ -3781,7 +4048,7 @@ function ThemeAppearancePage() {
 
       {/* ── Button style ── */}
       <div className="card">
-        <div className="sectionTitle">Button Style</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Button Style</div>
         <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
           {RADIUS_OPTIONS.map((opt) => (
             <button key={opt.value} onClick={() => update({ btnRadius: opt.value })}
@@ -3800,7 +4067,7 @@ function ThemeAppearancePage() {
 
       {/* ── Button background & size ── */}
       <div className="card">
-        <div className="sectionTitle">Button Background</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Button Background</div>
         <div className="col" style={{ gap: 16 }}>
           <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
             <div className="col" style={{ gap: 6, flex: 1, minWidth: 140 }}>
@@ -3857,7 +4124,7 @@ function ThemeAppearancePage() {
 
       {/* ── Font ── */}
       <div className="card">
-        <div className="sectionTitle">Font Family</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Font Family</div>
         <div className="col" style={{ gap: 10 }}>
           {FONT_OPTIONS.map((opt) => {
             const active = settings.fontValue === opt.value;
@@ -3880,7 +4147,7 @@ function ThemeAppearancePage() {
 
       {/* ── Appearance ── */}
       <div className="card">
-        <div className="sectionTitle">Appearance</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Appearance</div>
         <div className="col" style={{ gap: 18 }}>
 
           {/* Shadow */}
@@ -3945,7 +4212,7 @@ function ThemeAppearancePage() {
 
       {/* ── Map Pins ── */}
       <div className="card">
-        <div className="sectionTitle">Map Pins</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Map Pins</div>
         <div className="col" style={{ gap: 16 }}>
 
           {/* Pin size */}
@@ -4062,7 +4329,7 @@ function SheetSyncCard() {
 
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div className="sectionTitle">Sheet Sync</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Sheet Sync</div>
       <div className="small" style={{ color: "var(--muted)" }}>
         Re-export any events that are durable in the app database but missing from the Google Sheet.
         Safe to run any time - duplicates are skipped automatically.
@@ -4131,7 +4398,7 @@ function AppHealthCard() {
 
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div className="sectionTitle">App Health</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>App Health</div>
       <div className="small" style={{ color: "var(--muted)" }}>
         Snapshot of critical functions - sync state, network, Google API access, data drift. Plain text so you can copy/paste it.
       </div>
@@ -4296,7 +4563,7 @@ function AdvancedSettingsPage() {
   return (
     <div>
       <div className="card">
-        <div className="sectionTitle">Google Calendar</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Google Calendar</div>
         <CalendarTab />
       </div>
 
@@ -4304,10 +4571,18 @@ function AdvancedSettingsPage() {
 
       <DataManagementCard />
 
-      {/* Sheet Sync and App Health moved here from the Settings tab - both
-          are admin-troubleshooting tools that don't need to surface on
-          every visit to Settings. Order: action card (Sheet Sync) before
-          read-only health snapshot, then collapsible Diagnostics. */}
+      {/* Sync & Accuracy: one group of tools that answer "is the app healthy
+          and is the Sheet an accurate mirror of the server, and fix it if not".
+          App Health now folds in a live record-drift audit, so it WARNs when the
+          Sheet is out of sync; the cards below drill into and fix that drift.
+          Order: connection + structural check, record drift + re-send, then the
+          overall health snapshot. */}
+      <div className="microLabel" style={{ margin: "18px 0 4px" }}>Sync &amp; Accuracy</div>
+      <div className="small" style={{ color: "var(--muted)", margin: "0 0 6px" }}>
+        Audit and fix app and record accuracy. App Health flags when the Sheet is
+        out of sync with the server; the tools below show what is missing and why,
+        and re-send it.
+      </div>
       <SheetSyncCard />
       <SheetSyncHealthCard />
       <SheetBackfillCard />
@@ -4415,7 +4690,7 @@ function SheetSyncHealthCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">System Check - Sheet Syncs</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>System Check - Sheet Syncs</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Verifies the Google Sheets connection and that every app→sheet sync has its
         worksheet tab and a valid config. Run this after adding a feature that
@@ -4529,6 +4804,12 @@ type BackfillRow = {
   missing_count: number;
   truncated?: boolean;
   error: string | null;
+  // Drain diagnostics: if the last export for this sync failed, that same error
+  // is why its missing records will not re-send - surfaced so a stuck record
+  // reads as "export is throwing: <reason>" instead of "re-send did nothing".
+  failing?: boolean;
+  last_error?: string | null;
+  last_error_at?: string | null;
 };
 type BackfillAudit = {
   spreadsheet_id: string;
@@ -4578,7 +4859,7 @@ function SheetBackfillCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Sheet Backfill - what never made it</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Sheet Backfill - what never made it</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Compares the database against the Sheet and lists records that were saved
         but whose sheet row is missing - usually the leftovers of a sync outage.
@@ -4621,6 +4902,12 @@ function SheetBackfillCard() {
                         <td style={{ padding: "4px 6px" }}>
                           {r.label}
                           <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{r.tab}</div>
+                          {r.failing && r.last_error && (
+                            <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 2 }}
+                              title="The export is failing, so re-sending will not land these until this is fixed.">
+                              ⚠ export failing: {r.last_error}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: "4px 6px" }}>{r.in_db ?? "-"}</td>
                         <td style={{ padding: "4px 6px", color: "var(--danger)", fontWeight: 700 }}>
@@ -4735,7 +5022,7 @@ function CrewResourcesCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Crew Resources events</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Crew Resources events</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
         Force a refresh of the daily 5–6 AM "Crew Resources" events on the
         Resources calendar. Events for today through today + N are created
@@ -4843,7 +5130,7 @@ function DiagnosticsCard() {
         }}
       >
         <div style={{ flex: 1 }}>
-          <div className="sectionTitle" style={{ marginBottom: 0 }}>Diagnostics</div>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Diagnostics</div>
           <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
             Read-only checks of integrations wired through env vars or OAuth.
             Useful when a feature looks "set up" but isn't behaving.
@@ -5030,7 +5317,7 @@ function HelpTextCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Field Help Text</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Field Help Text</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
         Placeholder and hint text shown to crew, grouped by the page it appears on.
       </div>
@@ -5102,43 +5389,71 @@ type DVIRRecord = {
 // ─────────────────────────────────────────
 // DVIR vehicle units editor
 // ─────────────────────────────────────────
-function DVIRUnitsCard() {
-  const [units, setUnits] = useState<string[]>([]);
-  const [newUnit, setNewUnit] = useState("");
+// Wraps a Settings config card in a collapsed-by-default disclosure so the
+// admin does not see every config at once. The child card keeps its own title
+// (shown when expanded); the header is the toggle.
+function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        style={{
+          width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+          background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12,
+          padding: "12px 14px", cursor: "pointer", color: "var(--text)",
+        }}
+      >
+        {/* When expanded, the card inside shows its own title, so hide the
+            header's copy (kept in layout) to avoid a duplicate; collapsed, this
+            label is the only cue to what the section is. */}
+        <span className="microLabel" style={{ marginBottom: 0, visibility: open ? "hidden" : "visible" }}>{title}</span>
+        <span
+          aria-hidden
+          style={{ color: "var(--muted)", fontSize: 20, lineHeight: 1, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}
+        >
+          ›
+        </span>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
+function CompanyInfoCard() {
+  const FIELDS: { key: keyof CompanyInfo; label: string; placeholder: string }[] = [
+    { key: "name", label: "Company name", placeholder: "Mountaineer Moving LLC" },
+    { key: "address", label: "Address", placeholder: "Street, City, ST ZIP" },
+    { key: "phone", label: "Phone", placeholder: "(406) 201-9580" },
+    { key: "email", label: "Email", placeholder: "management@mountaineermoving.com" },
+    { key: "dot", label: "U.S. DOT number", placeholder: "4557708" },
+    { key: "mc", label: "MC number", placeholder: "1811084" },
+  ];
+  const [info, setInfo] = useState<CompanyInfo>(() => getCompanyInfoCached());
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch<{ units: string[] }>("/api/admin/config/dvir-units")
-      .then((r) => setUnits(r.units))
-      .catch(() => setErr("Failed to load units"));
+    apiFetch<CompanyInfo>("/api/admin/config/company")
+      .then((r) => setInfo((prev) => ({ ...prev, ...r })))
+      .catch(() => setErr("Failed to load company info"));
   }, []);
 
-  function addUnit() {
-    const trimmed = newUnit.trim().toUpperCase();
-    if (!trimmed) return;
-    if (units.includes(trimmed)) { setErr("Unit already exists"); return; }
-    setUnits((prev) => [...prev, trimmed]);
-    setNewUnit("");
+  function set(key: keyof CompanyInfo, value: string) {
+    setInfo((prev) => ({ ...prev, [key]: value }));
     setSaved(false);
     setErr(null);
-  }
-
-  function removeUnit(unit: string) {
-    setUnits((prev) => prev.filter((u) => u !== unit));
-    setSaved(false);
   }
 
   async function save() {
-    if (units.length === 0) { setErr("At least one unit is required"); return; }
     setBusy(true);
     setErr(null);
     try {
-      await apiFetch("/api/admin/config/dvir-units", {
-        method: "PUT",
-        body: JSON.stringify({ units }),
-      });
+      await apiFetch("/api/admin/config/company", { method: "PUT", body: JSON.stringify(info) });
+      setCompanyInfoCache(info); // this device reflects the change immediately
       setSaved(true);
     } catch (e: any) {
       setErr(e?.message ?? "Save failed");
@@ -5149,62 +5464,603 @@ function DVIRUnitsCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">DVIR Vehicle Units</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Company information</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
-        Vehicle unit options shown in the DVIR form dropdown.
+        Your company details, shown as the carrier on the Bill of Lading and used
+        anywhere the company address appears. Blank fields fall back to defaults.
       </div>
-
-      {/* Current units */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
-        {units.map((u) => (
-          <span key={u} style={{
-            display: "inline-flex", alignItems: "center", gap: 6,
-            padding: "4px 10px", borderRadius: 999,
-            background: "rgba(93,214,194,0.12)", border: "1px solid var(--brand)",
-            color: "var(--brand)", fontSize: 13, fontWeight: 600,
-          }}>
-            {u}
-            <button
-              onClick={() => removeUnit(u)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14, lineHeight: 1, padding: 0 }}
-              aria-label={`Remove ${u}`}
-            >
-              ×
-            </button>
-          </span>
+      <div className="col" style={{ gap: 10 }}>
+        {FIELDS.map((f) => (
+          <label key={f.key} className="col" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>{f.label}</span>
+            <input
+              value={info[f.key] || ""}
+              onChange={(e) => set(f.key, e.target.value)}
+              placeholder={f.placeholder}
+              style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14 }}
+            />
+          </label>
         ))}
-        {units.length === 0 && (
-          <span className="small" style={{ color: "var(--muted)" }}>No units configured</span>
-        )}
+      </div>
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+      <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
+        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
+        <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save company info"}</button>
+      </div>
+    </div>
+  );
+}
+
+// Payroll reimbursement rates (2f): mileage $/mi and per-diem $/night. The
+// payroll page multiplies crew-logged miles/nights by these to show pay. 0 = not
+// set (payroll shows counts only). These are reimbursement rates, not wages
+// (ADR 0033); hourly pay stays in QuickBooks.
+// App communication (Settings): the subject and body of every email the app
+// sends. Editable ones are templates with placeholders the app fills in at send
+// time. The read-only list is here because visibility was the point: an email
+// nobody can see is the problem this screen exists to fix, and "you cannot edit
+// it" is not a reason to hide it.
+type CommPlaceholder = { name: string; description: string; sample: string; required: boolean };
+type CommTemplate = {
+  key: string; label: string; audience: string; when: string; handled_by: string;
+  editable: boolean; default_subject: string; default_body: string;
+  placeholders: CommPlaceholder[];
+  subject: string; body: string; customized: boolean;
+  preview_subject: string; preview_body: string;
+};
+type CommReadOnly = {
+  key: string; label: string; audience: string; when: string; handled_by: string;
+  why_locked: string; subject: string; body: string;
+};
+
+function AppCommunicationCard() {
+  const [templates, setTemplates] = useState<CommTemplate[]>([]);
+  const [readOnly, setReadOnly] = useState<CommReadOnly[]>([]);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Record<string, { subject: string; body: string }>>({});
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  const load = useCallback(() => {
+    apiFetch<{ templates: CommTemplate[]; read_only: CommReadOnly[] }>("/api/admin/config/app-communication")
+      .then((r) => {
+        setTemplates(r.templates || []);
+        setReadOnly(r.read_only || []);
+        setDraft(Object.fromEntries((r.templates || []).map((t) => [t.key, { subject: t.subject, body: t.body }])));
+        setLoaded(true);
+      })
+      .catch(() => { setErr("Failed to load app communication"); setLoaded(true); });
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const edit = (key: string, patch: Partial<{ subject: string; body: string }>) => {
+    setDraft((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
+    setSavedKey(null);
+    setErr(null);
+  };
+
+  async function save(t: CommTemplate) {
+    const d = draft[t.key];
+    if (!d) return;
+    setBusyKey(t.key);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/app-communication", {
+        method: "PUT",
+        body: JSON.stringify({ key: t.key, subject: d.subject, body: d.body }),
+      });
+      setSavedKey(t.key);
+      load();
+    } catch (e: any) {
+      // The server names the missing placeholder and says why it matters, so
+      // surface its message rather than a generic failure.
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function revert(t: CommTemplate) {
+    setBusyKey(t.key);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/app-communication/" + encodeURIComponent(t.key), { method: "DELETE" });
+      setSavedKey(null);
+      load();
+    } catch (e: any) {
+      setErr(e?.message ?? "Could not revert");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  if (!loaded) {
+    return (
+      <div className="card">
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      </div>
+    );
+  }
+
+  const rowBtn: React.CSSProperties = {
+    width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+    gap: 10, padding: "11px 14px", background: "transparent", border: "none",
+    color: "var(--text)", cursor: "pointer", textAlign: "left",
+  };
+  const chevron = (open: boolean) => (
+    <span aria-hidden style={{ color: "var(--muted)", fontSize: 18, flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>›</span>
+  );
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>App communication</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Every email the system sends. The wording is yours; anything in curly
+        braces is filled in by the app when it sends. Tap one to read or edit it.
       </div>
 
-      {/* Add new unit */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input
-          value={newUnit}
-          onChange={(e) => { setNewUnit(e.target.value); setErr(null); }}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addUnit(); } }}
-          placeholder="e.g. 20FORD"
-          style={{
-            flex: 1, padding: "8px 12px", borderRadius: 8,
-            border: "1px solid var(--border)", background: "var(--bg)",
-            color: "var(--text)", fontSize: 14,
-          }}
-        />
-        <button
-          onClick={addUnit}
-          style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--brand)", color: "var(--brand)", fontSize: 13, cursor: "pointer" }}
-        >
-          Add
-        </button>
+      <div className="col" style={{ gap: 8 }}>
+        {templates.map((t) => {
+          const open = openKey === t.key;
+          const d = draft[t.key] || { subject: t.subject, body: t.body };
+          const dirty = d.subject !== t.subject || d.body !== t.body;
+          return (
+            <div key={t.key} style={{ border: "1px solid var(--border)", borderRadius: 8 }}>
+              <button type="button" onClick={() => setOpenKey(open ? null : t.key)} aria-expanded={open} style={rowBtn}>
+                <span className="col" style={{ gap: 2 }}>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{t.label}</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>To: {t.audience}</span>
+                </span>
+                <span className="row" style={{ gap: 8, alignItems: "center", flexShrink: 0 }}>
+                  {t.customized && <span className="statusDot" style={{ ["--dot"]: "var(--brand)" } as React.CSSProperties}>Edited</span>}
+                  {chevron(open)}
+                </span>
+              </button>
+
+              {open && (
+                <div className="col" style={{ gap: 10, padding: "0 14px 14px" }}>
+                  <div className="small" style={{ color: "var(--muted)" }}>{t.when}</div>
+
+                  <label className="col" style={{ gap: 4 }}>
+                    <span className="microLabel" style={{ marginBottom: 0 }}>Subject</span>
+                    <input
+                      value={d.subject}
+                      onChange={(e) => edit(t.key, { subject: e.target.value })}
+                      style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14 }}
+                    />
+                  </label>
+
+                  <label className="col" style={{ gap: 4 }}>
+                    <span className="microLabel" style={{ marginBottom: 0 }}>Body</span>
+                    <textarea
+                      value={d.body}
+                      onChange={(e) => edit(t.key, { body: e.target.value })}
+                      rows={10}
+                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, fontFamily: "inherit", lineHeight: 1.5 }}
+                    />
+                  </label>
+
+                  <div className="col" style={{ gap: 4 }}>
+                    <span className="microLabel" style={{ marginBottom: 0 }}>Placeholders you can use</span>
+                    {t.placeholders.map((p) => (
+                      <div key={p.name} className="small" style={{ color: "var(--muted)" }}>
+                        <span className="mono" style={{ color: "var(--text)" }}>{"{" + p.name + "}"}</span>
+                        {p.required && <span style={{ color: "var(--danger)" }}> (required)</span>}
+                        {" " + p.description}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="col" style={{ gap: 4 }}>
+                    <span className="microLabel" style={{ marginBottom: 0 }}>
+                      {dirty ? "Preview (of the saved version - save to refresh)" : "Preview (with example data)"}
+                    </span>
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, background: "var(--card2)" }}>
+                      <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+                        Subject: <span style={{ color: "var(--text)" }}>{t.preview_subject}</span>
+                      </div>
+                      <div className="small" style={{ whiteSpace: "pre-wrap", color: "var(--text)" }}>{t.preview_body}</div>
+                    </div>
+                  </div>
+
+                  <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
+                    {savedKey === t.key && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
+                    {t.customized && (
+                      <button
+                        type="button"
+                        onClick={() => revert(t)}
+                        disabled={busyKey === t.key}
+                        style={{ fontSize: 13, background: "none", color: "var(--muted)", border: "1px solid var(--border)" }}
+                      >
+                        Revert to default
+                      </button>
+                    )}
+                    <button className="btnPrimary" onClick={() => save(t)} disabled={busyKey === t.key || !dirty}>
+                      {busyKey === t.key ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 8 }}>{err}</div>}
-      {saved && !busy && <div style={{ color: "var(--ok)", fontSize: 13, marginBottom: 8 }}>✓ Saved</div>}
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
 
-      <button className="btnPrimary" onClick={save} disabled={busy} style={{ fontSize: 13 }}>
-        {busy ? "Saving…" : "Save Units"}
-      </button>
+      {readOnly.length > 0 && (
+        <div className="col" style={{ gap: 8, marginTop: 18 }}>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Sent, but not editable here</div>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Listed so the inventory is complete. Each says why it cannot be
+            changed on this screen, and where it actually lives.
+          </div>
+          {readOnly.map((r) => {
+            const open = openKey === r.key;
+            return (
+              <div key={r.key} style={{ border: "1px solid var(--border)", borderRadius: 8 }}>
+                <button type="button" onClick={() => setOpenKey(open ? null : r.key)} aria-expanded={open} style={rowBtn}>
+                  <span className="col" style={{ gap: 2 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{r.label}</span>
+                    <span className="small" style={{ color: "var(--muted)" }}>To: {r.audience}</span>
+                  </span>
+                  {chevron(open)}
+                </button>
+                {open && (
+                  <div className="col" style={{ gap: 8, padding: "0 14px 14px" }}>
+                    <div className="small" style={{ color: "var(--muted)" }}>{r.when}</div>
+                    <div>
+                      <span className="microLabel" style={{ marginBottom: 0 }}>Handled by</span>
+                      <div className="small" style={{ color: "var(--muted)" }}>{r.handled_by}</div>
+                    </div>
+                    <div>
+                      <span className="microLabel" style={{ marginBottom: 0 }}>Why it is not editable here</span>
+                      <div className="small" style={{ color: "var(--muted)" }}>{r.why_locked}</div>
+                    </div>
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, background: "var(--card2)" }}>
+                      <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+                        Subject: <span style={{ color: "var(--text)" }}>{r.subject}</span>
+                      </div>
+                      <div className="small" style={{ whiteSpace: "pre-wrap", color: "var(--text)" }}>{r.body}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PayrollRatesCard() {
+  const [mileage, setMileage] = useState("");
+  const [perDiem, setPerDiem] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ mileage_rate: number; per_diem_rate: number }>("/api/admin/config/payroll-rates")
+      .then((r) => {
+        setMileage(String(r.mileage_rate ?? 0));
+        setPerDiem(String(r.per_diem_rate ?? 0));
+      })
+      .catch(() => setErr("Failed to load payroll rates"));
+  }, []);
+
+  async function save() {
+    const m = Number(mileage);
+    const p = Number(perDiem);
+    if (!Number.isFinite(m) || m < 0 || !Number.isFinite(p) || p < 0) {
+      setErr("Rates must be zero or a positive number.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/payroll-rates", {
+        method: "PUT",
+        body: JSON.stringify({ mileage_rate: m, per_diem_rate: p }),
+      });
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const field = (
+    label: string,
+    hint: string,
+    value: string,
+    setter: (v: string) => void,
+  ) => (
+    <label className="col" style={{ gap: 4 }}>
+      <span className="small" style={{ color: "var(--muted)" }}>{label}</span>
+      <input
+        type="number"
+        inputMode="decimal"
+        min={0}
+        step={0.01}
+        value={value}
+        onChange={(e) => { setter(e.target.value); setSaved(false); setErr(null); }}
+        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, maxWidth: 200 }}
+      />
+      <span className="small" style={{ color: "var(--muted)" }}>{hint}</span>
+    </label>
+  );
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>Payroll rates</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Standardized reimbursement rates the Payroll page uses to turn crew-logged
+        miles and out-of-town nights into pay. Leave a rate at 0 to show the count
+        only. These are reimbursement rates, not hourly wages (those stay in
+        QuickBooks).
+      </div>
+      <div className="col" style={{ gap: 12 }}>
+        {field("Mileage rate", "Dollars per mile, e.g. 0.65", mileage, setMileage)}
+        {field("Per-diem rate", "Dollars per out-of-town night, e.g. 40", perDiem, setPerDiem)}
+      </div>
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+      <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
+        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
+        <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save payroll rates"}</button>
+      </div>
+    </div>
+  );
+}
+
+// Job checklist config (C3.1): admin-editable checklist items, each manual or
+// bound to an AUTO signal, optionally limited to long-distance and/or job types.
+type ChecklistItem = { key?: string; label: string; auto_key: string; ld_only: boolean; job_types: string[] };
+
+function JobChecklistCard() {
+  const jobTypes = useJobTypes();
+  const [items, setItems] = useState<ChecklistItem[]>([]);
+  const [autoSignals, setAutoSignals] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ items: ChecklistItem[]; auto_signals: Record<string, string> }>("/api/admin/config/job-checklist")
+      .then((r) => { setItems(r.items); setAutoSignals(r.auto_signals); setLoaded(true); })
+      .catch(() => { setErr("Failed to load checklist"); setLoaded(true); });
+  }, []);
+
+  const update = (i: number, patch: Partial<ChecklistItem>) => {
+    setItems((prev) => prev.map((it, j) => (j === i ? { ...it, ...patch } : it)));
+    setSaved(false);
+  };
+  const remove = (i: number) => { setItems((prev) => prev.filter((_, j) => j !== i)); setSaved(false); };
+  const add = () => { setItems((prev) => [...prev, { label: "", auto_key: "", ld_only: false, job_types: [] }]); setSaved(false); };
+  const move = (i: number, dir: -1 | 1) => {
+    setItems((prev) => {
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = prev.slice();
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+    setSaved(false);
+  };
+  const toggleType = (i: number, t: string) =>
+    update(i, {
+      job_types: items[i].job_types.includes(t)
+        ? items[i].job_types.filter((x) => x !== t)
+        : [...items[i].job_types, t],
+    });
+
+  async function save() {
+    if (items.some((it) => !it.label.trim())) { setErr("Every item needs a label."); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/job-checklist", { method: "PUT", body: JSON.stringify({ items }) });
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>Job checklist</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        The checklist shown on a job. An item is either manual (the crew tick it)
+        or auto (it ticks itself when the app sees the thing happen). Limit an
+        item to long-distance jobs and/or specific job types. Leave job types
+        empty for every job.
+      </div>
+      {!loaded ? (
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div className="col" style={{ gap: 12 }}>
+          {items.map((it, i) => (
+            <div key={i} className="col" style={{ gap: 8, border: "1px solid var(--border)", borderRadius: 10, padding: 10 }}>
+              <div className="row" style={{ gap: 6, alignItems: "flex-start" }}>
+                <textarea
+                  rows={2}
+                  value={it.label}
+                  onChange={(e) => update(i, { label: e.target.value })}
+                  placeholder="Checklist item"
+                  style={{ flex: 1, resize: "vertical", padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 13 }}
+                />
+                <div className="col" style={{ gap: 2 }}>
+                  <button type="button" onClick={() => move(i, -1)} disabled={i === 0} title="Move up" style={{ fontSize: 12, padding: "2px 8px" }}>↑</button>
+                  <button type="button" onClick={() => move(i, 1)} disabled={i === items.length - 1} title="Move down" style={{ fontSize: 12, padding: "2px 8px" }}>↓</button>
+                </div>
+              </div>
+              <div className="row wrap" style={{ gap: 10, alignItems: "center" }}>
+                <label className="col" style={{ gap: 2 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Auto-check</span>
+                  <select value={it.auto_key} onChange={(e) => update(i, { auto_key: e.target.value })}>
+                    {Object.entries(autoSignals).map(([k, label]) => (
+                      <option key={k} value={k}>{label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="row" style={{ gap: 6, alignItems: "center" }}>
+                  <input type="checkbox" checked={it.ld_only} onChange={(e) => update(i, { ld_only: e.target.checked })} />
+                  <span className="small">Long-distance only</span>
+                </label>
+                <button type="button" onClick={() => remove(i)} style={{ fontSize: 12, color: "var(--danger)", marginLeft: "auto" }}>Remove</button>
+              </div>
+              {jobTypes.length > 0 && (
+                <div className="col" style={{ gap: 4 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>
+                    Job types {it.job_types.length === 0 ? "(all)" : ""}
+                  </span>
+                  <div className="row wrap" style={{ gap: 6 }}>
+                    {jobTypes.map((t) => {
+                      const on = it.job_types.includes(t);
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => toggleType(i, t)}
+                          style={{
+                            padding: "4px 10px", borderRadius: 999, fontSize: 12, cursor: "pointer",
+                            border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+                            background: on ? "var(--brand)" : "transparent",
+                            color: on ? "var(--on-brand)" : "var(--text)", fontWeight: on ? 700 : 400,
+                          }}
+                        >
+                          {t}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          <button type="button" onClick={add} style={{ alignSelf: "flex-start", fontSize: 13 }}>+ Add item</button>
+        </div>
+      )}
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+      <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center", marginTop: 12 }}>
+        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
+        <button className="btnPrimary" onClick={save} disabled={busy || !loaded}>{busy ? "Saving…" : "Save checklist"}</button>
+      </div>
+    </div>
+  );
+}
+
+type VehicleUnit = {
+  name: string;
+  dry_weight_lbs: number | null;
+  gvwr_lbs: number | null;
+  length_ft: number | null;
+  width_ft: number | null;
+  height_ft: number | null;
+  axle_capacities_lbs: number[];
+  notes?: string;
+};
+
+function VehicleUnitsCard() {
+  const [units, setUnits] = useState<VehicleUnit[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ units: VehicleUnit[] }>("/api/config/vehicle-units")
+      .then((r) => setUnits(r.units || []))
+      .catch(() => setErr("Failed to load vehicle units"));
+  }, []);
+
+  const numVal = (v: string): number | null => {
+    const n = Number(v);
+    return v.trim() === "" || !Number.isFinite(n) ? null : n;
+  };
+  function update(i: number, patch: Partial<VehicleUnit>) {
+    setUnits((prev) => prev.map((u, idx) => (idx === i ? { ...u, ...patch } : u)));
+    setSaved(false);
+  }
+  function addUnit() {
+    setUnits((prev) => [...prev, {
+      name: "", dry_weight_lbs: null, gvwr_lbs: null,
+      length_ft: null, width_ft: null, height_ft: null, axle_capacities_lbs: [],
+    }]);
+    setSaved(false);
+  }
+  function removeUnit(i: number) {
+    setUnits((prev) => prev.filter((_, idx) => idx !== i));
+    setSaved(false);
+  }
+  async function save() {
+    const cleaned = units.filter((u) => u.name.trim());
+    if (cleaned.length === 0) { setErr("Add at least one named unit"); return; }
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch("/api/admin/config/vehicle-units", { method: "PUT", body: JSON.stringify({ units: cleaned }) });
+      setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally { setBusy(false); }
+  }
+
+  const numInput = { width: "100%", padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" as const };
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>Vehicle Units</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        The single truck list. Each unit's name here fills the DVIR unit dropdown,
+        and its empty (dry) weight, GVWR, dimensions, and per-axle capacities feed
+        the DVIR/BOL vehicle info and the inventory weight-capacity flags. Payload
+        capacity = GVWR minus dry weight.
+      </div>
+
+      <div className="col" style={{ gap: 14 }}>
+        {units.map((u, i) => (
+          <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <input value={u.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="Unit name / number (e.g. 26INT)" style={{ ...numInput, fontWeight: 700, flex: "1 1 auto" }} />
+              <button onClick={() => removeUnit(i)} style={{ color: "var(--danger)", background: "none", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Remove</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">Dry wt (lb)</span><input type="number" value={u.dry_weight_lbs ?? ""} onChange={(e) => update(i, { dry_weight_lbs: numVal(e.target.value) })} style={numInput} /></label>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">GVWR (lb)</span><input type="number" value={u.gvwr_lbs ?? ""} onChange={(e) => update(i, { gvwr_lbs: numVal(e.target.value) })} style={numInput} /></label>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">Length (ft)</span><input type="number" value={u.length_ft ?? ""} onChange={(e) => update(i, { length_ft: numVal(e.target.value) })} style={numInput} /></label>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">Width (ft)</span><input type="number" value={u.width_ft ?? ""} onChange={(e) => update(i, { width_ft: numVal(e.target.value) })} style={numInput} /></label>
+              <label className="col" style={{ gap: 2 }}><span className="microLabel">Height (ft)</span><input type="number" value={u.height_ft ?? ""} onChange={(e) => update(i, { height_ft: numVal(e.target.value) })} style={numInput} /></label>
+            </div>
+            <label className="col" style={{ gap: 2, marginTop: 8 }}>
+              <span className="microLabel">Axle capacities (lb, comma-separated)</span>
+              <input
+                value={u.axle_capacities_lbs.join(", ")}
+                onChange={(e) => update(i, { axle_capacities_lbs: e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0) })}
+                placeholder="e.g. 12000, 20000"
+                style={numInput}
+              />
+            </label>
+            {u.gvwr_lbs != null && u.dry_weight_lbs != null && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+                Payload capacity: <span className="mono" style={{ color: "var(--text)", fontWeight: 600 }}>{(u.gvwr_lbs - u.dry_weight_lbs).toLocaleString()} lb</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="row" style={{ gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <button onClick={addUnit}>+ Add unit</button>
+        <button className="btnPrimary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save units"}</button>
+        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved</span>}
+        {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
+      </div>
     </div>
   );
 }
@@ -5290,7 +6146,7 @@ function DVIRTab() {
                 <span
                   className="chip"
                   style={{
-                    background: d.condition === "satisfactory" ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+                    background: d.condition === "satisfactory" ? "color-mix(in srgb, var(--ok) 15%, transparent)" : "color-mix(in srgb, var(--danger) 15%, transparent)",
                     color: d.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
                   }}
                 >
@@ -5304,7 +6160,7 @@ function DVIRTab() {
                     : awaiting
                       ? "Awaiting Mechanic"
                       : "No Review Needed";
-                  const bg = awaiting ? "rgba(255,200,50,0.12)" : "rgba(45,212,191,0.15)";
+                  const bg = awaiting ? "rgba(255,200,50,0.12)" : "color-mix(in srgb, var(--ok) 15%, transparent)";
                   const color = awaiting ? "#f0c040" : "var(--ok)";
                   return (
                     <span className="chip" style={{ background: bg, color }}>
@@ -5356,7 +6212,7 @@ function DataManagementCard() {
 
   return (
     <div className="card">
-      <div className="sectionTitle">Data Management</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>Data Management</div>
       <div className="col" style={{ gap: 8 }}>
         {rows.map((r) => (
           <div key={r.key} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
@@ -5506,7 +6362,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
           <span
             className="chip"
             style={{
-              background: dvir.condition === "satisfactory" ? "rgba(45,212,191,0.15)" : "rgba(255,107,107,0.15)",
+              background: dvir.condition === "satisfactory" ? "color-mix(in srgb, var(--ok) 15%, transparent)" : "color-mix(in srgb, var(--danger) 15%, transparent)",
               color: dvir.condition === "satisfactory" ? "var(--ok)" : "var(--danger)",
             }}
           >
@@ -5519,7 +6375,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Defects:</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {dvir.defects.map((d) => (
-                <span key={d} className="chip" style={{ background: "rgba(255,107,107,0.12)", color: "var(--danger)" }}>
+                <span key={d} className="chip" style={{ background: "color-mix(in srgb, var(--danger) 12%, transparent)", color: "var(--danger)" }}>
                   {d}
                 </span>
               ))}
@@ -5692,7 +6548,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
                       padding: "10px 0",
                       borderRadius: 10,
                       border: repairsMade === value ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: repairsMade === value ? "rgba(93,214,194,0.12)" : "var(--card)",
+                      background: repairsMade === value ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
                       color: repairsMade === value ? "var(--brand)" : "var(--muted)",
                       cursor: "pointer",
                       fontWeight: repairsMade === value ? 700 : 400,
@@ -5729,7 +6585,7 @@ function MechanicSignView({ dvir, onBack, onSigned }: MechanicSignViewProps) {
             </div>
 
             {err && (
-              <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+              <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "color-mix(in srgb, var(--danger) 10%, transparent)", borderRadius: 8 }}>
                 {err}
               </div>
             )}
@@ -5846,7 +6702,7 @@ function NotesTab() {
   return (
     <div style={{ marginTop: 16 }}>
       <div className="card">
-        <div className="sectionTitle">{editingId == null ? "New Patch Note" : "Edit Patch Note"}</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>{editingId == null ? "New Patch Note" : "Edit Patch Note"}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Shows up on every crew member's Profile tab. Updating a note re-triggers the
           "new patch notes" indicator on the home screen.
@@ -5876,7 +6732,7 @@ function NotesTab() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">Published Patch Notes</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Published Patch Notes</div>
         {loading && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
         {!loading && notes.length === 0 && (
           <div className="small" style={{ color: "var(--muted)" }}>No patch notes yet.</div>
@@ -6066,7 +6922,7 @@ function AdminNotesSection() {
   return (
     <>
       <div className="card">
-        <div className="sectionTitle">{editingId == null ? "New Admin Note" : "Edit Admin Note"}</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>{editingId == null ? "New Admin Note" : "Edit Admin Note"}</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Leave "Attached job" empty for a global note (shown to every crew member).
           Attach a job to scope the note - it only surfaces when that job is selected.
@@ -6107,7 +6963,7 @@ function AdminNotesSection() {
             {pickerOpen && (
               <div
                 className="card"
-                style={{ marginTop: 6, padding: 12, border: "1px solid var(--brand)", background: "rgba(93,214,194,0.05)" }}
+                style={{ marginTop: 6, padding: 12, border: "1px solid var(--brand)", background: "color-mix(in srgb, var(--brand) 5%, transparent)" }}
               >
                 <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
                   Search by date and/or customer name. Pick one to attach.
@@ -6191,7 +7047,7 @@ function AdminNotesSection() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">Published Admin Notes</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Published Admin Notes</div>
         {loading && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
         {!loading && notes.length === 0 && (
           <div className="small" style={{ color: "var(--muted)" }}>No admin notes yet.</div>
@@ -6362,9 +7218,53 @@ type JobSummary = {
   entry_status: {
     entered_by: string;
     entered_on: string;
+    validated?: boolean;
+    corrected?: boolean;
+    confirmed_in_sheet?: boolean;
     updated_by_name: string | null;
     updated_at: string | null;
   } | null;
+};
+
+// ── Job-level hour corrections (ADR 0032) ──────────────────────────────────
+// Corrections are an override layer made from the Job Summary: the crew's
+// submitted hours are never edited, both numbers stay visible, and each change
+// is emailed to the crew member when the job is initialed.
+
+type JobCorrection = {
+  id: number;
+  user_id: number;
+  user_name: string;
+  bucket: string;
+  original_hours: number;
+  corrected_hours: number;
+  reason: string;
+  created_by_name: string | null;
+  notified_at: string | null;
+  updated_at: string | null;
+};
+
+type JobReported = { user_id: number; user_name: string; bucket: string; hours: number };
+
+type JobCorrectionsResp = {
+  job_uuid: string;
+  job_name: string;
+  work_date: string;
+  reported: JobReported[];
+  corrections: JobCorrection[];
+  pending_notify_count: number;
+};
+
+type NotifyResult = {
+  sent: { user_id: number; name: string; count: number }[];
+  failed: { user_id: number; name: string; count: number; error: string }[];
+  email_unconfigured: boolean;
+};
+
+const CORRECTION_BUCKET_LABELS: Record<string, string> = {
+  billable: "Billable",
+  non_billable: "Non-billable",
+  per_diem_nights: "Per-diem nights",
 };
 
 type JobCandidate = {
@@ -6376,7 +7276,493 @@ type JobCandidate = {
   entered: boolean;
 };
 
-function JobSummaryTab() {
+function fmtHrs(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0$/, "");
+}
+
+/** Correct a job's employee hours from the Job Summary (ADR 0032). Self-
+ *  contained: fetches the job's corrections + what the crew reported, edits an
+ *  override, and never touches the crew's submission. `employees` are the people
+ *  on the job report, so an admin can add a correction to a bucket someone
+ *  reported nothing in (moving hours to "other", say). Refetches when
+ *  `refreshSignal` changes - the attestation save bumps it after mailing. */
+function JobHourCorrections({
+  jobUuid,
+  employees,
+  refreshSignal,
+}: {
+  jobUuid: string;
+  employees: Array<{ user_id: number; name: string }>;
+  refreshSignal: number;
+}) {
+  const [resp, setResp] = useState<JobCorrectionsResp | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Form state.
+  const [userId, setUserId] = useState<number | "">("");
+  const [bucket, setBucket] = useState("billable");
+  const [hours, setHours] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [formErr, setFormErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const data = await apiFetch<JobCorrectionsResp>(
+        `/api/admin/payroll/job/${encodeURIComponent(jobUuid)}/corrections`,
+      );
+      setResp(data);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not load corrections.");
+    } finally {
+      setLoading(false);
+    }
+  }, [jobUuid]);
+
+  useEffect(() => { load(); }, [load, refreshSignal]);
+
+  const reportedFor = (uid: number, b: string): number =>
+    resp?.reported.find((r) => r.user_id === uid && r.bucket === b)?.hours ?? 0;
+
+  const closeForm = () => {
+    setAdding(false);
+    setEditingId(null);
+    setUserId("");
+    setBucket("billable");
+    setHours("");
+    setReason("");
+    setFormErr(null);
+  };
+
+  const openAdd = () => {
+    closeForm();
+    setAdding(true);
+  };
+
+  const openEdit = (c: JobCorrection) => {
+    setAdding(false);
+    setEditingId(c.id);
+    setUserId(c.user_id);
+    setBucket(c.bucket);
+    setHours(String(c.corrected_hours));
+    setReason(c.reason);
+    setFormErr(null);
+  };
+
+  const save = async () => {
+    if (userId === "") { setFormErr("Pick an employee."); return; }
+    const n = Number(hours);
+    if (!Number.isFinite(n) || n < 0) { setFormErr("Enter the corrected hours as a number."); return; }
+    if (!reason.trim()) { setFormErr("A reason is required - the crew member is emailed this text."); return; }
+    setBusy(true);
+    setFormErr(null);
+    try {
+      await apiFetch(`/api/admin/payroll/job/${encodeURIComponent(jobUuid)}/corrections`, {
+        method: "PUT",
+        body: JSON.stringify({
+          user_id: userId,
+          bucket,
+          corrected_hours: n,
+          reason: reason.trim(),
+        }),
+      });
+      closeForm();
+      await load();
+    } catch (e) {
+      setFormErr(e instanceof ApiError ? e.message : "Could not save the correction.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (c: JobCorrection) => {
+    if (!confirm(`Remove the correction to ${c.user_name}'s ${CORRECTION_BUCKET_LABELS[c.bucket] || c.bucket} hours?`)) return;
+    setBusy(true);
+    try {
+      await apiFetch(`/api/admin/payroll/job/${encodeURIComponent(jobUuid)}/corrections/${c.id}`, {
+        method: "DELETE",
+      });
+      if (editingId === c.id) closeForm();
+      await load();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not remove the correction.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const corrections = resp?.corrections ?? [];
+  const pending = resp?.pending_notify_count ?? 0;
+  const unit = bucket === "per_diem_nights" ? "nights" : "hrs";
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Hour corrections</div>
+        {!adding && editingId === null && (
+          <button type="button" onClick={openAdd} style={{ fontSize: 12 }}>
+            + Correct hours
+          </button>
+        )}
+      </div>
+      <div className="small" style={{ color: "var(--muted)", margin: "8px 0 10px" }}>
+        This never changes what the crew submitted - it records an override for
+        payroll. Each correction is emailed to the crew member when you initial
+        the job below.
+      </div>
+
+      {err && <div className="small" style={{ color: "var(--danger)", marginBottom: 8 }}>{err}</div>}
+      {loading && !resp && <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>}
+
+      {corrections.length > 0 && (
+        <div className="col" style={{ gap: 6, marginBottom: 10 }}>
+          {corrections.map((c) => (
+            <div
+              key={c.id}
+              className="row"
+              style={{
+                justifyContent: "space-between", alignItems: "center", gap: 10,
+                padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 8,
+                fontSize: 13,
+              }}
+            >
+              <div className="col" style={{ gap: 1, minWidth: 0 }}>
+                <span style={{ fontWeight: 600 }}>
+                  {c.user_name}
+                  <span style={{ color: "var(--muted)", fontWeight: 400 }}>
+                    {" "}({CORRECTION_BUCKET_LABELS[c.bucket] || c.bucket})
+                  </span>
+                </span>
+                <span className="small" style={{ color: "var(--brand)" }}>
+                  {fmtHrs(c.original_hours)} → {fmtHrs(c.corrected_hours)}
+                  {c.bucket === "per_diem_nights" ? " nights" : " hrs"} · {c.reason}
+                </span>
+                <span className="small" style={{ color: "var(--muted)" }}>
+                  {c.notified_at ? "Crew emailed" : "Not yet sent - initial the job to notify"}
+                </span>
+              </div>
+              <div className="row" style={{ gap: 8, flexShrink: 0 }}>
+                <button type="button" onClick={() => openEdit(c)} disabled={busy} style={{ fontSize: 12 }}>Edit</button>
+                <button type="button" onClick={() => remove(c)} disabled={busy} style={{ fontSize: 12, color: "var(--danger)" }}>Remove</button>
+              </div>
+            </div>
+          ))}
+          {pending > 0 && (
+            <div className="small" style={{ color: "var(--warn, #e0a800)" }}>
+              {pending} correction{pending === 1 ? "" : "s"} not yet emailed. Initial the job below to send.
+            </div>
+          )}
+        </div>
+      )}
+
+      {(adding || editingId !== null) && (
+        <div className="col" style={{ gap: 10, padding: 12, borderRadius: 10, border: "1px solid var(--brand)" }}>
+          <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
+            <label className="col" style={{ gap: 3, minWidth: 160 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Employee</span>
+              <select
+                value={userId}
+                onChange={(e) => setUserId(e.target.value ? Number(e.target.value) : "")}
+                disabled={editingId !== null}
+              >
+                <option value="">Pick…</option>
+                {employees.map((emp) => (
+                  <option key={emp.user_id} value={emp.user_id}>{emp.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="col" style={{ gap: 3 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Bucket</span>
+              <select value={bucket} onChange={(e) => setBucket(e.target.value)} disabled={editingId !== null}>
+                {Object.entries(CORRECTION_BUCKET_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+            </label>
+            <label className="col" style={{ gap: 3, width: 130 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>
+                {bucket === "per_diem_nights" ? "Nights" : "Should be"}
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step={0.25}
+                value={hours}
+                onChange={(e) => setHours(e.target.value)}
+              />
+            </label>
+            {userId !== "" && (
+              <div className="small" style={{ color: "var(--muted)", paddingBottom: 6 }}>
+                Crew reported {fmtHrs(reportedFor(userId, bucket))} {unit}
+              </div>
+            )}
+          </div>
+          <label className="col" style={{ gap: 3 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>Reason (the crew member is emailed this)</span>
+            <textarea
+              rows={2}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Clocked out at 3, not 5 - confirmed with the crew lead."
+              style={{ width: "100%", resize: "vertical" }}
+            />
+          </label>
+          {formErr && <span className="small" style={{ color: "var(--danger)" }}>{formErr}</span>}
+          <div className="row" style={{ gap: 8 }}>
+            <button type="button" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save correction"}</button>
+            <button type="button" onClick={closeForm} disabled={busy}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {corrections.length === 0 && !adding && editingId === null && !loading && (
+        <div className="small" style={{ color: "var(--muted)" }}>No corrections on this job.</div>
+      )}
+    </div>
+  );
+}
+
+type BillItem = { label?: string; qty?: number; unit?: string; rate?: number; discount?: number };
+
+type ReportBilling = {
+  personal_vehicles: number;
+  dumpster_pct: number;
+  recycling_pct: number;
+  billing_method: string;
+  bill_personal_vehicles: boolean;
+};
+
+function billLineTotal(items: BillItem[], globalDiscount: number): number {
+  const subtotal = items.reduce((s, it) => {
+    const qty = Number(it.qty) || 0;
+    const rate = Number(it.rate) || 0;
+    const disc = Number(it.discount) || 0;
+    return s + qty * rate * (1 - disc / 100);
+  }, 0);
+  return subtotal * (1 - (globalDiscount || 0) / 100);
+}
+
+/** Admin correction of a job's billing (2e): the bill invoice AND the job-report
+ *  billing fields, edited in place. On save it re-exports both to the Sheet and
+ *  emails the job's crew the total change + reason. The bill is the office's
+ *  invoice (not crew-sacred like hours), so there is no override layer. */
+function BillCorrectionEditor({
+  jobUuid,
+  bill,
+  reportBilling,
+  onClose,
+  onSaved,
+}: {
+  jobUuid: string;
+  bill: { items: BillItem[]; global_discount: number; notes: string | null };
+  reportBilling: ReportBilling | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [items, setItems] = useState<BillItem[]>(() => bill.items.map((x) => ({ ...x })));
+  const [globalDiscount, setGlobalDiscount] = useState(String(bill.global_discount ?? 0));
+  const [notes, setNotes] = useState(bill.notes ?? "");
+  const [pv, setPv] = useState(reportBilling ? String(reportBilling.personal_vehicles) : "");
+  const [dumpster, setDumpster] = useState(reportBilling ? String(reportBilling.dumpster_pct) : "");
+  const [recycling, setRecycling] = useState(reportBilling ? String(reportBilling.recycling_pct) : "");
+  const [method, setMethod] = useState(reportBilling?.billing_method ?? "");
+  const [billPv, setBillPv] = useState(!!reportBilling?.bill_personal_vehicles);
+  const [reason, setReason] = useState("");
+  const [notify, setNotify] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    before_total: number;
+    after_total: number;
+    notify: NotifyResult;
+  } | null>(null);
+
+  const beforeTotal = billLineTotal(bill.items, bill.global_discount || 0);
+  const newTotal = billLineTotal(items, Number(globalDiscount) || 0);
+
+  const setItem = (i: number, patch: Partial<BillItem>) =>
+    setItems((prev) => prev.map((it, j) => (j === i ? { ...it, ...patch } : it)));
+  const addItem = () => setItems((prev) => [...prev, { label: "", qty: 1, rate: 0, discount: 0 }]);
+  const removeItem = (i: number) => setItems((prev) => prev.filter((_, j) => j !== i));
+
+  const save = async () => {
+    if (!reason.trim()) { setErr("A reason is required - the crew is emailed it."); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      const cleanItems = items.map((it) => ({
+        label: (it.label ?? "").trim(),
+        qty: Number(it.qty) || 0,
+        unit: it.unit,
+        rate: Number(it.rate) || 0,
+        discount: Number(it.discount) || 0,
+      }));
+      const payload: Record<string, unknown> = {
+        items: cleanItems,
+        global_discount: Number(globalDiscount) || 0,
+        notes: notes.trim() || null,
+        reason: reason.trim(),
+        notify,
+      };
+      if (reportBilling) {
+        payload.personal_vehicles = Number(pv) || 0;
+        payload.dumpster_pct = Number(dumpster) || 0;
+        payload.recycling_pct = Number(recycling) || 0;
+        payload.billing_method = method.trim();
+        payload.bill_personal_vehicles = billPv;
+      }
+      const r = await apiFetch<{ before_total: number; after_total: number; notify: NotifyResult }>(
+        `/api/admin/bill-correction/${encodeURIComponent(jobUuid)}`,
+        { method: "POST", body: JSON.stringify(payload) },
+      );
+      setResult({ before_total: r.before_total, after_total: r.after_total, notify: r.notify });
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not save the correction.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (result) {
+    return (
+      <div className="col" style={{ gap: 8, padding: 12, borderRadius: 10, border: "1px solid var(--ok)", marginTop: 10 }}>
+        <div className="small" style={{ color: "var(--ok)", fontWeight: 700 }}>
+          ✓ Bill corrected: ${result.before_total.toFixed(2)} → ${result.after_total.toFixed(2)}
+        </div>
+        {result.notify.email_unconfigured && (
+          <div className="small" style={{ color: "var(--warn, #e0a800)" }}>
+            Crew were not emailed: email is not configured on this server.
+          </div>
+        )}
+        {result.notify.sent.map((s) => (
+          <div key={s.user_id} className="small" style={{ color: "var(--ok)" }}>Emailed {s.name}</div>
+        ))}
+        {result.notify.failed.map((f) => (
+          <div key={f.user_id} className="small" style={{ color: "var(--danger)" }}>
+            Could not email {f.name}: {f.error}
+          </div>
+        ))}
+        {!notify && !result.notify.email_unconfigured && result.notify.sent.length === 0 && (
+          <div className="small" style={{ color: "var(--muted)" }}>No email sent (notify was off).</div>
+        )}
+        <div>
+          <button type="button" onClick={() => { onSaved(); onClose(); }}>Done</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="col" style={{ gap: 12, padding: 12, borderRadius: 10, border: "1px solid var(--brand)", marginTop: 10 }}>
+      <div style={{ fontWeight: 700, fontSize: 13 }}>Correct bill</div>
+
+      {/* Line items */}
+      <div className="col" style={{ gap: 6 }}>
+        {items.map((it, i) => (
+          <div key={i} className="row wrap" style={{ gap: 6, alignItems: "flex-end" }}>
+            <label className="col" style={{ gap: 2, flex: "2 1 160px", minWidth: 120 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Line</span>
+              <input value={it.label ?? ""} onChange={(e) => setItem(i, { label: e.target.value })} placeholder="Label" />
+            </label>
+            <label className="col" style={{ gap: 2, width: 64 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Qty</span>
+              <input type="number" inputMode="decimal" step={0.25} value={it.qty ?? 0} onChange={(e) => setItem(i, { qty: Number(e.target.value) })} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 84 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Rate $</span>
+              <input type="number" inputMode="decimal" step={0.01} value={it.rate ?? 0} onChange={(e) => setItem(i, { rate: Number(e.target.value) })} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 64 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Disc %</span>
+              <input type="number" inputMode="decimal" step={1} value={it.discount ?? 0} onChange={(e) => setItem(i, { discount: Number(e.target.value) })} />
+            </label>
+            <button type="button" onClick={() => removeItem(i)} style={{ color: "var(--danger)", flex: "0 0 auto" }}>Remove</button>
+          </div>
+        ))}
+        <div>
+          <button type="button" onClick={addItem} style={{ fontSize: 12 }}>+ Add line</button>
+        </div>
+      </div>
+
+      <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
+        <label className="col" style={{ gap: 2, width: 120 }}>
+          <span className="small" style={{ color: "var(--muted)" }}>Global discount %</span>
+          <input type="number" inputMode="decimal" step={1} value={globalDiscount} onChange={(e) => setGlobalDiscount(e.target.value)} />
+        </label>
+        <div className="small" style={{ paddingBottom: 6 }}>
+          New total <strong>${newTotal.toFixed(2)}</strong>
+          <span style={{ color: "var(--muted)" }}> (was ${beforeTotal.toFixed(2)})</span>
+        </div>
+      </div>
+
+      <label className="col" style={{ gap: 2 }}>
+        <span className="small" style={{ color: "var(--muted)" }}>Bill notes</span>
+        <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: "100%", resize: "vertical" }} />
+      </label>
+
+      {reportBilling && (
+        <div className="col" style={{ gap: 8, paddingTop: 4, borderTop: "1px solid var(--border)" }}>
+          <div className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Report billing fields</div>
+          <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
+            <label className="col" style={{ gap: 2, width: 110 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Billing method</span>
+              <input value={method} onChange={(e) => setMethod(e.target.value)} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 90 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Personal veh.</span>
+              <input type="number" inputMode="numeric" step={1} value={pv} onChange={(e) => setPv(e.target.value)} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 100 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>M1 dumpster %</span>
+              <input type="number" inputMode="numeric" step={5} value={dumpster} onChange={(e) => setDumpster(e.target.value)} />
+            </label>
+            <label className="col" style={{ gap: 2, width: 100 }}>
+              <span className="small" style={{ color: "var(--muted)" }}>M1 recycling %</span>
+              <input type="number" inputMode="numeric" step={5} value={recycling} onChange={(e) => setRecycling(e.target.value)} />
+            </label>
+            <label className="row" style={{ gap: 6, alignItems: "center", paddingBottom: 6 }}>
+              <input type="checkbox" checked={billPv} onChange={(e) => setBillPv(e.target.checked)} />
+              <span className="small">Bill personal vehicles</span>
+            </label>
+          </div>
+        </div>
+      )}
+
+      <label className="col" style={{ gap: 2 }}>
+        <span className="small" style={{ color: "var(--muted)" }}>Reason (the crew is emailed this)</span>
+        <textarea
+          rows={2}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. Removed the duplicate dolly line."
+          style={{ width: "100%", resize: "vertical" }}
+        />
+      </label>
+
+      <label className="row" style={{ gap: 8, alignItems: "center" }}>
+        <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+        <span className="small">Email the job's crew what changed</span>
+      </label>
+
+      {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
+
+      <div className="row" style={{ gap: 8 }}>
+        <button type="button" onClick={save} disabled={busy} className="btnPrimary">
+          {busy ? "Saving…" : (notify ? "Save & notify crew" : "Save correction")}
+        </button>
+        <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null; onOpened?: () => void }) {
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
   const [candidates, setCandidates] = useState<JobCandidate[] | null>(null);
@@ -6393,6 +7779,21 @@ function JobSummaryTab() {
   const [entrySaving, setEntrySaving] = useState(false);
   const [entrySaved, setEntrySaved] = useState(false);
   const [entryError, setEntryError] = useState<string | null>(null);
+  // The three-part attestation (ADR 0032) and the notify result from the last
+  // save. correctionsRefresh forces the corrections card to refetch after a
+  // save mails its corrections.
+  const [entryValidated, setEntryValidated] = useState(false);
+  const [entryCorrected, setEntryCorrected] = useState(false);
+  const [entryConfirmedSheet, setEntryConfirmedSheet] = useState(false);
+  const [entryNotify, setEntryNotify] = useState<NotifyResult | null>(null);
+  const [correctionsRefresh, setCorrectionsRefresh] = useState(0);
+  const [editingBill, setEditingBill] = useState(false);
+
+  // Deep-link from the payroll pending-review list: open a specific job directly.
+  useEffect(() => {
+    if (openJobUuid) { loadSummary(openJobUuid); onOpened?.(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openJobUuid]);
 
   async function search() {
     if (!date && !name.trim()) {
@@ -6429,6 +7830,12 @@ function JobSummaryTab() {
       // new jobs default to today's Mountain date and an empty initials box.
       setEntryInitials(data.entry_status?.entered_by ?? "");
       setEntryDate(data.entry_status?.entered_on || mountainDateYYYYMMDD());
+      setEntryValidated(!!data.entry_status?.validated);
+      setEntryCorrected(!!data.entry_status?.corrected);
+      setEntryConfirmedSheet(!!data.entry_status?.confirmed_in_sheet);
+      setEntryNotify(null);
+      setCorrectionsRefresh((n) => n + 1);
+      setEditingBill(false);
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to load summary");
     } finally {
@@ -6447,19 +7854,36 @@ function JobSummaryTab() {
       setEntryError("Date is required.");
       return;
     }
+    if (!(entryValidated && entryCorrected && entryConfirmedSheet)) {
+      setEntryError("Confirm all three checks before initialing.");
+      return;
+    }
     setEntrySaving(true);
     setEntryError(null);
     setEntrySaved(false);
+    setEntryNotify(null);
     try {
-      const updated = await apiFetch<{ entry_status: NonNullable<JobSummary["entry_status"]> }>(
+      const updated = await apiFetch<{
+        entry_status: NonNullable<JobSummary["entry_status"]>;
+        notify?: NotifyResult;
+      }>(
         `/api/admin/job-entry-status/${encodeURIComponent(summary.job_uuid)}`,
         {
           method: "PUT",
-          body: JSON.stringify({ entered_by: initials, entered_on: entryDate }),
+          body: JSON.stringify({
+            entered_by: initials,
+            entered_on: entryDate,
+            validated: entryValidated,
+            corrected: entryCorrected,
+            confirmed_in_sheet: entryConfirmedSheet,
+          }),
         },
       );
       setSummary((prev) => (prev ? { ...prev, entry_status: updated.entry_status } : prev));
       setEntrySaved(true);
+      setEntryNotify(updated.notify ?? null);
+      // Corrections were just mailed - refetch so their "sent" state updates.
+      setCorrectionsRefresh((n) => n + 1);
     } catch (e: any) {
       setEntryError(e instanceof ApiError ? e.message : "Save failed.");
     } finally {
@@ -6575,7 +7999,7 @@ function JobSummaryTab() {
   return (
     <div style={{ marginTop: 16 }}>
       <div className="card">
-        <div className="sectionTitle">Look up job</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Look up job</div>
         <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
           Search by date and/or customer name. Results below link through to
           the full summary.
@@ -6609,7 +8033,7 @@ function JobSummaryTab() {
 
       {candidates != null && !summary && (
         <div className="card">
-          <div className="sectionTitle">
+          <div className="microLabel" style={{ marginBottom: 10 }}>
             Matches ({candidates.length})
           </div>
           {candidates.length === 0 ? (
@@ -6634,7 +8058,7 @@ function JobSummaryTab() {
                         fontSize: 10,
                         padding: "2px 8px",
                         color: c.entered ? "var(--ok)" : "var(--brand2)",
-                        borderColor: c.entered ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                        borderColor: c.entered ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
                       }}
                     >
                       {c.entered ? "✓ Entered" : "Pending entry"}
@@ -6661,6 +8085,24 @@ function JobSummaryTab() {
 
       {summary && (
         <>
+          {/* Phase C metrics strip: one bordered row split into columns
+              (microLabel + large mono value), not separate KPI boxes. Uses the
+              figures already computed for this job's summary below. */}
+          <div className="card" style={{ display: "flex", flexWrap: "wrap", padding: 0, overflow: "hidden" }}>
+            {[
+              { label: "Bill", value: `$${Number(billTotal || 0).toFixed(0)}` },
+              { label: "Materials", value: `$${materialsTotal.toFixed(0)}` },
+              { label: "Furniture", value: summary.inventory.furniture_count },
+              { label: "Boxes", value: summary.inventory.box_count },
+              { label: "BOL items", value: summary.bol?.item_count ?? 0 },
+              { label: "DVIRs", value: summary.dvirs.length },
+            ].map((m, i) => (
+              <div key={m.label} style={{ flex: "1 1 88px", minWidth: 88, padding: "12px 14px", borderLeft: i === 0 ? "none" : "1px solid var(--border)" }}>
+                <div className="microLabel">{m.label}</div>
+                <div className="mono" style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
           <div className="card">
             <button
               onClick={() => setSummary(null)}
@@ -6668,7 +8110,7 @@ function JobSummaryTab() {
             >
               ← Back to matches
             </button>
-            <div className="sectionTitle">{summary.job_name || "Unnamed job"}</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>{summary.job_name || "Unnamed job"}</div>
             <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace" }}>{summary.job_uuid}</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
               {summary.events.length} event{summary.events.length === 1 ? "" : "s"} ·
@@ -6679,9 +8121,35 @@ function JobSummaryTab() {
             </div>
           </div>
 
+          {/* Sticky section nav - jump anywhere in the job's data without scrolling
+              the whole stack. Sections carry matching ids + scrollMarginTop. */}
+          <div className="card" style={{ position: "sticky", top: 0, zIndex: 5, padding: "8px 10px" }}>
+            <div className="row" style={{ gap: 6, overflowX: "auto", flexWrap: "nowrap" }}>
+              {[
+                { id: "js-timeline", label: "Timeline" },
+                { id: "js-hours", label: "Hours" },
+                { id: "js-materials", label: "Materials" },
+                { id: "js-bill", label: "Bill" },
+                { id: "js-report", label: "Report" },
+                { id: "js-dvirs", label: "DVIRs" },
+                { id: "js-incidents", label: "Incidents" },
+                { id: "js-photos", label: "Photos" },
+              ].map((sn) => (
+                <button
+                  key={sn.id}
+                  type="button"
+                  onClick={() => document.getElementById(sn.id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  style={{ fontSize: 12, padding: "4px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
+                >
+                  {sn.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {summary.admin_notes.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Admin Notes</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Admin Notes</div>
               <div className="col" style={{ gap: 10 }}>
                 {summary.admin_notes.map((n) => (
                   <div key={n.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
@@ -6697,8 +8165,8 @@ function JobSummaryTab() {
             </div>
           )}
 
-          <div className="card">
-            <div className="sectionTitle">Timeline ({summary.events.length})</div>
+          <div className="card" id="js-timeline" style={{ scrollMarginTop: 64 }}>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Timeline ({summary.events.length})</div>
             {summary.events.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>No events logged.</div>
             ) : (
@@ -6729,8 +8197,8 @@ function JobSummaryTab() {
             )}
           </div>
 
-          <div className="card">
-            <div className="sectionTitle">
+          <div className="card" id="js-materials" style={{ scrollMarginTop: 64 }}>
+            <div className="microLabel" style={{ marginBottom: 10 }}>
               Materials ({summary.materials.length})
               <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
                 Total ${materialsTotal.toFixed(2)}
@@ -6763,7 +8231,7 @@ function JobSummaryTab() {
             )}
           </div>
 
-          <div className="card">
+          <div className="card" id="js-hours" style={{ scrollMarginTop: 64 }}>
             {(() => {
               // Round-at-end: sum actual billable hours first, round once.
               // Per-row displays show actuals so the office assistant can see
@@ -6776,7 +8244,7 @@ function JobSummaryTab() {
               const totalBillable = roundBillableQuarter(totalActual);
               return (
                 <>
-                  <div className="sectionTitle">
+                  <div className="microLabel" style={{ marginBottom: 10 }}>
                     Employee Hours
                     {summary.job_report && rows.length > 0 && (
                       <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
@@ -6911,8 +8379,22 @@ function JobSummaryTab() {
             })()}
           </div>
 
-          <div className="card">
-            <div className="sectionTitle">DVIRs ({summary.dvirs.length})</div>
+          {/* Job-level hour corrections (ADR 0032). Employees are those on the
+              report who resolved to a user_id, deduped. */}
+          <JobHourCorrections
+            jobUuid={summary.job_uuid}
+            refreshSignal={correctionsRefresh}
+            employees={Array.from(
+              new Map(
+                (summary.job_report?.employee_hours ?? [])
+                  .filter((e) => typeof e.user_id === "number")
+                  .map((e) => [e.user_id as number, { user_id: e.user_id as number, name: e.name || "-" }]),
+              ).values(),
+            )}
+          />
+
+          <div className="card" id="js-dvirs" style={{ scrollMarginTop: 64 }}>
+            <div className="microLabel" style={{ marginBottom: 10 }}>DVIRs ({summary.dvirs.length})</div>
             {summary.dvirs.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>None for this job.</div>
             ) : (
@@ -6945,7 +8427,7 @@ function JobSummaryTab() {
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Invoice copy-paste</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Invoice copy-paste</div>
               <button onClick={copyInvoice} disabled={!invoiceText} style={{ fontSize: 12 }}>
                 {invoiceCopied ? "✓ Copied" : "Copy"}
               </button>
@@ -6968,8 +8450,8 @@ function JobSummaryTab() {
             />
           </div>
 
-          <div className="card">
-            <div className="sectionTitle">Job Report</div>
+          <div className="card" id="js-report" style={{ scrollMarginTop: 64 }}>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Job Report</div>
             {!summary.job_report ? (
               <div className="small" style={{ color: "var(--muted)" }}>Not yet submitted.</div>
             ) : (
@@ -7038,8 +8520,8 @@ function JobSummaryTab() {
           {/* ── Incidents ──
               A liability record. It was reaching the sheet and not this page, so the
               one screen called "every source for a job" omitted the damage claims. */}
-          <div className="card" style={{ borderColor: summary.incidents.length ? "var(--danger)" : undefined }}>
-            <div className="sectionTitle">Incidents ({summary.incidents.length})</div>
+          <div className="card" id="js-incidents" style={{ scrollMarginTop: 64, borderColor: summary.incidents.length ? "var(--danger)" : undefined }}>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Incidents ({summary.incidents.length})</div>
             {summary.incidents.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>None reported.</div>
             ) : (
@@ -7087,7 +8569,7 @@ function JobSummaryTab() {
 
           {/* ── Inventory ── */}
           <div className="card">
-            <div className="sectionTitle">
+            <div className="microLabel" style={{ marginBottom: 10 }}>
               Inventory ({summary.inventory.furniture_count} furniture · {summary.inventory.box_count} boxes)
             </div>
             {summary.inventory.items.length === 0 ? (
@@ -7113,7 +8595,7 @@ function JobSummaryTab() {
           {/* ── Bill of lading ── */}
           {summary.bol && (
             <div className="card">
-              <div className="sectionTitle">Bill of Lading</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Bill of Lading</div>
               <div className="col" style={{ gap: 4 }}>
                 <div className="small"><strong>Status:</strong> {summary.bol.status}</div>
                 <div className="small"><strong>Items:</strong> {summary.bol.item_count}</div>
@@ -7136,7 +8618,7 @@ function JobSummaryTab() {
               $50 per person per out-of-town day, so admin needs the count, not the flag. */}
           {summary.ld_days.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Long-distance days</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Long-distance days</div>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
                 Per-diem is owed per out-of-town day, per person.
               </div>
@@ -7161,7 +8643,7 @@ function JobSummaryTab() {
           {/* ── Reimbursements tied to this job ── */}
           {summary.reimbursements.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Reimbursements ({summary.reimbursements.length})</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Reimbursements ({summary.reimbursements.length})</div>
               <div className="col" style={{ gap: 4 }}>
                 {summary.reimbursements.map((r) => (
                   <div key={r.reimbursement_uuid} className="small">
@@ -7175,19 +8657,26 @@ function JobSummaryTab() {
             </div>
           )}
 
-          <div className="card">
-            <div className="sectionTitle">
-              Bill
-              {summary.bill && (
-                <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
-                  Total ${billTotal.toFixed(2)}
-                </span>
+          <div className="card" id="js-bill" style={{ scrollMarginTop: 64 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div className="microLabel" style={{ marginBottom: 0 }}>
+                Bill
+                {summary.bill && (
+                  <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+                    Total ${billTotal.toFixed(2)}
+                  </span>
+                )}
+              </div>
+              {!editingBill && (
+                <button type="button" onClick={() => setEditingBill(true)} style={{ fontSize: 12 }}>
+                  Correct bill
+                </button>
               )}
             </div>
             {!summary.bill ? (
-              <div className="small" style={{ color: "var(--muted)" }}>No bill saved.</div>
+              <div className="small" style={{ color: "var(--muted)", marginTop: 10 }}>No bill saved.</div>
             ) : (
-              <div className="col" style={{ gap: 4 }}>
+              <div className="col" style={{ gap: 4, marginTop: 10 }}>
                 <div className="small"><strong>Saved by:</strong> {summary.bill.saved_by_name ?? "-"}</div>
                 <div className="small"><strong>Global discount:</strong> {summary.bill.global_discount}%</div>
                 {summary.bill.items.map((it, i) => (
@@ -7201,10 +8690,33 @@ function JobSummaryTab() {
                 )}
               </div>
             )}
+            {editingBill && (
+              <BillCorrectionEditor
+                jobUuid={summary.job_uuid}
+                bill={{
+                  items: (summary.bill?.items ?? []) as BillItem[],
+                  global_discount: summary.bill?.global_discount ?? 0,
+                  notes: summary.bill?.notes ?? null,
+                }}
+                reportBilling={
+                  summary.job_report
+                    ? {
+                        personal_vehicles: summary.job_report.personal_vehicles,
+                        dumpster_pct: summary.job_report.dumpster_pct,
+                        recycling_pct: summary.job_report.recycling_pct,
+                        billing_method: summary.job_report.billing_method,
+                        bill_personal_vehicles: summary.job_report.bill_personal_vehicles,
+                      }
+                    : null
+                }
+                onClose={() => setEditingBill(false)}
+                onSaved={() => loadSummary(summary.job_uuid)}
+              />
+            )}
           </div>
 
-          <div className="card">
-            <div className="sectionTitle">Photos ({summary.photos.length})</div>
+          <div className="card" id="js-photos" style={{ scrollMarginTop: 64 }}>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Photos ({summary.photos.length})</div>
             {summary.photos.length === 0 ? (
               <div className="small" style={{ color: "var(--muted)" }}>No photos uploaded.</div>
             ) : (
@@ -7233,23 +8745,48 @@ function JobSummaryTab() {
 
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Data entry</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Initial this job</div>
               <span
                 className="chip"
                 style={{
                   fontSize: 10,
                   padding: "2px 8px",
                   color: summary.entry_status ? "var(--ok)" : "var(--brand2)",
-                  borderColor: summary.entry_status ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
+                  borderColor: summary.entry_status ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
                 }}
               >
-                {summary.entry_status ? "✓ Entered" : "Pending entry"}
+                {summary.entry_status ? "✓ Initialed" : "Pending"}
               </span>
             </div>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-              Record your initials and the date once you've entered this job's data into the books.
-              Saving also writes the values into every job-related sheet for this job.
+              Initialing is your sign-off that all three below are true. Saving
+              writes your initials into every job-related sheet for this job and
+              emails each crew member any correction made to their hours above.
             </div>
+            {(() => {
+              const checkRow = (
+                checked: boolean,
+                set: (v: boolean) => void,
+                label: string,
+              ) => (
+                <label className="row" style={{ gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => { set(e.target.checked); setEntrySaved(false); }}
+                    style={{ marginTop: 2, flexShrink: 0 }}
+                  />
+                  <span className="small">{label}</span>
+                </label>
+              );
+              return (
+                <div className="col" style={{ gap: 8, marginBottom: 12 }}>
+                  {checkRow(entryValidated, setEntryValidated, "I reviewed this job's record.")}
+                  {checkRow(entryCorrected, setEntryCorrected, "I made any needed hour corrections (or there were none).")}
+                  {checkRow(entryConfirmedSheet, setEntryConfirmedSheet, "I confirmed this job's data landed in the Google Sheet.")}
+                </div>
+              );
+            })()}
             <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
               <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
@@ -7262,7 +8799,7 @@ function JobSummaryTab() {
                 />
               </label>
               <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Entered on</span>
+                <span className="small" style={{ color: "var(--muted)" }}>Date</span>
                 <input
                   type="date"
                   value={entryDate}
@@ -7271,24 +8808,42 @@ function JobSummaryTab() {
               </label>
               <button
                 onClick={saveEntryStatus}
-                disabled={entrySaving}
+                disabled={entrySaving || !(entryValidated && entryCorrected && entryConfirmedSheet)}
                 className="btnPrimary"
                 style={{ flex: "0 0 auto" }}
               >
-                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Mark entered")}
+                {entrySaving ? "Saving…" : (summary.entry_status ? "Update" : "Initial job")}
               </button>
             </div>
             {entryError && (
               <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{entryError}</div>
             )}
             {entrySaved && !entryError && (
-              <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>
-                ✓ Saved and propagated to sheets
+              <div className="col" style={{ gap: 4, marginTop: 8 }}>
+                <div className="small" style={{ color: "var(--ok)" }}>
+                  ✓ Initialed and propagated to sheets
+                </div>
+                {entryNotify?.email_unconfigured && (
+                  <div className="small" style={{ color: "var(--warn, #e0a800)" }}>
+                    Corrections were not emailed: email is not configured on this
+                    server. They will send on the next initialing once it is.
+                  </div>
+                )}
+                {entryNotify?.sent.map((s) => (
+                  <div key={s.user_id} className="small" style={{ color: "var(--ok)" }}>
+                    Emailed {s.name} ({s.count} correction{s.count === 1 ? "" : "s"})
+                  </div>
+                ))}
+                {entryNotify?.failed.map((f) => (
+                  <div key={f.user_id} className="small" style={{ color: "var(--danger)" }}>
+                    Could not email {f.name}: {f.error}. Their corrections will retry on the next initialing.
+                  </div>
+                ))}
               </div>
             )}
             {summary.entry_status && (
               <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
-                Last updated by {summary.entry_status.updated_by_name || "-"}
+                Last initialed by {summary.entry_status.updated_by_name || "-"}
                 {summary.entry_status.updated_at ? ` on ${formatMountainDateTime(summary.entry_status.updated_at)}` : ""}
               </div>
             )}

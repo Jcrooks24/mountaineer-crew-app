@@ -3,6 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
+import AppHeader from "../components/AppHeader";
+import VehicleUnitSpecs from "../components/VehicleUnitSpecs";
+import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
+import { loadJobSetup } from "../lib/jobSetupStore";
 
 // ── FMCSA 49 CFR §396.11 inspection items with descriptions ──────────────────
 const INSPECTION_ITEMS: { name: string; desc: string }[] = [
@@ -163,6 +167,8 @@ export default function DVIRPage() {
 
   // ── Units list ─────────────────────────────────────────────────────────────
   const [units, setUnits] = useState<string[]>([]);
+  const [vehUnits, setVehUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
+  useEffect(() => { refreshUnits().then(setVehUnits).catch(() => {}); }, []);
   useEffect(() => {
     apiFetch<{ units: string[] }>("/api/dvir/units")
       .then((r) => setUnits(r.units))
@@ -171,7 +177,22 @@ export default function DVIRPage() {
 
   // ── Vehicle info ───────────────────────────────────────────────────────────
   const [vehicleNumber, setVehicleNumber] = useState("");
-  const [trailerNumber, setTrailerNumber] = useState("");
+
+  // C1.3 (ADR 0034): default the unit from the job header's assigned truck when
+  // this DVIR is attached to a job and the inspector hasn't picked one yet. Only
+  // fills an empty field, so it never overrides a manual choice.
+  useEffect(() => {
+    if (!attachedJobUuid) return;
+    let cancelled = false;
+    loadJobSetup(attachedJobUuid)
+      .then((h) => {
+        const u = h?.vehicle_unit_names?.[0];
+        if (!cancelled && u) setVehicleNumber((cur) => cur || u);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [attachedJobUuid]);
+
   const [odometer, setOdometer] = useState("");
   const [inspectionType, setInspectionType] = useState<"pre-trip" | "post-trip">("pre-trip");
   const [inspectionDate, setInspectionDate] = useState(todayLocal());
@@ -243,7 +264,9 @@ export default function DVIRPage() {
         body: JSON.stringify({
           dvir_id: newUUID(),
           vehicle_number: vehicleNumber,
-          trailer_number: trailerNumber.trim() || null,
+          // Straight trucks only - no trailer, ever. Field removed from the form;
+          // the column stays for back-compat but is always null now.
+          trailer_number: null,
           odometer: odometer ? parseInt(odometer, 10) : null,
           inspection_type: inspectionType,
           inspection_date: inspectionDate,
@@ -308,10 +331,7 @@ export default function DVIRPage() {
   if (submitted) {
     return (
       <div className="container">
-        <div className="topbar" style={{ marginBottom: 16 }}>
-          <span style={{ fontWeight: 700, fontSize: 16 }}>DVIR Submitted</span>
-          <button onClick={() => nav("/")} style={backBtnStyle}>← Back to Jobs</button>
-        </div>
+        <AppHeader title="DVIR Submitted" onBack={() => nav("/")} />
         <div className="card" style={{ textAlign: "center", padding: "32px 24px" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>✓</div>
           <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 6, color: "var(--ok)" }}>DVIR Recorded</div>
@@ -341,7 +361,6 @@ export default function DVIRPage() {
               onClick={() => {
                 setSubmitted(null);
                 setVehicleNumber("");
-                setTrailerNumber("");
                 setOdometer("");
                 setDefects(new Set());
                 setDefectNotes("");
@@ -366,13 +385,8 @@ export default function DVIRPage() {
   if (vehicleNumber && !prevLoading && prevHasOpenDefect) {
     return (
       <div className="container">
-        <div className="topbar" style={{ marginBottom: 16 }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>Driver Vehicle Inspection Report</div>
-            <div className="small" style={{ color: "var(--muted)" }}>FMCSA 49 CFR §396.11</div>
-          </div>
-          <button onClick={() => nav("/")} style={backBtnStyle}>← Back</button>
-        </div>
+        <AppHeader title="DVIR" onBack={() => nav("/")} />
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>FMCSA 49 CFR §396.11</div>
 
         {/* Out-of-service warning */}
         <div style={{
@@ -431,26 +445,21 @@ export default function DVIRPage() {
   // ── Form ───────────────────────────────────────────────────────────────────
   return (
     <div className="container">
-      <div className="topbar" style={{ marginBottom: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Driver Vehicle Inspection Report</div>
-          <div className="small" style={{ color: "var(--muted)" }}>FMCSA 49 CFR §396.11</div>
-        </div>
-        <button onClick={() => nav("/")} style={backBtnStyle}>← Back</button>
-      </div>
+      <AppHeader title="DVIR" onBack={() => nav("/")} />
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>FMCSA 49 CFR §396.11</div>
 
       <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
         {/* ── Job attachment ── */}
         <div className="card">
-          <div className="label" style={{ marginBottom: 8, fontWeight: 700 }}>Job</div>
+          <div className="microLabel" style={{ marginBottom: 8 }}>Job</div>
           {attachedJobUuid ? (
             <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>
                   {attachedJobName || "(unnamed job)"}
                 </div>
-                <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace", wordBreak: "break-all" }}>
+                <div className="small mono" style={{ color: "var(--muted)", wordBreak: "break-all" }}>
                   {attachedJobUuid}
                 </div>
               </div>
@@ -472,7 +481,7 @@ export default function DVIRPage() {
 
         {/* ── Vehicle Information ── */}
         <div className="card">
-          <div className="label" style={{ marginBottom: 12, fontWeight: 700 }}>Vehicle Information</div>
+          <div className="microLabel" style={{ marginBottom: 12 }}>Vehicle Information</div>
 
           <div style={{ marginBottom: 10 }}>
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Unit *</div>
@@ -487,6 +496,7 @@ export default function DVIRPage() {
                 <option key={u} value={u}>{u}</option>
               ))}
             </select>
+            <VehicleUnitSpecs unit={unitByName(vehUnits, vehicleNumber)} />
           </div>
 
           <div style={{
@@ -495,10 +505,6 @@ export default function DVIRPage() {
             gap: 10,
             marginBottom: 10,
           }}>
-            <div>
-              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Trailer # (or N/A)</div>
-              <input value={trailerNumber} onChange={(e) => setTrailerNumber(e.target.value)} placeholder="N/A if none" style={inputStyle} />
-            </div>
             <div>
               <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Odometer (miles) *</div>
               <input type="number" value={odometer} onChange={(e) => setOdometer(e.target.value)} placeholder="Required" min={0} required style={inputStyle} />
@@ -536,7 +542,7 @@ export default function DVIRPage() {
                       padding: "9px 6px",
                       borderRadius: 10,
                       border: inspectionType === t ? "2px solid var(--brand)" : "1px solid var(--border)",
-                      background: inspectionType === t ? "rgba(93,214,194,0.12)" : "var(--card)",
+                      background: inspectionType === t ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
                       color: inspectionType === t ? "var(--brand)" : "var(--muted)",
                       cursor: "pointer",
                       fontWeight: inspectionType === t ? 700 : 400,
@@ -555,7 +561,7 @@ export default function DVIRPage() {
         {/* ── Previous DVIR Review ── */}
         {vehicleNumber && (
           <div className="card">
-            <div className="label" style={{ fontWeight: 700, marginBottom: 6 }}>Previous Inspection Review</div>
+            <div className="microLabel" style={{ marginBottom: 6 }}>Previous Inspection Review</div>
             {prevLoading ? (
               <div className="small" style={{ color: "var(--muted)" }}>Loading previous report…</div>
             ) : prevDVIR ? (
@@ -654,45 +660,77 @@ export default function DVIRPage() {
 
         {/* ── Inspection Checklist ── */}
         <div className="card">
-          <div className="label" style={{ marginBottom: 4, fontWeight: 700 }}>Inspection Checklist</div>
+          <div className="microLabel" style={{ marginBottom: 4 }}>Inspection Checklist</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
             Check any item where a defect was found. Tap an item name to see what to inspect.
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {INSPECTION_ITEMS.map((item) => {
-              const checked = defects.has(item.name);
+              const checked = defects.has(item.name);   // checked === DEFECT
               const expanded = expandedItem === item.name;
               return (
                 <div
                   key={item.name}
                   style={{
-                    borderRadius: 8,
+                    borderRadius: 6,
                     border: checked ? "1px solid var(--danger)" : "1px solid var(--border)",
-                    background: checked ? "rgba(255,107,107,0.06)" : "transparent",
+                    background: checked ? "color-mix(in srgb, var(--danger) 8%, transparent)" : "transparent",
                     overflow: "hidden",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px" }}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleDefect(item.name)}
-                      style={{ accentColor: "var(--danger)", width: 16, height: 16, flexShrink: 0, cursor: "pointer" }}
-                    />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 6px 6px 10px" }}>
                     <span
-                      style={{ flex: 1, fontSize: 13, color: checked ? "var(--danger)" : "var(--text)", fontWeight: checked ? 600 : 400, cursor: "pointer", userSelect: "none" }}
+                      style={{ flex: 1, minWidth: 0, fontSize: 13, color: checked ? "var(--danger)" : "var(--text)", fontWeight: checked ? 600 : 400, cursor: "pointer", userSelect: "none" }}
                       onClick={() => setExpandedItem(expanded ? null : item.name)}
                     >
                       {item.name}
                     </span>
+
+                    {/* Explicit OK / DEFECT segmented toggle (Figma DVIR pattern):
+                        larger touch targets and a clear state, vs a small
+                        checkbox that silently means "defect". Same data model -
+                        DEFECT = item in the `defects` set. */}
+                    <div
+                      role="group"
+                      aria-label={`${item.name} condition`}
+                      style={{ display: "flex", flexShrink: 0, border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}
+                    >
+                      <button
+                        type="button"
+                        aria-pressed={!checked}
+                        onClick={() => { if (checked) toggleDefect(item.name); }}
+                        style={{
+                          minWidth: 52, minHeight: 40, padding: "0 10px", border: "none", cursor: "pointer",
+                          fontSize: 12, fontWeight: !checked ? 700 : 500, letterSpacing: "0.04em",
+                          background: !checked ? "color-mix(in srgb, var(--ok) 16%, transparent)" : "transparent",
+                          color: !checked ? "var(--ok)" : "var(--muted)",
+                        }}
+                      >
+                        OK
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={checked}
+                        onClick={() => { if (!checked) toggleDefect(item.name); }}
+                        style={{
+                          minWidth: 62, minHeight: 40, padding: "0 10px", border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
+                          fontSize: 12, fontWeight: checked ? 700 : 500, letterSpacing: "0.04em",
+                          background: checked ? "color-mix(in srgb, var(--danger) 16%, transparent)" : "transparent",
+                          color: checked ? "var(--danger)" : "var(--muted)",
+                        }}
+                      >
+                        DEFECT
+                      </button>
+                    </div>
+
                     <button
                       type="button"
                       onClick={() => setExpandedItem(expanded ? null : item.name)}
                       style={{
                         background: "none", border: "none", color: "var(--muted)",
                         cursor: "pointer", fontSize: 14, lineHeight: 1,
-                        width: 40, height: 40, padding: 0,
+                        width: 36, height: 40, padding: 0, flexShrink: 0,
                         display: "inline-flex", alignItems: "center", justifyContent: "center",
                       }}
                       aria-label="Toggle description"
@@ -701,7 +739,7 @@ export default function DVIRPage() {
                     </button>
                   </div>
                   {expanded && (
-                    <div style={{ padding: "0 10px 10px 34px", fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
+                    <div style={{ padding: "0 10px 10px", fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
                       {item.desc}
                     </div>
                   )}
@@ -710,20 +748,18 @@ export default function DVIRPage() {
             })}
           </div>
 
-          {/* Condition summary */}
+          {/* Condition summary - dot + text (color only on the dot), count in mono. */}
           <div
+            className="statusDot"
             style={{
               marginTop: 12,
-              padding: "10px 14px",
-              borderRadius: 8,
-              background: hasDefects ? "rgba(255,107,107,0.1)" : "rgba(45,212,191,0.1)",
-              color: hasDefects ? "var(--danger)" : "var(--ok)",
+              padding: "10px 2px",
               fontWeight: 600,
-              fontSize: 13,
+              ["--dot" as any]: hasDefects ? "var(--danger)" : "var(--ok)",
             }}
           >
             {hasDefects
-              ? `${defects.size} defect${defects.size !== 1 ? "s" : ""} noted - mechanic review required`
+              ? <span><span className="mono">{defects.size}</span> defect{defects.size !== 1 ? "s" : ""} noted - mechanic review required</span>
               : "No defects - vehicle in satisfactory condition"}
           </div>
 
@@ -743,7 +779,7 @@ export default function DVIRPage() {
 
         {/* ── Driver Certification ── */}
         <div className="card">
-          <div className="label" style={{ marginBottom: 4, fontWeight: 700 }}>Driver Certification</div>
+          <div className="microLabel" style={{ marginBottom: 4 }}>Driver Certification</div>
           <p className="small" style={{ color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
             I certify that this vehicle has been inspected in accordance with applicable requirements and to the best
             of my knowledge and belief, the above defects and deficiencies were not present, have been corrected, or
@@ -768,7 +804,7 @@ export default function DVIRPage() {
 
         {/* ── Back-of-truck confirmation ── */}
         <div className="card">
-          <div className="label" style={{ marginBottom: 8, fontWeight: 700 }}>
+          <div className="microLabel" style={{ marginBottom: 8 }}>
             Back of Truck Check *
           </div>
           {inspectionType === "pre-trip" ? (
@@ -898,14 +934,6 @@ const inputStyle: React.CSSProperties = {
 const selectStyle: React.CSSProperties = {
   ...inputStyle,
   appearance: "auto",
-};
-
-const backBtnStyle: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  color: "var(--muted)",
-  cursor: "pointer",
-  fontSize: 13,
 };
 
 const outlineBtnStyle: React.CSSProperties = {

@@ -15,6 +15,7 @@
 
 import { apiFetch } from "../api/client";
 import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
+import { mountainDateYYYYMMDD, mountainHHMM } from "./time";
 
 export type DutyStatus = "off_duty" | "sleeper" | "driving" | "on_duty";
 
@@ -56,6 +57,9 @@ export type RodsDay = {
   log_date: string; // YYYY-MM-DD
   driver_name: string;
   changes: DutyChange[];
+  // Job link - enables seeding from the job header + the RODS checklist auto-tick.
+  job_uuid?: string;
+  job_name?: string;
   // Trip header - carried across days.
   co_driver_name?: string;
   vehicle_number?: string;
@@ -82,13 +86,13 @@ export function newUUID(): string {
 }
 
 export function todayLocal(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  // Mountain calendar date - the DOT log's home-terminal tz, not the device's.
+  return mountainDateYYYYMMDD();
 }
 
 export function nowHHMM(): string {
-  const d = new Date();
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // Mountain wall-clock - a phone in Central must not shift the duty time +1h.
+  return mountainHHMM(new Date());
 }
 
 export function minutesOfDay(hhmm: string): number {
@@ -179,11 +183,11 @@ export function rodsDatesFromEvents(events: MinEvent[]): string[] {
  * event's time in the activity log edits the RODS. Begins off-duty at
  * midnight. Within a single minute, the LAST tap wins - lets the crew fix
  * a misclick without leaving a stale earlier entry stuck on the log. */
-/** Local calendar date ("YYYY-MM-DD", device tz) of an ISO timestamp. */
+/** Mountain calendar date ("YYYY-MM-DD") of an ISO timestamp - the DOT log's
+ *  home-terminal tz, so a duty event does not change days when the driver's phone
+ *  crosses a timezone. */
 function localDateFromTs(ts: string): string {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return mountainDateYYYYMMDD(ts);
 }
 
 export function changesForDriver(events: MinEvent[], driver: string, fallbackDriver = "", date?: string): DutyChange[] {
@@ -202,10 +206,10 @@ export function changesForDriver(events: MinEvent[], driver: string, fallbackDri
     })
     .map((e) => {
       const p = parseDutyNote(e.note || "");
-      const d = new Date(e.timestamp);
       return {
         _ts: e.timestamp,
-        time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+        // Mountain wall-clock of the event, matching the log's home-terminal tz.
+        time: mountainHHMM(e.timestamp),
         status: p.status as DutyStatus,
         location: "",
         remarks: "",
@@ -265,13 +269,15 @@ export function saveDay(day: RodsDay): void {
   } catch {}
 }
 
-export function newDay(date: string, driverName: string, carryFrom?: RodsDay | null): RodsDay {
+export function newDay(date: string, driverName: string, carryFrom?: RodsDay | null, jobUuid?: string, jobName?: string): RodsDay {
   return {
     rods_id: newUUID(),
     log_date: date,
     driver_name: driverName,
     // Start the day off-duty at 00:00 (FMCSA logs begin at midnight).
     changes: [{ time: "00:00", status: "off_duty", location: "", remarks: "" }],
+    job_uuid: jobUuid || carryFrom?.job_uuid,
+    job_name: jobName || carryFrom?.job_name,
     // Carry the trip header forward from the prior day so the driver doesn't re-enter it.
     co_driver_name: carryFrom?.co_driver_name,
     vehicle_number: carryFrom?.vehicle_number,
@@ -333,6 +339,8 @@ function dayToPayload(day: RodsDay): Record<string, unknown> {
     rods_id: day.rods_id,
     driver_name: day.driver_name,
     log_date: day.log_date,
+    job_uuid: day.job_uuid || null,
+    job_name: day.job_name || null,
     co_driver_name: day.co_driver_name || null,
     vehicle_number: day.vehicle_number || null,
     trailer_number: day.trailer_number || null,
@@ -428,16 +436,18 @@ export async function syncQueue(): Promise<number> {
   }
 }
 
-function queueHasDay(date: string): boolean {
-  return loadQueue().some((o) => o.log_date === date);
+function queueHasDay(date: string, driver = ""): boolean {
+  // Match the driver too - the queue is keyed by date::driver, so one driver's
+  // queued day must not block a co-driver's remote adoption for the same date.
+  return loadQueue().some((o) => o.log_date === date && (o.driver_name || "") === (driver || ""));
 }
 
 /** Resolve the working day: adopt the server copy when it's ahead (more changes,
  * or it's signed and local isn't) so the driver can resume on another device or
  * after a dead device. Skips adoption when local has unsynced queued work. */
 export async function loadOrResumeDay(date: string, driverName: string): Promise<RodsDay> {
-  const local = loadDay(date);
-  const remote = queueHasDay(date) ? null : await fetchRemoteDay(date);
+  const local = loadDay(date, driverName);
+  const remote = queueHasDay(date, driverName) ? null : await fetchRemoteDay(date, driverName);
   if (remote) {
     const adopt =
       !local ||
@@ -452,10 +462,12 @@ export async function loadOrResumeDay(date: string, driverName: string): Promise
 }
 
 /** Fetch a day from the server (signed or in-progress) for cross-device resume. */
-export async function fetchRemoteDay(date: string): Promise<RodsDay | null> {
+export async function fetchRemoteDay(date: string, driver = ""): Promise<RodsDay | null> {
   if (!date || !navigator.onLine) return null;
   try {
-    const rows = await apiFetch<any[]>(`/api/long-distance/rods?log_date=${encodeURIComponent(date)}`);
+    const q = `/api/long-distance/rods?log_date=${encodeURIComponent(date)}`
+      + (driver ? `&driver=${encodeURIComponent(driver)}` : "");
+    const rows = await apiFetch<any[]>(q);
     const r = Array.isArray(rows) && rows.length ? rows[0] : null;
     if (!r) return null;
     return {

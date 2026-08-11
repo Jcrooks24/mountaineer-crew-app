@@ -1,5 +1,5 @@
 TITLE:
-v1.8 - Skills, incidents, inventory, and more
+v2.3 - Skills, incidents, inventory, and more
 
 BODY (paste into Admin > Patch Notes; renders as plain text):
 
@@ -49,6 +49,10 @@ NEW - FOR ADMIN (back office)
 
 - Job types. Configure the job type tags the crew pick from on the Job Report.
 
+- Company information. Set your company name, address, phone, email, DOT, and MC
+  once in Settings; it shows as the carrier on the Bill of Lading (and anywhere the
+  company address appears) instead of being baked into the app.
+
 - Shared furniture catalogue. Import and export your catalogue as a CSV, with item
   dimensions and custom fields. One catalogue now feeds the Estimator, actual
   inventory, and the BOL item pickers.
@@ -84,6 +88,22 @@ Digital Bill of Lading:
   and delivered when they can be. It can no longer say "sent" without actually
   landing in the office sheet and the signed-PDF folder, and a background check
   re-sends anything that slipped through.
+- Present or send the signed BOL any time. Once a BOL is signed at origin, a
+  "Signed Bill of Lading" card lets you pull up the signed document on demand to
+  show it (for example at a border crossing) - it works offline - or email a copy
+  straight to the client from your phone.
+- The BOL now collects the details federal law requires, in short fill-in cards,
+  instead of leaning on the estimate (which you cannot open in the field). Before
+  signing at origin you enter the shipper's name/phone/address, the pickup and
+  delivery addresses, form of payment, binding vs non-binding, agreed dates, and
+  the customer's valuation choice (Full Value Protection or Released Value). Look
+  these up in the job's calendar description. The app will not let you sign until
+  the required fields are filled, so the finished BOL is complete for a DOT check.
+  The shipper address defaults to the pickup address (uncheck to enter a different
+  one), the agreed pickup date defaults to today, and estimates are always
+  non-binding so there is no estimate-type question.
+- Pickup and delivery addresses are now on the BOL and print on the document; you
+  can also correct them later from the "Signed Bill of Lading" card if needed.
 
 Estimator:
 - Attach site photos with notes, and use the richer shared furniture catalogue.

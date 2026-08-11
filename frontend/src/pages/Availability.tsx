@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
@@ -57,9 +58,9 @@ function nextStatus(current: AvailabilityStatus | null): AvailabilityStatus {
 }
 
 const STATUS_COLORS: Record<AvailabilityStatus, { bg: string; fg: string; label: string }> = {
-  available:   { bg: "rgba(45,212,191,0.18)",  fg: "var(--ok)",     label: "Available" },
-  unavailable: { bg: "rgba(255,107,107,0.18)", fg: "var(--danger)", label: "Unavailable" },
-  conditional: { bg: "var(--warn-bg)",         fg: "var(--warn)",   label: "Conditional" },
+  available:   { bg: "color-mix(in srgb, var(--ok) 18%, transparent)",     fg: "var(--ok)",     label: "Available" },
+  unavailable: { bg: "color-mix(in srgb, var(--danger) 18%, transparent)", fg: "var(--danger)", label: "Unavailable" },
+  conditional: { bg: "var(--warn-bg)",                                     fg: "var(--warn)",   label: "Conditional" },
 };
 
 type Tab = "submit" | "history";
@@ -421,18 +422,7 @@ export default function Availability() {
 
   return (
     <div className="container" style={{ maxWidth: 640 }}>
-      <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Scheduling Availability</div>
-        <button
-          onClick={() => nav(-1)}
-          style={{
-            background: "none", border: "none", color: "var(--muted)",
-            cursor: "pointer", fontSize: 13, padding: "4px 8px",
-          }}
-        >
-          &larr; Back
-        </button>
-      </div>
+      <AppHeader title="Scheduling Availability" onBack={() => nav(-1)} />
 
       {/* Admin view banner - this page is opened per-employee from the roster
           (Employees → Availability), so there's no in-page "view as" dropdown.
@@ -453,21 +443,17 @@ export default function Availability() {
       {/* Tab switcher - Submit hidden when an admin is viewing another user
           (Submit is for the crew member's own flow; admins edit via History). */}
       <div className="card" style={{ padding: 6 }}>
-        <div className="row" style={{ gap: 6 }}>
+        <div className="seg">
           {(isViewingSelf ? (["submit", "history"] as Tab[]) : (["history"] as Tab[])).map((t) => {
             const active = tab === t;
             return (
               <button
                 key={t}
                 type="button"
+                aria-pressed={active}
+                className={"segBtn" + (active ? " on" : "")}
+                style={{ ["--seg" as any]: "var(--brand)" }}
                 onClick={() => setTab(t)}
-                style={{
-                  flex: 1, padding: "8px 10px", borderRadius: 8,
-                  background: active ? "var(--brand)" : "transparent",
-                  color: active ? "var(--on-brand)" : "var(--text)",
-                  border: active ? "1px solid var(--brand)" : "1px solid var(--border)",
-                  fontWeight: 700, fontSize: 13,
-                }}
               >
                 {t === "submit" ? "Submit" : "History"}
               </button>
@@ -533,8 +519,8 @@ export default function Availability() {
       ) : (
         <>
           <div className="card">
-            <div className="sectionTitle">
-              {formatHuman(activeWindowStart)} → {formatHuman(addDaysIso(activeWindowStart, 13))}
+            <div className="microLabel" style={{ marginBottom: 10 }}>
+              <span className="mono">{formatHuman(activeWindowStart)}</span> → <span className="mono">{formatHuman(addDaysIso(activeWindowStart, 13))}</span>
             </div>
             <BetaTag feature="schedulingAvailability" />
             <div className="small" style={{ color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
@@ -550,7 +536,7 @@ export default function Availability() {
                 className="small"
                 style={{
                   marginTop: 10, padding: "8px 10px", borderRadius: 8,
-                  background: "rgba(93,214,194,0.10)",
+                  background: "color-mix(in srgb, var(--brand) 10%, transparent)",
                   border: "1px solid var(--brand)",
                   color: "var(--text)",
                 }}
@@ -585,7 +571,7 @@ export default function Availability() {
 
           {/* Quick fill - full 7-day week, independent state per button. */}
           <div className="card">
-            <div className="sectionTitle">Quick fill</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Quick fill</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
               Tap a day-of-week to cycle its own status and apply it to both
               matching days in this window. Skips any cells that are locked.
@@ -618,7 +604,7 @@ export default function Availability() {
 
           {/* Calendar grid. */}
           <div className="card">
-            <div className="sectionTitle">Calendar</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Calendar</div>
             <div
               style={{
                 display: "grid",
@@ -661,7 +647,7 @@ export default function Availability() {
                     <div style={{ fontSize: 10, fontWeight: 600, opacity: 0.85 }}>
                       {dayOfWeekShort(day)}
                     </div>
-                    <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
+                    <div className="mono" style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
                       {dayOfMonth(day)}
                     </div>
                     {isTodayDay && (
@@ -693,7 +679,7 @@ export default function Availability() {
 
           {/* Notes - collapsed by default. */}
           <div className="card">
-            <div className="sectionTitle">Notes</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Notes</div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 8 }}>
               Optional. Use this when "available" or "conditional" needs context
               (e.g. "available after 1pm").
@@ -726,8 +712,11 @@ export default function Availability() {
                       <span>
                         {dayOfWeekShort(day)} {formatHuman(day)}
                         {colors && (
-                          <span style={{ marginLeft: 6, color: colors.fg, fontWeight: 700 }}>
-                            · {colors.label}
+                          <span
+                            className="statusDot"
+                            style={{ ["--dot" as any]: colors.fg, marginLeft: 8, verticalAlign: "middle" }}
+                          >
+                            {colors.label}
                           </span>
                         )}
                       </span>
@@ -754,16 +743,7 @@ export default function Availability() {
                         )}
                       </span>
                       {colors && (
-                        <span
-                          className="small"
-                          style={{
-                            padding: "2px 8px", borderRadius: 999,
-                            background: colors.bg,
-                            color: colors.fg,
-                            border: `1px solid ${colors.fg}`,
-                            fontWeight: 700,
-                          }}
-                        >
+                        <span className="statusDot" style={{ ["--dot" as any]: colors.fg }}>
                           {colors.label}
                         </span>
                       )}
@@ -802,7 +782,7 @@ export default function Availability() {
           <div className="card">
             {unsetDays.length > 0 && (
               <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-                {unsetDays.length} day{unsetDays.length === 1 ? "" : "s"} left to set
+                <span className="mono">{unsetDays.length}</span> day{unsetDays.length === 1 ? "" : "s"} left to set
                 before you can submit.
               </div>
             )}
@@ -817,7 +797,7 @@ export default function Availability() {
                 style={{
                   fontSize: 13, color: "var(--danger)",
                   padding: "8px 12px", marginBottom: 8,
-                  background: "rgba(255,107,107,0.1)", borderRadius: 8,
+                  background: "color-mix(in srgb, var(--danger) 10%, transparent)", borderRadius: 8,
                 }}
               >
                 {submitError}
@@ -828,7 +808,7 @@ export default function Availability() {
                 style={{
                   fontSize: 13, color: "var(--ok)",
                   padding: "8px 12px", marginBottom: 8,
-                  background: "rgba(45,212,191,0.1)", borderRadius: 8,
+                  background: "color-mix(in srgb, var(--ok) 10%, transparent)", borderRadius: 8,
                 }}
               >
                 ✓ {postSubmitMsg}
@@ -906,7 +886,7 @@ function CaughtUpView({
   return (
     <>
       {postSubmitMsg && (
-        <div className="card" style={{ background: "rgba(45,212,191,0.1)" }}>
+        <div className="card" style={{ background: "color-mix(in srgb, var(--ok) 10%, transparent)" }}>
           <div style={{ color: "var(--ok)", fontSize: 14, fontWeight: 700 }}>
             ✓ {postSubmitMsg}
           </div>
@@ -916,11 +896,11 @@ function CaughtUpView({
         <div
           className="card"
           style={{
-            background: "rgba(93,214,194,0.08)",
+            background: "color-mix(in srgb, var(--brand) 8%, transparent)",
             border: "1px solid var(--brand)",
           }}
         >
-          <div className="sectionTitle" style={{ color: "var(--brand)" }}>
+          <div className="microLabel" style={{ marginBottom: 10 }}>
             Unlocked by the office
           </div>
           <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
@@ -943,7 +923,7 @@ function CaughtUpView({
               >
                 <span className="col" style={{ gap: 2 }}>
                   <span style={{ fontWeight: 700, fontSize: 14 }}>
-                    {formatHuman(u.window_start)} → {formatHuman(addDaysIso(u.window_start, 13))}
+                    <span className="mono">{formatHuman(u.window_start)}</span> → <span className="mono">{formatHuman(addDaysIso(u.window_start, 13))}</span>
                   </span>
                   {u.note && (
                     <span className="small" style={{ color: "var(--muted)" }}>
@@ -963,11 +943,11 @@ function CaughtUpView({
         </div>
       )}
       <div className="card">
-        <div className="sectionTitle">You're all caught up</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>You're all caught up</div>
         <BetaTag feature="schedulingAvailability" />
         <div className="small" style={{ color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
           {horizon
-            ? <>Your submitted availability extends through <strong style={{ color: "var(--text)" }}>{formatHuman(horizon)}</strong>. The next window opens here automatically once your horizon drops below 2 weeks.</>
+            ? <>Your submitted availability extends through <strong className="mono" style={{ color: "var(--text)" }}>{formatHuman(horizon)}</strong>. The next window opens here automatically once your horizon drops below 2 weeks.</>
             : <>You haven't submitted any availability yet. Come back later - there's nothing to submit right now.</>}
           {" "}If you need to change a window that's already locked, ask the office to unlock it for you.
         </div>
@@ -1033,8 +1013,8 @@ function HistoryView({
         const notedDays = days.filter((d) => !!(d.note && d.note.trim().length));
         return (
           <div className="card" key={windowStart}>
-            <div className="sectionTitle">
-              {formatHuman(windowStart)} → {formatHuman(addDaysIso(windowStart, 13))}
+            <div className="microLabel" style={{ marginBottom: 10 }}>
+              <span className="mono">{formatHuman(windowStart)}</span> → <span className="mono">{formatHuman(addDaysIso(windowStart, 13))}</span>
             </div>
             <div
               style={{
@@ -1054,7 +1034,7 @@ function HistoryView({
                     <div style={{ fontSize: 10, fontWeight: 600, opacity: 0.85 }}>
                       {dayOfWeekShort(day)}
                     </div>
-                    <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
+                    <div className="mono" style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
                       {dayOfMonth(day)}
                     </div>
                     {hasNote && (
@@ -1166,7 +1146,7 @@ function ConfirmModal({
         <div style={{ fontSize: 16, fontWeight: 800 }}>Submit availability?</div>
         <div className="small" style={{ color: "var(--muted)", lineHeight: 1.5 }}>
           You're submitting availability for the window starting{" "}
-          <strong style={{ color: "var(--text)" }}>{formatHuman(windowStart)}</strong>.
+          <strong className="mono" style={{ color: "var(--text)" }}>{formatHuman(windowStart)}</strong>.
           Once submitted, days within the next 2 weeks become locked - you'll
           need to contact the office to change them. Make sure your selections
           are correct.
@@ -1344,7 +1324,7 @@ function FuturePeriodModal({
 
         <div className="row" style={{ gap: 8 }}>
           <label className="col" style={{ flex: 1, gap: 4 }}>
-            <span className="label">From</span>
+            <span className="microLabel">From</span>
             <input
               type="date"
               value={from}
@@ -1354,7 +1334,7 @@ function FuturePeriodModal({
             />
           </label>
           <label className="col" style={{ flex: 1, gap: 4 }}>
-            <span className="label">To</span>
+            <span className="microLabel">To</span>
             <input
               type="date"
               value={to}
@@ -1366,25 +1346,24 @@ function FuturePeriodModal({
         </div>
 
         <div>
-          <span className="label">Status for every day in the range</span>
-          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+          <span className="microLabel">Status for every day in the range</span>
+          <div className="seg" style={{ marginTop: 6 }}>
             {(["available", "unavailable", "conditional"] as const).map((s) => {
-              const colors = STATUS_COLORS[s];
               const active = status === s;
+              const seg =
+                s === "unavailable" ? "var(--danger)" :
+                s === "conditional" ? "var(--warn)" :
+                "var(--ok)";
               return (
                 <button
                   key={s}
                   type="button"
+                  aria-pressed={active}
+                  className={"segBtn" + (active ? " on" : "")}
+                  style={{ ["--seg" as any]: seg }}
                   onClick={() => setStatus(s)}
-                  style={{
-                    flex: 1, padding: "10px 8px", borderRadius: 8,
-                    border: `1px solid ${active ? colors.fg : "var(--border)"}`,
-                    background: active ? colors.bg : "transparent",
-                    color: active ? colors.fg : "var(--text)",
-                    fontWeight: 700, fontSize: 13,
-                  }}
                 >
-                  {colors.label}
+                  {STATUS_COLORS[s].label}
                 </button>
               );
             })}
@@ -1392,7 +1371,7 @@ function FuturePeriodModal({
         </div>
 
         <div className="col" style={{ gap: 4 }}>
-          <span className="label">Note (optional, applies to every day)</span>
+          <span className="microLabel">Note (optional, applies to every day)</span>
           <input
             type="text"
             value={note}
@@ -1410,7 +1389,7 @@ function FuturePeriodModal({
               background: "rgba(255,255,255,0.02)",
             }}
           >
-            Marking <strong style={{ color: "var(--text)" }}>{totalDays}</strong>
+            Marking <strong className="mono" style={{ color: "var(--text)" }}>{totalDays}</strong>
             {" "}day{totalDays === 1 ? "" : "s"} as
             {" "}<strong style={{ color: STATUS_COLORS[status].fg }}>{STATUS_COLORS[status].label.toLowerCase()}</strong>.
             {" "}You'll see these in your History tab and the office will see them in your calendar today.
@@ -1422,7 +1401,7 @@ function FuturePeriodModal({
             className="small"
             style={{
               color: "var(--danger)", padding: "8px 12px",
-              background: "rgba(255,107,107,0.1)", borderRadius: 8,
+              background: "color-mix(in srgb, var(--danger) 10%, transparent)", borderRadius: 8,
             }}
           >
             {err}
@@ -1629,7 +1608,7 @@ function SchedulingNotesCard() {
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="sectionTitle" style={{ marginBottom: 0 }}>Scheduling notes</div>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Scheduling notes</div>
           <BetaTag feature="schedulingNotes" />
           {!expanded && (
             <div

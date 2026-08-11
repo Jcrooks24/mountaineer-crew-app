@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
 import {
   discardFailed,
   enqueueExpense,
@@ -253,44 +254,23 @@ export default function Reimbursement() {
 
   return (
     <div className="container" style={{ maxWidth: 640 }}>
-      <div className="topbar" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, fontSize: 15 }}>Log Expense / Request Reimbursement</div>
-        <button
-          onClick={() => nav(-1)}
-          style={{
-            background: "none", border: "none", color: "var(--muted)",
-            cursor: "pointer", fontSize: 13, padding: "4px 8px",
-          }}
-        >
-          &larr; Back
-        </button>
-      </div>
+      <AppHeader title="Reimbursement" onBack={() => nav(-1)} />
 
       <div className="card">
-        <div className="row" style={{ gap: 8 }}>
+        <div className="seg">
           <button
             type="button"
+            className={"segBtn" + (mode === "mileage" ? " on" : "")}
+            aria-pressed={mode === "mileage"}
             onClick={() => setMode("mileage")}
-            style={{
-              flex: 1, padding: "10px 12px", borderRadius: 8,
-              background: mode === "mileage" ? "var(--brand)" : "transparent",
-              color: mode === "mileage" ? "var(--on-brand)" : "var(--text)",
-              border: "1px solid var(--brand)",
-              fontWeight: 700,
-            }}
           >
             Mileage
           </button>
           <button
             type="button"
+            className={"segBtn" + (mode === "expense" ? " on" : "")}
+            aria-pressed={mode === "expense"}
             onClick={() => setMode("expense")}
-            style={{
-              flex: 1, padding: "10px 12px", borderRadius: 8,
-              background: mode === "expense" ? "var(--brand)" : "transparent",
-              color: mode === "expense" ? "var(--on-brand)" : "var(--text)",
-              border: "1px solid var(--brand)",
-              fontWeight: 700,
-            }}
           >
             Business expense
           </button>
@@ -298,7 +278,7 @@ export default function Reimbursement() {
       </div>
 
       <div className="card">
-        <div className="sectionTitle">
+        <div className="microLabel" style={{ marginBottom: 10 }}>
           {mode === "mileage" ? "Mileage reimbursement" : "Business expense"}
         </div>
         <form onSubmit={handleSubmit} className="col" style={{ gap: 10 }}>
@@ -323,6 +303,7 @@ export default function Reimbursement() {
                 <div style={{ flex: 1 }}>
                   <div className="label">Start odometer</div>
                   <input
+                    className="mono"
                     type="number"
                     inputMode="numeric"
                     value={odoStart}
@@ -333,6 +314,7 @@ export default function Reimbursement() {
                 <div style={{ flex: 1 }}>
                   <div className="label">End odometer</div>
                   <input
+                    className="mono"
                     type="number"
                     inputMode="numeric"
                     value={odoEnd}
@@ -373,6 +355,7 @@ export default function Reimbursement() {
                 <div style={{ flex: 1 }}>
                   <div className="label">Amount ($)</div>
                   <input
+                    className="mono"
                     type="number"
                     inputMode="decimal"
                     step={0.01}
@@ -428,7 +411,7 @@ export default function Reimbursement() {
                       style={{
                         flex: 1, padding: "8px 10px", borderRadius: 8, textAlign: "left",
                         border: paymentMethod === opt.v ? "2px solid var(--brand)" : "1px solid var(--border)",
-                        background: paymentMethod === opt.v ? "rgba(93,214,194,0.12)" : "var(--card)",
+                        background: paymentMethod === opt.v ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "var(--card)",
                         color: "var(--text)", cursor: "pointer",
                       }}
                     >
@@ -598,5 +581,10 @@ function StatusBadge({ status }: { status: string }) {
     : status === "failed" ? "Not sent"
     : status === "pending" ? "Pending sync"
     : status;
-  return <span style={{ color, fontWeight: 700 }}>{label}</span>;
+  // Dot + neutral text (color lives on the dot, not the whole word).
+  return (
+    <span className="statusDot" style={{ ["--dot" as any]: color, fontSize: "inherit", fontWeight: 600 }}>
+      {label}
+    </span>
+  );
 }

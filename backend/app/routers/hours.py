@@ -26,11 +26,12 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db
+from app.core.payroll_period import current_period_start
 from app.core.time_utils import (
     MOUNTAIN_TZ,
     mountain_day_utc_bounds,
@@ -39,6 +40,7 @@ from app.core.time_utils import (
 from app.db.models.event import Event
 from app.db.models.job_report import JobReport
 from app.db.models.off_job_entry import OffJobEntry
+from app.db.models.office_hours import OfficeHoursEntry
 from app.db.models.user import User
 
 router = APIRouter(prefix="/api/hours", tags=["hours"])
@@ -51,22 +53,27 @@ OT_THRESHOLD = 40.0
 # looks wrong.
 WINDOW_WEEKS = 2
 
+# Hard cap on how far back the crew can expand the "see more" history. Bounds the
+# scan so a big `weeks` value can't turn the per-mount query into a full-table
+# read on the 512 MB worker.
+MAX_WINDOW_WEEKS = 26
+
 
 def _week_start(d: date) -> date:
     """Monday of the week containing d."""
     return d - timedelta(days=d.weekday())
 
 
-def _window_start() -> date:
+def _window_start(weeks: int = WINDOW_WEEKS) -> date:
     """Monday of the earliest week we report on.
 
     Every row the endpoint touches is filtered on this, so it is the single knob
-    controlling how much of the database this query reads. Raising WINDOW_WEEKS
-    widens a scan that runs on every Profile mount for every crew member; the
-    endpoint was unbounded once and that is the thing being fixed here.
+    controlling how much of the database this query reads. The default (2 weeks)
+    keeps the per-mount Profile query small; the crew can ask for more history
+    on demand via the `weeks` param, capped at MAX_WINDOW_WEEKS.
     """
     today_mt = datetime.now(MOUNTAIN_TZ).date()
-    return _week_start(today_mt) - timedelta(days=7 * (WINDOW_WEEKS - 1))
+    return _week_start(today_mt) - timedelta(days=7 * (max(1, weeks) - 1))
 
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
@@ -85,12 +92,27 @@ def _like_escape(s: str) -> str:
 
 @router.get("/worked-history")
 def worked_history(
+    weeks: int = Query(default=WINDOW_WEEKS, ge=1, le=MAX_WINDOW_WEEKS),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     my_name = (current_user.name or "").strip().lower()
     my_id = current_user.id
-    window_start = _window_start()
+    today_mt = datetime.now(MOUNTAIN_TZ).date()
+    window_start = _window_start(weeks)
+
+    # Current pay period = day after the last finalized payroll period end. If
+    # one is set, make sure the scan reaches back to it (so the pay-period summary
+    # is complete), but never past the MAX_WINDOW_WEEKS cap - a long-stale period
+    # must not widen this per-mount query into a full-table read on the 512 MB
+    # worker (see the OOM note above).
+    period_start = current_period_start(db)
+    if period_start is not None:
+        floor = _week_start(today_mt) - timedelta(days=7 * (MAX_WINDOW_WEEKS - 1))
+        effective = max(period_start, floor)
+        if effective < window_start:
+            window_start = effective
+
     # Naive-UTC instant at the start of that Mountain day, ready to compare
     # against the naive-UTC timestamp columns.
     window_start_utc, _ = mountain_day_utc_bounds(window_start)
@@ -223,9 +245,23 @@ def worked_history(
         .all()
     )
 
+    # --- Office hours (office staff log a day's non-job time; matched by user id) ---
+    # Paid but not billed to a client and not job hours, so they get their OWN
+    # summary line rather than being folded into billable/OT. Bucketed by
+    # work_date like off-job entries. Payroll counts the same hours as
+    # non-billable pay - this just breaks them out so the person can see them.
+    office = (
+        db.query(OfficeHoursEntry)
+        .filter(
+            OfficeHoursEntry.user_id == current_user.id,
+            OfficeHoursEntry.work_date >= window_start.isoformat(),
+        )
+        .all()
+    )
+
     # --- Bucket by week ---
     weeks: dict[date, dict] = defaultdict(
-        lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0}
+        lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0, "office": 0.0}
     )
 
     for u, hrs in job_hours.items():
@@ -254,18 +290,36 @@ def worked_history(
         else:
             weeks[ws]["other"] += hrs
 
+    for entry in office:
+        d = _parse_date(entry.work_date)
+        if d is None or d < window_start:
+            continue
+        weeks[_week_start(d)]["office"] += float(entry.hours or 0)
+
     result = []
-    tot = {"regular": 0.0, "ot": 0.0, "non_billable": 0.0, "other": 0.0}
+    tot = {"regular": 0.0, "ot": 0.0, "non_billable": 0.0, "other": 0.0, "office": 0.0}
+    # Pay-period totals: the same per-week figures, but only for weeks inside the
+    # current open pay period (>= its Monday-anchored start).
+    cp = {"regular": 0.0, "ot": 0.0, "non_billable": 0.0, "other": 0.0, "office": 0.0}
+    period_week_start = _week_start(period_start) if period_start is not None else None
     for ws in sorted(weeks.keys(), reverse=True):
         b = weeks[ws]["billable"]
         regular = min(OT_THRESHOLD, b)
         ot = max(0.0, b - OT_THRESHOLD)
         nb = weeks[ws]["non_billable"]
         other = weeks[ws]["other"]
+        office_h = weeks[ws]["office"]
         tot["regular"] += regular
         tot["ot"] += ot
         tot["non_billable"] += nb
         tot["other"] += other
+        tot["office"] += office_h
+        if period_week_start is not None and ws >= period_week_start:
+            cp["regular"] += regular
+            cp["ot"] += ot
+            cp["non_billable"] += nb
+            cp["other"] += other
+            cp["office"] += office_h
         result.append(
             {
                 "week_start": ws.isoformat(),
@@ -273,19 +327,150 @@ def worked_history(
                 "ot_hours": round(ot, 2),
                 "non_billable_hours": round(nb, 2),
                 "other_hours": round(other, 2),
-                "total_hours": round(b + nb + other, 2),
+                "office_hours": round(office_h, 2),
+                "total_hours": round(b + nb + other + office_h, 2),
             }
         )
 
+    current_period = None
+    if period_start is not None:
+        current_period = {
+            "start": period_start.isoformat(),
+            "end": today_mt.isoformat(),
+            "regular_hours": round(cp["regular"], 2),
+            "ot_hours": round(cp["ot"], 2),
+            "non_billable_hours": round(cp["non_billable"], 2),
+            "other_hours": round(cp["other"], 2),
+            "office_hours": round(cp["office"], 2),
+            "total_hours": round(
+                cp["regular"] + cp["ot"] + cp["non_billable"]
+                + cp["other"] + cp["office"], 2
+            ),
+        }
+
     return {
         "weeks": result,
+        # Present only once a payroll has been finalized; the frontend shows this
+        # as the primary summary ("current pay period") and falls back to the
+        # rolling `summary` otherwise.
+        "current_period": current_period,
         "summary": {
             "regular_hours": round(tot["regular"], 2),
             "ot_hours": round(tot["ot"], 2),
             "non_billable_hours": round(tot["non_billable"], 2),
             "other_hours": round(tot["other"], 2),
+            "office_hours": round(tot["office"], 2),
             "total_hours": round(
-                tot["regular"] + tot["ot"] + tot["non_billable"] + tot["other"], 2
+                tot["regular"] + tot["ot"] + tot["non_billable"]
+                + tot["other"] + tot["office"], 2
             ),
         },
     }
+
+
+@router.get("/daily")
+def daily_hours(
+    start: str = Query(...),
+    end: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Per-day TOTAL worked hours (job + off-job + office) for the caller across
+    [start, end] inclusive. Powers the PODS auto-fill: a driver's on-duty hours
+    for the days before an LD trip, summing every hour type per day.
+
+    Same sources as /worked-history so the two agree; kept separate because this
+    is on-demand (not per-mount) and buckets by DAY, not week. If you change how
+    a source is matched here, change it there too.
+    """
+    start_d = _parse_date(start)
+    end_d = _parse_date(end)
+    if not start_d or not end_d or end_d < start_d or (end_d - start_d).days > 62:
+        return {"days": []}
+
+    start_utc, _ = mountain_day_utc_bounds(start_d)
+    my_name = (current_user.name or "").strip().lower()
+    my_id = current_user.id
+
+    def _is_me(entry: dict) -> bool:
+        uid = entry.get("user_id")
+        if isinstance(uid, int):
+            return uid == my_id
+        return (entry.get("name") or "").strip().lower() == my_name
+
+    per_day: dict[date, float] = defaultdict(float)
+
+    # Job-report hours, dated by the job's earliest event (see /worked-history for
+    # why the ILIKE prefilter + _is_me both exist).
+    job_hours: dict[str, float] = defaultdict(float)
+    report_updated: dict[str, datetime] = {}
+    maybe_mine = [
+        JobReport.employee_hours_json.ilike(f'%"user_id": {my_id}%', escape="\\"),
+        JobReport.employee_hours_json.ilike(f'%"user_id":{my_id}%', escape="\\"),
+    ]
+    if my_name:
+        maybe_mine.append(JobReport.employee_hours_json.ilike(f"%{_like_escape(my_name)}%", escape="\\"))
+    for job_uuid, eh_json, updated_at in (
+        db.query(JobReport.job_uuid, JobReport.employee_hours_json, JobReport.updated_at)
+        .filter(JobReport.updated_at >= start_utc, JobReport.employee_hours_json.isnot(None), or_(*maybe_mine))
+        .all()
+    ):
+        report_updated[job_uuid] = updated_at
+        try:
+            entries = json.loads(eh_json or "[]")
+        except Exception:
+            continue
+        for e in entries or []:
+            if isinstance(e, dict) and _is_me(e):
+                job_hours[job_uuid] += float(e.get("hours") or 0)
+
+    if job_hours:
+        uuids = list(job_hours.keys())
+        earliest = {
+            ju: ts
+            for ju, ts in db.query(Event.job_uuid, func.min(Event.timestamp))
+            .filter(Event.job_uuid.in_(uuids)).group_by(Event.job_uuid).all()
+            if ts is not None
+        }
+        for u, hrs in job_hours.items():
+            ts = earliest.get(u) or report_updated.get(u)
+            if ts is None:
+                continue
+            d = utc_naive_to_mountain_date(ts)
+            if start_d <= d <= end_d:
+                per_day[d] += hrs
+
+    # Off-job hours (by work_date).
+    for entry in (
+        db.query(OffJobEntry)
+        .filter(
+            OffJobEntry.submitted_by_id == my_id,
+            or_(
+                OffJobEntry.work_date >= start_d.isoformat(),
+                and_(OffJobEntry.work_date.is_(None), OffJobEntry.created_at >= start_utc),
+            ),
+        )
+        .all()
+    ):
+        d = _parse_date(entry.work_date)
+        if d is None and entry.created_at is not None:
+            d = utc_naive_to_mountain_date(entry.created_at)
+        if d is not None and start_d <= d <= end_d:
+            per_day[d] += float(entry.hours or 0)
+
+    # Office hours (by work_date).
+    for entry in (
+        db.query(OfficeHoursEntry)
+        .filter(OfficeHoursEntry.user_id == my_id, OfficeHoursEntry.work_date >= start_d.isoformat())
+        .all()
+    ):
+        d = _parse_date(entry.work_date)
+        if d is not None and start_d <= d <= end_d:
+            per_day[d] += float(entry.hours or 0)
+
+    days = []
+    cur = start_d
+    while cur <= end_d:
+        days.append({"date": cur.isoformat(), "hours": round(per_day.get(cur, 0.0), 2)})
+        cur += timedelta(days=1)
+    return {"days": days}

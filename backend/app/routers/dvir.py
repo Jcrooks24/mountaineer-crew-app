@@ -135,6 +135,18 @@ def get_units(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
+    """The DVIR unit dropdown. Unified onto the fleet registry (vehicle_units) so
+    trucks are managed in ONE place (Settings -> Vehicle Units). Falls back to
+    the legacy dvir_units list, then the defaults, if the registry is empty."""
+    from app.core.vehicle_units import VEHICLE_UNITS_KEY, normalize_units
+    vrow = db.query(SystemConfig).filter(SystemConfig.key == VEHICLE_UNITS_KEY).first()
+    if vrow and vrow.value:
+        try:
+            names = [u["name"] for u in normalize_units(json.loads(vrow.value)) if u.get("name")]
+        except (ValueError, TypeError):
+            names = []
+        if names:
+            return {"units": names}
     row = db.query(SystemConfig).filter(SystemConfig.key == UNITS_CONFIG_KEY).first()
     units = json.loads(row.value) if row and row.value else DEFAULT_UNITS
     return {"units": units}
@@ -316,24 +328,22 @@ def request_mechanic_signature(
 
     defects = json.loads(dvir.defects_json) if dvir.defects_json else []
     defect_line = ", ".join(defects) if defects else "Defects noted"
-    greeting = f"Hi{' ' + body.mechanic_name if body.mechanic_name else ''},"
+    from app.core import app_communication as comms
+    subject, textbody = comms.render(db, "mechanic_signoff", {
+        "mechanic_name": (body.mechanic_name or "").strip() or "there",
+        "vehicle_number": dvir.vehicle_number,
+        "inspection_type": dvir.inspection_type,
+        "inspection_date": dvir.inspection_date,
+        "driver_name": dvir.driver_name,
+        "defects": defect_line,
+        # Pre-formatted as its own line so the template does not need a
+        # conditional; empty when there are no notes.
+        "notes_line": f"Notes: {dvir.defect_notes}\n" if dvir.defect_notes else "",
+        "sign_link": sign_link,
+        "expiry_days": 14,
+    })
     try:
-        send_email(
-            to_email=mechanic_email,
-            subject=f"Mechanic sign-off needed - {dvir.vehicle_number} (DVIR {dvir.inspection_date})",
-            text=(
-                f"{greeting}\n\n"
-                f"Mountaineer Moving needs a mechanic sign-off before vehicle "
-                f"{dvir.vehicle_number} can return to service.\n\n"
-                f"Inspection: {dvir.inspection_type} on {dvir.inspection_date}\n"
-                f"Reported by: {dvir.driver_name}\n"
-                f"Defects: {defect_line}\n"
-                + (f"Notes: {dvir.defect_notes}\n" if dvir.defect_notes else "")
-                + f"\nReview the inspection and sign off here (link expires in 14 days):\n\n"
-                f"{sign_link}\n\n"
-                f"Once you sign, the vehicle is automatically cleared for service."
-            ),
-        )
+        send_email(to_email=mechanic_email, subject=subject, text=textbody)
         # Log the dvir id rather than the mechanic's email - Render logs are
         # not the right place to record third-party contact information.
         print(f"[mechanic-sign] email sent OK for dvir {dvir.id}")

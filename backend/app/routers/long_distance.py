@@ -191,6 +191,8 @@ def _rods_to_response(r: RodsLog) -> RodsResponse:
         driver_id=r.driver_id,
         driver_name=r.driver_name,
         log_date=r.log_date,
+        job_uuid=r.job_uuid,
+        job_name=r.job_name,
         co_driver_name=r.co_driver_name,
         vehicle_number=r.vehicle_number,
         trailer_number=r.trailer_number,
@@ -245,6 +247,11 @@ def create_rods(
 
     if existing is not None:
         existing.driver_name = body.driver_name.strip()
+        # Only (re)link a job when one is supplied - an unsigned continuity
+        # autosave that omits it must not wipe an existing link.
+        if body.job_uuid:
+            existing.job_uuid = body.job_uuid
+            existing.job_name = (body.job_name or "").strip() or None
         existing.co_driver_name = (body.co_driver_name or "").strip() or None
         existing.vehicle_number = (body.vehicle_number or "").strip() or None
         existing.trailer_number = (body.trailer_number or "").strip() or None
@@ -279,6 +286,8 @@ def create_rods(
         driver_id=driver_id,
         driver_name=body.driver_name.strip(),
         log_date=body.log_date,
+        job_uuid=(body.job_uuid or None),
+        job_name=(body.job_name or None),
         co_driver_name=(body.co_driver_name or "").strip() or None,
         vehicle_number=(body.vehicle_number or "").strip() or None,
         trailer_number=(body.trailer_number or "").strip() or None,
@@ -311,12 +320,19 @@ def create_rods(
 @router.get("/rods", response_model=List[RodsResponse])
 def list_my_rods(
     log_date: Optional[str] = Query(default=None),
+    driver: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List this driver's RODS logs (newest first). If log_date is given, return
-    just that day (used by the recorder to resume a day across devices)."""
-    q = db.query(RodsLog).filter(RodsLog.driver_id == current_user.id)
+    """List RODS logs (newest first). Default: this user's own days. With `driver`
+    (a resolved driver name) return THAT driver's day(s) - a shared trip record any
+    crew member can resume (a passenger who logged on the driver's behalf, or a
+    co-driver on another device), since create_rods keys the row by the named
+    driver, not the submitter. If log_date is given, just that day."""
+    if driver and driver.strip():
+        q = db.query(RodsLog).filter(RodsLog.driver_name == driver.strip())
+    else:
+        q = db.query(RodsLog).filter(RodsLog.driver_id == current_user.id)
     if log_date:
         q = q.filter(RodsLog.log_date == log_date)
     rows = q.order_by(RodsLog.created_at.desc()).limit(50).all()

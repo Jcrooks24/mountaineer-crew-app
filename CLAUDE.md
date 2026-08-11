@@ -10,10 +10,18 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 |---|---|
 | [README.md](README.md) | The front door. What this is, where it lives, how to run it. Start a successor here. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | What the pieces are and how they talk. Read before changing anything structural. |
+| [docs/DATA_FLOW.md](docs/DATA_FLOW.md) | The field-level ledger for **production**: for every piece of data, what triggers the exchange and when the transfer happens. Queue keys, drain functions, debounce timings, Sheet export functions, per-field adherence. Read this when debugging what crews are actually running. |
+| [docs/DATA_FLOW_STAGING.md](docs/DATA_FLOW_STAGING.md) | The same ledger for **unpromoted staging work**, as a delta. New dev work is logged here in the same commit as the code, and folded into DATA_FLOW.md at promotion. |
 | [docs/RUNBOOKS.md](docs/RUNBOOKS.md) | Step-by-step checklists for when something is broken. Also holds the **Known defects** list. |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md) | Every account, env var, and API. What breaks without each. **No secret values, ever.** |
 | [docs/decisions/](docs/decisions/) | Why things are the way they are. **Read before "fixing" something that looks wrong.** |
+| [docs/business/](docs/business/) | The company this app serves: who does what, the SOP, the tools audit, the M1 merger assessment. **Read before deciding whether a feature should exist.** |
 | [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md) | The pre-promotion test protocol (`/vet`). |
+| [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) | Admin-facing guide: what admin can do in the app. Keep accurate against `Admin.tsx` / `admin.py`. |
+| [docs/CREW_GUIDE.md](docs/CREW_GUIDE.md) | Crew-facing reference & troubleshooting guide (every feature + failure modes). Master formatted copy lives in the shared doc. |
+| [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) | The visual contract: tokens, primitives, patterns. Read before restyling or building a screen. Rationale in [ADR 0030](docs/decisions/0030-enterprise-design-system-facelift.md). |
+| [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) | Cleanups paid down opportunistically, a few per commit, in files you are already editing. Check it whenever you touch a frontend file. |
+| [docs/PROMOTION_CHECKLIST.md](docs/PROMOTION_CHECKLIST.md) | Every pre- and post-merge step for `staging -> main`: Sheets mirror, env vars by environment, Apps Script pastes, email workflows, patch note, crew email, in-app config. Driven by `/promote`. |
 
 ## Definition of done
 
@@ -22,9 +30,11 @@ A change is not done when the code works. It is done when the next person can st
 1. **Code works**, verified by exercising it, not just by typecheck.
 2. **New env var, secret, or Google API?** → it is in `docs/CREDENTIALS.md`, and the user has been told to set it on Render/Vercel.
 3. **New service, integration, queue, or data flow?** → `docs/ARCHITECTURE.md` and its diagram still match reality.
+   **Touched a queue, a drain trigger, a debounce timing, an endpoint, or a Sheet export path?** → `docs/DATA_FLOW_STAGING.md` is updated in the same commit, including the per-field table for that domain. Adding a field to a payload without adding it there is how that doc goes stale. `docs/DATA_FLOW.md` is the production baseline and changes only at promotion.
 4. **Made a decision someone would be tempted to undo?** → write the ADR in `docs/decisions/` now. Apply the test in that folder's README.
 5. **Found a bug you did not fix?** → add it to Known defects in `docs/RUNBOOKS.md`. **Fixed one that is listed?** → delete the entry.
 6. **Changed setup, local dev, or deploy?** → `README.md` is current.
+7. **Edited a frontend file?** → check [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) and apply any items that match **the files you already touched**. A few per commit, noted in the commit message. Do not go hunting in other files, and do not let it become the point of the commit. Skip anything not obviously safe.
 
 Run **`/handoff`** at the end of a working session to sweep all of this. Run **`/vet`** before promoting to `main`.
 
@@ -88,6 +98,14 @@ measure, not a correctness requirement.
 
 Only run when explicitly asked to promote.
 
+**Start with `/promote`.** It runs `scripts/promotion_gate.py --report` and walks
+[docs/PROMOTION_CHECKLIST.md](docs/PROMOTION_CHECKLIST.md), which covers the
+things this section does not: the Sheets mirror and column safety, new env vars
+by platform and environment, Postmark/OAuth manual setup, Apps Script pastes (a
+runtime CI does not deploy), the full email-workflow inventory, the patch note,
+the mass crew email, and in-app config that does not travel with the merge. The
+steps below remain the mechanical merge procedure.
+
 1. **Merge** `staging` into `main`. Render auto-deploys main on push.
 2. **Verify the start command above is set** on the Render prod service before promoting (only needed once; persists across deploys). Migrations now run as part of the start command, not at app startup.
 3. **Run the user-migration script:** `backend/scripts/migrate_users_staging_to_prod.py`. It copies `email`, `password_hash`, `name`, `role`, `is_active`, `profile_photo`, `is_skill_rater` from staging Postgres to prod Postgres with `ON CONFLICT (email) DO NOTHING` (prod wins on conflicts). Crew who only exist on staging would otherwise have to re-register. Dry-run first:
@@ -96,6 +114,7 @@ Only run when explicitly asked to promote.
      python backend/scripts/migrate_users_staging_to_prod.py --dry-run
    ```
 4. **Verify prod env vars** (see checklist below). Missing/stale values here have caused a crew member to be unable to reset their password post-promotion.
+5. **Vet the data-flow docs.** Fold `docs/DATA_FLOW_STAGING.md` into `docs/DATA_FLOW.md`, empty the delta, and bump "Verified against". See the Data-flow doc gate in [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md). **A new staging data flow that does not pass blocks the merge**: any `[ ]` field, any newly-introduced deviation, or any changed data path missing from the staging doc. Deviations `main` already carries do not block. A blocker clears only by fixing it or by an explicit written waiver from the user.
 
 **One-time, on the promotion that carries [ADR 0014](docs/decisions/0014-skill-rating-is-designated-not-inherited.md):** the `crew_lead` role stops granting skill rating. Every prod crew lead who should keep rating needs the **Skill rater** toggle set on them in Admin → roster. Do this in the same sitting as the promotion, or leads will quietly find the skill rows and the job-type picker gone the next morning. `ON CONFLICT DO NOTHING` means the migration script will not fix it for anyone who already exists in prod.
 

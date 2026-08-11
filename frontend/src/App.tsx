@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "./auth/AuthContext";
 import { apiFetch } from "./api/client";
 import JobReport from "./components/JobReport";
@@ -8,16 +7,24 @@ import ActualInventory from "./components/ActualInventory";
 import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport";
 import { drainIncidents } from "./lib/incidentStore";
 import { drainOffJob } from "./lib/offJobStore";
+import { drainBugReports } from "./lib/bugReportStore";
+import { drainFeatureRequests } from "./lib/featureRequestStore";
+import { getUnitsCached as getVehUnitsCached, refreshUnits as refreshVehUnits, type VehicleUnit } from "./lib/vehicleUnits";
 import { drainAll as drainJobInventory } from "./lib/jobInventoryQueue";
+import { drainJobSetups } from "./lib/jobSetupStore";
+import JobSetupPanel from "./components/JobSetupPanel";
+import { drainChecklistChecks } from "./lib/jobChecklistStore";
+import JobChecklistCard from "./components/JobChecklistCard";
+import JobClosedPanel from "./components/JobClosedPanel";
+import DqReminderBanner from "./components/DqReminderBanner";
 import RodsRecorder from "./components/RodsRecorder";
-import { useLdPlan, LdPlanTile } from "./components/LdWorkday";
+import { useLdPlan } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
 import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { slotToBlob, slotToPreviewBlob, toQueuedPhoto, UnreadablePhotoError } from "./lib/queuedPhoto";
 import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
-import { hasUnseenPatchNotes } from "./lib/patchNotesSeen";
 import {
   formatMountain,
   formatMountainDate,
@@ -130,7 +137,7 @@ const JOB_DATE_PREFIX = "crew_job_date_v1:"; // per job_uuid
 const JOB_META_PREFIX = "crew_job_meta_v1:"; // per job_uuid
 const CAL_BIND_PREFIX = "crew_cal_bind_v1:"; // per date+calendarEventId => job_uuid
 
-type Tab = "timeline" | "photos" | "report" | "inventory";
+type Tab = "home" | "timeline" | "photos" | "report" | "inventory";
 
 type EventRecord = {
   event_id: string;
@@ -169,6 +176,11 @@ type CalEvent = {
   summary: string;
   start?: string;
   end?: string;
+  // The office writes the job's address, crew, and special instructions into
+  // the calendar event; surfaced in the hub's active-job context card so the
+  // crew see what they're on. `description` can arrive as light HTML.
+  description?: string;
+  location?: string;
   // Count of invited crew on the event; cached server-side at resolve so the
   // est-vs-actual schedule fallback can express man-hours (invitees x duration).
   invitees?: number;
@@ -193,6 +205,7 @@ type ServerPhoto = {
   thumb_url: string;
   created_at: string;
   mime_type: string;
+  category?: string | null;
   incident_uuid?: string | null;
   claim_number?: string | null;
 };
@@ -279,6 +292,27 @@ function calEventToJobUuid(calId: string): string {
   return stringToJobUuid(calId);
 }
 
+// Google Calendar descriptions can carry light HTML (<br>, <a>, bold). Strip to
+// readable plain text for the active-job context card: tags out, common entities
+// decoded, whitespace collapsed. Not a sanitizer - the result is rendered as
+// TEXT, never as HTML.
+function calText(raw: string | undefined | null): string {
+  if (!raw) return "";
+  return String(raw)
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/(p|div|li)\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /**
  * Derive a deterministic UUID v4 for a manually-entered job. Any device
  * that types the same (normalized) name on the same date resolves to the
@@ -324,18 +358,30 @@ function getDeviceId(): string {
   return id;
 }
 
+// Hub action-grid icons: 22px line icons, stroke = currentColor.
+const _hi = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+const HubIcons = {
+  timeline: () => (<svg {..._hi}><path d="M4 6h16M4 12h16M4 18h10" /><circle cx="20" cy="18" r="1.6" /></svg>),
+  photos: () => (<svg {..._hi}><rect x="3" y="6" width="18" height="14" rx="2" /><path d="M8 6l1.5-2h5L16 6" /><circle cx="12" cy="13" r="3.2" /></svg>),
+  box: () => (<svg {..._hi}><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" /><path d="M4 7.5l8 4.5 8-4.5M12 12v9" /></svg>),
+  report: () => (<svg {..._hi}><path d="M7 3h8l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><path d="M9 12h6M9 16h6M9 8h3" /></svg>),
+  truck: () => (<svg {..._hi}><path d="M2 5h11v10H2z" /><path d="M13 8h4l4 4v3h-8z" /><circle cx="6" cy="18" r="1.6" /><circle cx="17" cy="18" r="1.6" /></svg>),
+};
+
 export default function App() {
-  const nav = useNavigate();
   const { user } = useAuth();
   const { settings: themeSettings } = useTheme();
   const { src: logo, variant: logoVariant } = useResolvedLogo();
   const ht = themeSettings.helpTexts;
-  const [tab, setTab] = useState<Tab>("timeline");
+  const [tab, setTab] = useState<Tab>("home");
 
   const [jobUuid, setJobUuid] = useState<string>(() => localStorage.getItem(JOB_KEY) || "");
   const [jobStatus, setJobStatus] = useState<"active" | "closed">(
     () => (localStorage.getItem(JOB_STATUS_KEY) as any) || "active"
   );
+  // When true, reopening a finalized job's report drops straight into the editor
+  // instead of the read-only closed tile (set by "Edit finalized job").
+  const [openReportInEdit, setOpenReportInEdit] = useState(false);
 
   const [mode, setMode] = useState<"local" | "long_distance">(
     () => (localStorage.getItem(MODE_KEY) as any) || "local"
@@ -346,6 +392,17 @@ export default function App() {
     localStorage.setItem(MODE_KEY, val);
   }
 
+  // The calendar event description is often long (the office pastes full
+  // instructions), which crowds the hub. Collapsed by default; the crew expand
+  // it when they need it.
+  const [showJobDetails, setShowJobDetails] = useState(false);
+
+  // Once a job is active, the Select-Job dropdown + Date inputs collapse into a
+  // fixed read-only display; "Change job" reopens the picker to switch or start
+  // a new one. Selecting a job (jobUuid changes) closes the picker again.
+  const [selectingJob, setSelectingJob] = useState(false);
+  useEffect(() => { if (jobUuid) setSelectingJob(false); }, [jobUuid]);
+
   // The Inventory tab only exists in long-distance mode. Today the mode switch
   // itself lives on the Timeline tab, so nobody can be sitting on Inventory at
   // the moment it flips to local - but that is a layout coincidence, not a
@@ -353,7 +410,7 @@ export default function App() {
   // button is gone and whose body renders nothing: a blank screen with no way
   // back. Cheap insurance.
   useEffect(() => {
-    if (!longDistance && tab === "inventory") setTab("timeline");
+    if (!longDistance && tab === "inventory") setTab("home");
   }, [longDistance, tab]);
 
   // Long-distance day plan - drives whether the timeline shows the labor Actions
@@ -372,17 +429,6 @@ export default function App() {
   const [activityLog, setActivityLog] = useState<EventRecord[]>([]);
 
   const [clockText, setClockText] = useState<string>("-");
-  const [patchNotesUnseen, setPatchNotesUnseen] = useState<boolean>(false);
-
-  useEffect(() => {
-    apiFetch<{ id: number; updated_at: string }[]>("/api/patch-notes")
-      .then((rows) => {
-        const latest = rows[0]?.updated_at ?? null;
-        setPatchNotesUnseen(hasUnseenPatchNotes(latest));
-      })
-      .catch(() => {/* non-fatal - no indicator */});
-  }, []);
-
   // Retention prune on boot - drop stale log entries and stuck queue ops
   // so localStorage stays well clear of its per-origin quota. The Google
   // Sheet is authoritative long-term; this buffer only needs a couple of
@@ -491,6 +537,9 @@ export default function App() {
   // currently-selected target ("" = tag the batch to the job, not an incident).
   const [jobIncidents, setJobIncidents] = useState<JobIncidentRef[]>([]);
   const [attachIncidentUuid, setAttachIncidentUuid] = useState<string>("");
+  // Non-incident photos are before / after / general (the incident path is its
+  // own "category"). Applies to the whole pending batch on save.
+  const [photoCategory, setPhotoCategory] = useState<"before" | "after" | "general">("general");
 
   const [sendingType, setSendingType] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -704,6 +753,45 @@ export default function App() {
     localStorage.setItem(JOB_STATUS_KEY, val);
   }
 
+  // ── Closed-job panel (backlog #2) ──────────────────────────────────────────
+  // Report save-and-close IS the job closeout: mark the job finished (+ a FINISH
+  // marker on the timeline if none exists yet) and flip the whole screen to the
+  // static JobClosedPanel. "Edit finalized job" reopens the working view; "Start
+  // / change job" clears it back to the picker.
+  function handleReportCloseOut() {
+    const finished = loadLog().some((e) => e.job_uuid === jobUuid.trim() && e.type === "FINISH");
+    if (!finished) recordEvent("FINISH");   // timeline marker (also flips status)
+    setPersistedJobStatus("closed");         // guaranteed flip even if recordEvent guards out
+    setOpenReportInEdit(false);
+    setTab("home");
+  }
+  function handleEditFinalized() {
+    setPersistedJobStatus("active");
+    setOpenReportInEdit(true);   // drop straight into the report editor, not the closed tile
+    setTab("report");
+  }
+  function handleChangeJobFromPanel() {
+    setPersistedJobStatus("active");
+    setOpenReportInEdit(false);
+    setSelectingJob(true);
+    setTab("home");
+  }
+
+  // Cross-device: a job whose report already exists on the server has been closed
+  // out - show the panel even on a device that never closed it locally. Keyed on
+  // jobUuid only (so it never re-fires on reopen, which keeps the same jobUuid) and
+  // only ever sets "closed", so it can't fight an intentional reopen.
+  useEffect(() => {
+    setOpenReportInEdit(false);   // a job change clears any pending reopen-in-edit
+    const uuid = jobUuid.trim();
+    if (!uuid || !navigator.onLine) return;
+    let cancelled = false;
+    apiFetch(`/api/job-report?job_uuid=${encodeURIComponent(uuid)}`)
+      .then(() => { if (!cancelled) setPersistedJobStatus("closed"); })
+      .catch(() => { /* 404 = no report yet; leave status as-is */ });
+    return () => { cancelled = true; };
+  }, [jobUuid]);
+
   // -----------------------
   // Geolocation + events
   // -----------------------
@@ -722,10 +810,6 @@ export default function App() {
         { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
       );
     });
-  }
-
-  function iconForStatus(s: "queued" | "synced") {
-    return s === "synced" ? "✓" : "●";
   }
 
   function markLogEventsSyncedByIds(ids: Set<string>) {
@@ -1121,6 +1205,24 @@ export default function App() {
     }
   }
 
+  // ── Loaded-weight capture (B3/B4). Logging a weight creates a WEIGHT event, so
+  // it is timestamped, offline-queued, cross-device, and visible to anyone in the
+  // timeline + the "Loaded weights" summary. No new store needed. ──
+  const [vehUnits, setVehUnits] = useState<VehicleUnit[]>(() => getVehUnitsCached());
+  useEffect(() => { refreshVehUnits().then(setVehUnits).catch(() => {}); }, []);
+  const [showWeightEntry, setShowWeightEntry] = useState(false);
+  const [weightVal, setWeightVal] = useState("");
+  const [weightUnit, setWeightUnit] = useState("");
+  async function logWeight() {
+    const n = Number(weightVal);
+    if (!Number.isFinite(n) || n <= 0) { setStatus("Enter a loaded weight in pounds."); return; }
+    const unit = weightUnit.trim();
+    const note = `${Math.round(n).toLocaleString()} lb${unit ? ` · ${unit}` : ""}`;
+    await recordEvent("WEIGHT", note);
+    setWeightVal("");
+    setShowWeightEntry(false);
+  }
+
   // -----------------------
   // Calendar binding
   // -----------------------
@@ -1396,6 +1498,31 @@ export default function App() {
     }
   }
 
+  // Manual cross-device pull. Cross-device sync otherwise only reconciles on
+  // reconnect / mount, so a crew member on one device can't see what a teammate
+  // just logged to the same job. This pushes my own pending work up first (so
+  // the refresh reconciles both ways), then pulls the job's server state:
+  // timeline events, photos, and materials. Wired to a persistent Refresh button
+  // in the hub header, visible on every tab.
+  const [refreshing, setRefreshing] = useState(false);
+  async function refreshFromServer() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await syncQueueNow();
+      const uuid = jobUuid.trim();
+      if (uuid) {
+        await Promise.all([
+          fetchJobEvents(uuid),
+          fetchServerPhotos(uuid),
+          syncMaterialsInBackground(uuid),
+        ]);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   // -----------------------
   // Photos
   // -----------------------
@@ -1520,6 +1647,7 @@ export default function App() {
       caption,
       blob: await toQueuedPhoto(file),
       drive_status: "pending",
+      category: photoCategory,
       incident_uuid: inc?.incident_uuid,
       claim_number: inc?.claim_number,
     };
@@ -1534,6 +1662,7 @@ export default function App() {
       form.append("job_name", jobName);
       form.append("job_date", jobDate);
       form.append("caption", caption);
+      form.append("category", photoCategory);
       if (inc) {
         form.append("incident_uuid", inc.incident_uuid);
         form.append("claim_number", inc.claim_number || "");
@@ -1600,9 +1729,21 @@ export default function App() {
           method: "POST",
           body: JSON.stringify({ photo_id: id, caption }),
         });
-      } catch {
-        // Offline or not-yet-uploaded: local caption is saved above and will
-        // ride along on the next upload/retry. Non-fatal.
+      } catch (e) {
+        // Whether this is safe to swallow turns on ONE thing: is there a local
+        // copy holding the caption?
+        //
+        // isLocal - yes. `updatePhoto` above stored it, and it rides along on
+        // the next upload. Every server failure here is expected and harmless,
+        // including a 404: a not-yet-uploaded photo genuinely is not on the
+        // server. Swallow all of them.
+        //
+        // Server-only photo - no. Nothing else holds the note, and there is no
+        // queue for captions. Swallowing reported "Note saved" over a note that
+        // reached nothing, which for an incident photo is the record itself.
+        // Surface every failure, offline included: the crew member needs to
+        // know it did not save so they can redo it on signal.
+        if (!isLocal) throw e;
       }
       await refreshPhotos();
       await fetchServerPhotos(jobUuid.trim());
@@ -1789,17 +1930,23 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainPendingPhotos(); void drainJobInventory(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainFeatureRequests(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); void drainChecklistChecks(); };
     const onOffline = () => setIsOnline(false);
     // Flush any incidents + off-job hours + un-uploaded photos queued while
     // offline on this mount too.
     drainIncidents();
     drainOffJob();
+    void drainBugReports();
+    void drainFeatureRequests();
     void drainPendingPhotos();
     // Inventory adds queued offline: drained here rather than only inside
     // ActualInventory, because that component no longer mounts on local jobs.
     // Anything a crew member logged before the tab went away still syncs.
     void drainJobInventory();
+    // Job-setup headers saved offline (C1.2).
+    void drainJobSetups();
+    // Checklist manual ticks saved offline (C3).
+    void drainChecklistChecks();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
@@ -2008,53 +2155,34 @@ export default function App() {
         </div>
 
         <div className="row wrap" style={{ justifyContent: "flex-end" }}>
-          <span className="chip" style={{ color: isOnline ? "var(--ok)" : "var(--danger)" }}>
+          <button
+            type="button"
+            onClick={refreshFromServer}
+            disabled={refreshing || !isOnline}
+            title="Pull the latest data other crew logged for this job"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              background: "none", border: "1px solid var(--border)", borderRadius: 8,
+              color: "var(--text)", padding: "4px 8px", fontSize: 12, fontWeight: 600,
+              cursor: refreshing || !isOnline ? "default" : "pointer",
+              opacity: !isOnline ? 0.5 : 1,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></svg>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+          <span className="statusDot mono" style={{ ["--dot" as any]: isOnline ? "var(--ok)" : "var(--danger)", fontSize: 12 }}>
             {isOnline ? "Online" : "Offline"}
           </span>
-          <span className="chip" style={queueLen > 0 ? { color: "var(--brand2)", borderColor: "rgba(106,167,255,0.35)" } : {}}>
-            Queue {queueLen}
+          <span className="statusDot" style={{ ["--dot" as any]: queueLen > 0 ? "var(--brand2)" : "var(--muted)", fontSize: 12 }}>
+            Queue <span className="mono">{queueLen}</span>
           </span>
-          <span className="chip" style={{ color: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize" }}>
+          <span className="statusDot" style={{ ["--dot" as any]: jobStatus === "active" ? "var(--ok)" : "var(--muted)", textTransform: "capitalize", fontSize: 12 }}>
             {jobStatus}
           </span>
-          <button
-            className="chip"
-            onClick={() => nav("/dvir")}
-            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
-          >
-            DVIR
-          </button>
-          {user?.role === "admin" && (
-            <button
-              className="chip"
-              onClick={() => nav("/admin")}
-              style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)" }}
-            >
-              Admin
-            </button>
-          )}
-          <button
-            className="chip"
-            onClick={() => { setPatchNotesUnseen(false); nav("/profile"); }}
-            style={{ cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.3)", position: "relative" }}
-          >
-            Profile
-            {patchNotesUnseen && (
-              <span
-                title="New patch notes - view on Profile"
-                style={{
-                  position: "absolute",
-                  top: -2,
-                  right: -2,
-                  width: 9,
-                  height: 9,
-                  borderRadius: "50%",
-                  background: "var(--brand)",
-                  boxShadow: "0 0 0 2px var(--bg)",
-                }}
-              />
-            )}
-          </button>
+          {/* DVIR + Profile + Admin all live off the persistent nav / Tools grid
+              now (Tools -> Admin), so their redundant top-bar buttons were
+              removed. The "new patch notes" dot moved to the bottom-nav Profile tab. */}
         </div>
       </div>
 
@@ -2062,48 +2190,42 @@ export default function App() {
       <AdminNotesBanner scope="global" />
       {jobUuid && <AdminNotesBanner key={jobUuid} scope={jobUuid} />}
 
-      {/* Tabs */}
-      <div className="tabbar">
-        <button className={"tab " + (tab === "timeline" ? "active" : "")} onClick={() => setTab("timeline")}>
-          Timeline
-        </button>
-        <button className={"tab " + (tab === "photos" ? "active" : "")} onClick={() => setTab("photos")}>
-          Photos
-        </button>
-        {/* Inventory is long-distance only: item-by-item logging was too slow to
-            be worth it on a local job, and it is paused there until there's a
-            faster capture flow (ADR 0015). LD keeps it - the BOL needs it. */}
-        {longDistance && (
-          <button className={"tab " + (tab === "inventory" ? "active" : "")} onClick={() => setTab("inventory")}>
-            Inventory
-          </button>
-        )}
-        <button
-          className={"tab " + (tab === "report" ? "active" : "")}
-          onClick={() => setTab("report")}
-          style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.1, gap: 2 }}
-        >
-          <span>Report</span>
-          <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>{longDistance ? "Complete at end of trip" : "Complete at end of job"}</span>
-        </button>
-      </div>
+      {/* DQ missing-docs reminder (C4): shows when the driver owes documents. */}
+      <DqReminderBanner />
 
-      {/* Timeline */}
-      {tab === "timeline" && (
-        <>
-          <div className="card">
-            <div className="sectionTitle">Job</div>
+      {jobUuid && jobStatus === "closed" ? (
+        <JobClosedPanel
+          jobUuid={jobUuid}
+          jobName={jobName}
+          jobDate={jobDate}
+          longDistance={longDistance}
+          onEditFinalized={handleEditFinalized}
+          onChangeJob={handleChangeJobFromPanel}
+        />
+      ) : (
+      <>
+      {/* Job selector + core actions: always visible (drill-in home context). */}
+      <div className="card">
+            <div className="microLabel" style={{ marginBottom: 10 }}>Job</div>
 
             <div className="col" style={{ gap: 12 }}>
-              {/* 1 - Date */}
+              {jobUuid && !selectingJob ? (
+                // Fixed read-only display of the active job, visible throughout.
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                  <div className="col" style={{ gap: 2, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 16, wordBreak: "break-word" }}>{jobName || "Selected job"}</div>
+                    <div className="mono small" style={{ color: "var(--muted)" }} title={jobUuid}>
+                      {jobDate}{jobDate ? "  ·  " : ""}#{jobUuid.slice(0, 8)}
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => setSelectingJob(true)} style={{ fontSize: 12, flexShrink: 0 }}>Change job</button>
+                </div>
+              ) : (
+                <>
+              {/* 1 - Calendar job selector: lead with the job (the common case);
+                  the date is tucked below and defaults to today. */}
               <div className="col">
-                <div className="label">Date</div>
-                <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
-              </div>
-
-              {/* 2 - Calendar job selector */}
-              <div className="col">
-                <div className="label" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div className="microLabel" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span>Select Job{" "}
                     <span className="small" style={{ marginLeft: 4 }}>
                       {calLoading ? "Loading…" : calEvents.length > 0 ? `(${calEvents.length} found)` : calLoaded ? "(none found)" : ""}
@@ -2135,7 +2257,7 @@ export default function App() {
 
                 {calSelectedId === "__other__" && (
                   <div className="col" style={{ marginTop: 8 }}>
-                    <div className="label">Job description (required)</div>
+                    <div className="microLabel">Job description (required)</div>
                     <input
                       value={calOtherName}
                       onChange={(e) => {
@@ -2159,48 +2281,143 @@ export default function App() {
                 ) : null}
               </div>
 
-              {/* 3 - Job name display */}
+              {/* 2 - Date (secondary): defaults to today; change it to see another
+                  day's calendar jobs. */}
+              <div className="col">
+                <div className="microLabel">Date</div>
+                <input type="date" value={jobDate} onChange={(e) => setJobDate(e.target.value)} />
+              </div>
+
+              {/* 3 - Job name + short id (condensed - the full id is technical
+                  clutter; a short prefix is enough to eyeball). */}
               {jobName && (
-                <div className="col">
-                  <div className="label">Job Name</div>
-                  <div style={{ fontWeight: 600, fontSize: 15 }}>{jobName}</div>
+                <div className="col" style={{ gap: 2 }}>
+                  <div style={{ fontWeight: 700, fontSize: 16, wordBreak: "break-word" }}>{jobName}</div>
+                  {jobUuid && (
+                    <div className="mono" style={{ color: "var(--muted)", fontSize: 10 }} title={jobUuid}>#{jobUuid.slice(0, 8)}</div>
+                  )}
                 </div>
               )}
 
-              {/* 4 - Job ID (auto, read-only) */}
-              {jobUuid && (
-                <div className="col">
-                  <div className="label">Job ID</div>
-                  <div className="mono small" style={{ color: "var(--muted)", fontSize: 11 }}>{jobUuid}</div>
-                </div>
+              {jobUuid && selectingJob && (
+                <button
+                  type="button"
+                  onClick={() => setSelectingJob(false)}
+                  style={{ fontSize: 12, alignSelf: "flex-start", color: "var(--muted)" }}
+                >
+                  Keep current job
+                </button>
+              )}
+                </>
               )}
 
               {status && <div className="small" style={{ color: "var(--brand)" }}>{status}</div>}
               {historyStatus && <div className="small" style={{ color: "var(--muted)" }}>{historyStatus}</div>}
             </div>
 
-            {/* Job type toggle + LD day plan live in the Job tile. */}
-            <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                <span className="label" style={{ marginBottom: 0 }}>Job type</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={longDistance}
-                  onClick={() => setPersistedMode(longDistance ? "local" : "long_distance")}
-                  style={{ position: "relative", width: 52, height: 28, borderRadius: 999, border: "none", cursor: "pointer", background: longDistance ? "var(--brand)" : "var(--border)", transition: "background .15s", flexShrink: 0 }}
-                >
-                  <span style={{ position: "absolute", top: 3, left: longDistance ? 27 : 3, width: 22, height: 22, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
-                </button>
-                <span style={{ fontWeight: 700, fontSize: 13 }}>{longDistance ? "Long-distance (interstate)" : "Local"}</span>
-              </label>
-              {longDistance && (
-                <div style={{ marginTop: 12 }}>
-                  <LdPlanTile plan={ldPlan} onToggleActivity={ldToggleActivity} />
+            {/* Calendar context (folded into the Job tile): location + a
+                collapsible details block. The event's job name and invitee
+                "Crew" count are dropped here as redundant with the Job Name
+                above and Set up job's real crew list below. */}
+            {(() => {
+              const ev = calEvents.find((e) => e.id === calSelectedId);
+              if (!ev) return null;
+              const loc = (ev.location || "").trim();
+              const desc = calText(ev.description);
+              if (!loc && !desc) return null;
+              return (
+                <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+                  {loc && (
+                    <div className="col" style={{ gap: 2, minWidth: 0 }}>
+                      <div className="microLabel">Location</div>
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ fontSize: 13, color: "var(--brand2)", textDecoration: "none", wordBreak: "break-word" }}
+                      >
+                        {loc}
+                      </a>
+                    </div>
+                  )}
+                  {desc && (
+                    <div style={{ marginTop: loc ? 12 : 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowJobDetails((v) => !v)}
+                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
+                      >
+                        <span className="microLabel" style={{ marginBottom: 0 }}>Details</span>
+                        <span className="small" style={{ color: "var(--brand2)" }}>{showJobDetails ? "Hide" : "Show"}</span>
+                      </button>
+                      {showJobDetails && (
+                        <div className="small" style={{ color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5, marginTop: 6 }}>{desc}</div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()}
+
+            {/* Set up job (ADR 0034), embedded in the Job tile and collapsed by
+                default - one tile for the whole job: selector, identity,
+                context, and setup. */}
+            {jobUuid && (() => {
+              const jm = loadJobMeta(jobUuid);
+              const src = jm?.source === "calendar" || jm?.source === "manual" ? jm.source : null;
+              return (
+                <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+                  <JobSetupPanel
+                    key={jobUuid}
+                    jobUuid={jobUuid}
+                    meta={{
+                      jobName: jm?.jobName || jobName || "",
+                      jobDate: jm?.jobDate || jobDate || "",
+                      source: src,
+                      calendarEventId: jm?.calendarEventId || calSelectedId || null,
+                    }}
+                    onHeader={(h) => {
+                      // The job header owns local/long-distance now; selecting or
+                      // saving a job sets the mode from it, and a no-header job
+                      // resets to local so the prior job's flag never carries over.
+                      setPersistedMode(h?.is_long_distance ? "long_distance" : "local");
+                    }}
+                    ldPlan={ldPlan}
+                    onToggleActivity={ldToggleActivity}
+                  />
+                </div>
+              );
+            })()}
           </div>
+
+          {/* Job checklist (C3): applicable items for this job, auto-checked
+              from in-app signals + manual ticks. */}
+          {jobUuid && <JobChecklistCard key={jobUuid} jobUuid={jobUuid} longDistance={longDistance} refreshKey={tab} />}
+
+          {(() => {
+            // Loaded weights logged for this job - visible to anyone, any time
+            // (B4). Newest first. The timeline carries the full history; this is
+            // the at-a-glance summary.
+            const weights = [...mergedLog].filter((e) => e.type === "WEIGHT")
+              .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+            if (weights.length === 0) return null;
+            return (
+              <div className="card">
+                <div className="microLabel" style={{ marginBottom: 10 }}>Loaded weights</div>
+                <div className="col" style={{ gap: 6 }}>
+                  {weights.map((e) => (
+                    <div key={e.event_id} className="row" style={{ justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                      <span className="mono" style={{ fontWeight: 600, fontSize: 14 }}>{e.note}</span>
+                      <span className="small mono" style={{ color: "var(--muted)", textAlign: "right" }}>
+                        {e.timestamp ? new Date(e.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}
+                        {e.created_by ? ` · ${e.created_by}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           {(() => {
             const coreActions = (
@@ -2231,6 +2448,35 @@ export default function App() {
                 {sendingType === "NOTE" ? "..." : "Note"}
               </button>
             );
+            const weightButton = (
+              <button
+                disabled={!canSend || sendingType !== null}
+                onClick={() => setShowWeightEntry((v) => !v)}
+                title="Record a loaded / scale weight for this job"
+              >
+                {showWeightEntry ? "Cancel weight" : "Weight"}
+              </button>
+            );
+            const weightEntry = showWeightEntry ? (
+              <div className="row wrap" style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={weightVal}
+                  onChange={(e) => setWeightVal(e.target.value)}
+                  placeholder="Loaded weight (lb)"
+                  style={{ flex: "1 1 130px", minWidth: 0 }}
+                  autoFocus
+                />
+                <select value={weightUnit} onChange={(e) => setWeightUnit(e.target.value)} style={{ flex: "0 1 140px" }}>
+                  <option value="">Unit (optional)</option>
+                  {vehUnits.map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+                </select>
+                <button className="btnPrimary" disabled={!canSend || sendingType !== null} onClick={logWeight}>
+                  {sendingType === "WEIGHT" ? "..." : "Log weight"}
+                </button>
+              </div>
+            ) : null;
             // Drive-only LD day: the RODS duty logger replaces the Actions tile.
             if (longDistance && ldDriving && ldLabor.length === 0) {
               return <RodsRecorder events={mergedLog} onLogEvent={recordEvent} />;
@@ -2247,7 +2493,8 @@ export default function App() {
                       <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
                         Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is recorded by the RODS above.
                       </div>
-                      <div className="row wrap">{coreActions}</div>
+                      <div className="row wrap">{coreActions}{weightButton}</div>
+                      {weightEntry}
                     </>
                   }
                 />
@@ -2257,22 +2504,66 @@ export default function App() {
             if (!longDistance || ldLabor.length > 0) {
               return (
                 <div className="card" data-component="TimelineActionsTile">
-                  <div className="sectionTitle">Actions</div>
+                  <div className="microLabel" style={{ marginBottom: 10 }}>Actions</div>
                   {longDistance && (
                     <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
                       Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is handled by the RODS on drive days.
                     </div>
                   )}
-                  <div className="row wrap">{coreActions}{noteButton}</div>
+                  <div className="row wrap">{coreActions}{noteButton}{weightButton}</div>
+                  {weightEntry}
                 </div>
               );
             }
-            return null;
+            // Long-distance job with nothing picked yet: the logging tools depend
+            // on the day's activity, so instead of a blank screen, point the crew
+            // back to the job setup where "What are you doing today?" lives.
+            return (
+              <div className="card" data-component="TimelineActionsTile">
+                <div className="microLabel" style={{ marginBottom: 8 }}>Actions</div>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  Pick what you're doing today (packing, loading, unloading, unpacking, or driving)
+                  in the job setup above to start logging. Labor shows the Actions buttons; driving
+                  brings up the RODS recorder.
+                </div>
+              </div>
+            );
           })()}
 
+      {/* Home: the action-tile grid. Drilled into a task: a back-to-actions bar. */}
+      {tab === "home" ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8, marginTop: 12 }}>
+          {([
+            { key: "timeline", label: "Timeline", icon: HubIcons.timeline },
+            { key: "photos", label: "Photos", icon: HubIcons.photos },
+            ...(longDistance ? [{ key: "inventory", label: "Inventory", icon: HubIcons.box }] : []),
+            { key: "report", label: "Report", icon: HubIcons.report },
+          ] as { key: Tab; label: string; icon: () => ReactNode }[]).map((t) => {
+            const Icon = t.icon;
+            return (
+              <button key={t.key} type="button" onClick={() => setTab(t.key)}
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 68, padding: "10px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", cursor: "pointer" }}>
+                <span style={{ color: "var(--muted)", display: "inline-flex" }}><Icon /></span>
+                <span style={{ fontSize: 12, fontWeight: 500 }}>{t.label}</span>
+              </button>
+            );
+          })}
+          {/* DVIR is in the persistent bottom nav; its hub Actions tile was
+              removed as redundant with that. */}
+        </div>
+      ) : (
+        <button type="button" onClick={() => setTab("home")}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 12, background: "none", border: "none", color: "var(--brand)", cursor: "pointer", fontSize: 14, fontWeight: 600, padding: "6px 0" }}>
+          <span style={{ fontSize: 18, lineHeight: 1 }}>&lsaquo;</span> Actions
+        </button>
+      )}
+
+      {/* Timeline detail (Notes + Activity): the "Timeline" drill-in task. */}
+      {tab === "timeline" && (
+        <>
           <div className="card">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div className="sectionTitle">Notes</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Notes</div>
               {jobUuid.trim() ? (
                 <span
                   className="small"
@@ -2302,7 +2593,7 @@ export default function App() {
           </div>
 
           <div className="card">
-            <div className="sectionTitle">Activity</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Activity</div>
 
             {mergedLog.length === 0 ? (
               <div className="small">{jobUuid ? "No events yet." : "Select a job to see activity."}</div>
@@ -2319,17 +2610,15 @@ export default function App() {
                     <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
                       <div className="row" style={{ gap: 8, flexWrap: "wrap", minWidth: 0 }}>
                         <span
-                          className="chip"
+                          className="statusDot"
                           style={{
-                            padding: "3px 8px",
+                            ["--dot" as any]: e.sync_status === "synced" ? "var(--ok)" : "var(--brand2)",
                             fontSize: 11,
-                            color: e.sync_status === "synced" ? "var(--ok)" : "var(--brand2)",
-                            borderColor: e.sync_status === "synced" ? "rgba(45,212,191,0.3)" : "rgba(106,167,255,0.3)",
                           }}
                         >
-                          {iconForStatus(e.sync_status)}
+                          {e.sync_status === "synced" ? "Synced" : "Queued"}
                         </span>
-                        <strong style={{ fontSize: 14 }}>{e.type}</strong>
+                        <strong style={{ fontSize: 14 }}>{e.type === "WEIGHT" ? "Loaded weight" : e.type}</strong>
                         {e.created_by && (
                           <span className="row" style={{ gap: 6, minWidth: 0 }}>
                             <UserAvatar displayName={e.created_by} size={18} />
@@ -2583,7 +2872,7 @@ export default function App() {
           {/* Capture: take one at a time and/or multi-select from the library,
               accumulating a batch before submitting. */}
           <div className="card">
-            <div className="sectionTitle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="microLabel" style={{ display: "flex", alignItems: "center", gap: 8 }}>
               Photos<BetaTag feature="multiPhoto" />
             </div>
             {ht.photosHint && (
@@ -2627,7 +2916,27 @@ export default function App() {
           {/* Pending batch - review, note each photo, then submit together. */}
           {pendingPhotos.length > 0 && (
             <div className="card">
-              <div className="sectionTitle">Ready to save ({pendingPhotos.length})</div>
+              <div className="microLabel" style={{ marginBottom: 10 }}>Ready to save ({pendingPhotos.length})</div>
+
+              {/* Photo type for the batch: before / after / general. Tagging to
+                  an incident below makes it an incident photo instead. */}
+              <div className="col" style={{ gap: 6, marginTop: 8 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Photo type</span>
+                <div className="row wrap" style={{ gap: 6 }}>
+                  {([["general", "General"], ["before", "Before"], ["after", "After"]] as const).map(([val, label]) => {
+                    const on = photoCategory === val;
+                    return (
+                      <button key={val} type="button" onClick={() => setPhotoCategory(val)}
+                        style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, cursor: "pointer",
+                          border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
+                          background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
+                          color: on ? "var(--brand)" : "var(--text)", fontWeight: on ? 700 : 400 }}>
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
               {/* Attach target: tag this batch to an incident's claim, or leave
                   as plain job photos. Only shown when the job has incidents. */}
@@ -2646,7 +2955,7 @@ export default function App() {
                           title={inc.description}
                           style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, cursor: "pointer",
                             border: on ? "2px solid var(--brand)" : "1px solid var(--border)",
-                            background: on ? "rgba(93,214,194,0.18)" : "transparent",
+                            background: on ? "color-mix(in srgb, var(--brand) 18%, transparent)" : "transparent",
                             color: on ? "var(--brand)" : "var(--text)", fontWeight: on ? 700 : 400 }}>
                           {label}
                         </button>
@@ -2692,7 +3001,7 @@ export default function App() {
           )}
 
           <div className="card">
-            <div className="sectionTitle">Saved</div>
+            <div className="microLabel" style={{ marginBottom: 10 }}>Saved</div>
 
             {photos.length === 0 && serverPhotos.filter(sp => !photos.some(lp => lp.id === sp.id)).length === 0 ? (
               <div className="small">{jobUuid ? "No photos yet." : "Select a job to see photos."}</div>
@@ -2750,11 +3059,15 @@ export default function App() {
                         ) : (
                           p.caption && <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.caption}</div>
                         )}
-                        {p.claim_number && (
+                        {p.claim_number ? (
                           <div style={{ display: "inline-block", marginBottom: 6, fontSize: 11, fontWeight: 700, color: "var(--brand)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px" }}>
                             Incident {p.claim_number}
                           </div>
-                        )}
+                        ) : p.category && p.category !== "general" ? (
+                          <div style={{ display: "inline-block", marginBottom: 6, fontSize: 11, fontWeight: 700, color: "var(--muted)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 8px", textTransform: "capitalize" }}>
+                            {p.category}
+                          </div>
+                        ) : null}
                         <div className="small" style={{ color: "var(--muted)" }}>{formatMountainDateTime(p.created_at)}</div>
                         <div className="row wrap" style={{ marginTop: 8, gap: 6, alignItems: "center" }}>
                           {editingNoteId !== p.id && (
@@ -2766,7 +3079,7 @@ export default function App() {
                           )}
                           {driveOk && p.drive_url ? (
                             <a href={p.drive_url} target="_blank" rel="noopener noreferrer"
-                              style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
+                              style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)", padding: "2px 8px", borderRadius: 999 }}>
                               View in Drive
                             </a>
                           ) : driveFail ? (
@@ -2851,7 +3164,7 @@ export default function App() {
                           </button>
                         )}
                         <a href={sp.drive_url} target="_blank" rel="noopener noreferrer"
-                          style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid rgba(45,212,191,0.3)", padding: "2px 8px", borderRadius: 999 }}>
+                          style={{ fontSize: 11, color: "var(--ok)", textDecoration: "none", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)", padding: "2px 8px", borderRadius: 999 }}>
                           View in Drive
                         </a>
                       </div>
@@ -2885,7 +3198,9 @@ export default function App() {
 
       {/* Report */}
       {tab === "report" && (
-        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} />
+        <JobReport jobUuid={jobUuid} jobName={jobName} events={mergedLog} longDistance={longDistance} driveOnly={longDistance && ldDriving && ldLabor.length === 0} mixedLd={longDistance && ldDriving && ldLabor.length > 0} onCloseOut={handleReportCloseOut} openInEdit={openReportInEdit} />
+      )}
+      </>
       )}
 
       {/* DVIR reminder modal - shown before START or FINISH */}

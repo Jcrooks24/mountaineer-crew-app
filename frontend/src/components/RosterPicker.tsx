@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DirectoryEntry } from "../auth/AuthContext";
 import {
   currentDirectory,
@@ -74,41 +74,105 @@ export default function RosterPicker({
     );
   }
 
+  return <SearchableRoster
+    sorted={sorted}
+    userId={userId}
+    showLegacy={showLegacy}
+    legacyName={legacyName}
+    onChange={onChange}
+    disabled={disabled}
+    style={style}
+  />;
+}
+
+/** Search-as-you-type picker. Still selection-only: typing filters the roster,
+ * but the row's user_id is only set by CLICKING a real person - free text never
+ * commits, preserving the id-keyed invariant above. Replaces a native <select>
+ * that made you scroll dozens of names in a truck. */
+function SearchableRoster({
+  sorted, userId, showLegacy, legacyName, onChange, disabled, style,
+}: {
+  sorted: DirectoryEntry[];
+  userId: number | null;
+  showLegacy: boolean;
+  legacyName?: string;
+  onChange: (userId: number | null, name: string) => void;
+  disabled?: boolean;
+  style?: React.CSSProperties;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  const selected = userId != null ? sorted.find((u) => u.id === userId) : undefined;
+  const selectedLabel = selected
+    ? (selected.name || selected.email)
+    : showLegacy ? `${legacyName} (not on roster)` : "";
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(
+      (u) => (u.name || "").toLowerCase().includes(q) || (u.email || "").toLowerCase().includes(q),
+    );
+  }, [query, sorted]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
   return (
-    <select
-      value={userId != null ? String(userId) : showLegacy ? "__legacy__" : ""}
-      disabled={disabled}
-      onChange={(e) => {
-        const v = e.target.value;
-        if (v === "" || v === "__legacy__") return; // keep whatever is set
-        const id = Number(v);
-        const hit = sorted.find((u) => u.id === id);
-        if (hit) onChange(id, (hit.name || hit.email).trim());
-      }}
-      style={{
-        width: "100%",
-        padding: "10px 12px",
-        borderRadius: 10,
-        border: "1px solid var(--border)",
-        background: "var(--bg)",
-        color: "var(--text)",
-        // 16px or iOS zooms the page on focus. See index.css.
-        fontSize: 16,
-        boxSizing: "border-box",
-        ...style,
-      }}
-    >
-      <option value="" disabled>
-        Select crew member…
-      </option>
-      {showLegacy && (
-        <option value="__legacy__">{legacyName} (not on roster)</option>
+    <div ref={boxRef} style={{ position: "relative", ...style }}>
+      <input
+        type="text"
+        value={open ? query : selectedLabel}
+        placeholder="Search crew member…"
+        disabled={disabled}
+        // Seed the query with the current selection and select-all instead of
+        // blanking it, so the crew can still see who is set while they retype.
+        onFocus={(e) => { setOpen(true); setQuery(selectedLabel); e.currentTarget.select(); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        style={{
+          width: "100%", padding: "10px 12px", borderRadius: 10,
+          border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)",
+          // 16px or iOS zooms the page on focus. See index.css.
+          fontSize: 16, boxSizing: "border-box",
+        }}
+      />
+      {open && !disabled && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50,
+          background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10,
+          maxHeight: 264, overflowY: "auto", boxShadow: "var(--shadow)",
+        }}>
+          {filtered.length === 0 ? (
+            <div className="small" style={{ padding: "10px 12px", color: "var(--muted)" }}>No match.</div>
+          ) : filtered.map((u) => (
+            <button
+              key={u.id}
+              type="button"
+              onClick={() => { onChange(u.id, (u.name || u.email).trim()); setOpen(false); setQuery(""); }}
+              style={{
+                display: "block", width: "100%", textAlign: "left", padding: "10px 12px",
+                minHeight: 44, background: u.id === userId ? "var(--card2)" : "transparent",
+                border: "none", borderBottom: "1px solid var(--border)", color: "var(--text)",
+                cursor: "pointer", fontSize: 15,
+              }}
+            >
+              {u.name || u.email}
+              {u.name && u.email ? <span className="small" style={{ color: "var(--muted)" }}> · {u.email}</span> : null}
+            </button>
+          ))}
+        </div>
       )}
-      {sorted.map((u) => (
-        <option key={u.id} value={String(u.id)}>
-          {u.name || u.email}
-        </option>
-      ))}
-    </select>
+    </div>
   );
 }

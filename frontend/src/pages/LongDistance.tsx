@@ -5,6 +5,8 @@ import { useAuth } from "../auth/AuthContext";
 import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePad";
 import BillOfLadingForm from "../components/BillOfLadingForm";
 import { BetaTag } from "../components/BetaTag";
+import AppHeader from "../components/AppHeader";
+import LdDocuments from "../components/LdDocuments";
 import {
   fetchCalendarDay,
   fetchManualJobsForDate,
@@ -16,7 +18,7 @@ import {
   type OpenBol,
 } from "../lib/bolStore";
 
-type Section = "menu" | "prior" | "hos" | "trala" | "bol";
+type Section = "menu" | "prior" | "hos" | "trala" | "bol" | "docs";
 
 function todayLocal() {
   const d = new Date();
@@ -47,7 +49,7 @@ export default function LongDistance() {
   const [params, setParams] = useSearchParams();
   const initialSection: Section = (() => {
     const raw = params.get("section");
-    if (raw === "prior" || raw === "bol" || raw === "hos" || raw === "trala") return raw;
+    if (raw === "prior" || raw === "bol" || raw === "hos" || raw === "trala" || raw === "docs") return raw;
     return "menu";
   })();
   const [section, setSectionState] = useState<Section>(initialSection);
@@ -77,21 +79,30 @@ export default function LongDistance() {
       />
     );
   }
+  if (section === "docs") {
+    return (
+      <div className="container">
+        <AppHeader title="LD Documents" onBack={() => setSection("menu")} />
+        <LdDocuments
+          onOpenBol={(bolId) => {
+            const p = new URLSearchParams(params);
+            p.set("section", "bol");
+            p.set("bol_id", bolId);
+            setParams(p, { replace: true });
+            setSectionState("bol");
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="container">
-      <div className="topbar" style={{ marginBottom: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Long Distance Compliance</div>
-          <div className="small" style={{ color: "var(--muted)" }}>FMCSR interstate-trip resources</div>
-        </div>
-        <button onClick={() => nav(-1)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 13 }}>
-          ← Back
-        </button>
-      </div>
+      <AppHeader title="Long Distance Compliance" onBack={() => nav(-1)} />
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>FMCSR interstate-trip resources</div>
 
       <div className="card" data-component="LdHosReference">
-        <div className="sectionTitle">Hours of Service - Quick Reference</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Hours of Service - Quick Reference</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             <li><strong>11-hour driving limit</strong> after 10 consecutive hours off-duty.</li>
@@ -108,7 +119,7 @@ export default function LongDistance() {
       </div>
 
       <div className="card" data-component="LdFormsSection">
-        <div className="sectionTitle">Forms</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>Forms</div>
         <div className="col" style={{ gap: 8 }}>
           <button onClick={() => setSection("prior")} style={{ textAlign: "left" }}>
             <div style={{ fontWeight: 700 }}>Prior On-Duty Hours Statement</div>
@@ -127,7 +138,7 @@ export default function LongDistance() {
       </div>
 
       <div className="card" data-component="LdTralaExemption">
-        <div className="sectionTitle">TRALA Rental-Truck Exemption - 82 FR 47306</div>
+        <div className="microLabel" style={{ marginBottom: 10 }}>TRALA Rental-Truck Exemption - 82 FR 47306</div>
         <div className="small" style={{ color: "var(--text)", lineHeight: 1.6 }}>
           Published by FMCSA in the Federal Register (Oct 11, 2017), this exemption covers
           drivers operating a rental truck on our behalf during out-of-state moves. Carry a
@@ -278,6 +289,36 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
   const [submitted, setSubmitted] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Auto-fill the prior-7-day on-duty hours from the driver's own logged history
+  // (job + off-job + office hours summed per day). The driver reviews and can
+  // adjust any day. Re-runs when the trip date changes (a new 7-day window).
+  // Offline / no history just leaves the fields at 0 for manual entry.
+  const [autofilled, setAutofilled] = useState(false);
+  useEffect(() => {
+    if (priorDates.length === 0) return;
+    const start = priorDates[0];
+    const end = priorDates[priorDates.length - 1];
+    let cancelled = false;
+    apiFetch<{ days: { date: string; hours: number }[] }>(
+      `/api/hours/daily?start=${start}&end=${end}`,
+    )
+      .then((r) => {
+        if (cancelled) return;
+        const next: Record<string, string> = {};
+        for (const d of priorDates) next[d] = "0";
+        for (const day of r.days || []) {
+          if (day.date in next) next[day.date] = String(day.hours ?? 0);
+        }
+        setDailyHours(next);
+        const lastDay = (r.days || []).find((x) => x.date === end);
+        if (lastDay) setHoursLast24(String(lastDay.hours ?? 0));
+        setAutofilled(true);
+      })
+      .catch(() => { /* offline / no history - manual entry */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripDate]);
+
   const totalLast7 = useMemo(
     () =>
       priorDates.reduce((s, d) => {
@@ -333,15 +374,12 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
   if (submitted) {
     return (
       <div className="container">
-        <div className="topbar" style={{ marginBottom: 16 }}>
-          <span style={{ fontWeight: 700, fontSize: 16 }}>Statement Submitted</span>
-          <button onClick={onBack} style={backBtnStyle}>← Back</button>
-        </div>
+        <AppHeader title="Statement Submitted" onBack={onBack} />
         <div className="card" style={{ textAlign: "center", padding: "32px 24px" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>✓</div>
           <div style={{ fontWeight: 700, fontSize: 18, color: "var(--ok)", marginBottom: 6 }}>Statement on File</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 20 }}>
-            Total on-duty hours in the prior 7 days: <strong>{totalLast7.toFixed(2)}</strong>
+            Total on-duty hours in the prior 7 days: <strong className="mono">{totalLast7.toFixed(2)}</strong>
           </div>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
             <button className="btnPrimary" onClick={onBack}>Back to menu</button>
@@ -354,13 +392,8 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="container">
-      <div className="topbar" style={{ marginBottom: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Prior On-Duty Hours Statement</div>
-          <div className="small" style={{ color: "var(--muted)" }}>§395.8(j)(2)</div>
-        </div>
-        <button onClick={onBack} style={backBtnStyle}>← Menu</button>
-      </div>
+      <AppHeader title="Prior On-Duty Hours Statement" onBack={onBack} />
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>§395.8(j)(2)</div>
 
       <div className="card">
         <div className="small" style={{ color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
@@ -384,7 +417,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
             <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
               Job{" "}
               <span className="small" style={{ marginLeft: 4 }}>
-                {calLoading ? "(loading…)" : calEvents.length > 0 ? `(${calEvents.length} found)` : "(none found)"}
+                {calLoading ? "(loading…)" : calEvents.length > 0 ? <>(<span className="mono">{calEvents.length}</span> found)</> : "(none found)"}
               </span>
             </div>
             <select value={pickerValue} onChange={(e) => onPickJob(e.target.value)} disabled={calLoading}>
@@ -449,10 +482,15 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
             <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
               On-duty hours per day (last 7 days before trip) *
             </div>
+            {autofilled && (
+              <div className="small" style={{ color: "var(--brand)", marginBottom: 6 }}>
+                Auto-filled from your logged hours (job + off-job + office). Review each day and adjust if needed.
+              </div>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {priorDates.map((d) => (
                 <div key={d} className="row" style={{ gap: 10, justifyContent: "space-between" }}>
-                  <span className="small" style={{ color: "var(--text)", minWidth: 110 }}>{d}</span>
+                  <span className="small mono" style={{ color: "var(--text)", minWidth: 110 }}>{d}</span>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -468,7 +506,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
               ))}
             </div>
             <div className="small" style={{ color: "var(--muted)", marginTop: 8, textAlign: "right" }}>
-              7-day total: <strong style={{ color: "var(--text)" }}>{totalLast7.toFixed(2)} hrs</strong>
+              7-day total: <strong className="mono" style={{ color: "var(--text)" }}>{totalLast7.toFixed(2)} hrs</strong>
             </div>
           </div>
 
@@ -515,7 +553,7 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
           </label>
 
           {err && (
-            <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "rgba(255,107,107,0.1)", borderRadius: 8 }}>
+            <div style={{ color: "var(--danger)", fontSize: 13, padding: "8px 12px", background: "color-mix(in srgb, var(--danger) 10%, transparent)", borderRadius: 8 }}>
               {err}
             </div>
           )}
@@ -528,12 +566,3 @@ function PriorOnDutyForm({ onBack }: { onBack: () => void }) {
     </div>
   );
 }
-
-
-const backBtnStyle: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  color: "var(--muted)",
-  cursor: "pointer",
-  fontSize: 13,
-};

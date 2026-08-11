@@ -47,6 +47,15 @@ class Incident(Base):
     resolved = Column(Boolean, nullable=False, default=False)
     notes = Column(Text, nullable=True)
 
+    # Admin incident tracking. `status` is the workflow state the admin sets:
+    # None/"" = no status, "pending" = needs action, "resolved" = closed (kept in
+    # sync with the `resolved` bool for back-compat + the sheet export).
+    status = Column(String, nullable=True)
+    # Dollars actually settled on the claim (distinct from est_cost).
+    settled_amount = Column(Float, nullable=True)
+    # JSON [{at, by, text}] log of conversation notes (internal / client).
+    conversation_log = Column(Text, nullable=True)
+
     # JSON array of Drive photo URLs attached at submit time (online only).
     photo_urls = Column(Text, nullable=False, default="[]")
 

@@ -3,6 +3,7 @@ import { useAuth } from "../auth/AuthContext";
 import type { DirectoryEntry } from "../auth/AuthContext";
 import { apiFetch } from "../api/client";
 import { ensureDirectory } from "../lib/userDirectory";
+import { loadJobSetup } from "../lib/jobSetupStore";
 import SignaturePad, { type SignaturePadHandle } from "./SignaturePad";
 import {
   type RodsDay,
@@ -106,7 +107,7 @@ function RodsDriverSection({
   date: string; driver: string; fallback: string; events: MinEvent[]; bolLink: BolLink; units: string[];
   podsFiled: boolean; onNeedPods: () => void; tripJob: string;
 }) {
-  const [day, setDay] = useState<RodsDay>(() => loadDay(date, driver) || newDay(date, driver, null));
+  const [day, setDay] = useState<RodsDay>(() => loadDay(date, driver) || newDay(date, driver, null, tripJob));
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -133,6 +134,35 @@ function RodsDriverSection({
     if (day.driver_name !== driver) setDay((prev) => ({ ...prev, driver_name: driver }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driver]);
+
+  // Link this day to the job and seed origin/destination/vehicle from the job's
+  // setup (blank-only). job_uuid is identity - set unconditionally (and even when
+  // setup can't load), so a signed RODS carries it and the job's RODS checklist
+  // item auto-ticks. Seed values never clobber what the driver has already entered.
+  useEffect(() => {
+    if (!tripJob) return;
+    loadJobSetup(tripJob)
+      .then((h) => {
+        setDay((prev) => {
+          const next = { ...prev };
+          let changed = false;
+          if (prev.job_uuid !== tripJob) { next.job_uuid = tripJob; changed = true; }
+          if (h) {
+            const veh = h.vehicle_unit_names?.[0];
+            if (h.origin && !(prev.origin || "").trim()) { next.origin = h.origin; changed = true; }
+            if (h.destination && !(prev.destination || "").trim()) { next.destination = h.destination; changed = true; }
+            if (veh && !(prev.vehicle_number || "").trim()) { next.vehicle_number = veh; changed = true; }
+          }
+          if (!changed) return prev;
+          next.updated_at = new Date().toISOString();
+          return next;
+        });
+      })
+      .catch(() => {
+        setDay((prev) => (prev.job_uuid === tripJob ? prev : { ...prev, job_uuid: tripJob, updated_at: new Date().toISOString() }));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripJob]);
 
   function patch(p: Partial<RodsDay>) { setDay((prev) => ({ ...prev, ...p, updated_at: new Date().toISOString() })); }
 
@@ -165,7 +195,7 @@ function RodsDriverSection({
 
   return (
     <div data-component="RodsSignoff" style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
-      <div style={{ fontWeight: 800, fontSize: 14 }}>RODS - {driver || "driver"}</div>
+      <div className="microLabel" style={{ marginBottom: 10 }}>RODS - {driver || "driver"}</div>
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Edit the duty log on the Timeline; review the summary, add trip details, and sign.{day.signature ? "  Signed." : ""}
       </div>
@@ -174,11 +204,10 @@ function RodsDriverSection({
         {periods.map((p, i) => (
           <div key={i} className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
             <span className="row" style={{ gap: 8, alignItems: "center", minWidth: 0 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLORS[p.status], flexShrink: 0 }} />
-              <span style={{ fontWeight: 600, fontSize: 13 }}>{STATUS_LABELS[p.status]}</span>
-              <span className="small" style={{ color: "var(--muted)" }}>{fmt12(p.start)} &rarr; {p.end ? fmt12(p.end) : "now"}</span>
+              <span className="statusDot" style={{ ["--dot" as any]: STATUS_COLORS[p.status] }}>{STATUS_LABELS[p.status]}</span>
+              <span className="small" style={{ color: "var(--muted)" }}><span className="mono">{fmt12(p.start)}</span> &rarr; {p.end ? <span className="mono">{fmt12(p.end)}</span> : "now"}</span>
             </span>
-            <span className="small" style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>{minutesToHHMM(p.dur)}{p.isLast ? " so far" : ""}</span>
+            <span className="small" style={{ color: "var(--muted)", whiteSpace: "nowrap" }}><span className="mono">{minutesToHHMM(p.dur)}</span>{p.isLast ? " so far" : ""}</span>
           </div>
         ))}
       </div>
@@ -186,7 +215,7 @@ function RodsDriverSection({
         {DUTY_STATUSES.map((s) => (
           <div key={s} className="col" style={{ gap: 2, flex: "1 1 110px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>{STATUS_LABELS[s]}</span>
-            <span style={{ fontWeight: 700, color: STATUS_COLORS[s] }}>{minutesToHHMM(totals[s])}</span>
+            <span className="mono" style={{ fontWeight: 700, color: STATUS_COLORS[s] }}>{minutesToHHMM(totals[s])}</span>
           </div>
         ))}
       </div>
@@ -222,7 +251,7 @@ function RodsDriverSection({
           <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
             <span className="small" style={{ color: "var(--muted)" }}>Miles today</span>
             <div className="row" style={{ gap: 6 }}>
-              <input value={day.total_miles || ""} onChange={(e) => patch({ total_miles: e.target.value })} inputMode="numeric" style={{ flex: 1, minWidth: 0 }} />
+              <input className="mono" value={day.total_miles || ""} onChange={(e) => patch({ total_miles: e.target.value })} inputMode="numeric" style={{ flex: 1, minWidth: 0 }} />
               <button type="button" onClick={calcMiles} style={{ fontSize: 12, padding: "6px 10px", whiteSpace: "nowrap" }}>Auto</button>
             </div>
             {calcMsg && <span className="small" style={{ color: "var(--muted)" }}>{calcMsg}</span>}
@@ -232,7 +261,7 @@ function RodsDriverSection({
           <span className="small" style={{ color: "var(--muted)" }}>Bill of Lading</span>
           {bolLink ? (
             <button type="button" onClick={bolLink.onOpen} style={{ alignSelf: "flex-start", fontSize: 13, padding: "6px 12px", border: "1px solid var(--brand)", color: "var(--brand)", background: "transparent", borderRadius: 8, cursor: "pointer" }}>
-              View {bolLink.ref} &rsaquo;
+              View <span className="mono">{bolLink.ref}</span> &rsaquo;
             </button>
           ) : (
             <span className="small" style={{ color: "var(--muted)" }}>Attach a BOL in the documents above.</span>

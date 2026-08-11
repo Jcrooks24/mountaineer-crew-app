@@ -207,6 +207,12 @@ def record_sheet_sync(db: Session, fn_name: str, ok: bool, error: Optional[str] 
 DEFAULT_SHEET_ID = "17RMNRlBvHxYo-sDPoHO3wSajulVANXbN5rfWLWVA4bs"
 DEFAULT_MATERIALS_TAB = "Materials"
 
+
+class SheetHeaderError(Exception):
+    """Raised when a tab's header row is corrupted (its key column is missing
+    from an already-populated header). Fail-closed guard so a renamed header
+    can't silently re-append a key column and manufacture duplicates."""
+
 EVENTS_HEADERS = [
     "event_id", "timestamp", "logged_at", "job_uuid", "job_name", "job_date",
     "type", "note", "lat", "lng", "accuracy_m", "device_id", "created_by", "synced",
@@ -377,7 +383,7 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
 
     if tab not in existing_tabs:
         # Create the tab
-        _api(lambda: svc.spreadsheets().batchUpdate(
+        add_resp = _api(lambda: svc.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": tab}}}]},
         ).execute())
@@ -389,6 +395,22 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
             valueInputOption="RAW",
             body={"values": [headers]},
         ).execute())
+        # Protect row 1 (warning-only) the moment the tab is born, so a stray edit
+        # to the header row is caught - the same protection the 2026-08-05 audit
+        # applied by hand to the existing tabs, now automatic for every new one.
+        # Best-effort: a protection failure must never break tab creation/export.
+        try:
+            new_sheet_id = add_resp["replies"][0]["addSheet"]["properties"]["sheetId"]
+            _api(lambda: svc.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={"requests": [{"addProtectedRange": {"protectedRange": {
+                    "range": {"sheetId": new_sheet_id, "startRowIndex": 0, "endRowIndex": 1},
+                    "description": "Header row - do not overwrite (auto)",
+                    "warningOnly": True,
+                }}}]},
+            ).execute())
+        except Exception:
+            pass
         return list(headers)
 
     # Tab exists - read current header row
@@ -397,6 +419,19 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
         range=f"{tab}!1:1",
     ).execute())
     current = result.get("values", [[]])[0] if result.get("values") else []
+
+    # Fail closed on header corruption. If the tab already has a header row but
+    # its KEY column (the first expected header - the entity's uuid/id) is not in
+    # it, that is a renamed/overwritten header, not a genuinely new column.
+    # Appending the key as a fresh column silently strands every existing row's
+    # key and breaks the replace-style delete - the exact Reimbursements `dfg`
+    # cascade (2026-08-05 audit). Refuse loudly instead of quietly duplicating.
+    if current and headers and headers[0] not in current:
+        raise SheetHeaderError(
+            f"{tab!r}: key column {headers[0]!r} is missing from a populated header "
+            f"row {current!r}. Refusing to re-append it (row 1 was likely renamed or "
+            f"overwritten); fix the header in the sheet before this tab exports again."
+        )
 
     # Find any columns we want but that aren't in the sheet yet
     missing = [h for h in headers if h not in current]
@@ -998,6 +1033,12 @@ JOB_REPORT_HEADERS = [
     "overage_note",
     "created_at", "updated_at",
     "entered_by", "entered_on",
+    # Close-out (added 2026-07-27). New columns land to the RIGHT of the
+    # existing header row - _ensure_tab appends, it never reorders - so they
+    # are listed last here to match where the sheet actually puts them.
+    "variance_cause", "variance_note",
+    "client_readiness", "client_unready",
+    "scope_change_count", "scope_change_hours", "scope_changes",
 ]
 
 
@@ -1072,9 +1113,146 @@ def _format_truck_fullness(entries: Optional[list]) -> str:
                 if length:
                     label = f"{truck} {length}ft"
             label = f"{label} (rental)"
-        parts.append(f"{label}: V{v}×H{h} ({combined}%)")
+        # Cubic feet loaded, derived from the truck's interior at export time
+        # (see TRUCK_SPECS). The percentage is the crew's observation; the
+        # volume is what the office actually reasons about, so put both in the
+        # cell rather than making admin do the multiplication.
+        try:
+            from app.schemas.job_report import truck_capacity_cuft
+            capacity = truck_capacity_cuft(e)
+        except Exception:  # noqa: BLE001 - never let a spec lookup kill an export
+            capacity = None
+        volume = f", {round(capacity * combined / 100):,} cu ft" if capacity else ""
+        parts.append(f"{label}: V{v}×H{h} ({combined}%{volume})")
     return "; ".join(parts)
 
+
+# Close-out vocabularies render as sentence case in the sheet: admin reads this,
+# not code. Unknown keys fall back to the raw key rather than an empty cell, so a
+# vocabulary that grows without this map being updated degrades to something
+# readable instead of silently blank.
+_CLOSEOUT_LABELS = {
+    "underestimated_volume": "Underestimated volume",
+    "access_stairs_carry": "Access / stairs / long carry",
+    "client_not_ready": "Client not ready",
+    "crew_size_or_skill": "Crew size or skill",
+    "scope_added_on_site": "Scope added on site",
+    "travel_or_traffic": "Travel / traffic",
+    "damage_or_repack": "Damage or repack",
+    "fully_ready": "Fully ready",
+    "mostly_ready": "Mostly ready",
+    "partly_ready": "Partly ready",
+    "not_ready": "Not ready",
+    "packing_incomplete": "Packing incomplete",
+    "parking_not_reserved": "Parking not reserved",
+    "elevator_not_reserved": "Elevator not reserved",
+    "access_blocked": "Access blocked",
+    "utilities_off": "Utilities off",
+    "pets_or_kids": "Pets / kids underfoot",
+    "paperwork_or_payment": "Paperwork or payment",
+    "added_items": "Added items",
+    "extra_stop": "Extra stop",
+    "packing_added": "Packing added",
+    "storage_added": "Storage added",
+    "disposal_added": "Disposal added",
+    "address_changed": "Address changed",
+    "reduced_scope": "Reduced scope",
+    # Reduction-side scope changes and variance causes (added 2026-07-28).
+    "fewer_items": "Fewer items",
+    "stop_dropped": "Stop dropped",
+    "packing_not_needed": "Packing not needed",
+    "storage_not_needed": "Storage not needed",
+    "client_already_packed": "Client already packed",
+    "less_volume_than_estimated": "Less volume than estimated",
+    "overestimated_volume": "Overestimated volume",
+    "easier_access": "Easier access than expected",
+    "client_ahead_of_prep": "Client further along than expected",
+    "scope_reduced_on_site": "Scope reduced on site",
+    "crew_faster_than_expected": "Crew faster than expected",
+    "other": "Other",
+}
+
+
+def _closeout_label(key: Any) -> str:
+    key = (key or "")
+    return _CLOSEOUT_LABELS.get(key, str(key))
+
+
+def _format_closeout_list(values: Optional[list]) -> str:
+    if not values:
+        return ""
+    return ", ".join(_closeout_label(v) for v in values if v)
+
+
+def _scope_change_kinds(c: Dict[str, Any]) -> list:
+    """The kinds on one scope change, in either stored shape.
+
+    Reports written before 2026-07-28 have a single `kind`; newer ones have a
+    `kinds` list. The sheet has to render both, because the export re-runs over
+    old reports whenever an admin edits one.
+    """
+    kinds = c.get("kinds")
+    if isinstance(kinds, list) and kinds:
+        return [k for k in kinds if k]
+    single = c.get("kind")
+    return [single] if single else []
+
+
+def _scope_change_signed_hours(c: Dict[str, Any]) -> Optional[float]:
+    """One change's hours, negative when the change SAVED time.
+
+    None (not 0.0) when the crew logged the change without estimating hours -
+    the caller needs to tell "no estimate" from "estimated at zero".
+    """
+    try:
+        h = float(c.get("hours"))
+    except (TypeError, ValueError):
+        return None
+    return -h if (c.get("direction") or "added") == "saved" else h
+
+
+def _format_scope_changes(changes: Optional[list]) -> str:
+    """One line per change, e.g. "Added items (+1.5h): client added shelving" or
+    "Fewer items, Stop dropped (-2h): garage already empty". Semicolon-joined so
+    it stays one readable cell. The sign is the crew's added/saved answer."""
+    if not changes:
+        return ""
+    parts: list[str] = []
+    for c in changes:
+        if not isinstance(c, dict):
+            continue
+        label = ", ".join(_closeout_label(k) for k in _scope_change_kinds(c))
+        hours = _scope_change_signed_hours(c)
+        # {:+g} prints the leading + or - itself, so a saved-time change reads
+        # as "(-2h)" without any extra string surgery.
+        head = f"{label} ({hours:+g}h)" if hours else label
+        note = (c.get("note") or "").strip()
+        parts.append(f"{head}: {note}" if note else head)
+    return "; ".join(parts)
+
+
+def _scope_change_hours(changes: Optional[list]) -> Any:
+    """NET estimated hours the on-site changes moved the day by: additions minus
+    the time reductions gave back. Blank rather than 0 when no change carried an
+    estimate, so "nobody estimated" reads differently from "the changes netted
+    out to nothing".
+
+    Net, not gross, as of 2026-07-28. A job that added a stop and dropped two
+    others used to report the addition alone; the column is meant to answer "how
+    far did the day move from the quote", and only a signed sum does that."""
+    if not changes:
+        return ""
+    total = 0.0
+    seen = False
+    for c in changes:
+        if not isinstance(c, dict):
+            continue
+        h = _scope_change_signed_hours(c)
+        if h is None:
+            continue
+        total += h
+        seen = True
+    return round(total, 2) if seen else ""
 
 def _per_diem_total(report: Dict[str, Any]) -> Any:
     """Total per-diem owed for this report: $50 per crew member when the report's
@@ -1230,6 +1408,22 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
         # Total billable man-hours for the job (standalone metric).
         "actual_man_hours": _actual_man_hours,
         "overage_note": report.get("overage_note", "") or "",
+        # Multi-select since 2026-07-28. The sheet COLUMN keeps its singular
+        # header - _ensure_tab appends columns but never renames them, and a
+        # year of formulas point at "variance_cause". Only the cell contents
+        # changed, from one label to a comma-joined list.
+        "variance_cause": _format_closeout_list(
+            report.get("variance_causes")
+            # A caller still on the old payload shape (or a queued export
+            # serialized before this deploy) sends the singular key.
+            or ([report["variance_cause"]] if report.get("variance_cause") else [])
+        ),
+        "variance_note": report.get("variance_note", "") or "",
+        "client_readiness": _closeout_label(report.get("client_readiness")),
+        "client_unready": _format_closeout_list(report.get("client_unready")),
+        "scope_change_count": len(report.get("scope_changes") or []) or "",
+        "scope_change_hours": _scope_change_hours(report.get("scope_changes")),
+        "scope_changes": _format_scope_changes(report.get("scope_changes")),
         "created_at": _iso(report.get("created_at")),
         "updated_at": _iso(report.get("updated_at")),
         "entered_by": entered_by,
@@ -1639,11 +1833,27 @@ ESTIMATE_ITEM_HEADERS = [
 BOL_HEADERS = [
     "bol_id", "created_by", "job_uuid", "job_name", "job_date",
     "status", "item_count",
+    "shipment_number", "shipper_name", "shipper_phone", "shipper_address",
+    "origin_address", "destination_address",
+    "form_of_payment", "estimate_type", "valuation",
+    "agreed_pickup", "agreed_delivery",
     "inventory_verified", "inventory_note",
     "origin_signed_at", "dest_signed_at", "final_charges",
     "walkthrough_notes", "signed_pdf_url",
     "created_at", "updated_at",
 ]
+
+# Human labels for the coded BOL option fields, so the office sheet reads plainly.
+# Keep in sync with frontend/src/lib/bolContract.ts option maps.
+_BOL_FORM_OF_PAYMENT = {
+    "cash": "Cash", "check": "Check", "credit_card": "Credit card",
+    "cod": "Collect on delivery (COD)", "other": "Other",
+}
+_BOL_ESTIMATE_TYPE = {"binding": "Binding", "non_binding": "Non-binding"}
+_BOL_VALUATION = {
+    "full_value": "Full Value Protection",
+    "released": "Released Value (60 cents per pound, per article)",
+}
 
 BOL_ITEM_HEADERS = [
     "bol_id", "job_name", "job_date", "item_no", "item_name",
@@ -1677,6 +1887,19 @@ def _delete_sheet_rows_by_value(
     ).execute())
     headers_row = (hdr.get("values") or [[]])[0]
     if col_name not in headers_row:
+        if headers_row:
+            # Populated header row but the dedupe key column is gone: row 1 was
+            # renamed or overwritten. Silently returning 0 here is exactly what let
+            # the Reimbursements duplicates pile up (2026-08-05 audit) - the delete
+            # no-ops and the caller appends anyway, so every save adds another copy.
+            # Fail loud so the sync records RED instead of quietly duplicating.
+            raise SheetHeaderError(
+                f"{tab!r}: dedupe key column {col_name!r} is missing from a populated "
+                f"header row {headers_row!r}. Refusing the replace-style delete (row 1 "
+                f"was likely renamed or overwritten); fix the header before this tab "
+                f"exports again."
+            )
+        # Empty header row = tab not set up yet; genuine no-op.
         return 0
     col_letter = _col_letter(headers_row.index(col_name))
 
@@ -1920,6 +2143,28 @@ def export_bol_to_sheets(db: Session, bol: Dict[str, Any]) -> int:
         "job_date": bol.get("job_date", "") or "",
         "status": bol.get("status", "") or "",
         "item_count": sum(int(it.get("qty", 1) or 1) for it in items),
+        # FMCSA 375.505 fields (from shipment_json). Surfacing them here keeps
+        # admin's view complete; coded fields render as human labels (ADR 0023).
+        "shipment_number": (bol.get("shipment") or {}).get("shipment_number", "") or "",
+        "shipper_name": (bol.get("shipment") or {}).get("shipper_name", "") or "",
+        "shipper_phone": (bol.get("shipment") or {}).get("shipper_phone", "") or "",
+        "shipper_address": (bol.get("shipment") or {}).get("shipper_address", "") or "",
+        "origin_address": (bol.get("shipment") or {}).get("origin_address", "") or "",
+        "destination_address": (bol.get("shipment") or {}).get("dest_address", "") or "",
+        "form_of_payment": _BOL_FORM_OF_PAYMENT.get(
+            (bol.get("shipment") or {}).get("form_of_payment", ""),
+            (bol.get("shipment") or {}).get("form_of_payment", "") or "",
+        ),
+        "estimate_type": _BOL_ESTIMATE_TYPE.get(
+            (bol.get("shipment") or {}).get("estimate_type", ""),
+            (bol.get("shipment") or {}).get("estimate_type", "") or "",
+        ),
+        "valuation": _BOL_VALUATION.get(
+            (bol.get("shipment") or {}).get("valuation", ""),
+            (bol.get("shipment") or {}).get("valuation", "") or "",
+        ),
+        "agreed_pickup": (bol.get("shipment") or {}).get("agreed_pickup", "") or "",
+        "agreed_delivery": (bol.get("shipment") or {}).get("agreed_delivery", "") or "",
         "inventory_verified": (
             "yes" if bol.get("inventory_verified") is True
             else "no" if bol.get("inventory_verified") is False
@@ -2471,6 +2716,143 @@ def schedule_incident_export(incident_uuid: str) -> None:
     _EXPORT_POOL.submit(_incident_export_worker, incident_uuid)
 
 
+# ── Bug reports ───────────────────────────────────────────────────────────────
+
+BUG_REPORT_HEADERS = [
+    "bug_uuid", "occurred_date", "submitted_by", "description", "screenshots", "created_at",
+]
+
+
+def export_bug_report_to_sheets(db: Session, bug: Dict[str, Any]) -> int:
+    """Replace-style export: one row per bug_uuid on the Bugs tab, which the
+    nightly crew-feedback email reads. A re-submit (e.g. screenshots that
+    finished uploading after the first POST) overwrites in place."""
+    tab = os.getenv("SHEETS_BUGS_TAB", "Bugs").strip() or "Bugs"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = bug.get("bug_uuid") or ""
+    if not uuid:
+        return 0
+    svc = _get_sheets_svc(db)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, BUG_REPORT_HEADERS)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "bug_uuid", uuid)
+    urls = bug.get("screenshot_urls") or []
+    row = {
+        "bug_uuid": uuid,
+        "occurred_date": bug.get("occurred_date") or "",
+        "submitted_by": bug.get("submitted_by_name") or "",
+        "description": bug.get("description") or "",
+        "screenshots": ", ".join(u for u in urls if isinstance(u, str) and u),
+        "created_at": bug.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
+def _build_bug_report_payload(db: Session, bug_uuid: str) -> Optional[Dict[str, Any]]:
+    from app.db.models.bug_report import BugReport  # local import to avoid cycles
+
+    row = db.query(BugReport).filter(BugReport.bug_uuid == bug_uuid).first()
+    if row is None:
+        return None
+    try:
+        urls = json.loads(row.screenshot_urls or "[]")
+    except (ValueError, TypeError):
+        urls = []
+    return {
+        "bug_uuid": row.bug_uuid,
+        "occurred_date": row.occurred_date or "",
+        "submitted_by_name": row.submitted_by_name or "",
+        "description": row.description or "",
+        "screenshot_urls": [u for u in urls if isinstance(u, str)],
+        "created_at": _iso(row.created_at),
+    }
+
+
+def schedule_bug_report_export(bug_uuid: str) -> None:
+    """Re-export one bug report to the Bugs tab. Low-frequency (one per submit),
+    replace-style, so a plain background fire is enough - no coalescer needed."""
+    if not bug_uuid:
+        return
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        payload = _build_bug_report_payload(db, bug_uuid)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+    if payload:
+        run_export_in_background(export_bug_report_to_sheets, payload)
+
+
+FEATURE_REQUEST_HEADERS = [
+    "request_uuid", "title", "submitted_by", "description", "screenshots", "created_at",
+]
+
+
+def export_feature_request_to_sheets(db: Session, req: Dict[str, Any]) -> int:
+    """Replace-style export: one row per request_uuid on the FeatureRequests tab,
+    which the nightly crew-feedback email reads. A re-submit overwrites in place."""
+    tab = os.getenv("SHEETS_FEATURE_REQUESTS_TAB", "FeatureRequests").strip() or "FeatureRequests"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = req.get("request_uuid") or ""
+    if not uuid:
+        return 0
+    svc = _get_sheets_svc(db)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, FEATURE_REQUEST_HEADERS)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "request_uuid", uuid)
+    urls = req.get("screenshot_urls") or []
+    row = {
+        "request_uuid": uuid,
+        "title": req.get("title") or "",
+        "submitted_by": req.get("submitted_by_name") or "",
+        "description": req.get("description") or "",
+        "screenshots": ", ".join(u for u in urls if isinstance(u, str) and u),
+        "created_at": req.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
+def _build_feature_request_payload(db: Session, request_uuid: str) -> Optional[Dict[str, Any]]:
+    from app.db.models.feature_request import FeatureRequest  # local import to avoid cycles
+
+    row = db.query(FeatureRequest).filter(FeatureRequest.request_uuid == request_uuid).first()
+    if row is None:
+        return None
+    try:
+        urls = json.loads(row.screenshot_urls or "[]")
+    except (ValueError, TypeError):
+        urls = []
+    return {
+        "request_uuid": row.request_uuid,
+        "title": row.title or "",
+        "submitted_by_name": row.submitted_by_name or "",
+        "description": row.description or "",
+        "screenshot_urls": [u for u in urls if isinstance(u, str)],
+        "created_at": _iso(row.created_at),
+    }
+
+
+def schedule_feature_request_export(request_uuid: str) -> None:
+    """Re-export one feature request to the FeatureRequests tab. Low-frequency,
+    replace-style, so a plain background fire is enough."""
+    if not request_uuid:
+        return
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        payload = _build_feature_request_payload(db, request_uuid)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+    if payload:
+        run_export_in_background(export_feature_request_to_sheets, payload)
+
+
 def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
     """Re-read one BOL from the DB into the export shape export_bol_to_sheets
     expects. The worker calls this when it runs, so a coalesced export always
@@ -2486,6 +2868,10 @@ def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
         items = json.loads(row.items_json or "[]")
     except (ValueError, TypeError):
         items = []
+    try:
+        shipment = json.loads(row.shipment_json) if row.shipment_json else {}
+    except (ValueError, TypeError):
+        shipment = {}
     return {
         "bol_id": row.bol_id,
         "created_by": row.created_by or "",
@@ -2494,6 +2880,7 @@ def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
         "job_date": row.job_date or "",
         "status": row.status or "",
         "items": items,
+        "shipment": shipment,
         "inventory_verified": (
             True if row.inventory_verified == 1
             else False if row.inventory_verified == 0
@@ -3085,6 +3472,8 @@ SHEET_SYNC_REGISTRY = [
     {"key": "reimbursements",    "label": "Reimbursements",      "env": "SHEETS_REIMBURSEMENTS_TAB",     "default": "Reimbursements",    "fn": "export_reimbursement_to_sheets"},
     {"key": "availability",      "label": "Availability",        "env": "SHEETS_AVAILABILITY_TAB",       "default": "Availability",      "fn": "export_availability_window_to_sheets"},
     {"key": "off_job_hours",     "label": "Off-job hours",       "env": "SHEETS_OFF_JOB_TAB",            "default": "OffJobHours",       "fn": "export_off_job_to_sheets"},
+    {"key": "bug_reports",       "label": "Bug reports",         "env": "SHEETS_BUGS_TAB",               "default": "Bugs",              "fn": "export_bug_report_to_sheets"},
+    {"key": "feature_requests",  "label": "Feature requests",    "env": "SHEETS_FEATURE_REQUESTS_TAB",   "default": "FeatureRequests",   "fn": "export_feature_request_to_sheets"},
 ]
 
 

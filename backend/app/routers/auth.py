@@ -181,16 +181,13 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
         print(f"[forgot-password] reset link generated for user {user.id}")
 
         try:
-            send_email(
-                to_email=user.email,
-                subject="Reset your Mountaineer Crew App password",
-                text=(
-                    f"Hi{' ' + user.name if user.name else ''},\n\n"
-                    f"Click the link below to reset your password. It expires in 1 hour.\n\n"
-                    f"{reset_link}\n\n"
-                    f"If you didn't request this, you can ignore this email."
-                ),
-            )
+            from app.core import app_communication as comms
+            subject, textbody = comms.render(db, "password_reset", {
+                "name": (user.name or "").split(" ")[0] or "there",
+                "reset_link": reset_link,
+                "expiry_hours": 1,
+            })
+            send_email(to_email=user.email, subject=subject, text=textbody)
             print(f"[forgot-password] email sent OK for user {user.id}")
         except Exception as exc:
             # Log so it shows in Render logs, but don't leak the error to the client.

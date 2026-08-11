@@ -58,6 +58,9 @@ class IncidentOut(BaseModel):
     description: str
     est_cost: Optional[float] = None
     resolved: bool
+    status: str = ""
+    settled_amount: Optional[float] = None
+    conversation_log: List[dict] = []
     notes: Optional[str] = None
     photo_urls: List[str] = []
     created_at: str
@@ -69,7 +72,15 @@ def _to_out(inc: Incident) -> IncidentOut:
         urls = [str(u) for u in urls] if isinstance(urls, list) else []
     except (ValueError, TypeError):
         urls = []
+    try:
+        convo = json.loads(inc.conversation_log or "[]")
+        convo = convo if isinstance(convo, list) else []
+    except (ValueError, TypeError):
+        convo = []
     return IncidentOut(
+        status=inc.status or "",
+        settled_amount=inc.settled_amount,
+        conversation_log=convo,
         id=inc.id,
         incident_uuid=inc.incident_uuid,
         claim_number=inc.claim_number,
@@ -208,8 +219,11 @@ def list_all_incidents(
 
 class IncidentPatch(BaseModel):
     resolved: Optional[bool] = None
+    status: Optional[str] = None  # "" | "pending" | "resolved"
     notes: Optional[str] = None
     est_cost: Optional[float] = None
+    settled_amount: Optional[float] = None
+    add_note: Optional[str] = None  # append one conversation-log entry
 
 
 @admin_router.patch("/{incident_id}", response_model=IncidentOut)
@@ -217,17 +231,38 @@ def update_incident(
     incident_id: int,
     body: IncidentPatch,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     inc = db.query(Incident).filter(Incident.id == incident_id).first()
     if not inc:
         raise HTTPException(status_code=404, detail="Incident not found")
-    if body.resolved is not None:
+    if body.status is not None:
+        st = body.status.strip().lower()
+        if st not in ("", "pending", "resolved"):
+            raise HTTPException(status_code=400, detail="status must be '', 'pending', or 'resolved'")
+        inc.status = st or None
+        inc.resolved = st == "resolved"  # keep in sync for back-compat + the sheet
+    elif body.resolved is not None:
         inc.resolved = body.resolved
+        inc.status = "resolved" if body.resolved else inc.status
     if body.notes is not None:
         inc.notes = body.notes.strip() or None
     if body.est_cost is not None:
         inc.est_cost = body.est_cost
+    if body.settled_amount is not None:
+        inc.settled_amount = body.settled_amount
+    if body.add_note and body.add_note.strip():
+        try:
+            log = json.loads(inc.conversation_log or "[]")
+            log = log if isinstance(log, list) else []
+        except (ValueError, TypeError):
+            log = []
+        log.append({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "by": current_user.name or current_user.email or "admin",
+            "text": body.add_note.strip(),
+        })
+        inc.conversation_log = json.dumps(log)
     inc.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(inc)

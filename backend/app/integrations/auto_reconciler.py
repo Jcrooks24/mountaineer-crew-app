@@ -1,13 +1,22 @@
 """
-Background auto-reconciler for events → Sheets drift.
+Background auto-reconciler for Postgres → Sheets drift.
 
-The /api/sync path inserts the event into Postgres synchronously and fires
-the Sheets export on a background thread (see run_export_in_background).
-That thread can die before completing - worker recycling via
-`--limit-max-requests`, OOM kill, an mid-flight network drop past the
-_ssl_retry budget - leaving the event in `events` but not in
-`sheet_event_exports`. Admin used to recover by clicking the Refresh
-button in Settings; this module makes that automatic.
+The /api/sync path (and every other write path) inserts into Postgres
+synchronously and fires the Sheets export on a background thread (see
+run_export_in_background). That thread can die before completing - worker
+recycling via `--limit-max-requests`, OOM kill, a mid-flight network drop past
+the _ssl_retry budget, or a sustained quota 429 - leaving the row in Postgres
+but not in the sheet. Admin used to recover by clicking the Refresh button in
+Settings; this module makes that automatic.
+
+Three sweeps run here:
+- events, via `reconcile_events` (marker table `sheet_event_exports`)
+- signed BOLs, via `reconcile_bols` (marker table)
+- every other sync (materials, reports, RODS, reimbursements, ...), via
+  `reconcile_all_missing` - a DB-vs-sheet diff that re-drives whatever never
+  landed. These fired once at write time and, if that died, were stranded until
+  a human re-saved the record; this closes that hole. It is the heaviest sweep
+  (a full diff, not a marker lookup), so it runs on a slower cadence.
 
 Design:
 - One daemon thread per worker process, started from on_startup.
@@ -43,6 +52,16 @@ MAX_EVENTS_PER_CYCLE = 500
 BOL_BATCH_SIZE = 50
 BOL_MAX_PER_CYCLE = 200
 ON_ERROR_BACKOFF_S = 60
+
+# Generic self-heal for the other 17 sheet syncs (materials, reports, RODS,
+# reimbursements, ...). Events and BOLs have their own marker-table reconcilers
+# above; everything else fired once at write time and, if it died, was stranded
+# until a human re-saved the record. This runs the backfill audit (DB vs sheet)
+# and re-drives what never landed. It is a full DB-vs-sheet diff, heavier than
+# the marker-table sweeps, so it runs on a slower cadence: every Nth cycle
+# (~20 min at the 5-min base interval), not every cycle.
+GENERIC_RECONCILE_EVERY_N_CYCLES = 4
+_cycle_count = 0
 
 _started = False
 _started_lock = threading.Lock()
@@ -113,6 +132,23 @@ def _run_once() -> None:
                 f"{bol_result.get('errors', 0)} errors, "
                 f"{bol_result.get('duration_ms', 0)} ms"
             )
+
+        # Generic self-heal for the remaining 17 syncs, on a slower cadence.
+        # Runs inside the same advisory lock, so only one worker sweeps.
+        global _cycle_count
+        _cycle_count += 1
+        if _cycle_count % GENERIC_RECONCILE_EVERY_N_CYCLES == 0:
+            from app.integrations.sheet_backfill import reconcile_all_missing
+            gen = reconcile_all_missing(db)
+            if gen.get("queued", 0) or gen.get("remaining_missing", 0) or not gen.get("ok", True):
+                msg = (
+                    f"[auto-reconcile] generic: {gen.get('queued', 0)} re-driven "
+                    f"{gen.get('per_sync') or {}}, "
+                    f"{gen.get('remaining_missing', 0)} still missing"
+                )
+                if gen.get("error"):
+                    msg += f", error={gen['error']}"
+                print(msg)
     finally:
         try:
             db.close()
