@@ -1978,8 +1978,12 @@ function MonthScheduleView({
         // keeps the table off the viewport edges so scrollbars and window
         // chrome don't crowd it. Inner overflow:auto keeps the horizontal
         // scroll local to the card if employees still overflow the viewport.
+        // .fullBleedClip contains this breakout's sub-pixel horizontal overflow
+        // locally. It used to be handled by `overflow-x: clip` on html/body,
+        // which established a containing block for position:fixed and made the
+        // crew bottom nav drift upward while scrolling on mobile.
         <div
-          className="card"
+          className="card fullBleedClip"
           style={{
             padding: 0,
             overflow: "auto",
