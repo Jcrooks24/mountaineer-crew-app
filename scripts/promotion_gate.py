@@ -164,7 +164,11 @@ def check_data_flow_blockers() -> None:
             f"collects and then loses. First: {sample}",
         )
 
-    m = re.search(r"^# Deviations new on staging\s*$(.*?)^# ", text, re.M | re.S)
+    # Terminate on the next top-level heading OR end of file. The `^# `-only
+    # version silently matched nothing when Deviations was the LAST section,
+    # so a real deviation reported green - a false negative in a blocking gate,
+    # which is worse than no gate. Caught by reordering the doc and re-running.
+    m = re.search(r"^# Deviations new on staging\s*$(.*?)(?=^# |\Z)", text, re.M | re.S)
     if m:
         deviations = re.findall(r"^###\s+(.+?)\s*$", m.group(1), re.M)
         if deviations:
