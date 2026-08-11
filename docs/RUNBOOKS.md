@@ -474,18 +474,55 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    the `audit: loaded source ...` lines and never falls, that is it.
 
 2. **The crew bottom nav drifts upward on scroll, on mobile (prod/`main`).**
-   The first hypothesis - `html, body { overflow-x: clip }` creating a containing
-   block for `position: fixed` - is **wrong, or at least not the whole cause**.
-   That rule is gone and the deployed bundle confirms it; the nav still drifts.
-   No `transform`, `filter` or `contain` on an ancestor either.
+   The nav is `position: fixed; left/right/bottom: 0; zIndex: 50`, styled inline
+   at `BottomNav.tsx:72-78`. It is mounted app-wide at `main.tsx:81`, outside
+   `<Routes>`, so it is a sibling of every page rather than a child of one.
 
-   Before diagnosing further, **rule out a stale precached bundle** (Profile →
-   Update app, then fully close and reopen the app). The staging preview host has
-   a documented service-worker freeze that makes correct fixes look undeployed;
-   confirm the device is actually running the current code before believing the
-   symptom. If it survives that, the leading theory is iOS Safari's dynamic
-   toolbar resizing the visual viewport under `position: fixed` elements, which
-   wants `dvh`/`visualViewport` handling rather than a containing-block fix.
+   **The containing-block hypothesis is dead. Do not retry it.** The suspect was
+   `html, body { overflow-x: clip }` establishing a containing block for
+   `position: fixed` descendants. That rule is gone (moved to `.fullBleedClip`,
+   commit `dfd5ab8`, on both branches), the built bundle confirms it, and the nav
+   still drifts. A full ancestor audit on 2026-08-11 closed the rest of that
+   class: the nav's real DOM chain is only `html > body > div#root`; `#root` has
+   no CSS rules at all; `ThemeProvider` touches `documentElement` only via
+   `setProperty` on custom properties; and the codebase's single `backdrop-filter`
+   (`Admin.tsx:170`) is not an ancestor and sits behind a route the nav hides on
+   anyway. No `transform`, `filter`, `perspective`, `will-change`, `contain` or
+   non-`visible` `overflow` exists anywhere on that chain.
+
+   **Rule out a stale precached bundle before diagnosing further** (Profile →
+   Update app, then fully close and reopen). Note this is a *prod* symptom and the
+   staging service-worker freeze does **not** apply here: the prod host returns
+   `200` for `/sw.js` with no redirect (checked 2026-08-11), so the update path
+   genuinely works. That makes the device test trustworthy on prod in a way it
+   never was on staging.
+
+   If it survives that, the leading theory is iOS Safari's dynamic toolbar
+   resizing the visual viewport under `position: fixed` elements. There is no
+   `dvh`, `svh` or `visualViewport` handling anywhere in the codebase to absorb
+   it. **Unverified: nobody has reproduced this on an instrumented device.**
+
+2. **`env(safe-area-inset-*)` resolves to 0 on iOS: the viewport meta is missing
+   `viewport-fit=cover`.** `frontend/index.html:8` is
+   `<meta name="viewport" content="width=device-width, initial-scale=1.0" />`,
+   with no `viewport-fit=cover`. Confirmed identical in `frontend/dist/index.html`
+   and in the live prod HTML on 2026-08-11. Without it iOS keeps the default
+   `viewport-fit=auto` and every `env(safe-area-inset-*)` in the app evaluates
+   to `0`.
+
+   Two places silently do nothing on a notched iPhone as a result:
+   `BottomNav.tsx:77` (`paddingBottom: env(safe-area-inset-bottom)`) and
+   `index.css:68` (`body { padding-bottom: calc(56px + env(safe-area-inset-bottom)) }`).
+   The nav reserves no room for the home indicator, and the page reserves no room
+   for the nav beyond a flat 56px. `UpdateBanner.tsx:114` offsets itself from the
+   same dead value.
+
+   **Separate defect from the drift above, and not the fix for it** - a zero inset
+   changes how much padding the nav has, not where a `position: fixed` element is
+   anchored. Found while auditing the drift. Deliberately not fixed yet: adding
+   `viewport-fit=cover` shifts the nav's layout on every iOS device, which would
+   confound the drift device-test that has not been run. Fix it after that test,
+   not before.
 
 2. **The long-distance day queue never drains: `drive_day` never reaches the server.**
    `LdWorkday.tsx:70` calls `setLdDay()` when the crew picks "Driving" in the LD day
