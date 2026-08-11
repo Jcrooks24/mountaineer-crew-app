@@ -136,9 +136,15 @@ def update_caption(
     or edit a note on an individual photo from the Saved gallery. Persists to
     the DB (so it syncs across devices) and best-effort mirrors it onto the
     Drive file description so admin sees the note in Drive too."""
+    # Both failures below used to `return {"ok": False, ...}` with an HTTP 200.
+    # apiFetch throws only on !res.ok, so a 200 reads as success: the UI said
+    # "Note saved", cleared the draft, and the note was gone. For an incident
+    # photo the note IS the record (damage description, claim context), so that
+    # is a lying success on data with no second copy. Status codes now match
+    # what happened - 404 permanent, 5xx retryable.
     row = db.query(Photo).filter(Photo.id == payload.photo_id).first()
     if not row:
-        return {"ok": False, "error": "Photo not found"}
+        raise HTTPException(status_code=404, detail="Photo not found")
 
     caption = (payload.caption or "").strip()
     row.caption = caption
@@ -147,7 +153,9 @@ def update_caption(
     except SQLAlchemyError:
         db.rollback()
         traceback.print_exc()
-        return {"ok": False, "error": "Failed to save note"}
+        # 500, not 4xx: a DB failure is retryable and the caller should be able
+        # to try again rather than being told its payload was bad.
+        raise HTTPException(status_code=500, detail="Could not save the note. Try again.")
 
     # Best-effort: keep the Drive description in sync. Never fail the request
     # on a Drive hiccup - the note is already saved to the DB.

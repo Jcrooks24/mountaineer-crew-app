@@ -1729,9 +1729,21 @@ export default function App() {
           method: "POST",
           body: JSON.stringify({ photo_id: id, caption }),
         });
-      } catch {
-        // Offline or not-yet-uploaded: local caption is saved above and will
-        // ride along on the next upload/retry. Non-fatal.
+      } catch (e) {
+        // Whether this is safe to swallow turns on ONE thing: is there a local
+        // copy holding the caption?
+        //
+        // isLocal - yes. `updatePhoto` above stored it, and it rides along on
+        // the next upload. Every server failure here is expected and harmless,
+        // including a 404: a not-yet-uploaded photo genuinely is not on the
+        // server. Swallow all of them.
+        //
+        // Server-only photo - no. Nothing else holds the note, and there is no
+        // queue for captions. Swallowing reported "Note saved" over a note that
+        // reached nothing, which for an incident photo is the record itself.
+        // Surface every failure, offline included: the crew member needs to
+        // know it did not save so they can redo it on signal.
+        if (!isLocal) throw e;
       }
       await refreshPhotos();
       await fetchServerPhotos(jobUuid.trim());

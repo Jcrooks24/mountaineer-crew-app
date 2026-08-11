@@ -1327,8 +1327,15 @@ def notify_job_corrections(db: Session, job_uuid: str) -> Dict[str, Any]:
         by_user[c.user_id].append(c)
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # One query for the whole group instead of one per recipient. The loop is
+    # bounded by the crew on a single job so the old shape was not a scale
+    # problem, but it put a DB round-trip inside a loop that also sends mail,
+    # and that is the pattern VETTING_PROTOCOL asks us not to leave lying around.
+    users_by_id = {
+        u.id: u for u in db.query(User).filter(User.id.in_(list(by_user.keys()))).all()
+    } if by_user else {}
     for uid, group in by_user.items():
-        user = db.query(User).filter(User.id == uid).first()
+        user = users_by_id.get(uid)
         name = user.name if user else (group[0].user_name or "")
         if user is None or not user.email:
             result["failed"].append({
@@ -1469,8 +1476,12 @@ def finalize_period(
     failed: List[Dict[str, Any]] = []
     suppressed: List[Dict[str, Any]] = []
 
+    # Same preload as the per-job path above: one query, not one per recipient.
+    users_by_id = {
+        u.id: u for u in db.query(User).filter(User.id.in_(list(by_user.keys()))).all()
+    } if by_user else {}
     for uid, cs in by_user.items():
-        user = db.query(User).filter(User.id == uid).first()
+        user = users_by_id.get(uid)
         name = user.name if user else (cs[0].user_name or "")
         if uid in suppress:
             # Marked as already discussed in person. Stamp them notified so the

@@ -172,6 +172,31 @@ The full step-by-step is the **Data-flow doc gate** in
 [ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md); the two facts
 that matter to data flow are recorded under "Queue failure handling" below.
 
+## Photo captions: a failed save is no longer reported as success
+
+**Changed 2026-08-11.** `POST /api/photos/caption` returned HTTP **200** with
+`{"ok": false, "error": ...}` when the photo was missing or the DB commit failed.
+`apiFetch` throws only on `!res.ok`, so a 200 read as success: the UI showed
+"Note saved", cleared the draft, and the note was gone. Neither caller checked
+`ok`. For an incident photo the note **is** the record.
+
+| | |
+|---|---|
+| Endpoint | `POST /api/photos/caption` |
+| Was | 200 + `{"ok": false}` on both failure paths |
+| Now | **404** photo not found (permanent), **500** DB commit failed (retryable) |
+| Queue | none. Captions are not queued, which is why swallowing mattered |
+
+Client handling now turns on whether a local copy holds the caption:
+
+- **Local photo** - `updatePhoto` stored it and it rides along on the next
+  upload. Every server failure is swallowed, including a 404, because a
+  not-yet-uploaded photo genuinely is not on the server yet.
+- **Server-only photo** - nothing else holds the note. Every failure is
+  surfaced, offline included, so the crew member knows to redo it on signal.
+
+Drive description mirroring stays best-effort and still never fails the request.
+
 ## The long-distance day queue is still dead on staging
 
 `ldDayStore.syncQueue()` still has no caller. The `online` handler at
