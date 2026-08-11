@@ -441,16 +441,13 @@ def email_bol_to_client(
     filename = f"{(job_date + ' - ') if job_date else ''}{safe_name}.pdf"
 
     # NOTE: subject and body are intentionally em-dash free (company invariant).
-    subject = f"Your signed Bill of Lading - {job_name}"
-    body = (
-        f"Hello,\n\n"
-        f"Attached is the signed Bill of Lading for your move"
-        f"{(' on ' + job_date) if job_date else ''}.\n\n"
-        f"Please keep a copy for your records. If you have any questions, "
-        f"reply to this email or call us at (406) 201-9580.\n\n"
-        f"Thank you,\n"
-        f"Mountaineer Moving LLC"
-    )
+    from app.core import app_communication as comms
+    subject, body = comms.render(db, "signed_bol", {
+        "job_name": job_name,
+        "job_date_suffix": (" on " + job_date) if job_date else "",
+        "company_name": "Mountaineer Moving LLC",
+        "company_phone": "(406) 201-9580",
+    })
 
     try:
         send_email(

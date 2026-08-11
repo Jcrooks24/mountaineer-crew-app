@@ -382,6 +382,97 @@ def set_payroll_rates(
 
 
 # ---------------------------
+# App communication. Admin-editable subject + body for every email the app
+# sends. The registry (defaults, placeholders, who receives what) lives in
+# core/app_communication.py; this is just the CRUD around it.
+# ---------------------------
+
+class CommunicationTemplateIn(BaseModel):
+    key: str
+    subject: str
+    body: str
+
+
+@router.get("/config/app-communication")
+def get_app_communication(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Every template: the built-in default, the admin's override if any, and
+    the placeholders available to it."""
+    from app.core import app_communication as comms
+    overrides = comms.load(db)
+    out = []
+    for t in comms.catalog():
+        ov = overrides.get(t["key"], {})
+        subject = ov.get("subject") or t["default_subject"]
+        body = ov.get("body") or t["default_body"]
+        pv_subject, pv_body = comms.preview(t["key"], subject, body)
+        out.append({
+            **t,
+            "subject": subject,
+            "body": body,
+            "customized": bool(ov),
+            "preview_subject": pv_subject,
+            "preview_body": pv_body,
+        })
+    return {"templates": out}
+
+
+@router.put("/config/app-communication", status_code=200)
+def set_app_communication(
+    payload: CommunicationTemplateIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Save one template. Rejects a body that drops a required placeholder:
+    a password-reset email with no link is a broken email, not a wording
+    preference, and the admin should find that out here rather than from a crew
+    member who cannot log in."""
+    from app.core import app_communication as comms
+    if payload.key not in comms.BY_KEY:
+        raise HTTPException(status_code=404, detail=f"Unknown template '{payload.key}'")
+    errors = comms.validate(payload.key, payload.subject, payload.body)
+    if errors:
+        raise HTTPException(status_code=400, detail=" ".join(errors))
+
+    overrides = comms.load(db)
+    overrides[payload.key] = {"subject": payload.subject, "body": payload.body}
+    blob = _json.dumps({"templates": overrides})
+    row = db.query(SystemConfig).filter(SystemConfig.key == comms.APP_COMMUNICATION_KEY).first()
+    if row:
+        row.value = blob
+    else:
+        db.add(SystemConfig(key=comms.APP_COMMUNICATION_KEY, value=blob))
+    db.commit()
+    pv_subject, pv_body = comms.preview(payload.key, payload.subject, payload.body)
+    return {"ok": True, "preview_subject": pv_subject, "preview_body": pv_body}
+
+
+@router.delete("/config/app-communication/{key}", status_code=200)
+def reset_app_communication(
+    key: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Drop the override so this email goes back to its built-in wording."""
+    from app.core import app_communication as comms
+    if key not in comms.BY_KEY:
+        raise HTTPException(status_code=404, detail=f"Unknown template '{key}'")
+    overrides = comms.load(db)
+    overrides.pop(key, None)
+    blob = _json.dumps({"templates": overrides})
+    row = db.query(SystemConfig).filter(SystemConfig.key == comms.APP_COMMUNICATION_KEY).first()
+    if row:
+        row.value = blob
+    else:
+        db.add(SystemConfig(key=comms.APP_COMMUNICATION_KEY, value=blob))
+    db.commit()
+    t = comms.BY_KEY[key]
+    return {"ok": True, "subject": t["subject"], "body": t["body"]}
+
+
+# ---------------------------
 # Job checklist config (C3). Admin-editable items, each manual or bound to an
 # AUTO signal, optionally limited to long-distance and/or job types. Crew read
 # the list via the public GET /api/config/job-checklist.
@@ -812,24 +903,25 @@ class BillCorrectionRequest(BaseModel):
 
 
 def _bill_correction_email(
-    employee_name: str, job_name: str, before: float, after: float, reason: str
+    db: Session, employee_name: str, job_name: str,
+    before: float, after: float, reason: str,
 ) -> tuple:
+    from app.core import app_communication as comms
     first = employee_name.split(" ")[0] if employee_name else "there"
     changed = abs(after - before) >= 0.005
     total_line = (
-        f"The bill total changed from ${before:,.2f} to ${after:,.2f}.\n\n"
+        f"The bill total changed from ${before:,.2f} to ${after:,.2f}."
         if changed
-        else "The bill total did not change.\n\n"
+        else "The bill total did not change."
     )
-    body = (
-        f"Hi {first},\n\n"
-        f"The billing on {job_name} was reviewed and corrected by the office.\n\n"
-        + total_line
-        + f"Reason: {reason}\n\n"
-        "If any of this looks wrong, reply to this email or talk to the office.\n\n"
-        "Mountaineer Moving\n"
-    )
-    return f"Billing correction for {job_name}", body
+    return comms.render(db, "billing_correction", {
+        "first_name": first,
+        "employee_name": employee_name,
+        "job_name": job_name,
+        "total_line": total_line,
+        "reason": reason,
+        "company_name": "Mountaineer Moving",
+    })
 
 
 @router.post("/bill-correction/{job_uuid}")
@@ -934,7 +1026,7 @@ def correct_bill(
                     })
                     continue
                 subject, textbody = _bill_correction_email(
-                    name, job_name, before_total, after_total, reason,
+                    db, name, job_name, before_total, after_total, reason,
                 )
                 try:
                     send_email(to_email=user.email, subject=subject, text=textbody)

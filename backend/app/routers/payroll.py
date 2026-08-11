@@ -1276,20 +1276,19 @@ def delete_job_correction(
 
 
 def _job_correction_email(
-    employee_name: str, job_name: str, work_date: str, cs: List[PayrollCorrection]
+    db: Session, employee_name: str, job_name: str, work_date: str,
+    cs: List[PayrollCorrection],
 ) -> Tuple[str, str]:
+    from app.core import app_communication as comms
     first = employee_name.split(" ")[0] if employee_name else "there"
-    body = (
-        f"Hi {first},\n\n"
-        f"Your reported hours on {job_name} ({work_date}) were reviewed and "
-        f"corrected before payroll. Here is exactly what changed:\n\n"
-        + "\n\n".join(_correction_lines(cs))
-        + "\n\n"
-        "These are the numbers being paid. If any of this looks wrong, reply to "
-        "this email or talk to the office before the next pay period closes.\n\n"
-        "Mountaineer Moving\n"
-    )
-    return f"Correction to your hours on {job_name}", body
+    return comms.render(db, "hours_correction", {
+        "first_name": first,
+        "employee_name": employee_name,
+        "job_name": job_name,
+        "work_date": work_date,
+        "corrections": "\n\n".join(_correction_lines(cs)),
+        "company_name": "Mountaineer Moving",
+    })
 
 
 def notify_job_corrections(db: Session, job_uuid: str) -> Dict[str, Any]:
@@ -1343,7 +1342,7 @@ def notify_job_corrections(db: Session, job_uuid: str) -> Dict[str, Any]:
                 "error": "no email address on the roster",
             })
             continue
-        subject, text = _job_correction_email(name or user.email, job_name, work_date, group)
+        subject, text = _job_correction_email(db, name or user.email, job_name, work_date, group)
         try:
             send_email(to_email=user.email, subject=subject, text=text)
         except Exception as exc:
