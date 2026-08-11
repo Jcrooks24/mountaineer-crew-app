@@ -224,12 +224,22 @@ def main() -> None:
                 fails.append(f"{tab}: {len(dups)} duplicated {ukey}(s) "
                              f"({sum(dups.values())} rows) e.g. {shown}")
 
-        # 2d) fully-blank residue rows between data (values() trims trailing empties)
-        blanks = [i + 1 for i in range(1, len(vals))
-                  if not any(str(c).strip() for c in vals[i])]
+        # 2d) residue rows: a data row whose KEY cell is empty.
+        #
+        # This used to test whether an ENTIRE row was blank, which needed every
+        # cell of the tab in memory - the read that OOM-killed this job. The key
+        # column answers the same question within the memory budget, and answers
+        # a slightly better one: a row with no key is a defect whether or not the
+        # rest of it is empty, because every lookup, dedupe and replace-style
+        # delete on this tab is keyed off that column. A blank-key row is either
+        # residue or a row that has lost its identity, and both want reporting.
+        key_col = _column(svc, sid, tab, header.index(key0))
+        # +2: the list is data rows only (header dropped), and sheet rows are
+        # 1-based, so element 0 is sheet row 2.
+        blanks = [i + 2 for i, v in enumerate(key_col) if not str(v).strip()]
         if blanks:
-            warns.append(f"{tab}: {len(blanks)} fully-blank residue row(s) at {blanks[:10]}"
-                         + (" ..." if len(blanks) > 10 else ""))
+            warns.append(f"{tab}: {len(blanks)} row(s) with an empty {key0!r} at "
+                         f"{blanks[:10]}" + (" ..." if len(blanks) > 10 else ""))
 
     # COMPLETENESS: does the sheet mirror every current server record? -----------
     # The Sheet is the long-term record; the server data is treated as transient.
