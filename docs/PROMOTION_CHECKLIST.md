@@ -207,5 +207,25 @@ looks wrong, and who to contact.
 Items that were on a previous promotion's list and never got done. **Clear this
 section as part of the promotion, or explain why it is still here.**
 
-- _(nothing carried over yet - this section starts empty and is populated when a
-  promotion ends with an item unfinished)_
+- **Fold `docs/DATA_FLOW_STAGING.md` into `docs/DATA_FLOW.md`.** Deferred at the
+  v1.8 promotion and again at the 2026-08-11 instrumentation promotion. **This is
+  now two promotions old.**
+
+  Why it is still here: the delta's "Reconciliation `7fe20a4` -> `7f41611`"
+  section covers five data paths (Mountain-time recording, the two payroll
+  finalize preconditions, per-entry entry dates, RODS driver-keying) that were
+  verified by **reading the source and the diffs**, not by tracing a value from
+  device to Postgres to Sheet. The doc's own legend says `[x]` means traced, so
+  folding them in as `[x]` would assert a verification nobody performed. They are
+  deliberately not marked `[ ]` either, since that asserts the opposite and is
+  equally unearned.
+
+  Why it does **not** block a merge: every commit that section describes is
+  already on `main`, so this is documentation debt `main` already carries, not a
+  new staging flow. Confirmed 2026-08-11 with `git merge-base --is-ancestor` on
+  all ten referenced commits.
+
+  To clear it: exercise those five paths end to end on a real device against
+  prod, promote them to `[x]`, fold the delta in, empty it, and bump "Verified
+  against". That needs a device and prod access, so it is the owner's to schedule
+  or delegate, not something that can be closed from a checkout.
