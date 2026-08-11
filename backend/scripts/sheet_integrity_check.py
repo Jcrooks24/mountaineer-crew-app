@@ -86,10 +86,33 @@ def _tab_name(env_var: str, default: str) -> str:
     return os.getenv(env_var, default).strip() or default
 
 
-def _values(svc, sid, tab):
-    return se._api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=sid, range=tab, valueRenderOption="UNFORMATTED_VALUE",
+# Reading a whole tab is what OOM-killed this job on the 512 MB Render worker.
+# `range=tab` pulls every cell of every column - including the long free-text
+# columns (notes, feedback, walkthrough) - for every registered tab in a loop,
+# and holds it while counting duplicates. The check never needed any of that: it
+# wants the header row, and one key column.
+#
+# These two reads are bounded by ROW count on a single column instead of
+# rows x columns across the whole workbook. Do not "simplify" them back into one
+# whole-tab fetch.
+
+def _header(svc, sid, tab):
+    """Row 1 only."""
+    vals = se._api(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=sid, range=f"{tab}!1:1", valueRenderOption="UNFORMATTED_VALUE",
     ).execute()).get("values", [])
+    return vals[0] if vals else []
+
+
+def _column(svc, sid, tab, index: int):
+    """One column, data rows only (header dropped), as a flat list."""
+    letter = se._col_letter(index)
+    vals = se._api(lambda: svc.spreadsheets().values().get(
+        spreadsheetId=sid, range=f"{tab}!{letter}:{letter}",
+        valueRenderOption="UNFORMATTED_VALUE", majorDimension="COLUMNS",
+    ).execute()).get("values", [])
+    col = vals[0] if vals else []
+    return col[1:]  # drop the header cell
 
 
 def _completeness_checks(db, fails: list, warns: list) -> None:
@@ -170,8 +193,7 @@ def main() -> None:
         expected = getattr(se, headers_attr)
         if tab not in all_tabs:
             continue  # tab is created on first write; absence is not a defect
-        vals = _values(svc, sid, tab)
-        header = [str(h).strip() for h in (vals[0] if vals else [])]
+        header = [str(h).strip() for h in _header(svc, sid, tab)]
         if not header:
             warns.append(f"{tab}: exists but has no header row")
             continue
@@ -190,10 +212,13 @@ def main() -> None:
 
         # 2c) duplicate rows for a one-per-key tab
         if ukey and ukey in header:
-            ki = header.index(ukey)
-            keys = [str(vals[i][ki]).strip() for i in range(1, len(vals))
-                    if ki < len(vals[i]) and str(vals[i][ki]).strip()]
-            dups = {k: c for k, c in Counter(keys).items() if c > 1}
+            # Count straight into the Counter rather than materializing a list of
+            # every key first: same result, one copy of the data instead of two.
+            counts = Counter(
+                s for s in (str(v).strip() for v in _column(svc, sid, tab, header.index(ukey)))
+                if s
+            )
+            dups = {k: c for k, c in counts.items() if c > 1}
             if dups:
                 shown = dict(list(dups.items())[:5])
                 fails.append(f"{tab}: {len(dups)} duplicated {ukey}(s) "
