@@ -189,7 +189,7 @@ Because a crew could log inventory in one and sign an empty BOL from the other,
 `bolStore.loadForJob` now seeds an **unsigned, empty** BOL from that job's Actual
 Inventory (`GET /api/job-inventory/{job_uuid}`), best-effort and online-only. The BOL
 reads from inventory; inventory does not read from the BOL
-([ADR 0030](decisions/0030-bol-inherits-actual-inventory.md), amending ADR 0015).
+([ADR 0026](decisions/0026-bol-inherits-actual-inventory.md), amending ADR 0015).
 
 **Why retries are safe:** every payload carries a client-generated UUID, and the
 backend upserts on it. This is the single invariant that makes the whole offline
@@ -242,7 +242,7 @@ All of it is in-process threads. No Celery, no cron, no queue service.
   that will not re-send shows *why* (the export throwing, not a lost write). Three
   Sheets reads total for the whole audit, batched, so the audit cannot itself trip
   the quota that caused the gap
-  ([ADR 0026](decisions/0026-sheet-writes-retry-quota-and-cache-tab-metadata.md)).
+  ([ADR 0025](decisions/0025-sheet-writes-retry-quota-and-cache-tab-metadata.md)).
   App Health runs this audit live and WARNs when the Sheet is out of sync
   ([ADR 0031](decisions/0031-sync-accuracy-is-one-surface.md)).
 - **Crew-resources loop**, hourly, **off unless `CREW_RESOURCES_ENABLED=true`**.

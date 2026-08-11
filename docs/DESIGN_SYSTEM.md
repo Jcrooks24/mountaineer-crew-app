@@ -2,7 +2,7 @@
 
 The visual contract for the app. New and restyled screens follow this so the UI
 reads as one system, not 20 screens each reinventing the look. Rationale and
-rollout plan: [ADR 0025](decisions/0025-enterprise-design-system-facelift.md).
+rollout plan: [ADR 0030](decisions/0030-enterprise-design-system-facelift.md).
 
 **Golden rule:** use theme CSS vars and the primitives below. Do **not** hardcode
 colors or reinvent a component inline. If you reach for a hardcoded hex, that is
@@ -84,7 +84,7 @@ pattern to reach for is a computed `--on-*` ink (see `pickInk` in
 
 An external design doc (Figma) specified this look in full. We adopt its
 **direction and concrete values**, but deliberately did **not** adopt two things
-(they would break real functionality — see ADR 0025):
+(they would break real functionality — see ADR 0030):
 
 - **We keep `ThemeContext` and the 8-preset system.** The Figma doc proposed
   ripping it out for a two-theme `data-theme` rewrite. The presets +
@@ -153,5 +153,5 @@ muscle memory is safety-critical.
   Remaining: apply the data-table pattern to any other admin card-lists as they
   come up, and the metrics strip to other admin views if wanted.
 - Not a from-scratch layout restructure - the shell exists; remaining work is
-  converting specific views to the table/metrics patterns (ADR 0025). Confirm nav
+  converting specific views to the table/metrics patterns (ADR 0030). Confirm nav
   IA before moving where things live.

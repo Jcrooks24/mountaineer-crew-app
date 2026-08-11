@@ -649,7 +649,7 @@ export async function loadForJobWithInfo(job: { job_uuid: string; job_name: stri
     shouldPersist = true; // prior behavior saved the adopted/merged server draft
   }
 
-  // Bridge (ADR 0030): an UNSIGNED BOL with no items of its own inherits the
+  // Bridge (ADR 0026): an UNSIGNED BOL with no items of its own inherits the
   // job's Actual Inventory, so inventory logged in the Inventory tab shows on
   // the BOL instead of the crew signing an empty one. Gated on status "draft"
   // so a signed BOL is never re-seeded, and on an empty item list so crew-added

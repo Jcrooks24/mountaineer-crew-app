@@ -12,7 +12,7 @@ The singular `variance_cause` column added in c4d6e8f0a2b3 is deliberately left
 in place and NOT backfilled. Reports written between 2026-07-27 and this deploy
 carry their single cause there; the router reads the JSON column first and falls
 back to the string column, so both eras answer the same question without a data
-migration over live rows. See ADR 0026.
+migration over live rows. See ADR 0025.
 
 `scope_changes_json` needs no migration despite its element shape changing
 ({kind} -> {kinds[], direction}) - it is an opaque Text blob to Postgres, and

@@ -175,10 +175,91 @@ def check_data_flow_blockers() -> None:
             )
 
 
+def _git(*args: str) -> str:
+    try:
+        return subprocess.run(["git", *args], cwd=REPO, capture_output=True,
+                              text=True, encoding="utf-8", check=True).stdout
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def _headers_lists(ref: str) -> dict[str, list[str]]:
+    src = _git("show", f"{ref}:backend/app/integrations/sheets_export.py")
+    out: dict[str, list[str]] = {}
+    for m in re.finditer(r"^([A-Z0-9_]*HEADERS)\s*(?::[^=]+)?=\s*\[(.*?)\]", src, re.M | re.S):
+        out[m.group(1)] = re.findall(r'"([^"]*)"', m.group(2))
+    return out
+
+
+def _env_vars(ref: str) -> set[str]:
+    src = _git("grep", "-ohE",
+               r'getenv\("[A-Z0-9_]+"|environ\.get\("[A-Z0-9_]+"|environ\["[A-Z0-9_]+"\]',
+               ref, "--", "backend")
+    return set(re.findall(r'"([A-Z0-9_]+)"', src))
+
+
+def report(base_ref: str) -> None:
+    """Advisory block for docs/PROMOTION_CHECKLIST.md sections 2-4. Never fails
+    the run: these need a human decision, not a pass/fail."""
+    print("\n" + "=" * 72)
+    print("PROMOTION REPORT (advisory - see docs/PROMOTION_CHECKLIST.md)")
+    print("=" * 72)
+
+    print(f"\n[3] Backend env vars read on HEAD but not on {base_ref}:")
+    new_vars = sorted(_env_vars("HEAD") - _env_vars(base_ref))
+    for v in new_vars:
+        print(f"      {v}")
+    if not new_vars:
+        print("      (none)")
+    indirect = sorted(set(re.findall(
+        r'^[A-Z_]+_ENV_VAR\s*=\s*"([A-Z0-9_]+)"',
+        _git("grep", "-hE", r'^[A-Z_]+_ENV_VAR\s*=\s*"', "HEAD", "--", "backend"), re.M)))
+    if indirect:
+        print("    read indirectly via a constant (check these by hand):")
+        for v in indirect:
+            print(f"      {v}")
+
+    print("\n[4] Apps Script changed (NOT deployed by CI - must be pasted by hand):")
+    changed = [ln for ln in _git("diff", "--name-status", base_ref, "HEAD",
+                                 "--", "apps_script/").splitlines() if ln.strip()]
+    for ln in changed:
+        print(f"      {ln}")
+    if not changed:
+        print("      (none)")
+
+    print("\n[2b] Sheet column changes:")
+    old, new = _headers_lists(base_ref), _headers_lists("HEAD")
+    any_change = False
+    for name in sorted(set(old) | set(new)):
+        o, n = old.get(name), new.get(name)
+        if o == n:
+            continue
+        any_change = True
+        if o is None:
+            print(f"      NEW TAB   {name} ({len(n)} cols) - no existing data to disturb")
+        elif n is None:
+            print(f"      REMOVED   {name}")
+        elif n[: len(o)] == o:
+            print(f"      APPEND    {name}: +{len(n) - len(o)} at end -> {n[len(o):]}")
+        else:
+            added = [c for c in n if c not in o]
+            print(f"      MID-LIST  {name}: {len(added)} column(s) inserted mid-list.")
+            print(f"                Existing rows do NOT shift (_ensure_tab appends right),")
+            print(f"                but prod and a fresh tab end up in different column")
+            print(f"                ORDER. Check nothing addresses this tab by column")
+            print(f"                letter/index. Added: {added}")
+    if not any_change:
+        print("      (no header changes)")
+    print()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-ref", default=os.environ.get("GATE_BASE_REF") or None,
                     help="branch being merged INTO, e.g. origin/main")
+    ap.add_argument("--report", action="store_true",
+                    help="also print the advisory promotion report (env vars, "
+                         "Apps Script, sheet columns)")
     args = ap.parse_args()
 
     check_adr_numbers(args.base_ref)
@@ -207,11 +288,21 @@ def main() -> int:
         print(f"\n{len(active)} blocker(s). Fix them, or record a "
               f"'GATE-WAIVER: <check-id> <reason>' line in DATA_FLOW_STAGING.md.")
         print("A green gate would still not mean vetted. Run /vet.")
-        return 1
+    else:
+        print("\n  No mechanical blockers." + (f" ({len(waived)} waived.)" if waived else ""))
+        print("  This is NOT a vet. Run /vet before promoting.")
 
-    print("\n  No mechanical blockers." + (f" ({len(waived)} waived.)" if waived else ""))
-    print("  This is NOT a vet. Run /vet before promoting.")
-    return 0
+    # The report prints even when blocked, on purpose: you want the env-var and
+    # Apps Script list while you are still working through the blockers, not
+    # only once everything is already green.
+    if args.report:
+        if args.base_ref:
+            report(args.base_ref)
+        else:
+            print("\n  --report needs --base-ref (e.g. origin/main)")
+
+    print("Full checklist: docs/PROMOTION_CHECKLIST.md")
+    return 1 if active else 0
 
 
 if __name__ == "__main__":

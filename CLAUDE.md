@@ -19,8 +19,9 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 | [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md) | The pre-promotion test protocol (`/vet`). |
 | [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) | Admin-facing guide: what admin can do in the app. Keep accurate against `Admin.tsx` / `admin.py`. |
 | [docs/CREW_GUIDE.md](docs/CREW_GUIDE.md) | Crew-facing reference & troubleshooting guide (every feature + failure modes). Master formatted copy lives in the shared doc. |
-| [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) | The visual contract: tokens, primitives, patterns. Read before restyling or building a screen. Rationale in [ADR 0025](docs/decisions/0025-enterprise-design-system-facelift.md). |
+| [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) | The visual contract: tokens, primitives, patterns. Read before restyling or building a screen. Rationale in [ADR 0030](docs/decisions/0030-enterprise-design-system-facelift.md). |
 | [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) | Cleanups paid down opportunistically, a few per commit, in files you are already editing. Check it whenever you touch a frontend file. |
+| [docs/PROMOTION_CHECKLIST.md](docs/PROMOTION_CHECKLIST.md) | Every pre- and post-merge step for `staging -> main`: Sheets mirror, env vars by environment, Apps Script pastes, email workflows, patch note, crew email, in-app config. Driven by `/promote`. |
 
 ## Definition of done
 
@@ -96,6 +97,14 @@ measure, not a correctness requirement.
 ## Staging → main promotion workflow
 
 Only run when explicitly asked to promote.
+
+**Start with `/promote`.** It runs `scripts/promotion_gate.py --report` and walks
+[docs/PROMOTION_CHECKLIST.md](docs/PROMOTION_CHECKLIST.md), which covers the
+things this section does not: the Sheets mirror and column safety, new env vars
+by platform and environment, Postmark/OAuth manual setup, Apps Script pastes (a
+runtime CI does not deploy), the full email-workflow inventory, the patch note,
+the mass crew email, and in-app config that does not travel with the merge. The
+steps below remain the mechanical merge procedure.
 
 1. **Merge** `staging` into `main`. Render auto-deploys main on push.
 2. **Verify the start command above is set** on the Render prod service before promoting (only needed once; persists across deploys). Migrations now run as part of the start command, not at app startup.

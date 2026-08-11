@@ -380,7 +380,7 @@ const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 export const DEFAULT_SETTINGS: ThemeSettings = {
   // Enterprise Dark is the app's default identity (the facelift). Existing
   // users keep whatever they already saved in localStorage; only new users and
-  // anyone who never picked a theme land here. See ADR 0025.
+  // anyone who never picked a theme land here. See ADR 0030.
   themeId: "enterprise-light",
   brandOverride: null,
   brand2Override: null,
