@@ -37,7 +37,7 @@ export default defineConfig([
       // everyone and the realistic response would be a blanket disable, which
       // is worse than no rule. It warns now so NEW hardcoded colors are visible
       // in review, and gets promoted to 'error' once the count reaches zero.
-      // Progress is tracked in docs/INCREMENTAL_WORK.md item 6.
+      // Progress is tracked in docs/INCREMENTAL_WORK.md item 7.
       'no-restricted-syntax': [
         'warn',
         {

@@ -11,6 +11,23 @@ folded into [DATA_FLOW.md](DATA_FLOW.md) at promotion.
 | Branch / commit | `staging` @ `7fe20a4` |
 | Compared to | `main` @ `72b544a` |
 | Date verified | 2026-08-06 |
+
+> **STALE BASELINE - reconcile before promoting.** `staging` is 18 commits past
+> `7fe20a4`, and 15 of those commits touched a data path
+> (`routers/`, `integrations/`, `lib/`). Two of those changes are written up in
+> this doc (the DQ folder move, and the queue failure-handling change below);
+> the rest have **not** been reconciled against this ledger.
+>
+> Unreconciled commits touching a data path: `3750c3f` (LD job setup owns the
+> BOL header), `176a137` + `fb66575` + `de77fce` + `fe2d27f` (payroll time fixes
+> and the finalize gate), `d8709aa` (BOL shipper-address seed race), `9d9f97f`
+> (RODS driver-keying), `99adc10` (reopen-in-edit / deep links).
+>
+> Per the Data-flow doc gate in VETTING_PROTOCOL, "a data path changed in the
+> promotion diff but absent from the staging doc" **blocks the merge** until it
+> is written up. This stamp is deliberately NOT bumped to the current commit:
+> doing so would claim a verification nobody performed, which is the one thing
+> this doc exists to prevent.
 | Verified by | reading the code, not by exercising the app |
 
 `7fe20a4` (admin Job Summary sticky nav) is presentation only: ids and
@@ -319,6 +336,33 @@ race and re-reading the winner before deleting the loser's old file.
 
 Renewal-cadence types warn ahead of lapsing; `missing_required` drives the driver's
 nag count and deliberately excludes admin-audience forms the driver cannot file.
+
+## Queue failure handling (write-strategy change, all queues)
+
+**Changed 2026-08-11.** No new fields and no new endpoints; what changed is what
+each queue does with a payload the server permanently refuses.
+
+| | |
+|---|---|
+| Classifier | **one** now: `lib/queueFailure.ts::isPermanentRejection`. Permanent = every 4xx except 401, 403, 408, **429**. `api/client.ts::isPermanentFailure` (an allowlist of 400/404/409/422) is deleted |
+| Write strategy | mark-and-keep on a permanent rejection, in **every** queue. Nothing is deleted because the server refused it |
+| Drain | a marked entry is skipped, so it cannot wedge the entries behind it |
+| Exit | an entry leaves the queue only by syncing, or by an explicit human Discard |
+
+Ported this day: `jobChecklistStore` (was deleting), `jobSetupStore` (was
+deleting a queued job header - addresses, crew, shipment details), plus
+`bugReportStore` and `featureRequestStore` (had no permanent/transient split at
+all, so a refused report was re-POSTed forever).
+
+Two classifier consequences worth recording as data-flow facts:
+
+- **429 is now transient everywhere.** A Google Sheets rate limit no longer
+  discards field work in the ten queues that previously treated it as permanent.
+- **413 is now permanent everywhere.** The backend returns 413 from the body-size
+  middleware and three upload endpoints; the deleted allowlist treated it as
+  transient, which meant an oversized upload retried forever and never shrank.
+
+See [ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md).
 
 ## Payroll corrections
 

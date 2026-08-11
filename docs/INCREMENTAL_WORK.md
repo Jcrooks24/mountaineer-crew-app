@@ -104,7 +104,39 @@ stands up vitest.
 **Not opportunistic.** This one needs its own commit. Listed here so it is not
 forgotten.
 
-## 6. Hardcoded colors, and promoting the lint rule to `error`
+## 6. Crew-facing surfacing for refused queue entries
+
+Every offline queue now honors ADR 0013: a permanently-refused entry is marked
+failed and kept, never deleted. But **keeping it and showing it are different
+things**, and only some queues do the second.
+
+| Store | Failed entries surfaced to crew? |
+|---|---|
+| `reimbursementStore`, `materialsStore`, `officeHoursStore` | yes, per-row with Retry/Discard |
+| `estimatorQueue` | yes, synchronous error + the row's own delete |
+| `jobChecklistStore` | yes, on the job card (2026-08-11) |
+| `jobSetupStore` | **no** - `failedJobSetups` / `retryFailedJobSetup` / `discardFailedJobSetup` exist, nothing renders them |
+| `bugReportStore` | **no** - `failedBugReportInputs` / retry / discard exist, unrendered |
+| `featureRequestStore` | **no** - same |
+| `rodsStore`, `ldDayStore`, `bolStore` | **no** - noted as the open follow-up in ADR 0013 since 2026-07-15 |
+
+For the unrendered ones, a crew member's refused work is preserved and
+**invisible**. That is strictly better than destroyed and is not a regression,
+but they still do not know it did not land.
+
+The store API is already there in every case, so this is a rendering job: find
+the screen that owns the entity, show the failed entry with its
+`failed_reason`, and wire Retry and Discard. `JobChecklistCard.tsx` is the
+smallest reference implementation, including the bit that matters - it renders
+the failed state **outside** the collapsed section, because a rejection nobody
+opens a panel to find is still silent.
+
+`jobSetupStore` is the one to do first: a job header is the most valuable of
+the three unrendered ones.
+
+**Progress:** 6 stores unrendered as of 2026-08-11 (3 of them long-standing).
+
+## 7. Hardcoded colors, and promoting the lint rule to `error`
 
 `eslint.config.js` warns on hardcoded hex outside the permanent exceptions. It is
 deliberately **`warn`, not `error`**: there were ~38 pre-existing violations when
