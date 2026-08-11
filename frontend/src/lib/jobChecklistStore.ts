@@ -7,7 +7,8 @@
  * queued if offline and drained on reconnect (a tick is never lost in the
  * field). AUTO signals are read-only and only refresh when online.
  */
-import { apiFetch, isPermanentFailure } from "../api/client";
+import { apiFetch } from "../api/client";
+import { isPermanentRejection, failureMark, CLEARED_FAILURE, type MaybeFailed } from "./queueFailure";
 
 export type ChecklistItem = {
   key: string;
@@ -66,33 +67,11 @@ export type ChecklistQueueEntry = {
   job_uuid: string;
   item_key: string;
   checked: boolean;
-  failed_at?: string;
-  failed_status?: number;
-  failed_reason?: string;
-};
+} & MaybeFailed;
 type QueueBag = Record<string, ChecklistQueueEntry>;
 
 function qkeyOf(jobUuid: string, itemKey: string) {
   return `${jobUuid}|${itemKey}`;
-}
-
-/** FastAPI's 422 body is `{detail: [{loc, msg}]}`, useless on a phone. Reduce it
- *  to something a crew member can act on. */
-function reasonFrom(e: unknown): { status: number; reason: string } {
-  const err = e as { status?: number; body?: unknown; message?: string };
-  const status = typeof err?.status === "number" ? err.status : 0;
-  const detail = (err?.body as { detail?: unknown } | undefined)?.detail;
-  if (typeof detail === "string" && detail.trim()) return { status, reason: detail.trim() };
-  if (Array.isArray(detail)) {
-    const msg = detail
-      .map((d) => (d && typeof d === "object" ? (d as { msg?: string }).msg : null))
-      .filter(Boolean)
-      .join("; ");
-    if (msg) return { status, reason: msg };
-  }
-  if (status === 404) return { status, reason: "That checklist item no longer exists." };
-  if (status === 409) return { status, reason: "This job's checklist changed on another device." };
-  return { status, reason: err?.message || `The server refused this (${status || "error"}).` };
 }
 
 function loadBag<T>(key: string): T {
@@ -160,9 +139,7 @@ export async function retryFailedCheck(jobUuid: string, itemKey: string): Promis
   const q = loadBag<QueueBag>(QUEUE_KEY);
   const entry = q[qkeyOf(jobUuid, itemKey)];
   if (!entry) return;
-  delete entry.failed_at;
-  delete entry.failed_status;
-  delete entry.failed_reason;
+  Object.assign(entry, CLEARED_FAILURE);
   saveBag(QUEUE_KEY, q);
   await drainChecklistChecks();
 }
@@ -226,7 +203,7 @@ export async function setManualCheck(
     // lie ADR 0013 exists to prevent, just told by the cache instead of by the
     // queue. Nothing is queued here: the rejection is already visible, so there
     // is no silent loss to guard against.
-    if (isPermanentFailure(e)) {
+    if (isPermanentRejection(e)) {
       rollbackCachedTick(jobUuid, itemKey);
       throw e;
     }
@@ -261,11 +238,8 @@ export async function drainChecklistChecks(): Promise<void> {
       delete q[k];
       dirty = true;
     } catch (e) {
-      if (isPermanentFailure(e)) {
-        const { status, reason } = reasonFrom(e);
-        entry.failed_at = new Date().toISOString();
-        entry.failed_status = status;
-        entry.failed_reason = reason;
+      if (isPermanentRejection(e)) {
+        Object.assign(entry, failureMark(e));
         rollbackCachedTick(job_uuid, item_key);
         dirty = true;
       }

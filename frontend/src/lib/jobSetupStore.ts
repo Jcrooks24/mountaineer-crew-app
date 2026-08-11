@@ -7,7 +7,8 @@
  * REJECTS (e.g. a locked header, 409) is surfaced, not queued - retrying it
  * forever would never succeed. Keyed by job_uuid; one header per job.
  */
-import { apiFetch, isPermanentFailure } from "../api/client";
+import { apiFetch } from "../api/client";
+import { isPermanentRejection, failureMark, CLEARED_FAILURE, type MaybeFailed } from "./queueFailure";
 
 export type CrewMember = {
   user_id: number | null;
@@ -57,6 +58,12 @@ const CACHE_KEY = "crew_job_setup_cache_v1";
 const QUEUE_KEY = "crew_job_setup_queue_v1";
 
 type Bag = Record<string, JobSetupData>;
+
+/** A queued header save, widened with the ADR 0013 failure mark. All the mark's
+ *  fields are optional, so a queue already sitting on a crew phone stays
+ *  readable and counts as pending. */
+type QueuedSetup = JobSetupData & MaybeFailed;
+type QueueBag = Record<string, QueuedSetup>;
 
 function loadBag(key: string): Bag {
   try {
@@ -128,7 +135,7 @@ export async function saveJobSetup(
     if (r.setup) cacheJobSetup(jobUuid, r.setup);
     return { synced: true, setup: r.setup };
   } catch (e) {
-    if (isPermanentFailure(e)) {
+    if (isPermanentRejection(e)) {
       // The server refused with a client error (locked 409 / invalid). A retry
       // will never succeed; surface it instead of queuing forever.
       throw e;
@@ -139,29 +146,64 @@ export async function saveJobSetup(
   }
 }
 
-/** Drain queued header saves. Call on reconnect / app boot. A server rejection
- *  (ApiError) drops the item - it will never succeed; only network failures are
- *  kept for another try. */
+/** Drain queued header saves. Call on reconnect / app boot.
+ *
+ *  A permanent rejection MARKS the entry failed and KEEPS it (ADR 0013). This
+ *  used to `dequeue(jobUuid)`, which silently destroyed a queued job header -
+ *  addresses, crew, shipment details somebody typed in the field - with nothing
+ *  shown to anyone. Marked entries are skipped on later drains so one refused
+ *  header cannot wedge the others. */
 export async function drainJobSetups(): Promise<void> {
-  const bag = loadBag(QUEUE_KEY);
+  const bag = loadBag(QUEUE_KEY) as QueueBag;
   const uuids = Object.keys(bag);
   if (!uuids.length) return;
+  let dirty = false;
   for (const jobUuid of uuids) {
+    if (bag[jobUuid].failed_at) continue; // refused; waits for Retry or Discard
     try {
       const r = await apiFetch<{ setup: JobSetupData }>(
         `/api/job-setup/${encodeURIComponent(jobUuid)}`,
         { method: "PUT", body: JSON.stringify(bag[jobUuid]) },
       );
       if (r.setup) cacheJobSetup(jobUuid, r.setup);
-      dequeue(jobUuid);
+      delete bag[jobUuid];
+      dirty = true;
     } catch (e) {
-      // Drop only a permanent client-error rejection; keep transient (5xx/408/
-      // 429/401/403) and network failures queued for the next drain.
-      if (isPermanentFailure(e)) dequeue(jobUuid);
+      // Transient (5xx/408/429/401/403) and network failures stay queued
+      // untouched for the next drain.
+      if (isPermanentRejection(e)) {
+        Object.assign(bag[jobUuid], failureMark(e));
+        dirty = true;
+      }
     }
   }
+  if (dirty) saveBag(QUEUE_KEY, bag);
 }
 
+/** Headers still waiting to sync. Excludes failed ones: they need a decision,
+ *  and counting them would leave the unsynced indicator permanently lit. */
 export function pendingJobSetups(): number {
-  return Object.keys(loadBag(QUEUE_KEY)).length;
+  return Object.values(loadBag(QUEUE_KEY) as QueueBag).filter((v) => !v.failed_at).length;
+}
+
+/** Headers the server permanently refused, kept per ADR 0013. */
+export function failedJobSetups(): Array<{ job_uuid: string; entry: QueuedSetup }> {
+  return Object.entries(loadBag(QUEUE_KEY) as QueueBag)
+    .filter(([, v]) => v.failed_at)
+    .map(([job_uuid, entry]) => ({ job_uuid, entry }));
+}
+
+/** Clear the failed mark so the next drain picks it up again. */
+export async function retryFailedJobSetup(jobUuid: string): Promise<void> {
+  const bag = loadBag(QUEUE_KEY) as QueueBag;
+  if (!bag[jobUuid]) return;
+  Object.assign(bag[jobUuid], CLEARED_FAILURE);
+  saveBag(QUEUE_KEY, bag);
+  await drainJobSetups();
+}
+
+/** Explicit, user-initiated delete. The ONLY way a refused header leaves the
+ *  queue without reaching the server (ADR 0013). */
+export function discardFailedJobSetup(jobUuid: string): void {
+  dequeue(jobUuid);
 }

@@ -14,17 +14,16 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * A PERMANENT (non-retryable) failure: the server responded with a client-error
- * status that a retry will never fix (bad payload, not found, conflict).
- * Everything else - transient 5xx/408/429, auth 401/403 (may recover when the
- * token refreshes), and network errors (not an ApiError at all) - is retryable
- * and must stay queued. Offline stores split on this so a reconnect hiccup never
- * silently drops a crew member's queued write (ADR 0013).
- */
-export function isPermanentFailure(e: unknown): boolean {
-  return e instanceof ApiError && [400, 404, 409, 422].includes(e.status);
-}
+// `isPermanentFailure` used to live here as a SECOND failure classifier
+// (allowlist: 400/404/409/422) alongside `queueFailure.isPermanentRejection`
+// (denylist: any 4xx except 401/403/408). They disagreed, so whether a crew
+// member's queued work survived a given error depended on which store happened
+// to be draining. Removed 2026-08-11; there is now exactly one classifier, in
+// `lib/queueFailure.ts`. It cannot live here: queueFailure imports ApiError from
+// this module, so defining it here and delegating would be circular.
+//
+// If you are reaching for a failure classifier, import `isPermanentRejection`
+// from `lib/queueFailure`. Do not add a second one. See ADR 0013.
 
 export async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();

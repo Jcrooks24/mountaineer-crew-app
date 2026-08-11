@@ -8,6 +8,7 @@
  * along on the request.
  */
 import { apiFetch } from "../api/client";
+import { isPermanentRejection, failureMark, CLEARED_FAILURE, type MaybeFailed } from "./queueFailure";
 import { getToken } from "../auth/token";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -19,9 +20,12 @@ export type FeatureRequestInput = {
   screenshot_urls: string[];
 };
 
+/** A queued feature request, widened with the ADR 0013 failure mark. */
+type QueuedFeatureRequestInput = FeatureRequestInput & MaybeFailed;
+
 const QUEUE_KEY = "crew_feature_request_queue_v1";
 
-function loadQueue(): FeatureRequestInput[] {
+function loadQueue(): QueuedFeatureRequestInput[] {
   try {
     const raw = localStorage.getItem(QUEUE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
@@ -30,7 +34,7 @@ function loadQueue(): FeatureRequestInput[] {
     return [];
   }
 }
-function saveQueue(q: FeatureRequestInput[]) {
+function saveQueue(q: QueuedFeatureRequestInput[]) {
   try {
     localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
   } catch {
@@ -80,21 +84,57 @@ export async function submitFeatureRequest(r: FeatureRequestInput): Promise<{ sy
   }
 }
 
-/** Drain queued feature requests. Call on reconnect / app boot. */
+/** Drain queued feature requests. Call on reconnect / app boot.
+ *
+ *  This used to `catch { remaining.push(r) }` with no permanent/transient
+ *  split at all, so a feature request the server will never accept (a 422 after a schema
+ *  change, an oversized 413) was re-POSTed on every boot and every reconnect,
+ *  forever, with nothing shown to the person who wrote it. Now a permanent
+ *  rejection marks the entry and keeps it (ADR 0013); marked entries are skipped
+ *  so one bad feature request cannot wedge the ones behind it. */
 export async function drainFeatureRequests(): Promise<void> {
   const q = loadQueue();
   if (!q.length) return;
-  const remaining: FeatureRequestInput[] = [];
+  const remaining: QueuedFeatureRequestInput[] = [];
   for (const r of q) {
+    if (r.failed_at) {
+      remaining.push(r); // refused; waits for retry or discard
+      continue;
+    }
     try {
       await postRequest(r);
-    } catch {
-      remaining.push(r);
+      // synced - it does not go back on the queue
+    } catch (e) {
+      // Transient (5xx/408/429/401/403) or network: keep it as-is and try again.
+      remaining.push(isPermanentRejection(e) ? { ...r, ...failureMark(e) } : r);
     }
   }
   saveQueue(remaining);
 }
 
+/** Entries still waiting to sync. Excludes failed ones: they need a decision,
+ *  and counting them would leave the unsynced indicator permanently lit. */
 export function pendingFeatureRequests(): number {
-  return loadQueue().length;
+  return loadQueue().filter((x) => !x.failed_at).length;
+}
+
+/** Entries the server permanently refused, kept per ADR 0013. */
+export function failedFeatureRequestInputs(): QueuedFeatureRequestInput[] {
+  return loadQueue().filter((x) => !!x.failed_at);
+}
+
+/** Clear the failed mark so the next drain picks it up again. */
+export async function retryFailedFeatureRequestInput(id: string): Promise<void> {
+  const q = loadQueue();
+  const hit = q.find((x) => x.request_uuid === id);
+  if (!hit) return;
+  Object.assign(hit, CLEARED_FAILURE);
+  saveQueue(q);
+  await drainFeatureRequests();
+}
+
+/** Explicit, user-initiated delete. The ONLY way a refused entry leaves the
+ *  queue without reaching the server (ADR 0013). */
+export function discardFailedFeatureRequestInput(id: string): void {
+  saveQueue(loadQueue().filter((x) => x.request_uuid !== id));
 }

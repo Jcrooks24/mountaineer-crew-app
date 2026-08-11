@@ -42,18 +42,19 @@ user recorded in this doc with the reason. Silence is not a waiver.
 
 ### Open blockers right now
 
-Two. Each is written up in full under **Known defects** in
-[RUNBOOKS.md](RUNBOOKS.md), tagged `STAGING ONLY, BLOCKS PROMOTION`. That is the
-canonical entry; this list is the index, so fix and delete in RUNBOOKS first.
+**None.** All three cleared 2026-08-11:
 
-1. **Bug reports and feature requests retry forever.** No permanent/transient split.
-2. **Two failure classifiers disagree about 429.** Ten old queues stop, two new stores
-   keep retrying.
+1. **Checklist ticks deleted on permanent rejection.** `jobChecklistStore` now marks
+   the entry failed, keeps it, rolls back the optimistic cache, and surfaces it on
+   the job card with Retry and Discard.
+2. **Bug reports and feature requests retried forever.** Both stores now split
+   permanent from transient and mark-and-keep.
+3. **Two failure classifiers.** Converged to one (`queueFailure.isPermanentRejection`).
+   `api/client.isPermanentFailure` is gone.
 
-**Fixed 2026-08-11:** checklist ticks are no longer deleted on permanent rejection.
-`jobChecklistStore` now marks the entry failed, keeps it, rolls back the optimistic
-cache, and surfaces it on the job card with Retry and Discard. All ten-plus queues
-now honor ADR 0013.
+A fourth was found while fixing these and is also cleared: `jobSetupStore` silently
+deleted a queued job header on a permanent rejection. Every offline queue in the app
+now honors ADR 0013.
 
 Summaries also appear under "Deviations new on staging" below, in data-flow terms.
 
@@ -430,21 +431,6 @@ record was lost.
 
 **Everything in this section is a promotion blocker** until fixed or waived in
 writing. See "A failing staging flow blocks the merge" above.
-
-### 1. Bug reports and feature requests never stop retrying
-
-Both stores catch bare (`catch { remaining.push(b) }`) with no permanent/transient
-split. A report the server permanently refuses (a 422 from a schema change, say) is
-re-POSTed on every boot and every reconnect, forever, and the crew member is never
-told. Low blast radius, but it is a queue that cannot drain and cannot be cleared
-from the UI.
-
-### 2. Two failure classifiers
-
-Covered above under Changed behavior. Converge before promotion or write down why
-not.
-
----
 
 # Open questions
 

@@ -518,36 +518,6 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    deciding whether it should get an outbox like everything else. Affects `main` and
    `staging`.
 
-2. **STAGING ONLY, BLOCKS PROMOTION: bug reports and feature requests retry forever.**
-   `bugReportStore.ts::drainBugReports` and `featureRequestStore.ts::drainFeatureRequests`
-   both catch bare (`catch { remaining.push(b) }`) with no permanent/transient split at
-   all. A report the server permanently refuses (a 422 after a schema change, say) is
-   re-POSTed on every boot and every reconnect, forever.
-
-   **Symptom:** a queue that cannot drain and cannot be cleared from the UI, and a
-   crew member who is never told their report did not land. Low blast radius, cheap to
-   fix: adopt `isPermanentFailure` and the shared `queueFailure` marking the other
-   queues use. Found 2026-08-06.
-
-2. **STAGING ONLY, BLOCKS PROMOTION: two failure classifiers disagree about 429.**
-   `staging` added `isPermanentFailure` to `api/client.ts` (permanent = 400, 404, 409,
-   422 only) alongside the existing `queueFailure.isPermanentRejection` (permanent =
-   any 4xx except 401, 403, 408).
-
-   | Classifier | Used by |
-   |---|---|
-   | `isPermanentRejection` | the 10 original queues: materials, BOL, RODS, LD day, incidents, off-job, office hours, job inventory, estimator, reimbursements |
-   | `isPermanentFailure` | `jobSetupStore`, `jobChecklistStore` |
-
-   **The practical difference is 429.** The old rule treats a rate limit as permanent
-   and stops retrying; the new rule treats it as transient and keeps going. Given this
-   app's history with Google Sheets quota, the new rule is the correct one, which
-   means the ten old queues are the ones that should move.
-
-   Converging them is a behavior change across every offline queue and deserves its
-   own session, not a drive-by. Shipping two rules a successor has to discover is the
-   thing that blocks. Found 2026-08-06.
-
 2. **Staging PWA serves STALE code: fixes look "not deployed" when they are.**
    The staging frontend is a Vercel **branch-preview** deployment
    (`mountaineer-crew-app-git-staging-*.vercel.app`), and that host has **Vercel

@@ -89,6 +89,38 @@ on a 4xx, which is the same outcome by a slower route.
 
 ## Still to port
 
+## One classifier (2026-08-11)
+
+There were briefly **two** failure classifiers, and they disagreed:
+
+| | Rule | Used by |
+|---|---|---|
+| `queueFailure.isPermanentRejection` | denylist: any 4xx except 401/403/408 | the ten ported queues |
+| `api/client.isPermanentFailure` | allowlist: 400/404/409/422 only | `jobSetupStore`, `jobChecklistStore` |
+
+So whether a crew member's queued work survived a given error depended on which
+store happened to be draining. That is worse than either rule being wrong.
+
+**Neither was right.** The denylist called **429** permanent, so a Google Sheets
+rate limit - which this app has real history with - would discard field work. The
+allowlist called **413** transient, so an oversized upload would be retried
+forever and never get smaller; the backend returns 413 from the body-size
+middleware and three upload endpoints, so that is not hypothetical.
+
+Converged to one function, `queueFailure.isPermanentRejection`, keeping the
+**denylist shape** and adding 429 to the transient set. Permanent = every 4xx
+except 401, 403, 408, 429.
+
+The shape matters as much as the list. An allowlist treats every *unlisted* 4xx
+as transient, so the next status nobody thought about silently becomes an
+infinite retry loop - which is exactly how 413 got missed. A denylist fails the
+other way: an unlisted status is treated as permanent, which is visible (the
+crew member sees a failed entry with a reason) rather than silent. Given ADR
+0013's whole premise, prefer the failure mode somebody can see.
+
+`api/client.isPermanentFailure` was deleted. Do not add a second classifier; the
+one in `queueFailure` is it.
+
 **`jobChecklistStore` ported 2026-08-11.** It was written after the 2026-07-15
 sweep and reintroduced the exact pattern this ADR bans: `delete q[k]` on a
 permanent 4xx, surfacing nothing. That is the point of the closing line above -
@@ -108,6 +140,24 @@ Two things it added that the earlier ports did not have to think about:
   write needs the same.
 - **A failed entry is not "pending."** Counting it as pending leaves the unsynced
   indicator permanently lit, which trains crew to ignore it.
+
+**Three more ported the same day**, found while converging the classifiers:
+
+- **`jobSetupStore`** did `dequeue(jobUuid)` on a permanent rejection. This was
+  the worst of the four and was in no defect list: a queued job header is
+  addresses, crew and shipment details somebody typed in the field, and it was
+  being destroyed silently. Now marks and keeps, with
+  `failedJobSetups` / `retryFailedJobSetup` / `discardFailedJobSetup`.
+- **`bugReportStore`** and **`featureRequestStore`** had no permanent/transient
+  split at all - a bare `catch { remaining.push(x) }`. Nothing was lost, but a
+  report the server would never accept was re-POSTed on every boot and every
+  reconnect, forever, and the person who wrote it was never told. Both now split
+  and mark-and-keep.
+
+Every offline queue in the app now honors this ADR. The pattern to copy is
+`queueFailure.ts`: `isPermanentRejection`, `failureMark`, `CLEARED_FAILURE`, and
+a `& MaybeFailed` on the queued type. A new queue that hand-rolls its own
+classifier or its own reason-extraction is how these drifted apart both times.
 
 **Done. All ten queues have been ported** (2026-07-15): `reimbursementStore`,
 `incidentStore`, `offJobStore`, `jobInventoryQueue`, then the final six -
