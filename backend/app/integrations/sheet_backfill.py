@@ -36,6 +36,7 @@ from typing import Any, Callable, Dict, List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core import memprobe
 from app.integrations.sheets_export import (
     DEFAULT_SHEET_ID,
     _api,
@@ -573,7 +574,10 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
         spans[entry["key"]] = {"range": vr, "lo": lo, "idxs": idxs}
         value_ranges.append(vr)
 
+    memprobe.probe(f"audit: header batchGet ({len(header_ranges)} ranges)")
+
     columns = _batch_values(svc, sid, value_ranges, "COLUMNS") if value_ranges else {}
+    memprobe.probe(f"audit: key-column batchGet ({len(value_ranges)} ranges)")
 
     for entry in auditable:
         key = entry["key"]
@@ -589,6 +593,12 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
             "last_error": st.get("last_error"),
             "last_error_at": st.get("last_error_at"),
         }
+        # Bracketing every source query is the point of these probes. Each `_src_*`
+        # is a full-table `.all()` of ORM entities, and they all share ONE Session,
+        # so the identity map holds every row loaded by every earlier sync for the
+        # rest of the audit. If that is what OOM-kills the nightly cron, it shows up
+        # here as a step delta that never comes back down. Measure before changing.
+        memprobe.probe(f"audit: loading source {key}")
         try:
             records = entry["source"](db)
         except Exception as e:  # noqa: BLE001 - one bad kind must not kill the audit
@@ -600,6 +610,7 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
             continue
 
         row_out["in_db"] = len(records)
+        memprobe.probe(f"audit: loaded source {key} ({len(records)} rows)")
         span = spans.get(key) or {}
         if span.get("error"):
             row_out["error"] = span["error"]

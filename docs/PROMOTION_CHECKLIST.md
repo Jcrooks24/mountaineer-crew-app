@@ -55,9 +55,14 @@ The gate diffs every `*_HEADERS` list against `main` and classifies each change:
   column letter or index, and decide whether you want to reorder the prod tab by
   hand to match.
 
-> Currently flagged: `BOL_HEADERS` inserts 11 columns (`shipment_number` through
-> `agreed_delivery`) after `item_count`. Prod's BOL tab will get them appended at
-> the far right instead. `JOB_REPORT_HEADERS` is a clean append.
+> Currently flagged: **nothing.** The gate reports no header changes as of
+> 2026-08-11. The `BOL_HEADERS` mid-list insert (11 columns, `shipment_number`
+> through `agreed_delivery`, after `item_count`) shipped with the v1.8 promotion,
+> so prod's BOL tab already carries those columns appended at the far right
+> rather than in list order. That column-order difference between prod and a
+> freshly created staging tab is now permanent unless someone reorders it by
+> hand. Nothing addresses that tab by column letter today; re-check if an Apps
+> Script ever does.
 
 ## 3. New environment variables
 
@@ -77,9 +82,15 @@ Anything with a folder or tab ID needs a **different value per environment**, or
 staging writes into production. That is the single most common way this list
 hurts you.
 
-> Currently outstanding: `ALERT_EMAIL`, `SHEETS_BUGS_TAB`,
-> `SHEETS_FEATURE_REQUESTS_TAB`, `DRIVE_DQ_FOLDER_ID` (prod value needed; must
-> NOT be the same folder as staging).
+> Currently outstanding: **nothing blocking.** Confirmed with the owner
+> 2026-08-11: `ALERT_EMAIL`, `SHEETS_BUGS_TAB` and `SHEETS_FEATURE_REQUESTS_TAB`
+> are set on Render prod, and `DRIVE_DQ_FOLDER_ID`
+> (`1ffMaMNOf5MAZL3sSw5UucWmXeZHKI8WW`) is the **production** Drive folder, so it
+> belongs on Render prod and must **not** be reused on staging.
+>
+> `MEMPROBE` is new on this promotion and is deliberately **not** to be set
+> anywhere: it turns on `[mem]` RSS checkpoints in any process, and the
+> sheet-integrity cron enables them itself. Leave it unset.
 
 Also re-run the standing post-promotion env checks in CLAUDE.md: `FRONTEND_URL`,
 `JWT_SECRET`, `DATABASE_URL`, Postmark token on Render prod; `VITE_API_URL` on
@@ -98,8 +109,10 @@ The gate lists files changed between `main` and `staging`. For each:
 - [ ] Confirmed the trigger still exists and is on the right schedule
 - [ ] Ran it once by hand and checked the execution log
 
-> Currently outstanding: `apps_script/nightly_crew_email.gs` is modified on
-> staging and must be pasted after promotion.
+> Currently outstanding: **nothing.** `apps_script/nightly_crew_email.gs` was
+> pasted into the Sheet's script editor after the v1.8 promotion, confirmed with
+> the owner 2026-08-11. The gate reports no Apps Script changes on this
+> promotion. Re-check the trigger schedule if the nightly digest goes quiet.
 
 ## 5. Postmark / OAuth manual configuration
 
@@ -180,8 +193,11 @@ looks wrong, and who to contact.
 
 ## 11. Repoint anything that tracks a branch
 
-- [ ] Render **Cron Job** for the sheet integrity check: switch Branch from
-      `staging` to `main` once `main` has the script.
+- [x] Render **Cron Job** for the sheet integrity check: **already tracks
+      `main`** (confirmed from its own run log, "Checking out ... in branch
+      main"). Do not assume, and do not switch it back. The practical
+      consequence, which has caught us out: a fix pushed to `staging` does
+      **not** reach this cron. It ships only at a promotion.
 - [ ] Any other Render/Vercel service pinned to `staging`.
 
 ---
