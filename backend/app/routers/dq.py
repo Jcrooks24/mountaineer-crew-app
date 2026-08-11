@@ -186,6 +186,58 @@ def _do_upload(
     return row
 
 
+def is_driver(db: Session, user: User) -> bool:
+    """Does this person hold a Driver employee tag?
+
+    DQ documents are a driver obligation (49 CFR 391). Everyone else has no DQ
+    file to be missing, so chasing them for a medical card is noise that trains
+    people to ignore the reminder.
+    """
+    if user is None:
+        return False
+    return user.id in {u.id for u in _driver_roster(db)}
+
+
+def _driver_roster(db: Session) -> List[User]:
+    """Active employees tagged as drivers.
+
+    The board used to be `User.is_active == True` with no tag filter at all, so
+    every employee appeared as a driver missing every document. The docstring
+    said "per active driver"; the query never said so.
+
+    Inactive users are excluded outright: they are not employees, so they are not
+    a compliance gap.
+
+    Tag match is case-insensitive and substring-based ("Driver", "drivers",
+    "CDL Driver" all count) because the tag list is admin-authored free text and
+    an exact match would silently empty this board over a capital letter.
+    """
+    from app.db.models.employee_tag import EmployeeTag, user_employee_tags
+
+    driver_tag_ids = [
+        t.id for t in db.query(EmployeeTag).all()
+        if "driver" in (t.name or "").strip().lower()
+    ]
+    if not driver_tag_ids:
+        # No Driver tag exists yet. Return nobody rather than everybody: an empty
+        # board is a visible "set up your tags" prompt, while listing all staff is
+        # the bug this replaced.
+        return []
+    rows = db.execute(
+        user_employee_tags.select().where(
+            user_employee_tags.c.tag_id.in_(driver_tag_ids)
+        )
+    ).all()
+    ids = {r.user_id for r in rows}
+    if not ids:
+        return []
+    return (
+        db.query(User)
+        .filter(User.id.in_(ids), User.is_active.is_(True))
+        .all()
+    )
+
+
 def _file_view(db: Session, user: User, admin_view: bool) -> Dict[str, Any]:
     """A driver's whole DQ file: every type, with its document (or None) and
     whether it is missing. `missing_required` powers the reminder; for a driver
@@ -232,11 +284,19 @@ def _file_view(db: Session, user: User, admin_view: bool) -> Dict[str, Any]:
         if t["required"] and (missing or renewal_due) and (admin_view or t["audience"] == "driver"):
             missing_required.append(t["name"])
 
+    # A non-driver has no DQ obligation, so nothing is "missing" for them and the
+    # reminder must stay silent. Their file is still returned (empty), so an admin
+    # opening it sees the truth rather than a 404, and so a person who is later
+    # tagged as a driver needs no migration.
+    if not admin_view and not is_driver(db, user):
+        missing_required = []
+
     return {
         "user_id": user.id,
         "name": user.name or user.email,
         "types": items,
         "missing_required": missing_required,
+        "is_driver": is_driver(db, user),
     }
 
 
@@ -280,7 +340,7 @@ def admin_dq_overview(
     The office's at-a-glance DQ status board."""
     types = _load_types(db)
     required_keys = {t["key"] for t in types if t["required"]}
-    users = db.query(User).filter(User.is_active.is_(True)).all()
+    users = _driver_roster(db)
     have_rows = db.query(DqDocument.user_id, DqDocument.doc_type).all()
     have: Dict[int, set] = {}
     for uid, dt in have_rows:

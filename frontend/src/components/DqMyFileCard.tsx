@@ -40,6 +40,13 @@ export default function DqMyFileCard() {
       </div>
     );
   }
+  // No Driver tag, no DQ obligation (49 CFR 391 applies to drivers). Hide the
+  // card entirely rather than show an empty file: a mover who never drives does
+  // not need a medical card, and a "DQ file" card on their Profile is a standing
+  // question they cannot answer. Older builds of the API do not send the flag,
+  // so an absent value keeps the previous behavior instead of hiding the card
+  // from real drivers.
+  if (file.is_driver === false) return null;
 
   if (filling === "annual_cert_violations") {
     return (
