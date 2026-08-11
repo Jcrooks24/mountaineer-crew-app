@@ -20,7 +20,25 @@ folded into [DATA_FLOW.md](DATA_FLOW.md) at promotion.
 
 ## Reconciliation 7fe20a4 -> 7f41611
 
-18 commits, 7 touching a data path. Checked one by one:
+18 commits, 7 touching a data path. Checked one by one.
+
+> **Verification level: READ, not TRACED.** Every row below is marked **read**,
+> not `[x]`, and that distinction is the point. This doc's legend says `[x]`
+> means the field completes device -> Postgres -> Sheet, and VETTING_PROTOCOL
+> spells it out: "a field marked `[x]` means you traced it device to Postgres to
+> Sheet, not that you assumed it."
+>
+> These were verified by reading the source and the commit diffs. Nothing was
+> exercised end to end, no row was followed into the Sheet. That is enough to
+> say the ledger is no longer under-reporting; it is NOT enough to promote a
+> field to `[x]`.
+>
+> **At promotion, trace these five before folding them into DATA_FLOW.md as
+> `[x]`.** They are not marked `[ ]` because that asserts a field does not
+> complete its path, which would be an equally unearned claim in the other
+> direction.
+
+Checked one by one:
 
 | Commit | Data path | Ledger status |
 |---|---|---|
@@ -47,9 +65,9 @@ before this carry device-local values and are **not** back-corrected.
 
 | Field | Adheres | Note |
 |---|---|---|
-| RODS `duty_changes_json[].time` | `[x]` | `mountainHHMM`. "A phone in Central must not shift the duty time +1h" |
-| RODS `log_date` | `[x]` | `mountainDateYYYYMMDD` - the DOT log's home-terminal date, not the device's. A late-evening entry from a Pacific phone no longer files under the previous day |
-| `LdDay` recorded times | `[x]` | same treatment |
+| RODS `duty_changes_json[].time` | **read** | `mountainHHMM`. "A phone in Central must not shift the duty time +1h" |
+| RODS `log_date` | **read** | `mountainDateYYYYMMDD` - the DOT log's home-terminal date, not the device's. A late-evening entry from a Pacific phone no longer files under the previous day |
+| `LdDay` recorded times | **read** | same treatment |
 
 Rows written before `de77fce` carry device-local values and are **not**
 back-corrected.
@@ -73,7 +91,7 @@ wholly in one.
 
 | Field | Adheres | Note |
 |---|---|---|
-| employee-hours entry `date` | `[x]` | **optional.** When present it is authoritative for period assignment; when absent the job's earliest-event date is used, which is the old behavior. So this is additive: existing entries without a `date` are unaffected |
+| employee-hours entry `date` | **read** | **optional.** When present it is authoritative for period assignment; when absent the job's earliest-event date is used, which is the old behavior. So this is additive: existing entries without a `date` are unaffected |
 
 ### RODS days are keyed by driver, not by device (`9d9f97f`)
 
@@ -84,7 +102,7 @@ VETTING_PROTOCOL already lists for RODS.
 
 | Field | Adheres | Note |
 |---|---|---|
-| RODS `driver_id` | `[x]` | now the join key on resume AND shared-trip fetch |
+| RODS `driver_id` | **read** | now the join key on resume AND shared-trip fetch |
 
 **Pre-existing rows written before this may carry the wrong `driver_id`** on
 multi-driver trips. Not back-corrected, and worth a spot-check against the RODS tab
