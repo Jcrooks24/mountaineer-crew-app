@@ -330,7 +330,7 @@ function AdminMobileNav({ current, onPick }: { current: Tab; onPick: (t: Tab) =>
               flex: "0 0 auto", padding: "6px 12px", borderRadius: 999, fontSize: 13, whiteSpace: "nowrap", cursor: "pointer",
               border: active ? "1px solid var(--brand)" : "1px solid var(--border)",
               background: active ? "var(--brand)" : "var(--card)",
-              color: active ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: active ? 700 : 500,
+              color: active ? "var(--on-brand)" : "var(--text)", fontWeight: active ? 700 : 500,
             }}
           >
             {t.label}
@@ -2855,6 +2855,7 @@ function SettingsTab({
       <CollapsibleSection title="DQ document types"><DqDocTypesCard /></CollapsibleSection>
       <CollapsibleSection title="Crew skills"><SkillsManagerCard /></CollapsibleSection>
       <CollapsibleSection title="Furniture catalogue"><FurnitureCatalogCard /></CollapsibleSection>
+      <CollapsibleSection title="App communication"><AppCommunicationCard /></CollapsibleSection>
       <CollapsibleSection title="Help text"><HelpTextCard /></CollapsibleSection>
       {/* Theme + Advanced live at the very bottom - they're rarely-touched,
           full-screen sub-pages, not day-to-day field config. */}
@@ -5494,6 +5495,247 @@ function CompanyInfoCard() {
 // payroll page multiplies crew-logged miles/nights by these to show pay. 0 = not
 // set (payroll shows counts only). These are reimbursement rates, not wages
 // (ADR 0033); hourly pay stays in QuickBooks.
+// App communication (Settings): the subject and body of every email the app
+// sends. Editable ones are templates with placeholders the app fills in at send
+// time. The read-only list is here because visibility was the point: an email
+// nobody can see is the problem this screen exists to fix, and "you cannot edit
+// it" is not a reason to hide it.
+type CommPlaceholder = { name: string; description: string; sample: string; required: boolean };
+type CommTemplate = {
+  key: string; label: string; audience: string; when: string; handled_by: string;
+  editable: boolean; default_subject: string; default_body: string;
+  placeholders: CommPlaceholder[];
+  subject: string; body: string; customized: boolean;
+  preview_subject: string; preview_body: string;
+};
+type CommReadOnly = {
+  key: string; label: string; audience: string; when: string; handled_by: string;
+  why_locked: string; subject: string; body: string;
+};
+
+function AppCommunicationCard() {
+  const [templates, setTemplates] = useState<CommTemplate[]>([]);
+  const [readOnly, setReadOnly] = useState<CommReadOnly[]>([]);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Record<string, { subject: string; body: string }>>({});
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  const load = useCallback(() => {
+    apiFetch<{ templates: CommTemplate[]; read_only: CommReadOnly[] }>("/api/admin/config/app-communication")
+      .then((r) => {
+        setTemplates(r.templates || []);
+        setReadOnly(r.read_only || []);
+        setDraft(Object.fromEntries((r.templates || []).map((t) => [t.key, { subject: t.subject, body: t.body }])));
+        setLoaded(true);
+      })
+      .catch(() => { setErr("Failed to load app communication"); setLoaded(true); });
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const edit = (key: string, patch: Partial<{ subject: string; body: string }>) => {
+    setDraft((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
+    setSavedKey(null);
+    setErr(null);
+  };
+
+  async function save(t: CommTemplate) {
+    const d = draft[t.key];
+    if (!d) return;
+    setBusyKey(t.key);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/app-communication", {
+        method: "PUT",
+        body: JSON.stringify({ key: t.key, subject: d.subject, body: d.body }),
+      });
+      setSavedKey(t.key);
+      load();
+    } catch (e: any) {
+      // The server names the missing placeholder and says why it matters, so
+      // surface its message rather than a generic failure.
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function revert(t: CommTemplate) {
+    setBusyKey(t.key);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/config/app-communication/" + encodeURIComponent(t.key), { method: "DELETE" });
+      setSavedKey(null);
+      load();
+    } catch (e: any) {
+      setErr(e?.message ?? "Could not revert");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  if (!loaded) {
+    return (
+      <div className="card">
+        <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
+      </div>
+    );
+  }
+
+  const rowBtn: React.CSSProperties = {
+    width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+    gap: 10, padding: "11px 14px", background: "transparent", border: "none",
+    color: "var(--text)", cursor: "pointer", textAlign: "left",
+  };
+  const chevron = (open: boolean) => (
+    <span aria-hidden style={{ color: "var(--muted)", fontSize: 18, flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>›</span>
+  );
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>App communication</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
+        Every email the system sends. The wording is yours; anything in curly
+        braces is filled in by the app when it sends. Tap one to read or edit it.
+      </div>
+
+      <div className="col" style={{ gap: 8 }}>
+        {templates.map((t) => {
+          const open = openKey === t.key;
+          const d = draft[t.key] || { subject: t.subject, body: t.body };
+          const dirty = d.subject !== t.subject || d.body !== t.body;
+          return (
+            <div key={t.key} style={{ border: "1px solid var(--border)", borderRadius: 8 }}>
+              <button type="button" onClick={() => setOpenKey(open ? null : t.key)} aria-expanded={open} style={rowBtn}>
+                <span className="col" style={{ gap: 2 }}>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{t.label}</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>To: {t.audience}</span>
+                </span>
+                <span className="row" style={{ gap: 8, alignItems: "center", flexShrink: 0 }}>
+                  {t.customized && <span className="statusDot" style={{ ["--dot"]: "var(--brand)" } as React.CSSProperties}>Edited</span>}
+                  {chevron(open)}
+                </span>
+              </button>
+
+              {open && (
+                <div className="col" style={{ gap: 10, padding: "0 14px 14px" }}>
+                  <div className="small" style={{ color: "var(--muted)" }}>{t.when}</div>
+
+                  <label className="col" style={{ gap: 4 }}>
+                    <span className="microLabel" style={{ marginBottom: 0 }}>Subject</span>
+                    <input
+                      value={d.subject}
+                      onChange={(e) => edit(t.key, { subject: e.target.value })}
+                      style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14 }}
+                    />
+                  </label>
+
+                  <label className="col" style={{ gap: 4 }}>
+                    <span className="microLabel" style={{ marginBottom: 0 }}>Body</span>
+                    <textarea
+                      value={d.body}
+                      onChange={(e) => edit(t.key, { body: e.target.value })}
+                      rows={10}
+                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14, fontFamily: "inherit", lineHeight: 1.5 }}
+                    />
+                  </label>
+
+                  <div className="col" style={{ gap: 4 }}>
+                    <span className="microLabel" style={{ marginBottom: 0 }}>Placeholders you can use</span>
+                    {t.placeholders.map((p) => (
+                      <div key={p.name} className="small" style={{ color: "var(--muted)" }}>
+                        <span className="mono" style={{ color: "var(--text)" }}>{"{" + p.name + "}"}</span>
+                        {p.required && <span style={{ color: "var(--danger)" }}> (required)</span>}
+                        {" " + p.description}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="col" style={{ gap: 4 }}>
+                    <span className="microLabel" style={{ marginBottom: 0 }}>
+                      {dirty ? "Preview (of the saved version - save to refresh)" : "Preview (with example data)"}
+                    </span>
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, background: "var(--card2)" }}>
+                      <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+                        Subject: <span style={{ color: "var(--text)" }}>{t.preview_subject}</span>
+                      </div>
+                      <div className="small" style={{ whiteSpace: "pre-wrap", color: "var(--text)" }}>{t.preview_body}</div>
+                    </div>
+                  </div>
+
+                  <div className="row" style={{ justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
+                    {savedKey === t.key && <span className="small" style={{ color: "var(--ok)" }}>Saved.</span>}
+                    {t.customized && (
+                      <button
+                        type="button"
+                        onClick={() => revert(t)}
+                        disabled={busyKey === t.key}
+                        style={{ fontSize: 13, background: "none", color: "var(--muted)", border: "1px solid var(--border)" }}
+                      >
+                        Revert to default
+                      </button>
+                    )}
+                    <button className="btnPrimary" onClick={() => save(t)} disabled={busyKey === t.key || !dirty}>
+                      {busyKey === t.key ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+
+      {readOnly.length > 0 && (
+        <div className="col" style={{ gap: 8, marginTop: 18 }}>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Sent, but not editable here</div>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Listed so the inventory is complete. Each says why it cannot be
+            changed on this screen, and where it actually lives.
+          </div>
+          {readOnly.map((r) => {
+            const open = openKey === r.key;
+            return (
+              <div key={r.key} style={{ border: "1px solid var(--border)", borderRadius: 8 }}>
+                <button type="button" onClick={() => setOpenKey(open ? null : r.key)} aria-expanded={open} style={rowBtn}>
+                  <span className="col" style={{ gap: 2 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{r.label}</span>
+                    <span className="small" style={{ color: "var(--muted)" }}>To: {r.audience}</span>
+                  </span>
+                  {chevron(open)}
+                </button>
+                {open && (
+                  <div className="col" style={{ gap: 8, padding: "0 14px 14px" }}>
+                    <div className="small" style={{ color: "var(--muted)" }}>{r.when}</div>
+                    <div>
+                      <span className="microLabel" style={{ marginBottom: 0 }}>Handled by</span>
+                      <div className="small" style={{ color: "var(--muted)" }}>{r.handled_by}</div>
+                    </div>
+                    <div>
+                      <span className="microLabel" style={{ marginBottom: 0 }}>Why it is not editable here</span>
+                      <div className="small" style={{ color: "var(--muted)" }}>{r.why_locked}</div>
+                    </div>
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, background: "var(--card2)" }}>
+                      <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+                        Subject: <span style={{ color: "var(--text)" }}>{r.subject}</span>
+                      </div>
+                      <div className="small" style={{ whiteSpace: "pre-wrap", color: "var(--text)" }}>{r.body}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PayrollRatesCard() {
   const [mileage, setMileage] = useState("");
   const [perDiem, setPerDiem] = useState("");
@@ -5691,7 +5933,7 @@ function JobChecklistCard() {
                             padding: "4px 10px", borderRadius: 999, fontSize: 12, cursor: "pointer",
                             border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
                             background: on ? "var(--brand)" : "transparent",
-                            color: on ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: on ? 700 : 400,
+                            color: on ? "var(--on-brand)" : "var(--text)", fontWeight: on ? 700 : 400,
                           }}
                         >
                           {t}
