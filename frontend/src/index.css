@@ -47,11 +47,21 @@
 }
 
 *{ box-sizing: border-box; }
-/* overflow-x: clip prevents a sub-page-pixel horizontal scrollbar from
-   appearing when a full-bleed element (e.g. the admin Month schedule view)
-   uses 100vw and the viewport has a vertical scrollbar. Vertical scrolling
-   still works as normal because the body's natural overflow is auto. */
-html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font); overflow-x: clip; }
+/* NO overflow-x here. It used to carry `overflow-x: clip` to hide a sub-pixel
+   horizontal scrollbar from one full-bleed admin element, and that broke the
+   crew bottom nav on mobile: a non-`visible` overflow on the root establishes a
+   containing block for `position: fixed` descendants, so the nav positioned
+   against the page instead of the viewport and drifted upward as you scrolled.
+
+   A global rule to tidy one admin table is a bad trade against the nav crew use
+   on every screen, so the clip moved to that element's own wrapper
+   (`.fullBleedClip`). */
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
+
+/* Wrapper for a full-bleed breakout (width:100vw + negative margins). Contains
+   the sub-pixel horizontal overflow locally, where it cannot affect fixed
+   positioning anywhere else on the page. */
+.fullBleedClip { overflow-x: clip; }
 /* Clear the fixed crew bottom-nav (56px) + iOS home indicator so the last of a
    screen's content is never hidden behind it. Harmless on public routes where
    the nav self-hides. */
