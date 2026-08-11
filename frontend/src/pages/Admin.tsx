@@ -7771,6 +7771,24 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
   const [err, setErr] = useState<string | null>(null);
   const [invoiceCopied, setInvoiceCopied] = useState(false);
 
+  // Active roster, so the corrections Employee dropdown always has someone to
+  // pick. Loaded once for the tab rather than per job. A failure here is not
+  // fatal: the dropdown falls back to whoever the job's hours resolved to,
+  // which is the old behavior.
+  const [rosterForCorrections, setRosterForCorrections] = useState<Array<{ user_id: number; name: string }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<AdminUser[]>("/api/admin/users")
+      .then((us) => {
+        if (cancelled) return;
+        setRosterForCorrections(
+          us.filter((u) => u.is_active).map((u) => ({ user_id: u.id, name: u.name || u.email })),
+        );
+      })
+      .catch(() => { /* non-fatal, see above */ });
+    return () => { cancelled = true; };
+  }, []);
+
   // Admin data-entry checkpoint local state for the inputs on the
   // entry-status card; falls back to today's date so the typical
   // "I just entered this" path is one tap.
@@ -8384,12 +8402,22 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
           <JobHourCorrections
             jobUuid={summary.job_uuid}
             refreshSignal={correctionsRefresh}
+            /* The job's crew FIRST, then the rest of the active roster.
+               This used to be the crew list alone, which made the Employee
+               dropdown unpickable whenever no hours entry resolved to a
+               user_id. Hours entries are matched to people BY NAME, so a
+               nickname, a middle name or a typo leaves user_id null and drops
+               that person from the list entirely - and if none resolved, the
+               dropdown held nothing but "Pick...". You could not correct hours
+               precisely when the name was wrong, which is exactly when a
+               correction is needed. */
             employees={Array.from(
-              new Map(
-                (summary.job_report?.employee_hours ?? [])
+              new Map<number, { user_id: number; name: string }>([
+                ...(summary.job_report?.employee_hours ?? [])
                   .filter((e) => typeof e.user_id === "number")
-                  .map((e) => [e.user_id as number, { user_id: e.user_id as number, name: e.name || "-" }]),
-              ).values(),
+                  .map((e) => [e.user_id as number, { user_id: e.user_id as number, name: e.name || "-" }] as const),
+                ...rosterForCorrections.map((u) => [u.user_id, u] as const),
+              ]).values(),
             )}
           />
 
