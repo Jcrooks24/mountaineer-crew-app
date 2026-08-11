@@ -112,6 +112,14 @@ the same tabs, plus one addition:
 | Variable | Value |
 |---|---|
 | `ALERT_EMAIL` | `jacob@mountaineermoving.com` - the only alert recipient (defaults to this in code). |
+| `MEMPROBE` | **Optional, not needed here.** Set to `1` to turn on `[mem]` RSS checkpoints in any *other* process (e.g. the web service, to profile the admin backfill panel). This cron enables them itself, so leave it unset. |
+
+The cron prints `[mem]` checkpoint lines to stdout (current RSS, step delta,
+peak) before each tab and around each pass, unbuffered. That is deliberate: this
+job has been OOM-killed on the 512 MB worker and a SIGKILL leaves only exit code
+137, so the last `[mem]` line in the Render log is the only evidence of where the
+memory went. Pass `--no-mem` to suppress them. See `app/core/memprobe.py` and the
+Known defects entry in [RUNBOOKS.md](RUNBOOKS.md).
 
 It reuses `DATABASE_URL` (to read the Google token), `GOOGLE_SHEETS_SPREADSHEET_ID`,
 `POSTMARK_SERVER_TOKEN`, `SMTP_FROM`, and the `SHEETS_*_TAB` set from that service.

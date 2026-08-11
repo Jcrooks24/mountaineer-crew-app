@@ -447,6 +447,46 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    one-line edit. Found 2026-08-10 while moving DQ files to their own folder;
    the folder move neither caused nor worsened it.
 
+2. **The nightly sheet-integrity cron is OOM-killed on every run (prod/`main`).**
+   `sheet_integrity_check.py` exits 137 on the 512 MB Render Cron Job, so the
+   canary that is supposed to catch Sheet drift is not running at all. **Nothing
+   is watching the mirror right now** - treat the 2026-08-05 audit class
+   (header overwrites, duplicate rows) as undetected, not as absent.
+
+   One fix has already been made and was **real but insufficient**: the structural
+   pass no longer reads whole tabs, only `{tab}!1:1` and one key column
+   (`_header` / `_column`). It still OOMs after that change.
+
+   **Do not fix this by reading it again.** Two rounds have now been spent on
+   inspection. The job now prints `[mem]` RSS checkpoints (see
+   `app/core/memprobe.py`) before each tab and around each pass, unbuffered, so
+   the last line in the Render log before the kill names the culprit. Get that log
+   first. **This instrumentation is on `staging` and reaches the cron only at the
+   next promotion** - the Cron Job deploys from `main`.
+
+   The standing suspect, to be confirmed or killed by that log rather than acted
+   on: every `_src_*` in `sheet_backfill.py` is a full-table `.all()` of ORM
+   entities, seventeen of them run in sequence, and they all share the one Session
+   opened at `sheet_integrity_check.py:176`. SQLAlchemy's identity map holds a
+   strong reference to every row loaded by every earlier sync until that session
+   closes, so the audit's memory only grows. `JobReport` is 19 Text/JSON columns
+   of 28; `Estimate` is 44 columns. If the log shows a `total=` that climbs across
+   the `audit: loaded source ...` lines and never falls, that is it.
+
+2. **The crew bottom nav drifts upward on scroll, on mobile (prod/`main`).**
+   The first hypothesis - `html, body { overflow-x: clip }` creating a containing
+   block for `position: fixed` - is **wrong, or at least not the whole cause**.
+   That rule is gone and the deployed bundle confirms it; the nav still drifts.
+   No `transform`, `filter` or `contain` on an ancestor either.
+
+   Before diagnosing further, **rule out a stale precached bundle** (Profile →
+   Update app, then fully close and reopen the app). The staging preview host has
+   a documented service-worker freeze that makes correct fixes look undeployed;
+   confirm the device is actually running the current code before believing the
+   symptom. If it survives that, the leading theory is iOS Safari's dynamic
+   toolbar resizing the visual viewport under `position: fixed` elements, which
+   wants `dvh`/`visualViewport` handling rather than a containing-block fix.
+
 2. **The long-distance day queue never drains: `drive_day` never reaches the server.**
    `LdWorkday.tsx:70` calls `setLdDay()` when the crew picks "Driving" in the LD day
    plan. That writes `crew_ld_day_v1:<date>` and pushes an upsert onto
@@ -463,7 +503,10 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
 
    **Not a payroll-money bug.** `payroll.py::_per_diem_nights` takes per-diem
    primarily from the per-employee `out_of_town` flag on job-report hours and only
-   supplements from `LdDay`, so pay is correct. The real loss is `drive_day`, which
+   supplements from `LdDay`, so pay is correct. **Confirmed with the owner
+   2026-08-11: payroll showing "per-diem 0" for everyone on `main` is not a
+   defect - no out-of-town nights have actually been logged yet.** Do not go
+   looking for a payroll bug behind that zero until someone has logged one. The real loss is `drive_day`, which
    has no other source. Note also that `setLdDay` is only ever called with
    `drive_day`; `out_of_town` is never written locally either, so fixing the drain
    alone leaves that half of the record empty.

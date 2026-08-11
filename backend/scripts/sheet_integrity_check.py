@@ -33,8 +33,16 @@ follows automatically - no second source of truth to keep in sync.
     #   --email-warnings   email even when there are only warnings (no failures)
     #   --force-email      send the report no matter what (use to test wiring)
     #   --no-email         never email; just print + exit code
+    #   --no-completeness  structural checks only (skip the server->sheet audit)
+    #   --no-mem           suppress the [mem] RSS checkpoints
 
 Exit code: 0 when there are no FAILs, 1 when any FAIL is present.
+
+**Memory checkpoints.** This job has a history of being OOM-killed on the 512 MB
+Render worker, and a SIGKILL leaves no traceback - only exit code 137. So it
+prints `[mem]` checkpoints (current RSS, step delta, peak) to stdout as it goes,
+unbuffered, before each tab and around each pass. When it dies, the last `[mem]`
+line in the Render log names what it was doing. See `app/core/memprobe.py`.
 """
 from __future__ import annotations
 
@@ -48,6 +56,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core import memprobe
 from app.core.mailer import send_email
 from app.integrations import sheets_export as se
 
@@ -164,7 +173,18 @@ def main() -> None:
     ap.add_argument("--no-email", action="store_true")
     ap.add_argument("--no-completeness", action="store_true",
                     help="Skip the server->sheet completeness audit (structural checks only).")
+    ap.add_argument("--no-mem", action="store_true",
+                    help="Suppress the [mem] RSS checkpoints (on by default; see below).")
     args = ap.parse_args()
+
+    # Memory checkpoints are ON by default for this job, not behind a flag you have
+    # to remember to pass. This job is OOM-killed on the 512 MB worker, and a
+    # SIGKILL leaves no traceback - the last [mem] line to reach the Render log
+    # before the kill is the only evidence of where the memory went. A handful of
+    # extra log lines a night is a cheap price for that.
+    if not args.no_mem:
+        memprobe.enable()
+    memprobe.probe("start (imports loaded)")
 
     db_url = os.getenv("DATABASE_URL", "")
     if not db_url:
@@ -176,7 +196,10 @@ def main() -> None:
     db = sessionmaker(bind=create_engine(db_url))()
     svc = se._get_sheets_svc(db)  # keep the session open for the completeness audit below
 
+    memprobe.probe("sheets service + db session open")
+
     all_tabs = se._sheet_ids(svc, sid, refresh=True)  # {name: sheetId}
+    memprobe.probe(f"workbook metadata read ({len(all_tabs)} tabs)")
     fails: list[str] = []
     warns: list[str] = []
 
@@ -190,6 +213,9 @@ def main() -> None:
     # 2) per registered tab
     for env_var, default, headers_attr, ukey in REGISTRY:
         tab = _tab_name(env_var, default)
+        # Probed BEFORE the tab is read, not after: if the process is killed here,
+        # the last line in the log names the tab that was being read when it died.
+        memprobe.probe(f"structural: about to read {tab}")
         expected = getattr(se, headers_attr)
         if tab not in all_tabs:
             continue  # tab is created on first write; absence is not a defect
@@ -244,9 +270,12 @@ def main() -> None:
     # COMPLETENESS: does the sheet mirror every current server record? -----------
     # The Sheet is the long-term record; the server data is treated as transient.
     # A record on the server but not in the sheet is the thing to catch here.
+    memprobe.probe("structural pass complete")
     if not args.no_completeness:
         _completeness_checks(db, fails, warns)
+        memprobe.probe("completeness pass complete")
     db.close()
+    memprobe.probe("db session closed")
 
     # ── report ──────────────────────────────────────────────────────────────────
     lines = [f"Sheet integrity check - {sid}", f"tabs scanned: {len(all_tabs)}",
