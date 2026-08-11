@@ -157,27 +157,62 @@ export async function drainJobSetups(): Promise<void> {
   const bag = loadBag(QUEUE_KEY) as QueueBag;
   const uuids = Object.keys(bag);
   if (!uuids.length) return;
-  let dirty = false;
+
+  // What we did, applied against a FRESHLY re-read bag at the end. See
+  // `commitDrain` below for why we cannot just write `bag` back.
+  const synced: Array<{ id: string; sent: string }> = [];
+  const marked: Array<{ id: string; sent: string; mark: MaybeFailed }> = [];
+
   for (const jobUuid of uuids) {
     if (bag[jobUuid].failed_at) continue; // refused; waits for Retry or Discard
+    const sent = JSON.stringify(bag[jobUuid]);
     try {
       const r = await apiFetch<{ setup: JobSetupData }>(
         `/api/job-setup/${encodeURIComponent(jobUuid)}`,
-        { method: "PUT", body: JSON.stringify(bag[jobUuid]) },
+        { method: "PUT", body: sent },
       );
       if (r.setup) cacheJobSetup(jobUuid, r.setup);
-      delete bag[jobUuid];
-      dirty = true;
+      synced.push({ id: jobUuid, sent });
     } catch (e) {
       // Transient (5xx/408/429/401/403) and network failures stay queued
       // untouched for the next drain.
-      if (isPermanentRejection(e)) {
-        Object.assign(bag[jobUuid], failureMark(e));
-        dirty = true;
-      }
+      if (isPermanentRejection(e)) marked.push({ id: jobUuid, sent, mark: failureMark(e) });
     }
   }
-  if (dirty) saveBag(QUEUE_KEY, bag);
+  commitDrain(synced, marked);
+}
+
+/**
+ * Apply a drain's outcome to the queue WITHOUT clobbering anything enqueued
+ * while it was running.
+ *
+ * The drain reads the queue once, then awaits a network call per entry. A crew
+ * member saving a job header during those awaits calls `enqueue`, which writes
+ * to localStorage synchronously. Writing the drain's own stale copy back at the
+ * end would erase that save: the optimistic cache still shows their edit, so the
+ * screen looks right, but nothing is queued and it never syncs. Silent loss of a
+ * job header, and the drains all fire on `online` - exactly when somebody is
+ * back in signal and working.
+ *
+ * So we re-read, and act only on entries that are still byte-identical to what
+ * we sent. If an entry changed mid-flight it is a NEW edit: leave it queued and
+ * let the next drain carry it, rather than deleting it (we synced the old
+ * version) or marking it failed (the server refused the old version, not this
+ * one).
+ */
+function commitDrain(
+  synced: Array<{ id: string; sent: string }>,
+  marked: Array<{ id: string; sent: string; mark: MaybeFailed }>,
+): void {
+  if (!synced.length && !marked.length) return;
+  const fresh = loadBag(QUEUE_KEY) as QueueBag;
+  for (const { id, sent } of synced) {
+    if (fresh[id] && JSON.stringify(fresh[id]) === sent) delete fresh[id];
+  }
+  for (const { id, sent, mark } of marked) {
+    if (fresh[id] && JSON.stringify(fresh[id]) === sent) Object.assign(fresh[id], mark);
+  }
+  saveBag(QUEUE_KEY, fresh);
 }
 
 /** Headers still waiting to sync. Excludes failed ones: they need a decision,

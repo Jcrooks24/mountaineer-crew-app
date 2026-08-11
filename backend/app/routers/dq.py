@@ -31,7 +31,11 @@ from app.core.dq_doc_types import (
 from app.db.models.dq_document import DqDocument
 from app.db.models.system_config import SystemConfig
 from app.db.models.user import User
-from app.integrations.drive_upload import delete_drive_file, upload_dq_file_to_drive
+from app.integrations.drive_upload import (
+    delete_drive_file,
+    sweep_dq_orphans,
+    upload_dq_file_to_drive,
+)
 
 router = APIRouter(prefix="/api/dq", tags=["dq"])
 admin_router = APIRouter(prefix="/api/admin/dq", tags=["dq"])
@@ -102,6 +106,7 @@ def _do_upload(
         file.content_type or "application/pdf",
         driver_folder_name=driver.name or driver.email,
         known_folder_id=known_folder_id,
+        doc_type=doc_type,
     )
 
     now = datetime.now(timezone.utc)
@@ -125,6 +130,18 @@ def _do_upload(
         r.submitted_at = now
         r.updated_at = now
 
+    # The Drive upload above already happened. From here to the commit, ANY
+    # failure leaves a file in the driver's folder that no row points at: the
+    # app still reports the document missing, the driver uploads again, and the
+    # orphan is never cleaned up because the most-recent-wins delete below keys
+    # off a row that does not exist. Compensate by deleting what we just
+    # uploaded before re-raising, so a handled failure leaves no litter.
+    def _drop_uploaded(reason: str) -> None:
+        try:
+            delete_drive_file(db, result["file_id"])
+        except Exception as exc:  # noqa: BLE001 - best effort cleanup
+            print(f"[dq] orphan cleanup failed after {reason} ({result['file_id']}): {exc}")
+
     row = _find()
     old_file_id = row.drive_file_id if row else None
     if row is None:
@@ -140,10 +157,20 @@ def _do_upload(
         db.rollback()
         row = _find()
         if row is None:
+            _drop_uploaded("insert race with no winner")
             raise HTTPException(status_code=409, detail="document conflict, retry")
         old_file_id = row.drive_file_id
         _apply(row)
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            _drop_uploaded("commit failed after adopting the race winner")
+            raise
+    except Exception:
+        db.rollback()
+        _drop_uploaded("commit failed")
+        raise
     db.refresh(row)
 
     # Most-recent-wins: drop the previous file so the DQ file holds one copy.
@@ -152,6 +179,10 @@ def _do_upload(
             delete_drive_file(db, old_file_id)
         except Exception as exc:
             print(f"[dq] old file delete failed ({old_file_id}): {exc}")
+
+    # Self-heal any orphan a previous crashed upload of this doc type left
+    # behind. Runs after the commit, so the file we just recorded is safe.
+    sweep_dq_orphans(db, result.get("folder_id", ""), doc_type, result["file_id"])
     return row
 
 

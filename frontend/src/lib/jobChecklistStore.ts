@@ -225,28 +225,43 @@ export async function drainChecklistChecks(): Promise<void> {
   const q = loadBag<QueueBag>(QUEUE_KEY);
   const keys = Object.keys(q);
   if (!keys.length) return;
-  let dirty = false;
+
+  const synced: Array<{ k: string; sent: string }> = [];
+  const marked: Array<{ k: string; sent: string; mark: MaybeFailed }> = [];
+
   for (const k of keys) {
     const entry = q[k];
     if (entry.failed_at) continue; // already refused; waits for Retry or Discard
     const { job_uuid, item_key, checked } = entry;
+    const sent = JSON.stringify(entry);
     try {
       await apiFetch(`/api/job-checklist/${encodeURIComponent(job_uuid)}/check`, {
         method: "PUT",
         body: JSON.stringify({ item_key, checked }),
       });
-      delete q[k];
-      dirty = true;
+      synced.push({ k, sent });
     } catch (e) {
       if (isPermanentRejection(e)) {
-        Object.assign(entry, failureMark(e));
+        marked.push({ k, sent, mark: failureMark(e) });
         rollbackCachedTick(job_uuid, item_key);
-        dirty = true;
       }
       // Transient (5xx/408/429/401/403) or network: leave it queued untouched.
     }
   }
-  if (dirty) saveBag(QUEUE_KEY, q);
+
+  // Re-read before writing: a tick toggled during the drain's awaits would
+  // otherwise be erased by our stale copy. Act only on entries still identical
+  // to what we sent; a changed one is a newer toggle and belongs to the next
+  // drain. Same reasoning as jobSetupStore.commitDrain.
+  if (!synced.length && !marked.length) return;
+  const fresh = loadBag<QueueBag>(QUEUE_KEY);
+  for (const { k, sent } of synced) {
+    if (fresh[k] && JSON.stringify(fresh[k]) === sent) delete fresh[k];
+  }
+  for (const { k, sent, mark } of marked) {
+    if (fresh[k] && JSON.stringify(fresh[k]) === sent) Object.assign(fresh[k], mark);
+  }
+  saveBag(QUEUE_KEY, fresh);
 }
 
 /** Entries still waiting to sync. Excludes failed ones: those are not pending,

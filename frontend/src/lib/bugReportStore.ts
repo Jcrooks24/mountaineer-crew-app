@@ -100,21 +100,40 @@ export async function submitBugReport(b: BugReportInput): Promise<{ synced: bool
 export async function drainBugReports(): Promise<void> {
   const q = loadQueue();
   if (!q.length) return;
-  const remaining: QueuedBugReportInput[] = [];
+
+  const synced: Array<{ id: string; sent: string }> = [];
+  const marked: Array<{ id: string; sent: string; mark: MaybeFailed }> = [];
+
   for (const b of q) {
-    if (b.failed_at) {
-      remaining.push(b); // refused; waits for retry or discard
-      continue;
-    }
+    if (b.failed_at) continue; // refused; waits for retry or discard
+    const sent = JSON.stringify(b);
     try {
       await postBug(b);
-      // synced - it does not go back on the queue
+      synced.push({ id: b.bug_uuid, sent });
     } catch (e) {
-      // Transient (5xx/408/429/401/403) or network: keep it as-is and try again.
-      remaining.push(isPermanentRejection(e) ? { ...b, ...failureMark(e) } : b);
+      // Transient (5xx/408/429/401/403) or network: leave it queued untouched.
+      if (isPermanentRejection(e)) marked.push({ id: b.bug_uuid, sent, mark: failureMark(e) });
     }
   }
-  saveQueue(remaining);
+
+  // Re-read before writing. A submission made during the drain's awaits calls
+  // enqueue() synchronously; writing our own stale copy back would erase it,
+  // and the person who wrote it would never know. Act only on entries still
+  // identical to what we sent - a changed one is a newer submission under the
+  // same uuid and belongs to the next drain. See jobSetupStore.commitDrain.
+  if (!synced.length && !marked.length) return;
+  const fresh = loadQueue();
+  const syncedIds = new Map(synced.map((x) => [x.id, x.sent]));
+  const markedById = new Map(marked.map((x) => [x.id, x]));
+  saveQueue(
+    fresh.filter((x) => {
+      const sent = syncedIds.get(x.bug_uuid);
+      return !(sent !== undefined && JSON.stringify(x) === sent);
+    }).map((x) => {
+      const hit = markedById.get(x.bug_uuid);
+      return hit && JSON.stringify(x) === hit.sent ? { ...x, ...hit.mark } : x;
+    }),
+  );
 }
 
 /** Entries still waiting to sync. Excludes failed ones: they need a decision,
