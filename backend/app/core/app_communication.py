@@ -137,6 +137,35 @@ TEMPLATES: List[Dict[str, Any]] = [
         ],
     },
     {
+        "key": "payroll_finalize",
+        "label": "Pay period finalized, corrections summary",
+        "audience": "Each crew member with a correction not already sent at job sign-off",
+        "when": (
+            "When you finalize a pay period. Job-scoped corrections are already "
+            "mailed when you initial the job, so this covers the rest: off-job, "
+            "office and manual corrections, which have no job to hang off."
+        ),
+        "subject": "Payroll correction for {period}",
+        "body": (
+            "Hi {first_name},\n\n"
+            "Your reported hours for the pay period {period} were corrected before "
+            "payroll was run. Here is exactly what changed:\n\n"
+            "{corrections}\n\n"
+            "These are the numbers being paid. If any of this looks wrong, reply to "
+            "this email or talk to the office before the next pay period closes.\n\n"
+            "{company_name}\n"
+        ),
+        "placeholders": [
+            _p("first_name", "Their first name.", "Dana"),
+            _p("employee_name", "Their full name.", "Dana Reyes"),
+            _p("period", "The pay period, as a range.", "2026-08-01 to 2026-08-15"),
+            _p("period_start", "First day of the period.", "2026-08-01"),
+            _p("period_end", "Last day of the period.", "2026-08-15"),
+            _p("corrections", "The before/after lines, one per correction. Built by the app.", "Office hours: 4.0 -> 3.5\nReason: shift ended early", required=True),
+            _p("company_name", "Your company name.", "Mountaineer Moving"),
+        ],
+    },
+    {
         "key": "billing_correction",
         "label": "Billing corrected on a job",
         "audience": "The crew member on the job",
@@ -183,24 +212,6 @@ READ_ONLY: List[Dict[str, Any]] = [
         ),
         "subject": "Mountaineer Crew App Test",
         "body": "If you received this, Postmark is working correctly.",
-    },
-    {
-        "key": "payroll_finalize",
-        "label": "Pay period finalized, corrections summary",
-        "audience": "Each crew member with a period-scoped correction",
-        "when": "When you finalize a pay period, for corrections not already sent at job sign-off.",
-        "handled_by": "Crew app backend",
-        "why_locked": (
-            "Not yet converted to a template. This one SHOULD be editable and is "
-            "the next candidate; it is listed here so it is not invisible in the "
-            "meantime."
-        ),
-        "subject": "(built from the period dates and the corrections it covers)",
-        "body": (
-            "Built in payroll.py::_finalize_email. Greets the crew member, states the "
-            "pay period, lists each correction with its before and after, and closes "
-            "with a note to raise anything that looks wrong with the office."
-        ),
     },
     {
         "key": "apps_script_nightly",

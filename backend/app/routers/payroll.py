@@ -1385,20 +1385,18 @@ def _correction_lines(cs: List[PayrollCorrection]) -> List[str]:
 
 
 def _finalize_email(
-    employee_name: str, start: date, end: date, cs: List[PayrollCorrection]
+    db: Session, employee_name: str, start: date, end: date, cs: List[PayrollCorrection]
 ) -> Tuple[str, str]:
-    period = f"{start.isoformat()} to {end.isoformat()}"
-    body = (
-        f"Hi {employee_name.split(' ')[0] if employee_name else 'there'},\n\n"
-        f"Your reported hours for the pay period {period} were corrected before "
-        f"payroll was run. Here is exactly what changed:\n\n"
-        + "\n\n".join(_correction_lines(cs))
-        + "\n\n"
-        "These are the numbers being paid. If any of this looks wrong, reply to "
-        "this email or talk to the office before the next pay period closes.\n\n"
-        "Mountaineer Moving\n"
-    )
-    return f"Payroll correction for {period}", body
+    from app.core import app_communication as comms
+    return comms.render(db, "payroll_finalize", {
+        "first_name": employee_name.split(" ")[0] if employee_name else "there",
+        "employee_name": employee_name,
+        "period": f"{start.isoformat()} to {end.isoformat()}",
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "corrections": "\n\n".join(_correction_lines(cs)),
+        "company_name": "Mountaineer Moving",
+    })
 
 
 @router.post("/finalize")
@@ -1495,7 +1493,7 @@ def finalize_period(
                 "error": "no email address on the roster",
             })
             continue
-        subject, text = _finalize_email(name or user.email, s, e, cs)
+        subject, text = _finalize_email(db, name or user.email, s, e, cs)
         try:
             send_email(to_email=user.email, subject=subject, text=text)
         except Exception as exc:
