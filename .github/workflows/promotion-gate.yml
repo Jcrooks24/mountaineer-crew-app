@@ -1,0 +1,82 @@
+name: Promotion gate
+
+# Mechanical pre-merge checks for staging -> main. The checks themselves live in
+# scripts/promotion_gate.py and the frontend/backend build commands, so you can
+# run every one of them locally before opening the PR:
+#
+#   python scripts/promotion_gate.py --base-ref origin/main
+#   cd frontend && npm ci && npm run build
+#
+# IMPORTANT: this workflow only REPORTS. It does not block anything on its own.
+# Blocking requires a branch protection rule on `main` requiring these checks.
+# See docs/RUNBOOKS.md "Promotion gate" for the one-time setup.
+#
+# This is the mechanical subset of docs/VETTING_PROTOCOL.md. Green means nothing
+# mechanical is obviously broken. It is not a vet: it cannot tell you whether a
+# queue drains, whether a signed BOL survives a worker recycle, or whether the
+# app is legible in sunlight. Run /vet before promoting.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promotion-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-invariants:
+    name: Repo invariants (ADRs, migrations, data-flow)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The ADR cross-branch check diffs against the base, so a shallow
+          # clone of just this branch is not enough.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Promotion gate
+        env:
+          # No pip install: the script parses the migration chain itself rather
+          # than importing alembic, precisely so this job needs no backend deps.
+          GATE_BASE_REF: origin/${{ github.base_ref || 'main' }}
+        run: python scripts/promotion_gate.py
+
+  frontend-build:
+    name: Frontend build (tsc + vite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: Build
+        # `npm run build` is `tsc -b && vite build`. VETTING_PROTOCOL treats a
+        # non-clean build as a blocker. The >500 kB chunk notice is expected and
+        # is a warning, not a failure.
+        run: npm run build
+        working-directory: frontend
+
+  backend-compile:
+    name: Backend compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Byte-compile every backend module
+        # Deliberately py_compile and not an import: importing app.main needs
+        # the full dependency set plus env vars (JWT_SECRET fails closed), which
+        # would make this job a deployment rehearsal rather than a syntax gate.
+        run: python -m compileall -q backend/app backend/alembic backend/scripts

@@ -102,6 +102,19 @@ its own finding, and silence is not a waiver. A stale or under-reported doc is i
 a blocker, because the whole point is that a successor can trust it without
 re-deriving it.
 
+## Run the mechanical gate first
+
+```
+python scripts/promotion_gate.py --base-ref origin/main
+```
+
+Duplicate ADR numbers, a split migration chain, `[ ]` fields and open deviations
+in DATA_FLOW_STAGING.md are all machine-checkable, and CI runs the same script on
+every PR into `main` (see "Promotion gate" in [RUNBOOKS.md](RUNBOOKS.md)). Clear
+those before spending a human pass on the checks below, and do not mistake a
+green gate for a vet: everything that actually matters in this document is still
+unautomated and still yours to check.
+
 ## Standard evidence toolkit
 
 - **Frontend build (must be clean):** `cd frontend && npm run build` (runs

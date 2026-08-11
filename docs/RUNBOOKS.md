@@ -367,6 +367,63 @@ Data impact: none. Retrieval is read-only; email sends a copy and changes nothin
 
 ---
 
+## Promotion gate (CI)
+
+`.github/workflows/promotion-gate.yml` runs on every PR targeting `main`. It runs
+three jobs: repo invariants (`scripts/promotion_gate.py`), the frontend build, and
+a backend byte-compile.
+
+**The workflow reports; it does not block.** Blocking is a branch protection rule,
+and it is a ONE-TIME setup on GitHub that has to be done by hand:
+
+1. Repo → **Settings** → **Branches** → **Add branch ruleset** (or Add rule) for
+   `main`.
+2. Enable **Require status checks to pass before merging**.
+3. Add these three checks by name (they only appear in the list after the workflow
+   has run at least once, so open a throwaway PR first if the search is empty):
+   - `Repo invariants (ADRs, migrations, data-flow)`
+   - `Frontend build (tsc + vite)`
+   - `Backend compiles`
+4. Enable **Require branches to be up to date before merging**, so a check cannot
+   pass against a stale base.
+5. Leave **Do not allow bypassing** OFF unless you want to lock yourself out of
+   your own emergency hotfix path. As the repo owner you can otherwise override,
+   which is the right tradeoff for a one-maintainer repo with crews in the field.
+
+Do this on `Jcrooks24` (the primary). The `management909` mirror is a mirror; it
+does not need a ruleset.
+
+### Running it locally before opening the PR
+
+```
+python scripts/promotion_gate.py --base-ref origin/main
+```
+
+Same checks, same exit code. Do this first: a failing gate on a PR is just a
+slower way to learn the same thing.
+
+### Clearing a blocker
+
+Fix it, or record a waiver in `docs/DATA_FLOW_STAGING.md`:
+
+```
+GATE-WAIVER: <check-id> <reason, including who decided and when>
+```
+
+The check-id is printed in the failure (`adr-collision`, `data-flow-deviations`,
+etc.). A reason under 15 characters is rejected, deliberately: a waiver with no
+reasoning is how a blocker becomes permanent. Per VETTING_PROTOCOL, an agent
+cannot waive its own finding.
+
+### What the gate does NOT do
+
+It is the mechanical subset of [VETTING_PROTOCOL.md](VETTING_PROTOCOL.md). Green
+means nothing mechanical is obviously broken. It cannot tell you whether a queue
+drains, whether a signed BOL survives a worker recycle, whether staging and prod
+resolve different Drive folders, or whether a screen is legible in sunlight.
+**Run `/vet` before promoting.** Treating a green gate as a vet is how the
+durability bugs shipped the first time.
+
 ## Known defects
 
 Live bugs that are known and not yet fixed. If you hit one of these, you have found
