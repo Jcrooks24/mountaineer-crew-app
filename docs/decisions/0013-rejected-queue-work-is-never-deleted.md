@@ -89,6 +89,26 @@ on a 4xx, which is the same outcome by a slower route.
 
 ## Still to port
 
+**`jobChecklistStore` ported 2026-08-11.** It was written after the 2026-07-15
+sweep and reintroduced the exact pattern this ADR bans: `delete q[k]` on a
+permanent 4xx, surfacing nothing. That is the point of the closing line above -
+the rule binds every *future* queue, and a queue written later is exactly where
+it gets forgotten. It now marks the entry failed, keeps it, skips it in the
+drain, rolls back the optimistic status cache, and shows Retry / Discard on the
+job card. The failed state renders **outside** the card's collapsed section,
+because the card defaults to closed and a rejection nobody opens the card to find
+is still silent.
+
+Two things it added that the earlier ports did not have to think about:
+
+- **The optimistic cache can lie even when the queue is honest.** The tick is
+  written to the status cache before the request goes out, so keeping the queue
+  entry but leaving that write in place still shows the item as done. Both
+  rejection paths now roll it back. Any future queue with an optimistic local
+  write needs the same.
+- **A failed entry is not "pending."** Counting it as pending leaves the unsynced
+  indicator permanently lit, which trains crew to ignore it.
+
 **Done. All ten queues have been ported** (2026-07-15): `reimbursementStore`,
 `incidentStore`, `offJobStore`, `jobInventoryQueue`, then the final six -
 `rodsStore`, `materialsStore`, `bolStore`, `ldDayStore`, `officeHoursStore`,

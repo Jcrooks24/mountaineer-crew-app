@@ -518,22 +518,6 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    deciding whether it should get an outbox like everything else. Affects `main` and
    `staging`.
 
-2. **STAGING ONLY, BLOCKS PROMOTION: checklist ticks are deleted when the server
-   refuses them.** `jobChecklistStore.ts::drainChecklistChecks` does
-   `if (isPermanentFailure(e)) delete q[k]` and surfaces nothing. Every other queue in
-   the app marks the entry failed, keeps it, and shows the crew a reason with Retry
-   and Discard ([ADR 0013](decisions/0013-rejected-queue-work-is-never-deleted.md)).
-
-   `setManualCheck` throws on the interactive path, so a rejection the crew member
-   caused is visible. A rejection discovered during a **background** drain vanishes
-   silently and the tick reverts with no explanation.
-
-   Defensible for a re-tickable boolean, and far less serious than losing a materials
-   line. But it is the one queue that does not follow ADR 0013, so it should either
-   adopt the pattern or the exception should be written down as its own ADR. Until
-   then it blocks promotion under the Data-flow doc gate in
-   [VETTING_PROTOCOL.md](VETTING_PROTOCOL.md). Found 2026-08-06.
-
 2. **STAGING ONLY, BLOCKS PROMOTION: bug reports and feature requests retry forever.**
    `bugReportStore.ts::drainBugReports` and `featureRequestStore.ts::drainFeatureRequests`
    both catch bare (`catch { remaining.push(b) }`) with no permanent/transient split at

@@ -42,14 +42,18 @@ user recorded in this doc with the reason. Silence is not a waiver.
 
 ### Open blockers right now
 
-Three, none fixed as of `7fe20a4`. Each is written up in full under **Known defects**
-in [RUNBOOKS.md](RUNBOOKS.md), tagged `STAGING ONLY, BLOCKS PROMOTION`. That is the
+Two. Each is written up in full under **Known defects** in
+[RUNBOOKS.md](RUNBOOKS.md), tagged `STAGING ONLY, BLOCKS PROMOTION`. That is the
 canonical entry; this list is the index, so fix and delete in RUNBOOKS first.
 
-1. **Checklist ticks are deleted when the server refuses them.** ADR 0013 violation.
-2. **Bug reports and feature requests retry forever.** No permanent/transient split.
-3. **Two failure classifiers disagree about 429.** Ten old queues stop, two new stores
+1. **Bug reports and feature requests retry forever.** No permanent/transient split.
+2. **Two failure classifiers disagree about 429.** Ten old queues stop, two new stores
    keep retrying.
+
+**Fixed 2026-08-11:** checklist ticks are no longer deleted on permanent rejection.
+`jobChecklistStore` now marks the entry failed, keeps it, rolls back the optimistic
+cache, and surfaces it on the job card with Retry and Discard. All ten-plus queues
+now honor ADR 0013.
 
 Summaries also appear under "Deviations new on staging" below, in data-flow terms.
 
@@ -427,20 +431,7 @@ record was lost.
 **Everything in this section is a promotion blocker** until fixed or waived in
 writing. See "A failing staging flow blocks the merge" above.
 
-### 1. Checklist ticks are deleted on permanent rejection
-
-`jobChecklistStore.ts::drainChecklistChecks` does `if (isPermanentFailure(e)) delete
-q[k]` and nothing surfaces it. Every other queue marks the entry failed, keeps it,
-and shows the crew a reason with Retry and Discard (ADR 0013). `setManualCheck`
-throws on the interactive path, so the crew see a rejection they caused; a rejection
-discovered during a background drain vanishes silently and the tick reverts with no
-explanation.
-
-Defensible for a re-tickable boolean, and much less serious than losing a material
-line. But it is the one queue that does not follow ADR 0013, so it should either
-adopt the pattern or the exception should be written down as an ADR.
-
-### 2. Bug reports and feature requests never stop retrying
+### 1. Bug reports and feature requests never stop retrying
 
 Both stores catch bare (`catch { remaining.push(b) }`) with no permanent/transient
 split. A report the server permanently refuses (a 422 from a schema change, say) is
@@ -448,7 +439,7 @@ re-POSTed on every boot and every reconnect, forever, and the crew member is nev
 told. Low blast radius, but it is a queue that cannot drain and cannot be cleared
 from the UI.
 
-### 3. Two failure classifiers
+### 2. Two failure classifiers
 
 Covered above under Changed behavior. Converge before promotion or write down why
 not.

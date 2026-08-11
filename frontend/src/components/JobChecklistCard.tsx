@@ -15,8 +15,12 @@ import {
   cachedItems,
   cachedStatus,
   setManualCheck,
+  failedChecksForJob,
+  retryFailedCheck,
+  discardFailedCheck,
   type ChecklistItem,
   type ChecklistStatus,
+  type ChecklistQueueEntry,
 } from "../lib/jobChecklistStore";
 
 export default function JobChecklistCard({
@@ -40,6 +44,12 @@ export default function JobChecklistCard({
   const [open, setOpen] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Ticks the server permanently refused. Kept in the queue per ADR 0013 and
+  // shown here, because a rejection found during a BACKGROUND drain has no
+  // other way to reach the crew member.
+  const [failed, setFailed] = useState<ChecklistQueueEntry[]>(
+    () => failedChecksForJob(jobUuid),
+  );
 
   const refresh = useCallback(async () => {
     const [its, st, header] = await Promise.all([
@@ -49,6 +59,7 @@ export default function JobChecklistCard({
     ]);
     setItems(its);
     setStatus(st);
+    setFailed(failedChecksForJob(jobUuid));
     if (header) {
       setIsLD(!!header.is_long_distance);
       setTags(header.job_type_tags || []);
@@ -107,6 +118,57 @@ export default function JobChecklistCard({
           {open ? "Close" : "Open"}
         </button>
       </div>
+
+      {/* Refused ticks sit OUTSIDE the collapsed section on purpose. The card
+          defaults to closed, and a rejection nobody opens the card to find is
+          the silent failure ADR 0013 is about. */}
+      {failed.length > 0 && (
+        <div className="col" style={{ gap: 6, marginTop: 10 }}>
+          {failed.map((f) => {
+            const label = items.find((i) => i.key === f.item_key)?.label || f.item_key;
+            return (
+              <div
+                key={f.item_key}
+                className="col"
+                style={{
+                  gap: 6, padding: 10, borderRadius: 8,
+                  border: "1px solid var(--danger)",
+                  background: "color-mix(in srgb, var(--danger) 8%, transparent)",
+                }}
+              >
+                <div className="small" style={{ color: "var(--danger)", fontWeight: 700 }}>
+                  Not saved: {label}
+                </div>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  {f.failed_reason}
+                </div>
+                <div className="row" style={{ gap: 8 }}>
+                  <button
+                    type="button"
+                    style={{ fontSize: 12 }}
+                    onClick={async () => {
+                      await retryFailedCheck(jobUuid, f.item_key);
+                      await refresh();
+                    }}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    style={{ fontSize: 12, background: "none", color: "var(--danger)", border: "1px solid var(--danger)" }}
+                    onClick={async () => {
+                      discardFailedCheck(jobUuid, f.item_key);
+                      await refresh();
+                    }}
+                  >
+                    Discard
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {open && (
         <div className="col" style={{ gap: 6, marginTop: 12 }}>
