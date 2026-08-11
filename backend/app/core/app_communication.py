@@ -164,6 +164,70 @@ TEMPLATES: List[Dict[str, Any]] = [
 BY_KEY: Dict[str, Dict[str, Any]] = {t["key"]: t for t in TEMPLATES}
 
 
+# ── Emails that exist but are NOT editable ───────────────────────────────────
+# Visibility is the point. An email nobody can see is the problem this whole
+# module exists to fix, and "you cannot edit it" is not a reason to hide it.
+# Each entry says plainly WHY it is not editable and WHERE it actually lives, so
+# the office has one complete list of everything the system sends.
+READ_ONLY: List[Dict[str, Any]] = [
+    {
+        "key": "postmark_test",
+        "label": "Postmark test email",
+        "audience": "Whichever address you type into the test box",
+        "when": "Only when you press 'send test email' in Settings.",
+        "handled_by": "Crew app backend",
+        "why_locked": (
+            "It is a diagnostic, not a communication. Its whole job is to prove "
+            "Postmark works, so its wording has to stay fixed or it cannot tell "
+            "you anything."
+        ),
+        "subject": "Mountaineer Crew App Test",
+        "body": "If you received this, Postmark is working correctly.",
+    },
+    {
+        "key": "payroll_finalize",
+        "label": "Pay period finalized, corrections summary",
+        "audience": "Each crew member with a period-scoped correction",
+        "when": "When you finalize a pay period, for corrections not already sent at job sign-off.",
+        "handled_by": "Crew app backend",
+        "why_locked": (
+            "Not yet converted to a template. This one SHOULD be editable and is "
+            "the next candidate; it is listed here so it is not invisible in the "
+            "meantime."
+        ),
+        "subject": "(built from the period dates and the corrections it covers)",
+        "body": (
+            "Built in payroll.py::_finalize_email. Greets the crew member, states the "
+            "pay period, lists each correction with its before and after, and closes "
+            "with a note to raise anything that looks wrong with the office."
+        ),
+    },
+    {
+        "key": "apps_script_nightly",
+        "label": "Nightly crew feedback and incidents digest",
+        "audience": "management@mountaineermoving.com",
+        "when": "Once a day at approximately 9 PM.",
+        "handled_by": "Google Apps Script, bound to the Sheet. NOT the crew app.",
+        "why_locked": (
+            "It does not run in the crew app at all. It is a script bound to the "
+            "Google Sheet (apps_script/nightly_crew_email.gs), it sends through "
+            "MailApp rather than Postmark, and it is not deployed by CI: the repo "
+            "holds the source of truth, but what actually runs is whatever was last "
+            "pasted into the Sheet's Apps Script editor. To change it, edit it "
+            "there. Nothing in this screen affects it."
+        ),
+        "subject": "(varies with what it found: crew feedback, incidents, bug reports, feature requests)",
+        "body": (
+            "Scans the JobReports and Incidents tabs for anything the office has not "
+            "been told about yet, and mails the batch with photo links. It tracks what "
+            "it has already sent in its own log tabs, because the backend rewrites "
+            "JobReports and Incidents rows on every save and would wipe a flag written "
+            "onto them. An item re-sends if its crew-authored content changes."
+        ),
+    },
+]
+
+
 def catalog() -> List[Dict[str, Any]]:
     """The registry as the admin UI needs it: defaults + placeholder help."""
     return [
@@ -172,11 +236,32 @@ def catalog() -> List[Dict[str, Any]]:
             "label": t["label"],
             "audience": t["audience"],
             "when": t["when"],
+            "handled_by": "Crew app backend",
+            "editable": True,
             "default_subject": t["subject"],
             "default_body": t["body"],
             "placeholders": t["placeholders"],
         }
         for t in TEMPLATES
+    ]
+
+
+def read_only_catalog() -> List[Dict[str, Any]]:
+    """Every email the system sends that this screen cannot change."""
+    return [
+        {
+            "key": r["key"],
+            "label": r["label"],
+            "audience": r["audience"],
+            "when": r["when"],
+            "handled_by": r["handled_by"],
+            "editable": False,
+            "why_locked": r["why_locked"],
+            "subject": r["subject"],
+            "body": r["body"],
+            "placeholders": [],
+        }
+        for r in READ_ONLY
     ]
 
 

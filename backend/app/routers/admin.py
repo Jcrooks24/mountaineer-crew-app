@@ -398,8 +398,13 @@ def get_app_communication(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Every template: the built-in default, the admin's override if any, and
-    the placeholders available to it."""
+    """EVERY email the system sends.
+
+    `templates` are editable here. `read_only` are not, and each says why and
+    where it actually lives. The read-only list deliberately includes the Apps
+    Script digest, which does not run in this app at all: the office asked for
+    one complete inventory, and an email that is invisible because it is somebody
+    else's runtime is exactly the gap worth closing."""
     from app.core import app_communication as comms
     overrides = comms.load(db)
     out = []
@@ -416,7 +421,7 @@ def get_app_communication(
             "preview_subject": pv_subject,
             "preview_body": pv_body,
         })
-    return {"templates": out}
+    return {"templates": out, "read_only": comms.read_only_catalog()}
 
 
 @router.put("/config/app-communication", status_code=200)
@@ -431,6 +436,14 @@ def set_app_communication(
     member who cannot log in."""
     from app.core import app_communication as comms
     if payload.key not in comms.BY_KEY:
+        # Distinguish "does not exist" from "exists but is not editable here".
+        # A read-only email 404-ing as "unknown" would suggest it is not real.
+        locked = next((r for r in comms.READ_ONLY if r["key"] == payload.key), None)
+        if locked:
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{locked['label']}' cannot be edited here. {locked['why_locked']}",
+            )
         raise HTTPException(status_code=404, detail=f"Unknown template '{payload.key}'")
     errors = comms.validate(payload.key, payload.subject, payload.body)
     if errors:
