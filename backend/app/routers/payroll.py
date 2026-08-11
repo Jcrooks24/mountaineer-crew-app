@@ -433,9 +433,20 @@ def _reimbursements(
     back to anybody. Mileage carries no rate in this app, so miles are reported
     and the dollar figure stays the admin's to compute.
     """
+    # Everything EXCEPT what was explicitly rejected.
+    #
+    # This used to require status == "approved". Reimbursement.status defaults to
+    # "submitted" and there is no approval control anywhere in the app, so that
+    # filter could never match: payroll reported $0 and 0 miles for every
+    # employee, permanently, while crew were filing real expenses. A zero that
+    # means "nothing passed an unreachable gate" is indistinguishable from a zero
+    # that means "nothing was submitted", which is why it went unnoticed.
+    #
+    # If an approval workflow is ever built, gate here again - but on a status
+    # something can actually set.
     rows = (
         db.query(Reimbursement)
-        .filter(Reimbursement.status == "approved")
+        .filter(Reimbursement.status != "rejected")
         .all()
     )
     out: Dict[int, Dict[str, Any]] = defaultdict(

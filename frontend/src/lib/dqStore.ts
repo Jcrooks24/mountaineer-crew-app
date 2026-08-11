@@ -40,6 +40,9 @@ export type DqFile = {
   name?: string;
   types: DqFileItem[];
   missing_required: string[];
+  /** False for staff with no Driver tag: they have no DQ obligation, so the
+   *  card hides rather than reporting an empty file as complete. */
+  is_driver?: boolean;
 };
 
 async function postFile(path: string, form: FormData): Promise<void> {
