@@ -9,6 +9,7 @@ import { drainIncidents } from "./lib/incidentStore";
 import { drainOffJob } from "./lib/offJobStore";
 import { drainReimbursements } from "./lib/reimbursementStore";
 import { reportBuildSeen } from "./lib/appUpdate";
+import { Toast, timelineAddedMessage, type ToastMessage } from "./components/Toast";
 import { drainBugReports } from "./lib/bugReportStore";
 import { drainFeatureRequests } from "./lib/featureRequestStore";
 import { getUnitsCached as getVehUnitsCached, refreshUnits as refreshVehUnits, type VehicleUnit } from "./lib/vehicleUnits";
@@ -1174,6 +1175,12 @@ export default function App() {
     drainNotePatchQueue();
   }
 
+  // Confirmation for a captured event. The Actions timeline now sits behind a
+  // Timeline button, so tapping "Depart" gave no visible sign anything had
+  // happened - the crew member could not see the list the event was added to.
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+  const toastSeq = useRef(0);
+
   async function recordEvent(type: string, note: string | null = null) {
     if (!canSend || sendingType !== null) return;
 
@@ -1207,6 +1214,13 @@ export default function App() {
     const q = loadQueue();
     q.unshift(ev);
     saveQueue(q);
+
+    // Confirm HERE, not after syncQueueNow(). The event is on the device now,
+    // and that is the claim the toast makes - "added to timeline". Waiting for
+    // the server would leave a crew member with no signal seeing nothing at all,
+    // on the exact job sites where this feedback matters most.
+    toastSeq.current += 1;
+    setToast({ id: toastSeq.current, text: timelineAddedMessage(type, ev.timestamp) });
 
     if (type === "FINISH") setPersistedJobStatus("closed");
 
@@ -3276,6 +3290,10 @@ export default function App() {
         />
       )}
 
+      {/* Rendered last so it sits above the page content, and positioned clear
+          of the fixed bottom nav. See Toast.tsx for why it says "added" rather
+          than "sent". */}
+      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }
