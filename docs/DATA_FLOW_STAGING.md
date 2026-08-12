@@ -642,6 +642,35 @@ rather than handle the exception. It borrows no initials - `entered_by` is set t
 
 ---
 
+## App build history (2026-08-12)
+
+**Class A.** New `app_builds` table plus `patch_notes.build_id`.
+
+| Field | Path | Adherence |
+|---|---|---|
+| `app_builds.build_id` / `version_name` | device on load -> `POST /api/patch-notes/build-seen` -> Postgres | read |
+| `app_builds.first_seen_at` / `last_seen_at` | same | read |
+| `patch_notes.build_id` | Admin -> `POST`/`PATCH /api/patch-notes` -> Postgres | read |
+
+The build identity already existed in the bundle (`__APP_BUILD_ID__`,
+`__APP_VERSION_NAME__`, baked by vite.config.ts). What was missing was any server
+record that a build happened, so a build shipped without a note left no trace.
+
+**This records builds REACHED BY A DEVICE, not builds deployed.** The client
+reports its own build on load. That is the more useful fact: a build nobody
+loaded is not part of the crew's history, and a build that never reaches a device
+appears here as an absence, which is a deployment problem worth seeing. It also
+means the history is only as current as the last crew member to open the app.
+
+Dev builds (`dev-*`) are rejected server-side so a local machine cannot litter
+production history.
+
+**Does not reach the Sheet**, deliberately - this is app metadata, not business
+record. Worth confirming at the vet alongside the reimbursement-approval fields,
+which are in the same position.
+
+---
+
 ## Worked Hours: jobs per week (2026-08-12)
 
 **Class D (read cache).** `GET /api/hours/worked-history` weeks now carry a

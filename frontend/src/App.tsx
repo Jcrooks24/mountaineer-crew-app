@@ -8,6 +8,7 @@ import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport
 import { drainIncidents } from "./lib/incidentStore";
 import { drainOffJob } from "./lib/offJobStore";
 import { drainReimbursements } from "./lib/reimbursementStore";
+import { reportBuildSeen } from "./lib/appUpdate";
 import { drainBugReports } from "./lib/bugReportStore";
 import { drainFeatureRequests } from "./lib/featureRequestStore";
 import { getUnitsCached as getVehUnitsCached, refreshUnits as refreshVehUnits, type VehicleUnit } from "./lib/vehicleUnits";
@@ -1986,6 +1987,9 @@ export default function App() {
     // Reimbursement page was mounted, so a transient failure stranded a crew
     // member's receipt until they wandered back to that screen.
     void drainReimbursements();
+    // Record which build this device is on, so patch notes can read as a real
+    // version history instead of a list of announcements. Fire and forget.
+    void reportBuildSeen();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
 

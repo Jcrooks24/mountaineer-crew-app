@@ -634,8 +634,16 @@ function PatchNoteItem({ note }: { note: PatchNote }) {
   );
 }
 
+type BuildHistoryRow = {
+  build_id: string;
+  version_name: string;
+  first_seen_at: string | null;
+  notes: PatchNote[];
+};
+
 function PatchNotesCard() {
   const [notes, setNotes] = useState<PatchNote[] | null>(null);
+  const [builds, setBuilds] = useState<BuildHistoryRow[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -646,6 +654,12 @@ function PatchNotesCard() {
         if (rows.length > 0) markPatchNotesSeenNow(rows[0].updated_at);
       })
       .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"));
+    // The version history behind the notes. Loaded separately and non-fatally:
+    // if it fails, the notes still render exactly as they always have. This is
+    // additive context, not something worth breaking the card over.
+    apiFetch<{ builds: BuildHistoryRow[] }>("/api/patch-notes/history")
+      .then((h) => setBuilds(h.builds || []))
+      .catch(() => { /* non-fatal, see above */ });
   }, []);
 
   const visible = notes == null
@@ -669,6 +683,29 @@ function PatchNotesCard() {
         {visible.map((n) => (
           <PatchNoteItem key={n.id} note={n} />
         ))}
+        {/* The version history. A build that shipped with no notes still shows a
+            line saying it happened - that is the whole point of the request: the
+            list should read as a complete history, not only as the days somebody
+            wrote an announcement. Builds that DO have notes point at them; the
+            notes themselves are above rather than duplicated here. */}
+        {builds.length > 0 && (
+          <details style={{ marginTop: 4 }}>
+            <summary className="small" style={{ color: "var(--muted)", cursor: "pointer" }}>
+              Version history ({builds.length} build{builds.length === 1 ? "" : "s"})
+            </summary>
+            <div className="col" style={{ gap: 4, marginTop: 8 }}>
+              {builds.map((b) => (
+                <div key={b.build_id} className="small" style={{ color: "var(--muted)" }}>
+                  <strong style={{ color: "var(--text)" }}>{b.version_name}</strong>
+                  {b.first_seen_at ? ` - ${new Date(b.first_seen_at).toLocaleDateString()}` : ""}
+                  {b.notes.length === 0
+                    ? " - update released, no notes"
+                    : ` - ${b.notes.length} note${b.notes.length === 1 ? "" : "s"} above`}
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
         {hiddenCount > 0 && (
           <button
             onClick={() => setExpanded((v) => !v)}

@@ -6774,9 +6774,20 @@ type PatchNoteRecord = {
   id: number;
   title: string;
   body: string;
+  /** The build this note describes, if linked. */
+  build_id: string | null;
   created_by_name: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type AppBuildRow = {
+  kind: string;
+  build_id: string;
+  version_name: string;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  notes: Array<{ id: number; title: string }>;
 };
 
 const NOTES_TAB_INITIAL = 3;
@@ -6791,9 +6802,17 @@ function NotesTab() {
   const [body, setBody] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // Builds a crew device has actually reported, newest first, so a note can be
+  // tied to the build it describes. Non-fatal if it fails: the note form still
+  // works, it just cannot offer a link.
+  const [builds, setBuilds] = useState<AppBuildRow[]>([]);
+  const [buildId, setBuildId] = useState("");
 
   function load() {
     setLoading(true);
+    apiFetch<{ builds: AppBuildRow[] }>("/api/patch-notes/history")
+      .then((h) => setBuilds(h.builds || []))
+      .catch(() => { /* non-fatal - see above */ });
     apiFetch<PatchNoteRecord[]>("/api/patch-notes")
       .then(setNotes)
       .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
@@ -6806,12 +6825,14 @@ function NotesTab() {
     setEditingId(n.id);
     setTitle(n.title);
     setBody(n.body);
+    setBuildId(n.build_id || "");
   }
 
   function clearForm() {
     setEditingId(null);
     setTitle("");
     setBody("");
+    setBuildId("");
   }
 
   async function save() {
@@ -6825,12 +6846,14 @@ function NotesTab() {
       if (editingId == null) {
         await apiFetch<PatchNoteRecord>("/api/patch-notes", {
           method: "POST",
-          body: JSON.stringify({ title: title.trim(), body: body.trim() }),
+          body: JSON.stringify({ title: title.trim(), body: body.trim(), build_id: buildId || null }),
         });
       } else {
+        // "" is sent deliberately, not omitted: it is how the server is told to
+        // UNLINK. Omitting the field means "leave the link alone".
         await apiFetch<PatchNoteRecord>(`/api/patch-notes/${editingId}`, {
           method: "PATCH",
-          body: JSON.stringify({ title: title.trim(), body: body.trim() }),
+          body: JSON.stringify({ title: title.trim(), body: body.trim(), build_id: buildId }),
         });
       }
       clearForm();
@@ -6873,6 +6896,31 @@ function NotesTab() {
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
+          {/* Linking a note to a build is what turns patch notes into a version
+              history: the crew see "Brave Otter - here is what changed" instead
+              of a dated announcement floating free of any release. Optional, so
+              a note can still be written before the build is out. */}
+          <label className="col" style={{ gap: 3 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>
+              Build this note describes (optional)
+            </span>
+            <select value={buildId} onChange={(e) => setBuildId(e.target.value)}>
+              <option value="">Not linked to a build</option>
+              {builds.map((b) => (
+                <option key={b.build_id} value={b.build_id}>
+                  {b.version_name}
+                  {b.first_seen_at ? ` - ${new Date(b.first_seen_at).toLocaleDateString()}` : ""}
+                  {b.notes.length ? ` (${b.notes.length} note${b.notes.length === 1 ? "" : "s"})` : ""}
+                </option>
+              ))}
+            </select>
+            {builds.length === 0 && (
+              <span className="small" style={{ color: "var(--muted)" }}>
+                No builds recorded yet. A build appears here once a crew device
+                has loaded it.
+              </span>
+            )}
+          </label>
           {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
           <div className="row" style={{ gap: 8 }}>
             <button className="btnPrimary" onClick={save} disabled={busy}>
