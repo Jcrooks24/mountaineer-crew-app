@@ -487,6 +487,26 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
 ]
 
 
+def _norm_key(value: Any) -> str:
+    """Compare keys without letting stray whitespace invent a missing record.
+
+    The Availability sync keys on `f"{user_name}||{window_start}"`, and some
+    roster names carry a trailing space, so the database produced
+    `"Josh Fairmont ||2026-07-19"` while the sheet held `"Josh Fairmont||..."`.
+    The nightly audit reported 20 records MISSING on a tab that actually had MORE
+    rows than the database (208 vs 212) - which is the tell: a genuine missing
+    record cannot make the sheet longer. Nothing was lost; the two sides were
+    spelling the same key differently.
+
+    Stripping each component compares like with like. Harmless for the uuid-keyed
+    syncs, which have no whitespace to begin with, and it is a comparison-time
+    normalisation only - neither side's stored value is changed. The underlying
+    data hygiene (names saved with trailing spaces) is a separate problem and is
+    NOT fixed here; this stops the canary crying wolf about it.
+    """
+    return "||".join(part.strip() for part in str(value).split("||"))
+
+
 def _entry_for(key: str) -> Optional[Dict[str, Any]]:
     return next((e for e in BACKFILL_REGISTRY if e["key"] == key), None)
 
@@ -650,9 +670,9 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
                 for j in rel:
                     col = cols[j] if j < len(cols) else []
                     parts.append(col[r] if r < len(col) else "")
-                sheet_keys.add("||".join(str(p) for p in parts))
+                sheet_keys.add(_norm_key("||".join(str(p) for p in parts)))
 
-        missing = [r for r in records if r["id"] not in sheet_keys]
+        missing = [r for r in records if _norm_key(r["id"]) not in sheet_keys]
         row_out["in_sheet"] = len(sheet_keys)
         row_out["missing_count"] = len(missing)
         row_out["missing"] = [{
