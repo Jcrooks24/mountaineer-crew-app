@@ -602,6 +602,22 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
         try:
             records = entry["source"](db)
         except Exception as e:  # noqa: BLE001 - one bad kind must not kill the audit
+            # ROLL BACK, or the comment above is a lie. Postgres aborts the whole
+            # transaction on the first failed statement and refuses every
+            # subsequent one with InFailedSqlTransaction until someone rolls back.
+            # Without this, one bad table takes out all seventeen audits AND the
+            # Events/BOL counters below - the audit reports "not audited" across
+            # the board and, worse, the FAIL count DROPS, because checks that
+            # would have found real gaps never got to run. A clean-looking report
+            # produced by a broken audit is the worst possible output here.
+            #
+            # Seen 2026-08-12: a single missing column on job_reports (new code
+            # deployed ahead of its migration) blinded all 19 completeness checks
+            # and made the nightly report look better than the night before.
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001 - nothing useful to do if this fails
+                pass
             row_out["error"] = f"could not read from the database: {e}"
             row_out["in_db"] = 0
             row_out["missing"] = []

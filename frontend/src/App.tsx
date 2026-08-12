@@ -726,6 +726,16 @@ export default function App() {
       localStorage.setItem(calBindKey(date, calId), uuid);
     } catch {}
   }
+  /** The job_uuid this device last used for a calendar event, if any. Used only
+   *  when the server cannot be reached - reusing the id we already bound beats
+   *  minting a second one for the same job. */
+  function loadCalendarBinding(date: string, calId: string): string {
+    try {
+      return localStorage.getItem(calBindKey(date, calId)) || "";
+    } catch {
+      return "";
+    }
+  }
 
   // -----------------------
   // Job switching
@@ -1368,27 +1378,51 @@ export default function App() {
     // Ask the server for the canonical UUID for this calendar event.
     // All devices get the same UUID back, so cross-device history works.
     // Falls back to a local deterministic hash if offline.
-    let jobId: string;
-    try {
-      const token = getToken();
-      // Pass the event's scheduled window so the server caches it for the
-      // est-vs-actual scheduled-duration fallback.
-      let resolveUrl = `${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`;
-      if (ev.start) resolveUrl += `&scheduled_start=${encodeURIComponent(ev.start)}`;
-      if (ev.end) resolveUrl += `&scheduled_end=${encodeURIComponent(ev.end)}`;
-      if (typeof ev.invitees === "number") resolveUrl += `&invitee_count=${ev.invitees}`;
-      const res = await fetch(resolveUrl, {
-        headers: makeAuthHeaders(token),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        jobId = json.job_uuid;
-      } else {
-        jobId = calEventToJobUuid(calId);
+    // The canonical job_uuid comes from the SERVER, which mints a random uuid4
+    // and stores it against the calendar event id. `calEventToJobUuid` is a
+    // deterministic FNV hash of that same id, so the two values can NEVER agree.
+    // Any device that falls back therefore gets a different identity for the
+    // same job - and job_uuid is what job setup, events, materials, BOL, the
+    // report and the bill all key off. The crew member sees none of their
+    // colleagues' work on that job and none of theirs reaches anyone else.
+    //
+    // The fallback still has to exist (offline-first: a crew member with no
+    // signal must be able to open a job). What it must NOT be is the answer to
+    // the first hiccup. The backend recycles its worker every 1000 requests by
+    // design - see the start command in CLAUDE.md - so short windows where this
+    // call fails are ROUTINE, and each one used to fork a job permanently.
+    //
+    // Order: server (retried) > the id we already bound for this event > hash.
+    // The server is re-asked on every selection rather than trusting the local
+    // binding first, so a device that once fell back converges back onto the
+    // canonical id as soon as it can reach the server.
+    let jobId = "";
+    for (let attempt = 0; attempt < 3 && !jobId; attempt++) {
+      try {
+        const token = getToken();
+        // Pass the event's scheduled window so the server caches it for the
+        // est-vs-actual scheduled-duration fallback.
+        let resolveUrl = `${API}/api/jobs/resolve?calendar_event_id=${encodeURIComponent(calId)}`;
+        if (ev.start) resolveUrl += `&scheduled_start=${encodeURIComponent(ev.start)}`;
+        if (ev.end) resolveUrl += `&scheduled_end=${encodeURIComponent(ev.end)}`;
+        if (typeof ev.invitees === "number") resolveUrl += `&invitee_count=${ev.invitees}`;
+        const res = await fetch(resolveUrl, { headers: makeAuthHeaders(token) });
+        if (res.ok) {
+          const json = await res.json();
+          if (json?.job_uuid) jobId = String(json.job_uuid);
+        }
+      } catch {
+        // fall through to the retry / fallback below
       }
-    } catch {
-      jobId = calEventToJobUuid(calId);
+      // Only sleep between attempts, and only when still online - there is no
+      // point burning 1.2s of a crew member's time waiting on a radio that is off.
+      if (!jobId && attempt < 2 && navigator.onLine) {
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      } else if (!jobId && !navigator.onLine) {
+        break;
+      }
     }
+    if (!jobId) jobId = loadCalendarBinding(jobDate, calId) || calEventToJobUuid(calId);
 
     setPersistedJobUuid(jobId);
     setPersistedJobStatus("active");
