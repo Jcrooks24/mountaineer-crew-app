@@ -454,7 +454,9 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    512Mi) and immediately reported 11 FAILs. The **root cause of the biggest
    one is fixed**; the rest are open and listed here so nobody re-discovers them.
 
-   **Fixed: new columns could not be added to a full tab.** `_ensure_tab`
+   **Fixed and CONFIRMED 2026-08-12** (the backfill re-drive drained the
+   JobReports backlog, which only happens if the header append succeeded):
+   **new columns could not be added to a full tab.** `_ensure_tab`
    appended headers with `values().update`, which does **not** grow a sheet's
    grid. Past the allocated width Google returns a hard, non-retryable 400:
 
@@ -491,6 +493,15 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
      junk. `*Staging` tabs are now scanned (header only) instead of judged: a
      populated staging header with no recognisable key column WARNs, everything
      else is silent. Do not reinstate a name-based junk check.
+
+   **Reading a stale error in System Check.** `sheet_sync_status` holds one row
+   per export function and is overwritten in place, so `last_error` is current
+   state, not history. It used to survive a recovery, which meant System Check
+   printed a fixed failure in red indefinitely - exactly what happened after the
+   grid fix landed and the backfill had already drained the backlog. A success
+   now clears the error TEXT and keeps `last_error_at`, so the "recovered from an
+   error <date>" line still works. An existing row keeps its stale text until the
+   next successful export of that kind.
 
    Note the exit code: this job exits 1 when it finds FAILs. A Render "failed"
    badge on it means **the canary worked**, not that the canary broke. Only

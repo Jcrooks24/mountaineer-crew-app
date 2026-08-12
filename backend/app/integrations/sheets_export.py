@@ -194,6 +194,21 @@ def record_sheet_sync(db: Session, fn_name: str, ok: bool, error: Optional[str] 
             db.add(row)
         if ok:
             row.last_ok_at = now
+            # Clear the error TEXT on a success, keep the timestamp.
+            #
+            # This row is current state, not a history - there is one per export
+            # function and it is overwritten in place. Leaving `last_error`
+            # populated after a recovery meant System Check kept printing a
+            # resolved failure in red, indefinitely, with no way to tell it from a
+            # live one. That happened for real on 2026-08-12: the JobReports grid
+            # error stayed on screen after the backfill had already fixed it and
+            # drained the backlog, so the panel said broken while the sync was
+            # working.
+            #
+            # `last_error_at` is deliberately kept: Admin.tsx uses it to show
+            # "recovered from an error <date>", which is genuinely useful. It is
+            # only the red error text that must not outlive the error.
+            row.last_error = None
         else:
             row.last_error_at = now
             row.last_error = (error or "")[:500]
