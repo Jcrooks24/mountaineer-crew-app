@@ -649,6 +649,11 @@ function EmployeesTab() {
   // not want this ordering imposed on them. Same surname rule payroll uses -
   // see lib/nameSort.ts, mirrored in app/core/name_sort.py.
   const rosterUsers = useMemo(() => [...users].sort(compareRoster), [users]);
+  // Which roster card is open on mobile. One at a time: the expanded card is
+  // tall (eight action controls), so leaving several open would recreate the
+  // scrolling problem this replaces. Ignored on desktop, where every cell is
+  // always visible.
+  const [expandedRosterId, setExpandedRosterId] = useState<number | null>(null);
   const [tags, setTags] = useState<EmployeeTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -801,9 +806,44 @@ function EmployeesTab() {
           .roster-btn.ok:hover:not(:disabled) { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: var(--ok); }
           /* Phase C data-table: row hover is a background shift only (no border/scale/shadow). */
           .roster-table tbody tr:hover { background: var(--card2); }
+          .roster-table { min-width: 720px; }
+          /* The name cell is a toggle only on mobile; on desktop it is plain text
+             in a plain cell, so the button carries no button styling. */
+          .roster-name { background: none; border: 0; padding: 0; font: inherit; color: inherit;
+                         text-align: left; width: 100%; cursor: default; }
+          .roster-caret { display: none; }
+
+          /* ── Mobile: one card per person, fields hidden until the name is tapped ──
+             The table was 720px wide inside a horizontal scroller, so on a phone
+             an admin had to scroll sideways to see role, status or any action.
+             Same markup and the same handlers - only the presentation changes -
+             because the actions cell alone is eight controls and a duplicate
+             mobile tree would be two things to keep in step. */
+          @media (max-width: 760px) {
+            .roster-table { min-width: 0; }
+            .roster-table thead { display: none; }
+            .roster-table, .roster-table tbody, .roster-table tr, .roster-table td { display: block; width: 100%; }
+            .roster-table tr { border: 1px solid var(--border) !important; border-radius: 12px; margin-bottom: 8px; }
+            .roster-table td { padding: 8px 12px !important; border: 0; }
+            /* Collapsed: the name row only. Everything else waits for a tap. */
+            .roster-table tr:not(.expanded) td:not(.roster-cell-name) { display: none; }
+            .roster-table td.roster-cell-name { font-weight: 700; font-size: 15px; }
+            .roster-name { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+            .roster-caret { display: inline-block; color: var(--muted); font-size: 12px; transition: transform .15s; }
+            .roster-table tr.expanded .roster-caret { transform: rotate(90deg); }
+            /* Label each field, since the header row is gone. */
+            .roster-table tr.expanded td:not(.roster-cell-name)::before {
+              content: attr(data-label);
+              display: block; font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+              color: var(--muted); font-weight: 700; margin-bottom: 4px;
+            }
+            .roster-table tr.expanded td:not(.roster-cell-name) { border-top: 1px solid var(--border); }
+            /* Actions wrap instead of running off the side of the screen. */
+            .roster-table td .row { flex-wrap: wrap; }
+          }
         `}</style>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-        <table className="roster-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+        <table className="roster-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--card2)" }}>
               {["Name", "Contacts", "Role", "Status", "Tags", "Actions"].map((h) => (
@@ -815,13 +855,28 @@ function EmployeesTab() {
             {rosterUsers.map((u, i) => (
               <tr
                 key={u.id}
+                className={expandedRosterId === u.id ? "expanded" : undefined}
                 style={{
                   borderBottom: i < rosterUsers.length - 1 ? "1px solid var(--border)" : "none",
                   opacity: u.is_active ? 1 : 0.45,
                 }}
               >
-                <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>-</span>}</td>
-                <td style={{ padding: "10px 14px" }}>
+                <td className="roster-cell-name" style={{ padding: "10px 14px" }}>
+                  {/* A button only so it is keyboard- and screen-reader-reachable on
+                      mobile, where it is the disclosure control. On desktop the CSS
+                      strips every button affordance and the caret is hidden, so it
+                      reads as the plain name cell it has always been. */}
+                  <button
+                    type="button"
+                    className="roster-name"
+                    aria-expanded={expandedRosterId === u.id}
+                    onClick={() => setExpandedRosterId((cur) => (cur === u.id ? null : u.id))}
+                  >
+                    <span>{u.name || <span style={{ color: "var(--muted)" }}>-</span>}</span>
+                    <span className="roster-caret" aria-hidden="true">▶</span>
+                  </button>
+                </td>
+                <td data-label="Contacts" style={{ padding: "10px 14px" }}>
                   {/* Contacts: email + phone as compact clickable pills so the
                       roster reads as one "Contacts" column instead of two rows. */}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
@@ -851,13 +906,13 @@ function EmployeesTab() {
                     )}
                   </div>
                 </td>
-                <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
-                <td style={{ padding: "10px 14px" }}>
+                <td data-label="Role" style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
+                <td data-label="Status" style={{ padding: "10px 14px" }}>
                   <span className="statusDot" style={{ ["--dot" as any]: u.is_active ? "var(--ok)" : "var(--danger)", fontSize: 12 }}>
                     {u.is_active ? "Active" : "Disabled"}
                   </span>
                 </td>
-                <td style={{ padding: "10px 14px" }}>
+                <td data-label="Tags" style={{ padding: "10px 14px" }}>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                     {u.tag_ids.length === 0 ? (
                       <span className="small" style={{ color: "var(--muted)" }}>-</span>
@@ -902,7 +957,7 @@ function EmployeesTab() {
                     </button>
                   </div>
                 </td>
-                <td style={{ padding: "10px 14px" }}>
+                <td data-label="Actions" style={{ padding: "10px 14px" }}>
                   <div className="row" style={{ gap: 6 }}>
                     <button
                       className={`roster-btn ${u.is_active ? "danger" : "ok"}`}
