@@ -483,11 +483,14 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
      lost record. The keys shown carry a trailing space in the name
      (`Josh Fairmont ||2026-07-19`), so `f"{user_name}||{window_start}"` is not
      matching the sheet. Fix the name hygiene, not the sync.
-   - **Four junk env-var-named tabs** in the prod workbook:
-     `sheetsJobInventoryTabStaging`, `sheetsJobInventoryItemsTabStaging`,
-     `sheetsIncidentsTabStaging`, `sheetsOffJobTabStaging`. Something wrote the
-     env var NAME instead of its value. **Confirm each is empty before deleting**
-     (`cleanup_sheet.py --step tabs` removes empty strays).
+   - ~~Four junk env-var-named tabs~~ **Not a defect. This was the check being
+     wrong**, corrected 2026-08-12. It FAILed any tab matching
+     `startswith("sheets") and endswith("Staging")` and hit four real staging
+     mirrors. Prod and staging share one workbook by design, and a prod-side job
+     cannot read staging's env vars, so a name can never establish that a tab is
+     junk. `*Staging` tabs are now scanned (header only) instead of judged: a
+     populated staging header with no recognisable key column WARNs, everything
+     else is silent. Do not reinstate a name-based junk check.
 
    Note the exit code: this job exits 1 when it finds FAILs. A Render "failed"
    badge on it means **the canary worked**, not that the canary broke. Only

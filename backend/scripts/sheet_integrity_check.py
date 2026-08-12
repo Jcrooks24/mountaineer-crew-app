@@ -8,7 +8,6 @@ asserts it against the live sheet. Catches the whole class of drift behind the
     - a tab's KEY column (its uuid/id, the first expected header) is missing from
       the live header row  -> a `dfg`-style header overwrite
     - duplicate rows for a one-per-key tab                       -> the dedupe broke
-    - a junk env-var-named tab (sheets*Staging etc.)            -> a misconfig
     - a server record NOT present in the sheet (server->sheet completeness) -> a
       broken/stuck sync; that record could be lost if the DB ages out before it
       reaches the sheet. This is the point of the nightly run: the Sheet is the
@@ -16,6 +15,12 @@ asserts it against the live sheet. Catches the whole class of drift behind the
   WARN (reported, emailed only with --email-warnings or alongside a FAIL):
     - expected columns absent (often just un-promoted staging work)
     - fully-blank residue rows between data rows
+    - a `*Staging` mirror whose header carries no key column this check knows
+
+`*Staging` tabs are NOT junk. Prod and staging share one workbook by design, so
+their mirrors are scanned (header only) rather than judged by their names. An
+earlier check FAILed any tab named `sheets*Staging` as an env-var-named misconfig
+and flagged four real staging mirrors on 2026-08-12; a name cannot tell you that.
 
 The completeness pass reuses the app's OWN reconciler (audit_sheet_backfill for the
 diffable syncs; the Events/BOL marker-table counters for the two auto-reconciled
@@ -138,8 +143,13 @@ def _tab_name(env_var: str, default: str) -> str:
 # returns on the per-call cost.
 _BATCH_RANGES = 8
 
+# Header ranges are a single row each, so a request can carry many more of them
+# before the response gets large. Keeping them on their own budget is what lets
+# the staging mirrors be scanned for roughly one extra API call.
+_BATCH_HEADER_RANGES = 24
 
-def _batch_get(svc, sid, ranges: list, major: str) -> dict:
+
+def _batch_get(svc, sid, ranges: list, major: str, per_request: int = _BATCH_RANGES) -> dict:
     """Read many ranges in as few API calls as possible.
 
     Returns {requested range string: values}. Results are keyed by the range
@@ -147,8 +157,8 @@ def _batch_get(svc, sid, ranges: list, major: str) -> dict:
     not depend on Google echoing the range back in the same form it was given.
     """
     out: dict = {}
-    for start in range(0, len(ranges), _BATCH_RANGES):
-        chunk = ranges[start:start + _BATCH_RANGES]
+    for start in range(0, len(ranges), per_request):
+        chunk = ranges[start:start + per_request]
         # chunk bound as a default arg: the lambda is called by _api after the
         # loop variable would otherwise have moved on.
         resp = se._api(lambda c=chunk: svc.spreadsheets().values().batchGet(
@@ -252,11 +262,22 @@ def main() -> None:
     warns: list[str] = []
 
     # STRUCTURAL: is the sheet internally consistent? ----------------------------
-    # 1) junk env-var-named tabs anywhere in the workbook
-    for name in all_tabs:
-        low = name.lower()
-        if low.startswith("sheets") and name.endswith("Staging"):
-            fails.append(f"junk tab present: {name!r} (env-var-named; should not exist)")
+    #
+    # There is deliberately NO "junk tab" check here any more. It used to FAIL any
+    # tab matching `startswith("sheets") and endswith("Staging")`, on the theory
+    # that such a name could only come from a misconfig that wrote an env var's
+    # NAME instead of its value. That was a name heuristic standing in for a fact
+    # it could not check, and on 2026-08-12 it failed four real staging mirrors
+    # (`sheetsJobInventoryTabStaging` and friends) as junk.
+    #
+    # The workbook holds both environments by design - see the Sheet invariant in
+    # CLAUDE.md - so a `*Staging` tab existing is normal. This job runs against
+    # prod and cannot see staging's env vars, so it has no way to tell a
+    # misconfigured tab name from a deliberate one. Rather than guess and cry
+    # wolf, it now scans them (below) instead of judging their names.
+    #
+    # What was given up: nothing that was working. Four false FAILs a night train
+    # people to ignore the alert, which costs more than the check ever caught.
 
     # 2) per registered tab, in three phases: read all headers, read all key
     #    columns, then judge. An absent tab costs no API call at all, which is
@@ -268,15 +289,30 @@ def main() -> None:
             continue  # tab is created on first write; absence is not a defect
         scan.append((tab, getattr(se, headers_attr), ukey))
 
-    # 2a) every header row, batched.
+    # Staging mirrors share this workbook with prod. Scanned, not judged by name.
+    # Identified by CONTENT below rather than by title, because the naming has
+    # drifted over time (`sheetsIncidentsTabStaging` vs `incidentsStaging`) and
+    # keying off titles is exactly what produced the false junk-tab failures.
+    prod_tabs = {tab for tab, _, _ in scan}
+    staging_tabs = [t for t in sorted(all_tabs)
+                    if t.endswith("Staging") and t not in prod_tabs]
+
+    # 2a) every header row, batched. Header ranges are one row each, so far more
+    # of them fit in a request than key columns do; batching them separately is
+    # what makes scanning the staging mirrors nearly free (one extra call, not
+    # six) on a job whose whole failure mode is per-call cost.
     header_ranges = [f"{_quote_tab(tab)}!1:1" for tab, _, _ in scan]
-    header_vals = _batch_get(svc, sid, header_ranges, "ROWS")
+    staging_ranges = [f"{_quote_tab(tab)}!1:1" for tab in staging_tabs]
+    header_vals = _batch_get(svc, sid, header_ranges + staging_ranges, "ROWS",
+                             _BATCH_HEADER_RANGES)
     headers = {}
-    for (tab, _, _), rng in zip(scan, header_ranges):
+    for tab, rng in list(zip([t for t, _, _ in scan], header_ranges)) + \
+            list(zip(staging_tabs, staging_ranges)):
         rows = header_vals.get(rng) or []
         headers[tab] = [str(h).strip() for h in (rows[0] if rows else [])]
     del header_vals
-    memprobe.probe(f"structural: {len(scan)} header rows read")
+    memprobe.probe(
+        f"structural: {len(scan)} prod + {len(staging_tabs)} staging header rows read")
 
     # 2b) the key column of every tab that has a usable header, batched. Built
     #     as a set of column INDEXES per tab: the duplicate check and the residue
@@ -349,6 +385,31 @@ def main() -> None:
         if blanks:
             warns.append(f"{tab}: {len(blanks)} row(s) with an empty {key0!r} at "
                          f"{blanks[:10]}" + (" ..." if len(blanks) > 10 else ""))
+
+    # 2d) the staging mirrors. Checked for the ONE failure that matters and that
+    # cannot false-positive: a populated header row in which no known key column
+    # appears at all. That is the `dfg` overwrite class the 2026-08-05 audit was
+    # about, and it is just as damaging on a staging tab.
+    #
+    # Deliberately NOT checked for absent columns: staging legitimately runs a
+    # header set this prod job knows nothing about, so "expected column missing"
+    # would be noise by construction. Deliberately not checked for duplicates or
+    # residue either - that needs a key-column read per tab, and the per-call
+    # memory cost is the exact thing that OOM-killed this job.
+    known_keys = {getattr(se, attr)[0] for _, _, attr, _ in REGISTRY}
+    unrecognized = []
+    for tab in staging_tabs:
+        header = headers.get(tab) or []
+        if not header:
+            continue  # an empty staging tab is not interesting
+        if not any(k in header for k in known_keys):
+            unrecognized.append(tab)
+    if unrecognized:
+        warns.append(
+            f"{len(unrecognized)} staging tab(s) whose header carries no known key "
+            f"column: {unrecognized[:10]}"
+            + (" ..." if len(unrecognized) > 10 else "")
+            + " - either a header overwrite or a tab this check does not know about")
 
     # Release the key-column data before the completeness pass, which does its
     # own large reads. `.clear()` and not `del`: `_key_column` closes over this
