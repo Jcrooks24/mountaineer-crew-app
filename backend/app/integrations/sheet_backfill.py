@@ -744,6 +744,18 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
             })
 
     result["total_missing"] = sum(r["missing_count"] for r in result["results"])
+    # Why a record will not drain, when `failing` cannot say.
+    #
+    # `failing` compares this sync's last error against its last success, and a
+    # sync where MOST records export fine reads as healthy - so 33 bills that
+    # throw every time show up as "missing" with no explanation anywhere. These
+    # are the actual exceptions the background pool hit, newest first.
+    #
+    # See the note in sheets_export: this is an in-memory ring, so an empty list
+    # does NOT prove nothing failed. It proves nothing failed since the last
+    # worker recycle.
+    from app.integrations.sheets_export import recent_export_failures
+    result["recent_failures"] = recent_export_failures()
     return result
 
 

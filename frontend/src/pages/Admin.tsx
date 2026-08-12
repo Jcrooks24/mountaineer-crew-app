@@ -4879,12 +4879,17 @@ type BackfillRow = {
   last_error?: string | null;
   last_error_at?: string | null;
 };
+type ExportFailure = { fn: string; error: string; at: string };
+
 type BackfillAudit = {
   spreadsheet_id: string;
   connected: boolean;
   error: string | null;
   total_missing?: number;
   results: BackfillRow[];
+  /** Actual exceptions from the background export pool, newest first. In-memory
+   *  and bounded, so an empty list does not prove nothing failed. */
+  recent_failures?: ExportFailure[];
 };
 
 function SheetBackfillCard() {
@@ -5002,6 +5007,36 @@ function SheetBackfillCard() {
                 ? `${data.total_missing} record(s) missing from the Sheet`
                 : "✓ Every record is in the Sheet"}
           </div>
+
+          {/* Why a record will not drain. The per-sync `failing` flag cannot
+              answer this: it compares the sync's last error to its last
+              success, so a sync where most records export fine reads as
+              healthy while specific records throw every single time. That is
+              exactly the case where Re-send looks like it does nothing. These
+              are the real exceptions from the export pool. */}
+          {data.connected && (data.recent_failures?.length ?? 0) > 0 && (
+            <div className="small" style={{
+              marginBottom: 10, padding: 8, borderRadius: 8,
+              border: "1px solid var(--danger)", color: "var(--danger)",
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                Recent export failures ({data.recent_failures!.length})
+              </div>
+              <div style={{ color: "var(--muted)", marginBottom: 6 }}>
+                These are why records below are not draining. A sync can look
+                healthy overall while specific records fail every time.
+              </div>
+              {data.recent_failures!.slice(0, 8).map((f, i) => (
+                <div key={i} style={{ marginBottom: 3 }}>
+                  <span className="mono">{f.fn}</span>: {f.error}
+                </div>
+              ))}
+              <div style={{ color: "var(--muted)", marginTop: 6 }}>
+                Kept in memory only, so this clears when the server restarts.
+                An empty list does not prove nothing failed.
+              </div>
+            </div>
+          )}
 
           {data.connected && withMissing.length > 0 && (
             <div style={{ overflowX: "auto" }}>

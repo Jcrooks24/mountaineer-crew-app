@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Callable, List, Dict, Any, Optional, Set
@@ -149,6 +150,49 @@ def _lock_for_event_timestamp(event_id: str) -> threading.Lock:
         return _bounded_lock(_event_timestamp_locks, event_id)
 
 
+# ── Recent export failures ───────────────────────────────────────────────────
+# `sheet_sync_status` holds ONE row per export FUNCTION, so it cannot answer the
+# question an admin actually has when a backfill will not drain: "these 33 bills
+# keep failing - why?". If 322 bills export fine and 33 do not, `last_ok_at` is
+# newer than `last_error_at`, the sync reads as healthy, and the panel correctly
+# shows nothing. The failure is per RECORD; the status row is per function.
+#
+# That is the blind spot this module's own docstring describes, and it is why
+# pressing Re-send looked like it did nothing: the work WAS queued, it ran, it
+# threw, and the only trace was a line on stdout.
+#
+# This is a small bounded ring of the most recent failures so the reason reaches
+# the admin panel. Deliberately in memory and deliberately not a table: it is a
+# diagnostic for "what just happened when I pressed the button", it is read
+# within minutes of being written, and a durable per-record failure log is a
+# bigger design than this (it would want the record id threaded through every
+# export path). Lost on a worker recycle, which is fine for that purpose - but it
+# does mean an empty list is NOT proof that nothing failed.
+_MAX_RECENT_FAILURES = 50
+_recent_failures: "deque" = deque(maxlen=_MAX_RECENT_FAILURES)
+_recent_failures_lock = threading.Lock()
+
+
+def note_export_failure(fn_name: str, error: str) -> None:
+    with _recent_failures_lock:
+        _recent_failures.append({
+            "fn": fn_name,
+            "error": (error or "")[:400],
+            "at": datetime.utcnow().isoformat(),
+        })
+
+
+def recent_export_failures() -> List[Dict[str, Any]]:
+    """Newest first. See the note above: empty does not prove success."""
+    with _recent_failures_lock:
+        return list(reversed(list(_recent_failures)))
+
+
+def clear_export_failures() -> None:
+    with _recent_failures_lock:
+        _recent_failures.clear()
+
+
 def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
     """Submit a sheets export to the bounded background pool with a fresh
     DB session, so a slow or failing Google call never blocks the API
@@ -167,6 +211,7 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
             record_sheet_sync(db, export_fn.__name__, True)
         except Exception as exc:
             print(f"[sheets] background export failed ({export_fn.__name__}): {exc}")
+            note_export_failure(export_fn.__name__, str(exc))
             try:
                 db.rollback()
             except Exception:
