@@ -525,6 +525,65 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    badge on it means **the canary worked**, not that the canary broke. Only
    exit 137 is an OOM.
 
+2. **A calendar job can fork into two identities, so crews stop seeing each
+   other's work on it. Client fixed; existing forks need the repair script.**
+
+   Reported as "job set up data is not being carried over that has been entered
+   by another user, even after refresh". It is not a job-setup bug: that GET is
+   not user-filtered (`job_setup.py` queries by `job_uuid` alone), so the server
+   hands over whatever exists. The two devices were asking about **different
+   job_uuids for the same job.**
+
+   Two sources of truth that can never agree:
+
+   - **Server** (`sync.py`): `str(_uuid.uuid4())`, random, stored against the
+     calendar event id in `calendar_jobs`.
+   - **Client fallback** (`calEventToJobUuid` in `lib/bolStore.ts`): a
+     deterministic FNV hash of that same event id.
+
+   When `/api/jobs/resolve` failed, the client adopted the hash. That id was then
+   bound locally and persisted as the active job, so it survived a refresh.
+   Everything keyed on `job_uuid` forks with it: job setup, events, materials,
+   BOL, DVIRs, job report, bill, photos, incidents.
+
+   **The trigger is routine.** The backend recycles its worker every 1000
+   requests by design (the `--limit-max-requests` flag in CLAUDE.md, which is
+   load-bearing). Every recycle is a short window where that call can fail.
+
+   **Client side is fixed:** the resolve is retried three times with backoff, and
+   on failure the id already bound for that event is reused before any hash is
+   minted. The server is still re-asked on every selection, so a device that did
+   fall back converges back to canonical once it can reach the server.
+
+   **Repairing jobs that already forked:**
+
+   ```
+   python backend/scripts/repair_forked_jobs.py            # report only
+   python backend/scripts/repair_forked_jobs.py --apply    # move the rows
+   ```
+
+   Detection is COMPUTED, not guessed: the fallback is a pure function of the
+   calendar event id, so the orphan twin's uuid is derived exactly for every row
+   in `calendar_jobs`. See
+   [ADR 0038](decisions/0038-forked-job-repair-moves-rows-and-refuses-to-merge.md).
+
+   Three things to know before running it:
+
+   - **Run it AFTER the client fix is deployed**, not before. A device still
+     holding the orphan uuid keeps writing under it until it next resolves the
+     job online, so repairing first just lets new orphan rows appear behind you.
+   - **Conflicts are refused, not merged.** Where both identities hold a row in a
+     one-per-job table (two job reports for the same job, written by people who
+     could not see each other's), the script names it and moves nothing for that
+     table. Choosing is a judgement about the work, and picking "newest" would
+     quietly destroy somebody's account of the job.
+   - **It does not touch the Sheet.** Re-drive the affected records from Admin ->
+     Sheet Backfill afterwards, then remove the orphan rows by hand.
+
+   If it reports zero forks and you expected some, suspect
+   `app/core/job_uuid_fallback.py` having drifted from `calEventToJobUuid` in the
+   frontend - a drift there reports nothing, which looks exactly like success.
+
 2. **The crew bottom nav drifts upward on scroll, on mobile (prod/`main`).**
    The nav is `position: fixed; left/right/bottom: 0; zIndex: 50`, styled inline
    at `BottomNav.tsx:72-78`. It is mounted app-wide at `main.tsx:81`, outside
