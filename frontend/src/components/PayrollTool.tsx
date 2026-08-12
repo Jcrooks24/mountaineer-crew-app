@@ -879,14 +879,10 @@ function WaiveReportButton({
 
   async function waive() {
     const reason = window.prompt(
-      `Waive the job report requirement for "${jobName || "this job"}"?
-
-` +
+      `Waive the job report requirement for "${jobName || "this job"}"?\n\n` +
       "Use this for jobs that will never have a report - off-job hours logged " +
       "against a manual job, an unpaid drive leg. Payroll will finalize without " +
-      "one.
-
-Reason (recorded against the job):",
+      "one.\n\nReason (recorded against the job):",
       "",
     );
     if (reason === null) return;

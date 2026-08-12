@@ -713,6 +713,87 @@ observation of one fill, not a total.
 
 ---
 
+## Sheet plumbing changes (2026-08-12)
+
+**Class B/C.** Not new domains - changes to how existing exports read, report and
+are driven. Logged because the same-commit rule covers write strategy, endpoints
+and reconciler coverage, and a `/vet` found these missing.
+
+| Change | Path | Adherence |
+|---|---|---|
+| `_ensure_tab` caches the header row per (spreadsheet, tab) for 30s | every Sheet export | read |
+| `_sheet_ids` `fields` mask | every Sheet export | read |
+| `record_sheet_sync` clears `last_error` on success | `sheet_sync_status` | read |
+| `recent_failures` on the backfill audit response | `GET /api/admin/system-check/sheet-backfill` | read |
+| `POST /api/admin/system-check/sheet-backfill-all` | drains every sync in one budgeted pass | read |
+| Backfill throttle, 429 while a batch drains | both backfill endpoints | read |
+
+**Header cache.** `_ensure_tab` read row 1 on EVERY export - one read per record,
+the biggest consumer of the 60-reads-per-minute quota. Now cached for 30s, the
+same window `_meta_cache` uses, and invalidated explicitly whenever a column is
+appended. **The TTL is short on purpose:** this value drives positional column
+mapping in `_build_row`, so a stale header would misalign a written row. It is a
+small window by design, not a knob to turn up. The `SheetHeaderError` corruption
+guard still evaluates on every call, cached or not.
+
+**Drain-all.** Built on the existing `reconcile_all_missing`, the same code path
+the auto-reconciler uses: audits once, spends one budget across all syncs. The
+per-sync endpoint re-runs the FULL audit per call, so clearing syncs one at a
+time cost an audit each. The throttle is server-side because the endpoint returns
+when work is QUEUED, not when it lands - a request-scoped lock would release
+while the pool was still reading.
+
+**`recent_failures`** exists because `sheet_sync_status` is per export FUNCTION:
+when most records succeed and a few throw every time, the sync reads as healthy
+and the failing records have no visible explanation. In-memory and bounded, so an
+empty list does not prove nothing failed.
+
+---
+
+## Job review attestation: reviewer from the account (2026-08-12)
+
+**Class A, changed field.** ADR 0037.
+
+| Field | Path | Adherence |
+|---|---|---|
+| `admin_entry_status.entered_by` | Job Summary -> `PUT /api/admin/job-entry-status/{job_uuid}` -> Postgres -> `update_entry_status_in_sheets` -> Events/JobReports `entered_by` cells | read |
+
+The value CHANGES SHAPE. It was typed initials; it is now the reviewer's account
+name (falling back to email), and the payroll waiver writes the literal
+`(waived)`. Existing rows keep their initials - not backfilled, because those are
+a true record of what was entered.
+
+**This reaches the Sheet.** The `entered_by` column the office already reads
+starts showing full names instead of initials. Anything parsing that column must
+treat it as free text, which it always was.
+
+---
+
+## Bulletin feed: runtime shape validation (2026-08-12)
+
+**Class D (read).** `fetchFeed` validated nothing - `apiFetch<Feed>` is a type
+assertion erased at runtime - so a degraded response flowed into JSX. A malformed
+body now throws (surfacing the error card and Retry) while a genuinely empty feed
+still resolves to the empty state. `comments` is guaranteed an array on every path
+that puts a post into component state.
+
+Read-only, nothing stored, no migration.
+
+---
+
+## Forked-job repair (2026-08-12)
+
+**Class A, offline tool.** `backend/scripts/repair_forked_jobs.py` re-keys rows
+from a fork's orphan `job_uuid` onto the canonical one, across the 20 tables that
+carry `job_uuid`. Never `calendar_jobs`, which is the canonical mapping itself.
+
+Dry-run by default. Refuses to merge where both identities hold a row in a
+one-per-job table. **Does not touch the Sheet** - rows exported under the orphan
+key keep it, and are re-driven from Admin -> Sheet Backfill afterwards. See
+[ADR 0038](decisions/0038-forked-job-repair-moves-rows-and-refuses-to-merge.md).
+
+---
+
 # Deviations new on staging
 
 **Everything in this section is a promotion blocker** until fixed or waived in
