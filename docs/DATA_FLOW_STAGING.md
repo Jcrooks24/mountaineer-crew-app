@@ -642,6 +642,23 @@ rather than handle the exception. It borrows no initials - `entered_by` is set t
 
 ---
 
+## Worked Hours: jobs per week (2026-08-12)
+
+**Class D (read cache).** `GET /api/hours/worked-history` weeks now carry a
+`jobs` list: `{job_uuid, job_name, hours, date}` per job behind that week's
+billable hours.
+
+Read-only, nothing new is stored, no migration. The names come from one extra
+grouped `Event.job_name` query bounded to the jobs that already survived the
+window filter, so the endpoint's scan is unchanged in shape - it does not become
+a per-job lookup, which on a 512 MB worker is the thing to avoid.
+
+Only job hours are listed. Off-job and office time are not jobs and stay as
+column totals; the UI says so rather than leaving the crew to wonder why a week's
+job hours do not add up to its total.
+
+---
+
 ## Truck loads (2026-08-12)
 
 **Class A.** `truck_fullness` entries gain `loads`.
