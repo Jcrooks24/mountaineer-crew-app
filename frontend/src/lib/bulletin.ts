@@ -41,23 +41,53 @@ function uuid(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function fetchFeed(beforeId?: number | null): Promise<Feed> {
+/**
+ * Coerce one post into a shape the UI can render.
+ *
+ * `apiFetch<BulletinPost>` is a TYPE assertion, not a runtime check - the
+ * generic is erased, so a degraded server response flows straight into JSX. A
+ * post arriving without `comments` blows up on `post.comments.length` during
+ * render, which unmounts the tree behind the app-wide ErrorBoundary. Guaranteeing
+ * the array here is cheaper than guarding every read of it.
+ */
+function normalizePost(raw: any): BulletinPost {
+  return {
+    ...(raw as BulletinPost),
+    comments: Array.isArray(raw?.comments) ? raw.comments : [],
+  };
+}
+
+export async function fetchFeed(beforeId?: number | null): Promise<Feed> {
   const q = beforeId ? `?before_id=${beforeId}` : "";
-  return apiFetch<Feed>(`/api/bulletin/feed${q}`);
+  const raw = await apiFetch<any>(`/api/bulletin/feed${q}`);
+  // A malformed body must be an ERROR, not an empty feed. Without this, a
+  // degraded response (a 200 carrying an error object, a proxy page, a partial
+  // payload) renders as "Nothing posted yet" - which tells a crew member the
+  // bulletin is empty when it is actually broken, and gives them no Retry.
+  if (!raw || !Array.isArray(raw.posts)) {
+    throw new Error("The bulletin sent back something this app could not read.");
+  }
+  return {
+    posts: raw.posts
+      .filter((p: any) => p && typeof p === "object")
+      .map(normalizePost),
+    next_before_id:
+      typeof raw.next_before_id === "number" ? raw.next_before_id : null,
+  };
 }
 
 export function createTextPost(text: string): Promise<BulletinPost> {
-  return apiFetch<BulletinPost>("/api/bulletin/posts", {
+  return apiFetch<any>("/api/bulletin/posts", {
     method: "POST",
     body: JSON.stringify({ post_uuid: uuid(), kind: "text", text }),
-  });
+  }).then(normalizePost);
 }
 
 export function createLinkPost(linkUrl: string, text: string): Promise<BulletinPost> {
-  return apiFetch<BulletinPost>("/api/bulletin/posts", {
+  return apiFetch<any>("/api/bulletin/posts", {
     method: "POST",
     body: JSON.stringify({ post_uuid: uuid(), kind: "link", link_url: linkUrl, text }),
-  });
+  }).then(normalizePost);
 }
 
 // Resize a photo to a sane max dimension + JPEG before upload, so the bytes we
@@ -107,7 +137,9 @@ export async function createPhotoPost(file: File, text: string): Promise<Bulleti
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.detail || `Upload failed (HTTP ${res.status})`);
-  return json as BulletinPost;
+  // Same guarantee as the feed: a post reaching component state without a
+  // `comments` array crashes the render that reads `post.comments.length`.
+  return normalizePost(json);
 }
 
 // image_url is relative for server-stored images ("/api/bulletin/image/...") and
