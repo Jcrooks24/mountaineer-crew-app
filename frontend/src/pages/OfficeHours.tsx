@@ -155,7 +155,16 @@ export default function OfficeHoursPanel() {
 
     setBusy(true);
     try {
-      enqueueUpsert(input, user?.name || user?.email || "");
+      // Checked, not assumed. Office hours feed pay, so an entry that never
+      // reached the queue must not clear the form and look filed.
+      if (!enqueueUpsert(input, user?.name || user?.email || "")) {
+        setErr(
+          "There is no room left on this device to save these hours. Free up " +
+          "space - sync or delete old photos - and save again. Nothing has " +
+          "been sent, so do not close the app.",
+        );
+        return;
+      }
       refresh();
       (async () => {
         await syncQueue();

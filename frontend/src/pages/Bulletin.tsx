@@ -283,7 +283,23 @@ function PostCard({
           src={postImageSrc(post)!}
           alt=""
           loading="lazy"
-          style={{ display: "block", width: "100%", maxHeight: 520, objectFit: "cover", background: "var(--raised, rgba(0,0,0,0.04))" }}
+          // `contain`, not `cover`. With `cover` a portrait photo lost its top
+          // and bottom to the 520px cap - crews reported "images are getting
+          // cropped". The upload path never cropped: resizeImage scales by
+          // min(1, max/longest side) onto a canvas of exactly that size, so the
+          // aspect ratio is preserved. The crop was purely this style.
+          //
+          // `height: auto` lets a normal photo size itself naturally; the cap
+          // only engages for something very tall, and `contain` letterboxes it
+          // against the background rather than cutting the picture.
+          style={{
+            display: "block",
+            width: "100%",
+            height: "auto",
+            maxHeight: 520,
+            objectFit: "contain",
+            background: "var(--raised, rgba(0,0,0,0.04))",
+          }}
         />
       )}
       {post.kind === "link" && post.link_url && <LinkCard post={post} />}
@@ -329,6 +345,9 @@ function LinkCard({ post }: { post: BulletinPost }) {
       rel="noreferrer"
       style={{ display: "block", textDecoration: "none", color: "inherit", borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}
     >
+      {/* A link preview image is decorative chrome, not the crew's own photo, so
+          `cover` stays here: it fills the card band cleanly and nobody is trying
+          to read detail out of an OG thumbnail. */}
       {post.link_image_url && (
         <img src={post.link_image_url} alt="" style={{ display: "block", width: "100%", maxHeight: 320, objectFit: "cover" }} />
       )}

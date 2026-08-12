@@ -49,6 +49,7 @@ export default function JobSetupPanel({
   onHeader,
   ldPlan,
   onToggleActivity,
+  ldStorageErr = null,
 }: {
   jobUuid: string;
   meta: Meta;
@@ -59,6 +60,8 @@ export default function JobSetupPanel({
   // "What are you doing today?" - shown for every job (LD adds Driving).
   ldPlan: LdPlan;
   onToggleActivity: (a: LdActivity) => void;
+  /** Storage-full message from useLdPlan, surfaced on the tile. */
+  ldStorageErr?: string | null;
 }) {
   const jobTypes = useJobTypes();
   const [units, setUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
@@ -558,7 +561,7 @@ export default function JobSetupPanel({
           {/* What are you doing today? - the last setup field; it drives the
               timeline tools (labor -> Actions, driving -> RODS). */}
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-            <LdPlanTile plan={ldPlan} onToggleActivity={onToggleActivity} showDriving={isLD} />
+            <LdPlanTile plan={ldPlan} onToggleActivity={onToggleActivity} showDriving={isLD} storageErr={ldStorageErr} />
           </div>
 
           {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}

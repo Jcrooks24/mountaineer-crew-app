@@ -63,15 +63,26 @@ export function useLdPlan(date: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
+  // Surfaced when a write is refused (storage full). The plan is what pays a
+  // drive day, so a selection that did not persist must not look recorded.
+  const [storageErr, setStorageErr] = useState<string | null>(null);
+
   function persist(next: LdPlan) {
     savePlan(date, next);
     setPlan(next);
     // Only the drive_day flag comes from the plan; out_of_town is set on the Report tab.
-    setLdDay(date, { drive_day: next.activities.includes("driving") });
+    const day = setLdDay(date, { drive_day: next.activities.includes("driving") });
+    setStorageErr(
+      day.stored === false
+        ? "There is no room left on this device to save this day. Free up space " +
+          "- sync or delete old photos - and set it again."
+        : null,
+    );
   }
 
   return {
     plan,
+    storageErr,
     driving: plan.activities.includes("driving"),
     laborSelected: plan.activities.filter((a) => a !== "driving"),
     toggleActivity: (a: LdActivity) =>
@@ -87,10 +98,14 @@ export function LdPlanTile({
   plan,
   onToggleActivity,
   showDriving = true,
+  storageErr = null,
 }: {
   plan: LdPlan;
   onToggleActivity: (a: LdActivity) => void;
   showDriving?: boolean;
+  /** From `useLdPlan`. A drive-day selection that did not persist must not
+   *  read as recorded - it is what pays the day. */
+  storageErr?: string | null;
 }) {
   const shown = LD_ACTIVITIES.filter((a) => showDriving || a !== "driving");
   return (
@@ -99,6 +114,11 @@ export function LdPlanTile({
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Pick everything that applies. The timeline tools match your selection.
       </div>
+      {storageErr && (
+        <div className="small" style={{ color: "var(--danger)", marginBottom: 10, fontWeight: 600 }}>
+          {storageErr}
+        </div>
+      )}
       <div className="col" style={{ gap: 8 }}>
         {shown.map((a) => {
           const on = plan.activities.includes(a);

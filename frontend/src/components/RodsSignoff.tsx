@@ -184,12 +184,30 @@ function RodsDriverSection({
     setBusy(true);
     try {
       const signed: RodsDay = { ...day, driver_name: driver, changes, signature: sigRef.current!.toDataURL(), signed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-      saveDay(signed); setDay(signed); enqueueDay(signed);
+      // Both writes are checked before anything reports success. A signed RODS
+      // day is a DOT record carrying a base64 signature, so storage refusing it
+      // (quota) is realistic - and "RODS signed" over a log that was never
+      // stored is the exact silent loss this guards against (bug 5).
+      const stored = saveDay(signed);
+      setDay(signed);
+      const queued = enqueueDay(signed);
+      if (!stored || !queued) {
+        setErr(
+          "There is no room left on this device to save this signed log. " +
+          "Free up space - sync or delete old photos - and sign again. " +
+          "Nothing has been sent, so do not close the app.",
+        );
+        return;
+      }
       const n = await syncQueue();
       sigRef.current?.clear(); setConsent(false);
       setNote(n > 0 ? "RODS signed and synced." : "RODS signed - will sync when back online.");
       window.setTimeout(() => setNote(null), 4000);
-    } catch { setErr("Could not submit. Your log is saved - try again."); }
+    } catch {
+      // Reached only after both local writes succeeded above, so "saved" is
+      // earned here - this is a network/server failure, not a storage one.
+      setErr("Could not submit. Your log is saved on this device - try again.");
+    }
     finally { setBusy(false); }
   }
 

@@ -423,6 +423,7 @@ export default function App() {
     driving: ldDriving,
     laborSelected: ldLabor,
     toggleActivity: ldToggleActivity,
+    storageErr: ldStorageErr,
   } = useLdPlan(todayLocalYYYYMMDD());
 
   const [status, setStatus] = useState<string>("");
@@ -2458,6 +2459,7 @@ export default function App() {
                     }}
                     ldPlan={ldPlan}
                     onToggleActivity={ldToggleActivity}
+                    ldStorageErr={ldStorageErr}
                   />
                 </div>
               );

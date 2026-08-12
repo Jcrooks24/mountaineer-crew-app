@@ -21,6 +21,7 @@
  * from the queue (no DELETE is needed because the server never saw the add).
  */
 
+import { persistJson } from "./persistQueue";
 import { apiFetch } from "../api/client";
 import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 
@@ -180,10 +181,11 @@ export function loadQueue(): QueueOp[] {
   }
 }
 
-function saveQueue(ops: QueueOp[]): void {
-  try {
-    localStorage.setItem(MATERIALS_QUEUE_KEY, JSON.stringify(ops));
-  } catch {}
+/** Returns false if the queue could not be persisted (bug 5, see
+ *  lib/persistQueue.ts). A caller on a capture path must surface that rather
+ *  than reporting the work saved. */
+function saveQueue(ops: QueueOp[]): boolean {
+  return persistJson(MATERIALS_QUEUE_KEY, ops);
 }
 
 // ── Read ─────────────────────────────────────────────────────────────────────
@@ -251,7 +253,7 @@ export function enqueueAdd(
   jobUuid: string,
   jobName: string,
   input: AddMaterialInput,
-): string {
+): string | null {
   const submissionId = uuid();
   const itemId = uuid();
   const qty = Math.max(1, Math.floor(input.qty || 1));
@@ -280,7 +282,10 @@ export function enqueueAdd(
 
   const q = loadQueue();
   q.push({ op: "add", payload });
-  saveQueue(q);
+  // Null when the queue could not be persisted (storage full). Materials are
+  // billed, so a silent drop here bills the client for nothing and pays nobody
+  // for the run to the supplier.
+  if (!saveQueue(q)) return null;
   return submissionId;
 }
 
