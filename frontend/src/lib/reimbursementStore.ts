@@ -441,6 +441,29 @@ async function postMultipart(path: string, form: FormData): Promise<void> {
   }
 }
 
+/**
+ * App-wide background drain, named to match the other offline queues
+ * (`drainIncidents`, `drainOffJob`, ...) so it is obvious in App.tsx that
+ * reimbursements are in the same rotation.
+ *
+ * This queue used to drain ONLY while the Reimbursement page was mounted, which
+ * is why a failed submission looked like "resend does not work": resend itself
+ * was fine, but nothing retried afterwards unless the crew member happened to
+ * navigate back to that page. A receipt could sit unsent for days with the crew
+ * member believing they had filed it. Reported 2026-08-12.
+ *
+ * Safe to call from anywhere and on any schedule: syncQueue() no-ops when
+ * offline, when a drain is already running, and when the queue is empty.
+ */
+export async function drainReimbursements(): Promise<number> {
+  try {
+    return await syncQueue();
+  } catch {
+    return 0;  // a background drain must never surface an error to the UI
+  }
+}
+
+
 export async function syncQueue(): Promise<number> {
   if (!navigator.onLine) return 0;
   if (syncing) return 0;

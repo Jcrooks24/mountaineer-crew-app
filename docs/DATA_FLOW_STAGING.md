@@ -223,9 +223,32 @@ DATA_FLOW.md Deviations and Known defects in [RUNBOOKS.md](RUNBOOKS.md).
 
 ## The `online` / boot drain set has grown
 
-`App.tsx:1878` (`online`) and the mount effect now also call `drainBugReports`,
+`App.tsx` (`online`) and the mount effect now also call `drainBugReports`,
 `drainFeatureRequests`, `drainJobSetups`, `drainChecklistChecks`. All four are wired
 to **both** boot and `online`, correctly.
+
+**`drainReimbursements` joined them 2026-08-12**, and it is the reason to check this
+list when adding a queue. Mileage and expense claims drained **only while
+`Reimbursement.tsx` was mounted**, so a claim that hit a transient failure sat in
+IndexedDB until the crew member happened to open that screen again. It read to them
+as "resend is broken": resend worked, nothing retried after it. A receipt could go
+unsent for days with the crew member believing it was filed.
+
+It is now on boot, on `online`, and additionally on a **2-minute timer** while the
+app is open. The timer exists because neither boot nor `online` fires when the app
+stays connected and the SERVER has a bad minute (a deploy, a 503, a cold start).
+Cost is one IndexedDB read per tick: `syncQueue()` returns immediately when offline,
+already draining, or empty.
+
+Reimbursements are the only queue on a timer. The others are boot + `online` only,
+so the same stranding is possible for any of them - most notably the estimator
+queue, which has its own Known defects entry for exactly this.
+
+| Queue | boot | `online` | timer |
+|---|---|---|---|
+| incidents, off-job, bug reports, feature requests, photos, job inventory, job setups, checklist checks | yes | yes | no |
+| reimbursements | yes | yes | **yes, 2 min** |
+| estimator | **no - tab-mounted only** | no | no |
 
 ---
 

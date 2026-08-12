@@ -7,6 +7,7 @@ import ActualInventory from "./components/ActualInventory";
 import IncidentReport, { type JobIncidentRef } from "./components/IncidentReport";
 import { drainIncidents } from "./lib/incidentStore";
 import { drainOffJob } from "./lib/offJobStore";
+import { drainReimbursements } from "./lib/reimbursementStore";
 import { drainBugReports } from "./lib/bugReportStore";
 import { drainFeatureRequests } from "./lib/featureRequestStore";
 import { getUnitsCached as getVehUnitsCached, refreshUnits as refreshVehUnits, type VehicleUnit } from "./lib/vehicleUnits";
@@ -1930,7 +1931,7 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainFeatureRequests(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); void drainChecklistChecks(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainFeatureRequests(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); void drainChecklistChecks(); void drainReimbursements(); };
     const onOffline = () => setIsOnline(false);
     // Flush any incidents + off-job hours + un-uploaded photos queued while
     // offline on this mount too.
@@ -1947,11 +1948,32 @@ export default function App() {
     void drainJobSetups();
     // Checklist manual ticks saved offline (C3).
     void drainChecklistChecks();
+    // Mileage and expense claims. Previously drained only while the
+    // Reimbursement page was mounted, so a transient failure stranded a crew
+    // member's receipt until they wandered back to that screen.
+    void drainReimbursements();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
+
+    // Periodic retry for reimbursements specifically. Boot and the `online`
+    // event between them miss one real case: the app stays open and connected
+    // while the SERVER has a bad minute (a deploy, a 503, a cold start). No
+    // `online` event fires for that, so without a timer the claim waits for the
+    // next app launch.
+    //
+    // Cheap by construction - syncQueue() returns immediately when offline,
+    // already running, or the queue is empty, so the steady-state cost is one
+    // IndexedDB read every two minutes. Deliberately scoped to this one queue:
+    // it is the one with a reported stranding, and putting every queue on a
+    // timer is a much larger behavioural change than the bug calls for.
+    const reimbursementRetry = window.setInterval(() => {
+      void drainReimbursements();
+    }, 2 * 60 * 1000);
+
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
+      window.clearInterval(reimbursementRetry);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
