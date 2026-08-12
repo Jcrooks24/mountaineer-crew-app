@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -487,6 +489,55 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
 ]
 
 
+# ── Backfill throttle ────────────────────────────────────────────────────────
+# Re-driving one record is READ-expensive: its export does a header read, two
+# spreadsheet metadata gets and a full key-column read - roughly four reads
+# against a quota of 60 reads per minute per user. A hundred records is ~400
+# reads, or about seven minutes of quota for a single sync.
+#
+# On 2026-08-12 an admin pressed the backfill twice and the export pool spent
+# minutes in 429 backoff. Nothing was lost (the retry ladder handled it), but the
+# Sheet stopped updating for everyone while it cleared.
+#
+# A plain in-flight lock around the REQUEST does not help: the endpoint returns
+# as soon as work is QUEUED, so the lock would release while the pool was still
+# reading. The throttle therefore runs on a deadline estimated from the size of
+# the last batch, which outlives the request that queued it.
+READS_PER_REEXPORT = 4
+READS_PER_MINUTE = 60
+# Never hold the door shut longer than this, however big the batch. A stuck
+# throttle that cannot be cleared is worse than a second 429.
+MAX_COOLDOWN_SECONDS = 600
+
+_throttle_lock = threading.Lock()
+_backfill_ready_at: float = 0.0  # time.monotonic() deadline
+
+
+def backfill_cooldown_remaining() -> int:
+    """Seconds until another backfill batch may be queued. 0 when free."""
+    with _throttle_lock:
+        return max(0, int(round(_backfill_ready_at - time.monotonic())))
+
+
+def note_backfill_queued(count: int) -> None:
+    """Record that `count` records were queued, and hold the door for roughly as
+    long as they will take to drain within quota."""
+    if count <= 0:
+        return
+    seconds = min((count * READS_PER_REEXPORT) / READS_PER_MINUTE * 60.0,
+                  float(MAX_COOLDOWN_SECONDS))
+    global _backfill_ready_at
+    with _throttle_lock:
+        _backfill_ready_at = max(_backfill_ready_at, time.monotonic() + seconds)
+
+
+def reset_backfill_throttle() -> None:
+    """Clear the cooldown. For tests and for an admin who knows the pool is idle."""
+    global _backfill_ready_at
+    with _throttle_lock:
+        _backfill_ready_at = 0.0
+
+
 def _norm_key(value: Any) -> str:
     """Compare keys without letting stray whitespace invent a missing record.
 
@@ -753,6 +804,7 @@ def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE)
             per_sync[row["key"]] = q
             total_queued += q
             budget -= q
+    note_backfill_queued(total_queued)
     return {"ok": True, "queued": total_queued, "per_sync": per_sync,
             "remaining_missing": remaining_missing}
 
@@ -788,6 +840,7 @@ def reexport_missing(db: Session, key: str, ids: Optional[List[str]] = None) -> 
             print(f"[backfill] re-export failed for {key}/{rid}: {e}")
             skipped += 1
 
+    note_backfill_queued(queued)
     return {
         "ok": True,
         "key": key,

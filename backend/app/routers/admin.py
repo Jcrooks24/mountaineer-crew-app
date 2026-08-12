@@ -1442,8 +1442,59 @@ def run_sheet_backfill(
     every export in the registry is replace- or dedupe-style, so re-running one
     for a record that is actually present overwrites in place rather than
     duplicating."""
-    from app.integrations.sheet_backfill import reexport_missing
+    from app.integrations.sheet_backfill import (
+        backfill_cooldown_remaining,
+        reexport_missing,
+    )
+    _reject_if_draining(backfill_cooldown_remaining())
     result = reexport_missing(db, body.key, body.ids)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Backfill failed")
+    return result
+
+
+def _reject_if_draining(remaining: int) -> None:
+    """429 while a previous batch is still draining.
+
+    Re-driving a record costs roughly four Sheets reads against a 60/min quota,
+    and the endpoint returns as soon as work is QUEUED rather than when it lands.
+    So pressing the button again looks free and is not: on 2026-08-12 two clicks
+    put the export pool into minutes of 429 backoff and the Sheet stopped
+    updating for everyone until it cleared. Disabling the button in the UI is not
+    enough - two admins, or one admin with two tabs, would still get through.
+    """
+    if remaining > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"A backfill is still draining. Try again in about {remaining}s. "
+                "Re-driving records is read-heavy and Google caps reads at 60 a "
+                "minute, so queuing more now would slow every sync down, not "
+                "speed this up."
+            ),
+        )
+
+
+@router.post("/system-check/sheet-backfill-all")
+def run_sheet_backfill_all(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Drain everything the audit reports missing, across every sync, in one go.
+
+    Strongly preferred over pressing the per-sync backfill down the list. That
+    path re-runs the FULL audit on every call (`reexport_missing` re-audits when
+    no ids are given), so clearing five syncs one at a time costs five audits on
+    top of the exports. This audits once and spends a single budget across all of
+    them, which is also exactly what the auto-reconciler does - same code path,
+    so there is no second behaviour to keep in step.
+    """
+    from app.integrations.sheet_backfill import (
+        backfill_cooldown_remaining,
+        reconcile_all_missing,
+    )
+    _reject_if_draining(backfill_cooldown_remaining())
+    result = reconcile_all_missing(db)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Backfill failed")
     return result

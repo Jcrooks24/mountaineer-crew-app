@@ -4840,6 +4840,35 @@ function SheetBackfillCard() {
     } finally { setBusy(false); }
   }
 
+  // One button for the whole backlog. Draining sync-by-sync is the expensive
+  // way to do it: the per-sync endpoint re-runs the FULL audit on every call, so
+  // clearing five syncs one at a time costs five audits on top of the exports.
+  // This audits once and spends a single budget across every sync, on the same
+  // code path the auto-reconciler already uses.
+  async function drainAll() {
+    setSending("__all__"); setErr(null); setNote(null);
+    try {
+      const res = await apiFetch<{
+        queued: number; per_sync: Record<string, number>; remaining_missing: number;
+      }>("/api/admin/system-check/sheet-backfill-all", { method: "POST" });
+      const syncs = Object.keys(res.per_sync || {}).length;
+      setNote(
+        res.queued
+          ? `Queued ${res.queued} record(s) across ${syncs} sync(s)` +
+            (res.remaining_missing > res.queued
+              ? `. ${res.remaining_missing - res.queued} still to go - run it again once this batch lands.`
+              : ".") +
+            " Exports run in the background; re-run the audit in a minute to confirm."
+          : "Nothing to queue - everything the audit can see is already in the Sheet."
+      );
+    } catch (e: any) {
+      // A 429 here is the throttle, not a failure. Its message already explains
+      // the wait, so show it as guidance rather than in red.
+      if (e instanceof ApiError && e.status === 429) setNote(e.message);
+      else setErr(e instanceof ApiError ? e.message : "Drain failed");
+    } finally { setSending(null); }
+  }
+
   async function resend(row: BackfillRow) {
     setSending(row.key); setErr(null); setNote(null);
     try {
@@ -4854,7 +4883,8 @@ function SheetBackfillCard() {
         ". Exports run in the background; re-run the audit in a minute to confirm.",
       );
     } catch (e: any) {
-      setErr(e instanceof ApiError ? e.message : "Re-export failed");
+      if (e instanceof ApiError && e.status === 429) setNote(e.message);
+      else setErr(e instanceof ApiError ? e.message : "Re-export failed");
     } finally { setSending(null); }
   }
 
@@ -4870,9 +4900,30 @@ function SheetBackfillCard() {
         Nothing is lost when this happens: the app is the system of record and the
         Sheet is a mirror. Read-only until you press Re-send.
       </div>
-      <button onClick={run} disabled={busy} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>
-        {busy ? "Comparing…" : "Run audit"}
-      </button>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={run} disabled={busy || !!sending} className="btnPrimary"
+                style={{ padding: "6px 14px", fontSize: 13 }}>
+          {busy ? "Comparing…" : "Run audit"}
+        </button>
+        {/* Disabled while ANY drain is in flight, but the button is not the real
+            guard - the server rejects a second batch with a 429 while the last
+            one is still draining. Two admins, or one admin with two tabs, would
+            walk straight past a disabled button. */}
+        {data?.connected && (data.total_missing ?? 0) > 0 && (
+          <button onClick={drainAll} disabled={busy || !!sending}
+                  style={{ padding: "6px 14px", fontSize: 13 }}>
+            {sending === "__all__" ? "Queuing…" : `Drain all (${data.total_missing})`}
+          </button>
+        )}
+      </div>
+      {data?.connected && (data.total_missing ?? 0) > 0 && (
+        <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+          Drain all is the cheaper option: it audits once and spreads one budget
+          across every sync. Re-sending them one at a time re-runs the whole audit
+          each time. Either way the exports run in the background, and Google caps
+          reads at 60 a minute, so a big backlog takes a few passes.
+        </div>
+      )}
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
       {note && <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>{note}</div>}
