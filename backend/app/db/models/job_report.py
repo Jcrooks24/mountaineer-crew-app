@@ -21,9 +21,25 @@ class JobReport(Base):
     # Ties report to an offline-first job
     job_uuid = Column(String, unique=True, index=True, nullable=False)
 
-    # Submitter
+    # Who FIRST submitted this report. Write-once: set when the row is created
+    # and never reassigned afterwards.
+    #
+    # These used to be overwritten with the current user on every update, so the
+    # report was attributed to whoever saved it last. An admin opening a closed
+    # job and saving anything became "the person who submitted the report" even
+    # though they were never on the job. Reported 2026-08-12.
+    #
+    # Rows written before that fix hold whoever saved last, and there is no way
+    # to recover the original submitter from the data. The fix stops the drift;
+    # it cannot repair history.
     submitted_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     submitted_by_name = Column(String, nullable=True)
+
+    # Who last changed it. Null on a report nobody has edited since it was
+    # created, which is how the UI tells "untouched" from "edited by the same
+    # person who submitted it".
+    last_edited_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    last_edited_by_name = Column(String, nullable=True)
 
     # ── Field data ───────────────────────────────────────────────────────────
 

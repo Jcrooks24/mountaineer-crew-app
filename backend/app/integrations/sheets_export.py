@@ -1048,6 +1048,11 @@ JOB_REPORT_HEADERS = [
     "variance_cause", "variance_note",
     "client_readiness", "client_unready",
     "scope_change_count", "scope_change_hours", "scope_changes",
+    # Appended 2026-08-12. `submitted_by` is now write-once (who FILED the
+    # report); this is who last changed it. Blank means nobody has edited it
+    # since it was created. Before this split, `submitted_by` silently became
+    # whoever saved last, which is the bug the two columns exist to separate.
+    "last_edited_by",
 ]
 
 
@@ -1392,6 +1397,7 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
     _actual_man_hours = _billable_man_hours(report.get("employee_hours"))
     row = {
         "job_uuid": job_uuid,
+        "last_edited_by": report.get("last_edited_by_name", "") or "",
         "job_name": report.get("job_name", ""),
         "submitted_by": report.get("submitted_by_name", "") or "",
         "personal_vehicles": report.get("personal_vehicles", ""),

@@ -201,6 +201,7 @@ def build_job_summary(db: Session, job_uuid: str, *, include_admin: bool) -> Dic
         ],
         "job_report": None if not report else {
             "submitted_by_name": report.submitted_by_name,
+            "last_edited_by_name": report.last_edited_by_name,
             "personal_vehicles": report.personal_vehicles,
             "bill_personal_vehicles": bool(report.bill_personal_vehicles),
             "dumpster_pct": report.dumpster_pct,

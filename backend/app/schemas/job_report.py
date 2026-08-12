@@ -491,6 +491,10 @@ class JobReportResponse(BaseModel):
     job_uuid: str
     submitted_by_id: Optional[int]
     submitted_by_name: Optional[str]
+    # Who last changed the report, as distinct from who filed it. None until
+    # somebody edits it. See the model for why the two are separate columns.
+    last_edited_by_id: Optional[int] = None
+    last_edited_by_name: Optional[str] = None
     personal_vehicles: int
     dumpster_pct: int
     recycling_pct: int
