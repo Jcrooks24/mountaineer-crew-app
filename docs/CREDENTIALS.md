@@ -87,6 +87,34 @@ The empty `OffJobHours` / `Incidents` / etc. PascalCase tabs (created by a defau
 before the env var was pointed at the camelCase name) are junk; the cleanup tool
 (`backend/scripts/cleanup_sheet.py --step tabs`) removes the empty strays.
 
+### The two databases are NOT the same product
+
+**Production is a Render Postgres. Staging is Supabase, through the Supavisor
+transaction pooler** (`...pooler.supabase.com:6543`). Nothing in the app config
+says so, and getting it backwards leads to real mistakes - it led to one on
+2026-08-12, when a staging log was used to explain a production symptom.
+
+The difference that matters is not performance, it is **semantics**:
+
+| | Prod (Render) | Staging (Supabase :6543) |
+|---|---|---|
+| Connection | direct | transaction-mode pooler |
+| Session pinned across a commit | yes | **no** |
+| `pg_advisory_lock` reliable | yes | **no** |
+
+In transaction pooling the connection returns to the pool at every commit and the
+next statement may be served by a different backend. Anything session-scoped -
+advisory locks, session state, temp tables - is therefore unreliable on staging
+while working perfectly in prod.
+
+The auto-reconciler depended on exactly that (`pg_try_advisory_lock`) and now
+uses a row-based lease instead (`worker_leases`), which is indifferent to
+pooling. **Do not reintroduce a session-scoped lock**: it will pass every test
+run against prod and quietly do nothing on staging.
+
+On a Supabase pooler host, port 5432 is session mode and 6543 is transaction
+mode, so the port is the tell.
+
 ### Sheet integrity check (Render Cron Job) - keeps the mirror clean
 
 `backend/scripts/sheet_integrity_check.py` does two things. **Structural:**

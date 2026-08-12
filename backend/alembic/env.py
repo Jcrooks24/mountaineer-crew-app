@@ -36,6 +36,7 @@ from app.db.models import long_distance      # noqa: F401,E402
 from app.db.models import document           # noqa: F401,E402
 from app.db.models import estimate           # noqa: F401,E402
 from app.db.models import app_build          # noqa: F401,E402
+from app.db.models import worker_lease       # noqa: F401,E402
 from app.db.models import patch_note         # noqa: F401,E402
 from app.db.models import admin_note         # noqa: F401,E402
 from app.db.models import office_hours       # noqa: F401,E402

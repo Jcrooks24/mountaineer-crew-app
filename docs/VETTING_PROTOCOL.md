@@ -8,6 +8,8 @@ Reusable protocol for debugging and pre-promotion vetting. Hand it to an agent
 
 You are vetting the Crew App (frontend: `frontend/` Vite + React + TS PWA;
 backend: `backend/` FastAPI + SQLAlchemy + Alembic, SQLite in dev / Supabase
+on STAGING / a Render Postgres in PROD - see "The two databases are NOT the
+same product" in CREDENTIALS.md, because their locking semantics differ
 Postgres in prod on Render; synced data lands in a shared Google Sheet; photos
 + signed PDFs land in Google Drive). Vet either the current git diff or a named
 surface (e.g. "long-distance mode", "BOL flow", "the timeline").

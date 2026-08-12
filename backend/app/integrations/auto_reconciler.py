@@ -22,7 +22,7 @@ Design:
 - One daemon thread per worker process, started from on_startup.
 - Fires every RECONCILE_INTERVAL_S; sleeps that long *first* so we don't
   pile work onto a cold worker still loading state.
-- Postgres advisory lock (pg_try_advisory_lock) means only one worker
+- A row-based lease (worker_leases) means only one worker
   at a time runs reconciliation, even when Render scales out. Other
   workers skip silently.
 - Bounded batch (BATCH_SIZE / MAX_EVENTS) so a huge backlog can't pin
@@ -36,11 +36,26 @@ import threading
 import time
 from typing import Optional
 
-# Advisory-lock key - arbitrary 32-bit integer, picked once and kept
-# stable. If multiple subsystems start using pg_advisory_lock, give each
-# its own key from app.integrations._advisory_locks (not built yet - for
-# now, a magic number is fine, with this comment as the documentation).
-_ADVISORY_LOCK_KEY = 0x7C8E0001
+# One lease row per background job. A second sweep would use its own name.
+_LEASE_NAME = "auto_reconcile"
+
+# How long a claim is held. Must comfortably exceed a slow cycle, or a worker
+# still sweeping would have its lease expire and a second worker would join it -
+# the exact concurrency this prevents. It must also not be so long that a killed
+# worker blocks reconciliation for ages, since the clock is what releases it.
+# Cycles are minutes at worst against a 5-minute interval, so 15 minutes leaves
+# room without stalling recovery.
+LEASE_TTL_S = 900
+
+
+def _holder() -> str:
+    """Diagnostic only, never used for correctness - which worker is sweeping."""
+    import os
+    import socket
+    try:
+        return f"{socket.gethostname()}:{os.getpid()}"
+    except Exception:
+        return "unknown"
 
 # Tuning. Off the request path, so we err on the side of "small bites,
 # often" rather than "big bites, rarely" - keeps memory low.
@@ -79,25 +94,83 @@ def start_auto_reconciler() -> None:
     t.start()
 
 
-def _try_acquire_advisory_lock(db) -> bool:
-    """Try to acquire the cross-worker advisory lock. Returns True if we
-    got it (we should reconcile) or False (another worker is doing it,
-    skip this cycle).
+def _try_claim_lease(db) -> bool:
+    """Claim the cross-worker lease. True if this worker should sweep.
 
-    Released automatically when this DB session closes.
+    This replaced `pg_try_advisory_lock`, which is SESSION-scoped and so only
+    guarantees single-flight while the whole cycle runs on one backend
+    connection. Staging connects through a TRANSACTION-mode pooler, and the
+    cycle commits partway through (export_events_to_sheets writes its dedupe
+    markers and commits), after which the session may be served by a different
+    backend - so from that point the lock protected nothing. Production is a
+    direct Render Postgres where the lock did behave, which is exactly why the
+    difference went unnoticed: staging and prod had different semantics for the
+    same code. See app/db/models/worker_lease.py.
+
+    CORRECTNESS RESTS ON ONE ATOMIC STATEMENT. The UPDATE claims the row only if
+    the current lease has expired, and Postgres serialises concurrent UPDATEs of
+    the same row - so of two workers racing, exactly one sees a row updated.
+    Reading the row and then writing it would reintroduce the race this exists to
+    remove.
+
+    `now()` and the expiry are both the DATABASE's clock. Two workers with skewed
+    clocks would otherwise disagree about who holds the lease.
     """
     from sqlalchemy import text
     try:
-        row = db.execute(
-            text("SELECT pg_try_advisory_lock(:k)"),
-            {"k": _ADVISORY_LOCK_KEY},
-        ).scalar()
-        return bool(row)
+        # INSERT first so the row exists; ON CONFLICT DO NOTHING makes the race
+        # between two workers creating it harmless.
+        db.execute(
+            text(
+                "INSERT INTO worker_leases (name, holder, expires_at, updated_at) "
+                "VALUES (:n, :h, now(), now()) ON CONFLICT (name) DO NOTHING"
+            ),
+            {"n": _LEASE_NAME, "h": _holder()},
+        )
+        got = db.execute(
+            text(
+                "UPDATE worker_leases "
+                "SET holder = :h, "
+                "    expires_at = now() + make_interval(secs => :ttl), "
+                "    updated_at = now() "
+                "WHERE name = :n AND expires_at <= now() "
+                "RETURNING id"
+            ),
+            {"n": _LEASE_NAME, "h": _holder(), "ttl": float(LEASE_TTL_S)},
+        ).first()
+        db.commit()
+        return got is not None
     except Exception as exc:
-        # If the lock query itself fails (DB blip), don't run reconcile -
-        # the next cycle will retry.
-        print(f"[auto-reconcile] advisory-lock check failed: {exc}")
+        # A DB blip must not run reconcile unprotected - skip and retry next
+        # cycle. Roll back so the session is usable for the next attempt.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        print(f"[auto-reconcile] lease claim failed: {exc}")
         return False
+
+
+def _release_lease(db) -> None:
+    """Expire our lease so the next cycle can start immediately.
+
+    Best-effort. If it fails - or the worker is killed before reaching it - the
+    lease simply times out on its own, which is the property an advisory lock did
+    not have: a stranded lock is held until its backend dies, a stranded lease is
+    held until the clock passes it.
+    """
+    from sqlalchemy import text
+    try:
+        db.execute(
+            text("UPDATE worker_leases SET expires_at = now() WHERE name = :n AND holder = :h"),
+            {"n": _LEASE_NAME, "h": _holder()},
+        )
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def _run_once() -> None:
@@ -107,7 +180,7 @@ def _run_once() -> None:
 
     db = SessionLocal()
     try:
-        if not _try_acquire_advisory_lock(db):
+        if not _try_claim_lease(db):
             return
         result = reconcile_events(
             db,
@@ -150,6 +223,13 @@ def _run_once() -> None:
                     msg += f", error={gen['error']}"
                 print(msg)
     finally:
+        # Release before closing so the next cycle can start at once rather than
+        # waiting out the TTL. If this never runs - the worker was killed - the
+        # lease expires on the clock, which is the whole point of using one.
+        try:
+            _release_lease(db)
+        except Exception:
+            pass
         try:
             db.close()
         except Exception:
