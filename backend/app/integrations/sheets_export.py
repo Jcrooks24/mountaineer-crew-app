@@ -445,6 +445,20 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
     # Find any columns we want but that aren't in the sheet yet
     missing = [h for h in headers if h not in current]
     if missing:
+        # Make room first. `values().update` does NOT grow the grid: writing to a
+        # column past the tab's allocated width is a hard 400,
+        #
+        #   Range (JobReports!AB1) exceeds grid limits. Max rows: 1352, max columns: 27
+        #
+        # and because that 400 is not retryable, the whole export dies. This is
+        # not hypothetical: the nightly integrity check caught it on 2026-08-12
+        # with SEVEN close-out columns stranded on JobReports and ELEVEN on BOLs,
+        # and 5 job reports missing from the sheet entirely as a result. Every
+        # save of those records had been failing since the columns were added.
+        #
+        # A tab created by this code starts at the Sheets default of 26 columns,
+        # so the 27th expected column is where any growing tab hits the wall.
+        _widen_grid_for_columns(svc, spreadsheet_id, tab, len(current) + len(missing))
         start_letter = _col_letter(len(current))
         _api(lambda: svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
@@ -455,6 +469,47 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
         current = current + missing
 
     return current
+
+
+def _widen_grid_for_columns(
+    svc: Any, spreadsheet_id: str, tab: str, needed: int
+) -> None:
+    """Grow `tab` so it has at least `needed` columns. No-op if it already does.
+
+    Only called when there are genuinely new headers to append, which happens
+    once per column ever added, so the extra metadata read costs nothing on the
+    normal path. Best-effort by design: if the widen fails, fall through and let
+    the header write produce the real Google error rather than masking it with
+    one from here.
+    """
+    try:
+        meta = _api(lambda: svc.spreadsheets().get(
+            spreadsheetId=spreadsheet_id,
+            fields="sheets(properties(sheetId,title,gridProperties/columnCount))",
+        ).execute())
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        print(f"[sheets] could not read grid size for {tab!r}: {exc}")
+        return
+
+    for sheet in meta.get("sheets", []):
+        props = sheet.get("properties") or {}
+        if props.get("title") != tab:
+            continue
+        have = (props.get("gridProperties") or {}).get("columnCount") or 0
+        if have >= needed:
+            return
+        grow = needed - have
+        try:
+            _api(lambda sid=props["sheetId"], n=grow: svc.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={"requests": [{"appendDimension": {
+                    "sheetId": sid, "dimension": "COLUMNS", "length": n,
+                }}]},
+            ).execute())
+            print(f"[sheets] widened {tab!r} from {have} to {needed} columns")
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            print(f"[sheets] could not widen {tab!r} to {needed} columns: {exc}")
+        return
 
 
 def _build_row(data: Dict[str, Any], headers: List[str]) -> List[Any]:
