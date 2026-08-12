@@ -71,7 +71,13 @@ export function combinedFillPct(vertical_pct: number, horizontal_pct: number): n
   return Math.round((vertical_pct * horizontal_pct) / 100);
 }
 
-/** Cubic feet loaded, or null when the truck's capacity is unknown. */
+/** Cubic feet loaded IN ONE LOAD, or null when capacity is unknown.
+ *
+ *  Per load, deliberately. This feeds the deck gauge and the per-truck weight
+ *  readout, both of which describe a single fill: a truck that ran twice does
+ *  not weigh twice as much on any one trip, and showing a doubled `~lbs` next to
+ *  a fill percentage would misstate a weight. Use `totalFilledCuFt` for the
+ *  aggregate the office reasons about. */
 export function filledCuFt(entry: {
   truck: string;
   vertical_pct: number;
@@ -84,6 +90,23 @@ export function filledCuFt(entry: {
   return Math.round((cap * combinedFillPct(entry.vertical_pct, entry.horizontal_pct)) / 100);
 }
 
+/** Cubic feet across a whole list of entries. Each entry is ONE LOAD, so a truck
+ *  that ran the job twice contributes two entries with their own fill estimates -
+ *  a first load packed tight and a second half-empty is the normal case, and one
+ *  measurement multiplied by two would describe neither. Entries whose capacity
+ *  is unknown are skipped rather than counted as zero. */
+export function totalFilledCuFt(entries: Array<{
+  truck: string;
+  vertical_pct: number;
+  horizontal_pct: number;
+  is_rental?: boolean;
+  length_ft?: number;
+}>): number {
+  return entries.reduce((sum, e) => sum + (filledCuFt(e) ?? 0), 0);
+}
+
+/** ONE TRUCKLOAD, not one truck. A truck that runs the job twice gets two
+ *  entries, each with its own fill estimate. */
 export type TruckFullnessEntry = {
   truck: string;
   vertical_pct: number;

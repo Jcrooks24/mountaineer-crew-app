@@ -226,6 +226,21 @@ def worked_history(
             if d >= window_start:
                 job_date[u] = d
 
+    # Job names, so a week can list what was actually worked rather than a column
+    # of totals. Only for jobs that survived the date filter above, and taken from
+    # the events we are already reading - one extra grouped query, bounded by the
+    # same window, not a per-job lookup.
+    job_names: dict[str, str] = {}
+    if job_date:
+        in_window = list(job_date.keys())
+        job_names = {
+            u: (nm or "")
+            for u, nm in db.query(Event.job_uuid, func.max(Event.job_name))
+            .filter(Event.job_uuid.in_(in_window))
+            .group_by(Event.job_uuid)
+            .all()
+        }
+
     # --- Off-job hours (matched by user id) ---
     # work_date is an ISO "YYYY-MM-DD" string, so a lexicographic >= is a real
     # date comparison. Entries with no work_date fall back to created_at, and the
@@ -261,13 +276,20 @@ def worked_history(
 
     # --- Bucket by week ---
     weeks: dict[date, dict] = defaultdict(
-        lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0, "office": 0.0}
+        lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0,
+                 "office": 0.0, "jobs": []}
     )
 
     for u, hrs in job_hours.items():
         d = job_date.get(u)
         if d is not None:
             weeks[_week_start(d)]["billable"] += hrs
+            weeks[_week_start(d)]["jobs"].append({
+                "job_uuid": u,
+                "job_name": job_names.get(u) or "",
+                "hours": round(hrs, 2),
+                "date": d.isoformat(),
+            })
 
     for entry in off:
         d = _parse_date(entry.work_date)
@@ -329,6 +351,13 @@ def worked_history(
                 "other_hours": round(other, 2),
                 "office_hours": round(office_h, 2),
                 "total_hours": round(b + nb + other + office_h, 2),
+                # The jobs behind this week's billable hours, so a crew member can
+                # open a week and see what they actually worked instead of a bare
+                # total. Off-job and office hours are not jobs and are not listed
+                # here; their totals are the columns beside this.
+                "jobs": sorted(
+                    weeks[ws]["jobs"], key=lambda j: (j["date"], j["job_name"].lower())
+                ),
             }
         )
 

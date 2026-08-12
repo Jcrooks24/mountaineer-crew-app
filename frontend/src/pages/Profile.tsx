@@ -390,6 +390,9 @@ type WorkedWeek = {
   other_hours: number;
   office_hours: number;
   total_hours: number;
+  /** The jobs behind this week's billable hours. Optional: an older server does
+   *  not send it, and the row still renders without the breakdown. */
+  jobs?: Array<{ job_uuid: string; job_name: string; hours: number; date: string }>;
 };
 type HoursSummary = {
   regular_hours: number;
@@ -417,6 +420,13 @@ function fmtDay(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+// "Tue 12" for a job row inside a week. Parsed with an explicit T00:00:00 like
+// every other date here: `new Date("2026-08-12")` is UTC midnight and renders as
+// the 11th west of Greenwich, which would put a job in the wrong day.
+function fmtDayShort(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString([], { weekday: "short", day: "numeric" });
+}
+
 // week_start is the Monday; render "Mon D - Sun D".
 function fmtWeek(iso: string): string {
   const start = new Date(iso + "T00:00:00");
@@ -442,6 +452,9 @@ function WorkedHoursCard() {
   const [err, setErr] = useState<string | null>(null);
   const [weeksWindow, setWeeksWindow] = useState(HISTORY_DEFAULT_WEEKS);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Which week's job list is open. One at a time - the point is to look at one
+  // week, and several expanded turns a compact table back into a long scroll.
+  const [openWeek, setOpenWeek] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -498,15 +511,61 @@ function WorkedHoursCard() {
                 <span style={{ width: 56, textAlign: "right" }}>N-bill</span>
                 {hasOffice && <span style={{ width: 52, textAlign: "right" }}>Office</span>}
               </div>
-              {weeks.map((w) => (
-                <div key={w.week_start} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
-                  <span className="mono" style={{ flex: "1 1 auto" }}>{fmtWeek(w.week_start)}</span>
-                  <span className="mono" style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
-                  <span className="mono" style={{ width: 42, textAlign: "right", color: w.ot_hours > 0 ? "var(--warn)" : "var(--muted)", fontWeight: w.ot_hours > 0 ? 700 : 400 }}>{w.ot_hours.toFixed(1)}</span>
-                  <span className="mono" style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
-                  {hasOffice && <span className="mono" style={{ width: 52, textAlign: "right", color: "var(--muted)" }}>{w.office_hours.toFixed(1)}</span>}
+              {/* Tap a week to see the jobs behind it. Requested as "select a
+                  week and see jobs worked" - the totals alone could not answer
+                  "which job was that?". One week open at a time, since the point
+                  is to look at one. */}
+              {weeks.map((w) => {
+                const jobs = w.jobs ?? [];
+                const open = openWeek === w.week_start;
+                return (
+                <div key={w.week_start} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <button
+                    type="button"
+                    className="row"
+                    onClick={() => setOpenWeek(open ? null : w.week_start)}
+                    aria-expanded={open}
+                    disabled={jobs.length === 0}
+                    style={{
+                      width: "100%", justifyContent: "space-between", alignItems: "center",
+                      padding: "8px 0", fontSize: 13, background: "none", border: 0,
+                      color: "inherit", font: "inherit",
+                      cursor: jobs.length ? "pointer" : "default", textAlign: "left",
+                    }}
+                  >
+                    <span className="mono" style={{ flex: "1 1 auto" }}>
+                      {fmtWeek(w.week_start)}
+                      {jobs.length > 0 && (
+                        <span style={{ color: "var(--muted)", fontWeight: 400 }}>
+                          {" "}({jobs.length} job{jobs.length === 1 ? "" : "s"}) {open ? "▾" : "▸"}
+                        </span>
+                      )}
+                    </span>
+                    <span className="mono" style={{ width: 52, textAlign: "right", fontWeight: 600 }}>{w.regular_hours.toFixed(1)}</span>
+                    <span className="mono" style={{ width: 42, textAlign: "right", color: w.ot_hours > 0 ? "var(--warn)" : "var(--muted)", fontWeight: w.ot_hours > 0 ? 700 : 400 }}>{w.ot_hours.toFixed(1)}</span>
+                    <span className="mono" style={{ width: 56, textAlign: "right", color: "var(--muted)" }}>{w.non_billable_hours.toFixed(1)}</span>
+                    {hasOffice && <span className="mono" style={{ width: 52, textAlign: "right", color: "var(--muted)" }}>{w.office_hours.toFixed(1)}</span>}
+                  </button>
+                  {open && jobs.length > 0 && (
+                    <div className="col" style={{ gap: 2, padding: "0 0 8px 8px" }}>
+                      {jobs.map((j) => (
+                        <div key={j.job_uuid} className="row" style={{ justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+                          <span style={{ color: "var(--muted)" }}>
+                            {fmtDayShort(j.date)} - {j.job_name || "Unnamed job"}
+                          </span>
+                          <span className="mono">{j.hours.toFixed(2)}h</span>
+                        </div>
+                      ))}
+                      {/* Only job hours are listed. Off-job and office time are
+                          not jobs; their totals are the columns above. */}
+                      <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+                        Job hours only. Off-job and office time are in the columns above.
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
               <div style={{ marginTop: 10 }}>
                 {!expanded ? (
                   <button
@@ -575,8 +634,16 @@ function PatchNoteItem({ note }: { note: PatchNote }) {
   );
 }
 
+type BuildHistoryRow = {
+  build_id: string;
+  version_name: string;
+  first_seen_at: string | null;
+  notes: PatchNote[];
+};
+
 function PatchNotesCard() {
   const [notes, setNotes] = useState<PatchNote[] | null>(null);
+  const [builds, setBuilds] = useState<BuildHistoryRow[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -587,6 +654,12 @@ function PatchNotesCard() {
         if (rows.length > 0) markPatchNotesSeenNow(rows[0].updated_at);
       })
       .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"));
+    // The version history behind the notes. Loaded separately and non-fatally:
+    // if it fails, the notes still render exactly as they always have. This is
+    // additive context, not something worth breaking the card over.
+    apiFetch<{ builds: BuildHistoryRow[] }>("/api/patch-notes/history")
+      .then((h) => setBuilds(h.builds || []))
+      .catch(() => { /* non-fatal, see above */ });
   }, []);
 
   const visible = notes == null
@@ -610,6 +683,29 @@ function PatchNotesCard() {
         {visible.map((n) => (
           <PatchNoteItem key={n.id} note={n} />
         ))}
+        {/* The version history. A build that shipped with no notes still shows a
+            line saying it happened - that is the whole point of the request: the
+            list should read as a complete history, not only as the days somebody
+            wrote an announcement. Builds that DO have notes point at them; the
+            notes themselves are above rather than duplicated here. */}
+        {builds.length > 0 && (
+          <details style={{ marginTop: 4 }}>
+            <summary className="small" style={{ color: "var(--muted)", cursor: "pointer" }}>
+              Version history ({builds.length} build{builds.length === 1 ? "" : "s"})
+            </summary>
+            <div className="col" style={{ gap: 4, marginTop: 8 }}>
+              {builds.map((b) => (
+                <div key={b.build_id} className="small" style={{ color: "var(--muted)" }}>
+                  <strong style={{ color: "var(--text)" }}>{b.version_name}</strong>
+                  {b.first_seen_at ? ` - ${new Date(b.first_seen_at).toLocaleDateString()}` : ""}
+                  {b.notes.length === 0
+                    ? " - update released, no notes"
+                    : ` - ${b.notes.length} note${b.notes.length === 1 ? "" : "s"} above`}
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
         {hiddenCount > 0 && (
           <button
             onClick={() => setExpanded((v) => !v)}

@@ -7,6 +7,7 @@
  * queued if offline and drained on reconnect (a tick is never lost in the
  * field). AUTO signals are read-only and only refresh when online.
  */
+import { persistJson, StorageFullError } from "./persistQueue";
 import { apiFetch } from "../api/client";
 import { isPermanentRejection, failureMark, CLEARED_FAILURE, type MaybeFailed } from "./queueFailure";
 
@@ -43,7 +44,10 @@ export async function loadChecklistItems(): Promise<ChecklistItem[]> {
   try {
     const r = await apiFetch<{ items: ChecklistItem[] }>("/api/config/job-checklist");
     const items = Array.isArray(r.items) ? r.items : [];
-    try { localStorage.setItem(ITEMS_KEY, JSON.stringify(items)); } catch {}
+    // The item LIST is a re-derivable cache (it comes back from the server on
+    // the next load), so a failed write here is not data loss - unlike the queue
+    // below.
+    persistJson(ITEMS_KEY, items);
     return items;
   } catch {
     return cachedItems();
@@ -83,8 +87,11 @@ function loadBag<T>(key: string): T {
     return {} as T;
   }
 }
-function saveBag(key: string, bag: unknown) {
-  try { localStorage.setItem(key, JSON.stringify(bag)); } catch {}
+/** Returns false if the bag could not be persisted (bug 5, see
+ *  lib/persistQueue.ts). The QUEUE bag holds unsent ticks; a silent failure
+ *  there loses a crew member's check behind a ticked box. */
+function saveBag(key: string, bag: unknown): boolean {
+  return persistJson(key, bag);
 }
 
 export function cachedStatus(jobUuid: string): ChecklistStatus | null {
@@ -209,7 +216,14 @@ export async function setManualCheck(
     }
     const q = loadBag<QueueBag>(QUEUE_KEY);
     q[qkey] = { job_uuid: jobUuid, item_key: itemKey, checked };
-    saveBag(QUEUE_KEY, q);
+    if (!saveBag(QUEUE_KEY, q)) {
+      // The tick could not be queued (storage full). Roll the cached tick back
+      // and throw: leaving the box ticked would show the item done forever with
+      // nothing anywhere that will ever send it - the same lie ADR 0013 exists
+      // to prevent, told by the cache instead of the queue.
+      rollbackCachedTick(jobUuid, itemKey);
+      throw new StorageFullError("this checklist tick");
+    }
     return { synced: false };
   }
 }

@@ -622,8 +622,16 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       setMatErr("Select a material"); return;
     }
 
-    // Queue the add locally - persists across refresh/offline.
-    storeEnqueueAdd(jobUuid, jobName, { name: itemName, qty, unitPrice, baseCost, source });
+    // Queue the add locally - persists across refresh/offline. Null means the
+    // queue could not be written (storage full); materials are billed, so a
+    // silent drop would bill the client for nothing. Say so and keep the form.
+    if (!storeEnqueueAdd(jobUuid, jobName, { name: itemName, qty, unitPrice, baseCost, source })) {
+      setMatErr(
+        "There is no room left on this device to save this material. Free up " +
+        "space - sync or delete old photos - and add it again.",
+      );
+      return;
+    }
     refreshMaterials();
     resetMatControls();
     setShowAddMaterial(false);

@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_db, require_admin
 from app.core.mailer import send_email
+from app.core.name_sort import surname_key
 from app.core.payroll_period import set_last_finalized_period
 from app.core.time_utils import (
     MOUNTAIN_TZ,
@@ -81,6 +82,8 @@ from app.schemas.payroll import (
     JobCorrectionUpsert,
     PayrollCorrectionUpsert,
     PayrollFinalizeRequest,
+    ReimbursementDecision,
+    ReportWaiverRequest,
 )
 
 router = APIRouter(prefix="/api/admin/payroll", tags=["payroll"])
@@ -433,24 +436,28 @@ def _reimbursements(
     back to anybody. Mileage carries no rate in this app, so miles are reported
     and the dollar figure stays the admin's to compute.
     """
-    # Everything EXCEPT what was explicitly rejected.
+    # PAY UNLESS DECLINED. Everything except what an admin explicitly rejected
+    # counts toward the totals.
     #
-    # This used to require status == "approved". Reimbursement.status defaults to
-    # "submitted" and there is no approval control anywhere in the app, so that
+    # This once required status == "approved". Reimbursement.status defaults to
+    # "submitted" and there was no approval control anywhere in the app, so that
     # filter could never match: payroll reported $0 and 0 miles for every
-    # employee, permanently, while crew were filing real expenses. A zero that
-    # means "nothing passed an unreachable gate" is indistinguishable from a zero
-    # that means "nothing was submitted", which is why it went unnoticed.
+    # employee, permanently, while crew filed real expenses. A zero meaning
+    # "nothing passed an unreachable gate" looks exactly like a zero meaning
+    # "nothing was submitted", which is why it went unnoticed for so long.
     #
-    # If an approval workflow is ever built, gate here again - but on a status
-    # something can actually set.
-    rows = (
-        db.query(Reimbursement)
-        .filter(Reimbursement.status != "rejected")
-        .all()
-    )
+    # There IS an approval control now, and the direction is still pay-unless-
+    # declined rather than pay-only-if-approved. Deliberate: a forgotten approval
+    # must never silently underpay somebody. `unreviewed` below surfaces anything
+    # still awaiting a decision so nothing slips by unseen, and finalize warns on
+    # it - the safe default plus a visible nag, rather than a quiet zero.
+    #
+    # Rejected rows are FETCHED but not summed. The admin has to be able to see a
+    # decline to undo it; filtering them out of the query made a mis-click
+    # unrecoverable from the payroll screen.
+    rows = db.query(Reimbursement).all()
     out: Dict[int, Dict[str, Any]] = defaultdict(
-        lambda: {"amount": 0.0, "miles": 0, "items": []}
+        lambda: {"amount": 0.0, "miles": 0, "items": [], "unreviewed": 0}
     )
     for r in rows:
         uid = r.user_id
@@ -461,19 +468,32 @@ def _reimbursements(
         )
         if d is None or not (start <= d <= end):
             continue
+        status = (r.status or "submitted").strip() or "submitted"
+        counts = status != "rejected"
+        if status == "submitted":
+            out[uid]["unreviewed"] += 1
+        base = {
+            "uuid": r.reimbursement_uuid,
+            "date": d.isoformat(),
+            "status": status,
+            "notes": r.approval_notes or "",
+            "approver": r.approver_name or "",
+        }
         if r.type == "mileage":
             if r.odometer_start is not None and r.odometer_end is not None:
                 miles = max(0, int(r.odometer_end) - int(r.odometer_start))
-                out[uid]["miles"] += miles
+                if counts:
+                    out[uid]["miles"] += miles
                 out[uid]["items"].append(
-                    {"date": d.isoformat(), "kind": "mileage",
+                    {**base, "kind": "mileage",
                      "label": f"{miles} mi", "amount": None, "miles": miles}
                 )
         elif r.payment_method == "personal" and r.amount is not None:
             amt = float(r.amount)
-            out[uid]["amount"] += amt
+            if counts:
+                out[uid]["amount"] += amt
             out[uid]["items"].append(
-                {"date": d.isoformat(), "kind": "expense",
+                {**base, "kind": "expense",
                  "label": (r.vendor or r.category or "Expense"),
                  "amount": round(amt, 2), "miles": None}
             )
@@ -683,6 +703,10 @@ def _employee_summary(
             key=lambda x: (x["date"], x["source"], x["source_label"]),
         ),
         "reimbursement_items": reimb.get("items", []),
+        # How many of this person's claims nobody has approved or declined yet.
+        # They ARE being paid (pay-unless-declined), so this is a nag, not a
+        # blocker - it exists so "nobody looked" is visible instead of silent.
+        "reimbursements_unreviewed": reimb.get("unreviewed", 0),
         "correction_count": sum(1 for r in rows if r.get("correction_id")),
     }
 
@@ -723,6 +747,16 @@ def _report_less_jobs(db: Session, start: date, end: date) -> List[Dict[str, str
         .filter(JobReport.job_uuid.in_(list(event_uuids))).all() if u
     }
     missing = event_uuids - have_report
+    # Jobs an admin has explicitly waived are not pending anything. Applied here
+    # rather than at the gate so the waived job disappears from every count that
+    # reads this - jobs_total, the pending list and the finalize block - instead
+    # of being subtracted in one place and forgotten in another.
+    waived = {
+        u for (u,) in db.query(AdminEntryStatus.job_uuid)
+        .filter(AdminEntryStatus.job_uuid.in_(list(missing)),
+                AdminEntryStatus.report_waived.is_(True)).all() if u
+    }
+    missing = missing - waived
     if not missing:
         return []
     earliest = {
@@ -800,7 +834,10 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
         if uid not in by_user and uid in roster:
             employees.append(_employee_summary(roster[uid], [], start, end, r, rates))
 
-    employees.sort(key=lambda e: (e["name"] or "").lower())
+    # By LAST name. Sorting on the full string put everyone in first-name order,
+    # which is not how anyone looks a person up on a payroll run. Mirrors the
+    # admin roster, which uses the same rule in frontend/src/lib/nameSort.ts.
+    employees.sort(key=lambda e: surname_key(e.get("name"), e.get("email")))
 
     # Review gate (ADR 0032): the jobs whose hours feed this period, and which of
     # them the admin has reviewed + initialed on the Job Summary. A job is
@@ -812,9 +849,29 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
             period_jobs.setdefault(r["source_key"], r.get("source_label") or "")
     reviewed: set = set()
     if period_jobs:
+        # A WAIVER ROW IS NOT A REVIEW.
+        #
+        # This set used to be "has an AdminEntryStatus row at all". The report
+        # waiver creates such a row for a job that had none (entered_by
+        # "(waived)", attestation left unset), so waiving a report-less job would
+        # ALSO have exempted it from the initialing gate the moment somebody
+        # filed a report for it later and it entered period_jobs. The gate exists
+        # to stop payroll running over unreviewed work; a waiver says only "no
+        # report is coming", never "I checked this".
+        #
+        # Excluding exactly `report_waived AND validated IS NULL` - a row created
+        # by the waiver and never initialed since. Legacy rows (both null, from
+        # before ADR 0032's attestation existed) still count as reviewed, so this
+        # does not retroactively reopen old periods.
         reviewed = {
             u for (u,) in db.query(AdminEntryStatus.job_uuid)
-            .filter(AdminEntryStatus.job_uuid.in_(list(period_jobs))).all()
+            .filter(
+                AdminEntryStatus.job_uuid.in_(list(period_jobs)),
+                ~(
+                    (AdminEntryStatus.report_waived.is_(True))
+                    & (AdminEntryStatus.validated.is_(None))
+                ),
+            ).all()
         }
     period_pending = [
         {"job_uuid": u, "job_name": n, "reason": "not initialed"}
@@ -1444,6 +1501,18 @@ def finalize_period(
             ),
         )
 
+    # Un-reviewed reimbursements WARN, they do not block. Payroll pays anything
+    # not explicitly declined, so an unreviewed claim is already being paid -
+    # blocking here would stop payroll over money that is going out either way.
+    # But finishing a period without anyone having looked at the claims is worth
+    # saying out loud, so it comes back in the response.
+    summary_for_warn = _build_summary(db, s, e)
+    unreviewed = [
+        {"name": emp["name"], "count": emp.get("reimbursements_unreviewed", 0)}
+        for emp in summary_for_warn["employees"]
+        if emp.get("reimbursements_unreviewed", 0)
+    ]
+
     # The mailer falls back to printing to stdout when Postmark is unconfigured
     # (that fallback is what lets the backend boot without secrets). It does NOT
     # raise, so without this guard finalize would report every send as a success
@@ -1530,4 +1599,152 @@ def finalize_period(
         "sent": sent,
         "suppressed": suppressed,
         "failed": failed,
+        # Advisory only. See the note where this is built: these claims are being
+        # paid, so this is "nobody looked", not "something is wrong".
+        "reimbursements_unreviewed": unreviewed,
+    }
+
+
+# ── Reimbursement approve / decline ──────────────────────────────────────────
+
+@router.post("/reimbursement/{reimbursement_uuid}/decision")
+def decide_reimbursement(
+    reimbursement_uuid: str,
+    body: ReimbursementDecision,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Approve or decline one claim, and tell the crew member when it is declined.
+
+    Payroll pays everything except what is explicitly declined (see
+    `_reimbursements_for_period`), so approving is really "reviewed, and it
+    stands" while declining is the action that changes money. Both are recorded
+    so the payroll screen can show who decided and when.
+
+    The decline email is best-effort and its failure does NOT roll back the
+    decision. The alternative - refusing to record a decline because the crew
+    member's mailbox bounced - would leave a claim being paid that an admin has
+    already judged wrong. The response says whether the mail went, so the admin
+    can follow up by hand rather than assume.
+    """
+    row = (
+        db.query(Reimbursement)
+        .filter(Reimbursement.reimbursement_uuid == reimbursement_uuid)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Reimbursement not found")
+
+    previous = (row.status or "submitted").strip() or "submitted"
+    row.status = body.status
+    row.approval_notes = body.note or None
+    if body.status == "submitted":
+        # Back to undecided: clear the decision trail rather than leaving a
+        # stale approver on a claim nobody has currently decided.
+        row.approver_id = None
+        row.approver_name = None
+        row.approved_at = None
+    else:
+        row.approver_id = current_user.id
+        row.approver_name = current_user.name or current_user.email
+        row.approved_at = datetime.utcnow()
+    db.commit()
+
+    emailed = False
+    email_error: Optional[str] = None
+    # Only on a NEW decline. Re-saving a note on an already-declined claim must
+    # not re-mail the crew member about a decision they were already told about.
+    if body.status == "rejected" and previous != "rejected":
+        user = db.query(User).filter(User.id == row.user_id).first() if row.user_id else None
+        if not user or not (user.email or "").strip():
+            email_error = "no email address on file for this crew member"
+        else:
+            what = (
+                f"{row.vendor or row.category or 'expense'}"
+                f"{f' for ${float(row.amount):.2f}' if row.amount is not None else ''}"
+                if row.type != "mileage"
+                else "mileage claim"
+            )
+            when = row.expense_date or (
+                row.created_at.date().isoformat() if row.created_at else "an earlier date"
+            )
+            text = (
+                f"Hi {user.name or ''},\n\n"
+                f"Your {what} dated {when} was not approved for reimbursement, so "
+                f"it will not appear on your pay.\n\n"
+                + (f"Reason given: {body.note}\n\n" if body.note else "")
+                + "If you think this is wrong, reply to this email or speak to the "
+                "office - nothing has been deleted and it can be reinstated.\n"
+            )
+            try:
+                send_email(
+                    to_email=user.email,
+                    subject="A reimbursement claim was not approved",
+                    text=text,
+                )
+                emailed = True
+            except Exception as exc:  # noqa: BLE001 - see docstring
+                email_error = str(exc)
+
+    return {
+        "ok": True,
+        "uuid": reimbursement_uuid,
+        "status": row.status,
+        "approver": row.approver_name or "",
+        "emailed": emailed,
+        "email_error": email_error,
+    }
+
+
+# ── Job-report waiver ────────────────────────────────────────────────────────
+
+@router.post("/job/{job_uuid}/report-waiver")
+def set_report_waiver(
+    job_uuid: str,
+    body: ReportWaiverRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Waive the job-report requirement for one job so payroll can finalize.
+
+    The gate exists to stop payroll running over unreviewed work, and it is
+    right to keep it. But some jobs never get a report by design - off-job hours
+    logged against a manual job, an unpaid drive leg - and those blocked the
+    period indefinitely waiting for something nobody was going to file.
+
+    Per job and explicit, never a global switch: a blanket "ignore report-less
+    jobs" would retire the gate rather than handle the exception. The waiver
+    records who granted it and why, so a period that finalized over a missing
+    report can be explained months later.
+    """
+    row = db.query(AdminEntryStatus).filter(AdminEntryStatus.job_uuid == job_uuid).first()
+    if row is None:
+        if not body.waived:
+            return {"ok": True, "job_uuid": job_uuid, "waived": False}
+        # A report-less job usually has no entry-status row yet, so create one.
+        # entered_by / entered_on are NOT NULL and are the admin's attestation
+        # fields; a waiver is not an attestation, so they are marked as such
+        # rather than borrowing the admin's initials and implying a review.
+        row = AdminEntryStatus(
+            job_uuid=job_uuid,
+            entered_by="(waived)",
+            entered_on=datetime.now(MOUNTAIN_TZ).date().isoformat(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(row)
+
+    row.report_waived = bool(body.waived)
+    row.report_waived_reason = (body.reason or None) if body.waived else None
+    row.report_waived_by_name = (
+        (current_user.name or current_user.email) if body.waived else None
+    )
+    row.report_waived_at = datetime.utcnow() if body.waived else None
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    return {
+        "ok": True,
+        "job_uuid": job_uuid,
+        "waived": bool(row.report_waived),
+        "reason": row.report_waived_reason or "",
+        "by": row.report_waived_by_name or "",
     }

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
 import { getCompanyInfoCached, setCompanyInfoCache, type CompanyInfo } from "../lib/companyInfo";
+import { compareRoster } from "../lib/nameSort";
 import { useJobTypes } from "../lib/jobTypesStore";
 import { newClaimNumber } from "../lib/incidentStore";
 
@@ -640,6 +641,19 @@ function IncidentsAdminTab() {
 function EmployeesTab() {
   const nav = useNavigate();
   const [users, setUsers] = useState<AdminUser[]>([]);
+  // Roster order: active first, alphabetically by LAST name, then inactive in the
+  // same order. The table used to render `users` in whatever order the API
+  // returned, so the list of people who actually work here was interrupted by
+  // people who do not, and nobody could find a surname. Sorted here rather than
+  // server-side because /api/admin/users is shared with other callers that do
+  // not want this ordering imposed on them. Same surname rule payroll uses -
+  // see lib/nameSort.ts, mirrored in app/core/name_sort.py.
+  const rosterUsers = useMemo(() => [...users].sort(compareRoster), [users]);
+  // Which roster card is open on mobile. One at a time: the expanded card is
+  // tall (eight action controls), so leaving several open would recreate the
+  // scrolling problem this replaces. Ignored on desktop, where every cell is
+  // always visible.
+  const [expandedRosterId, setExpandedRosterId] = useState<number | null>(null);
   const [tags, setTags] = useState<EmployeeTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -792,9 +806,44 @@ function EmployeesTab() {
           .roster-btn.ok:hover:not(:disabled) { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: var(--ok); }
           /* Phase C data-table: row hover is a background shift only (no border/scale/shadow). */
           .roster-table tbody tr:hover { background: var(--card2); }
+          .roster-table { min-width: 720px; }
+          /* The name cell is a toggle only on mobile; on desktop it is plain text
+             in a plain cell, so the button carries no button styling. */
+          .roster-name { background: none; border: 0; padding: 0; font: inherit; color: inherit;
+                         text-align: left; width: 100%; cursor: default; }
+          .roster-caret { display: none; }
+
+          /* ── Mobile: one card per person, fields hidden until the name is tapped ──
+             The table was 720px wide inside a horizontal scroller, so on a phone
+             an admin had to scroll sideways to see role, status or any action.
+             Same markup and the same handlers - only the presentation changes -
+             because the actions cell alone is eight controls and a duplicate
+             mobile tree would be two things to keep in step. */
+          @media (max-width: 760px) {
+            .roster-table { min-width: 0; }
+            .roster-table thead { display: none; }
+            .roster-table, .roster-table tbody, .roster-table tr, .roster-table td { display: block; width: 100%; }
+            .roster-table tr { border: 1px solid var(--border) !important; border-radius: 12px; margin-bottom: 8px; }
+            .roster-table td { padding: 8px 12px !important; border: 0; }
+            /* Collapsed: the name row only. Everything else waits for a tap. */
+            .roster-table tr:not(.expanded) td:not(.roster-cell-name) { display: none; }
+            .roster-table td.roster-cell-name { font-weight: 700; font-size: 15px; }
+            .roster-name { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+            .roster-caret { display: inline-block; color: var(--muted); font-size: 12px; transition: transform .15s; }
+            .roster-table tr.expanded .roster-caret { transform: rotate(90deg); }
+            /* Label each field, since the header row is gone. */
+            .roster-table tr.expanded td:not(.roster-cell-name)::before {
+              content: attr(data-label);
+              display: block; font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+              color: var(--muted); font-weight: 700; margin-bottom: 4px;
+            }
+            .roster-table tr.expanded td:not(.roster-cell-name) { border-top: 1px solid var(--border); }
+            /* Actions wrap instead of running off the side of the screen. */
+            .roster-table td .row { flex-wrap: wrap; }
+          }
         `}</style>
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-        <table className="roster-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+        <table className="roster-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--card2)" }}>
               {["Name", "Contacts", "Role", "Status", "Tags", "Actions"].map((h) => (
@@ -803,16 +852,31 @@ function EmployeesTab() {
             </tr>
           </thead>
           <tbody>
-            {users.map((u, i) => (
+            {rosterUsers.map((u, i) => (
               <tr
                 key={u.id}
+                className={expandedRosterId === u.id ? "expanded" : undefined}
                 style={{
-                  borderBottom: i < users.length - 1 ? "1px solid var(--border)" : "none",
+                  borderBottom: i < rosterUsers.length - 1 ? "1px solid var(--border)" : "none",
                   opacity: u.is_active ? 1 : 0.45,
                 }}
               >
-                <td style={{ padding: "10px 14px" }}>{u.name || <span style={{ color: "var(--muted)" }}>-</span>}</td>
-                <td style={{ padding: "10px 14px" }}>
+                <td className="roster-cell-name" style={{ padding: "10px 14px" }}>
+                  {/* A button only so it is keyboard- and screen-reader-reachable on
+                      mobile, where it is the disclosure control. On desktop the CSS
+                      strips every button affordance and the caret is hidden, so it
+                      reads as the plain name cell it has always been. */}
+                  <button
+                    type="button"
+                    className="roster-name"
+                    aria-expanded={expandedRosterId === u.id}
+                    onClick={() => setExpandedRosterId((cur) => (cur === u.id ? null : u.id))}
+                  >
+                    <span>{u.name || <span style={{ color: "var(--muted)" }}>-</span>}</span>
+                    <span className="roster-caret" aria-hidden="true">▶</span>
+                  </button>
+                </td>
+                <td data-label="Contacts" style={{ padding: "10px 14px" }}>
                   {/* Contacts: email + phone as compact clickable pills so the
                       roster reads as one "Contacts" column instead of two rows. */}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
@@ -842,13 +906,13 @@ function EmployeesTab() {
                     )}
                   </div>
                 </td>
-                <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
-                <td style={{ padding: "10px 14px" }}>
+                <td data-label="Role" style={{ padding: "10px 14px", textTransform: "capitalize" }}>{u.role === "crew_lead" ? "Crew lead" : u.role}</td>
+                <td data-label="Status" style={{ padding: "10px 14px" }}>
                   <span className="statusDot" style={{ ["--dot" as any]: u.is_active ? "var(--ok)" : "var(--danger)", fontSize: 12 }}>
                     {u.is_active ? "Active" : "Disabled"}
                   </span>
                 </td>
-                <td style={{ padding: "10px 14px" }}>
+                <td data-label="Tags" style={{ padding: "10px 14px" }}>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                     {u.tag_ids.length === 0 ? (
                       <span className="small" style={{ color: "var(--muted)" }}>-</span>
@@ -893,7 +957,7 @@ function EmployeesTab() {
                     </button>
                   </div>
                 </td>
-                <td style={{ padding: "10px 14px" }}>
+                <td data-label="Actions" style={{ padding: "10px 14px" }}>
                   <div className="row" style={{ gap: 6 }}>
                     <button
                       className={`roster-btn ${u.is_active ? "danger" : "ok"}`}
@@ -4815,12 +4879,17 @@ type BackfillRow = {
   last_error?: string | null;
   last_error_at?: string | null;
 };
+type ExportFailure = { fn: string; error: string; at: string };
+
 type BackfillAudit = {
   spreadsheet_id: string;
   connected: boolean;
   error: string | null;
   total_missing?: number;
   results: BackfillRow[];
+  /** Actual exceptions from the background export pool, newest first. In-memory
+   *  and bounded, so an empty list does not prove nothing failed. */
+  recent_failures?: ExportFailure[];
 };
 
 function SheetBackfillCard() {
@@ -4840,6 +4909,35 @@ function SheetBackfillCard() {
     } finally { setBusy(false); }
   }
 
+  // One button for the whole backlog. Draining sync-by-sync is the expensive
+  // way to do it: the per-sync endpoint re-runs the FULL audit on every call, so
+  // clearing five syncs one at a time costs five audits on top of the exports.
+  // This audits once and spends a single budget across every sync, on the same
+  // code path the auto-reconciler already uses.
+  async function drainAll() {
+    setSending("__all__"); setErr(null); setNote(null);
+    try {
+      const res = await apiFetch<{
+        queued: number; per_sync: Record<string, number>; remaining_missing: number;
+      }>("/api/admin/system-check/sheet-backfill-all", { method: "POST" });
+      const syncs = Object.keys(res.per_sync || {}).length;
+      setNote(
+        res.queued
+          ? `Queued ${res.queued} record(s) across ${syncs} sync(s)` +
+            (res.remaining_missing > res.queued
+              ? `. ${res.remaining_missing - res.queued} still to go - run it again once this batch lands.`
+              : ".") +
+            " Exports run in the background; re-run the audit in a minute to confirm."
+          : "Nothing to queue - everything the audit can see is already in the Sheet."
+      );
+    } catch (e: any) {
+      // A 429 here is the throttle, not a failure. Its message already explains
+      // the wait, so show it as guidance rather than in red.
+      if (e instanceof ApiError && e.status === 429) setNote(e.message);
+      else setErr(e instanceof ApiError ? e.message : "Drain failed");
+    } finally { setSending(null); }
+  }
+
   async function resend(row: BackfillRow) {
     setSending(row.key); setErr(null); setNote(null);
     try {
@@ -4854,7 +4952,8 @@ function SheetBackfillCard() {
         ". Exports run in the background; re-run the audit in a minute to confirm.",
       );
     } catch (e: any) {
-      setErr(e instanceof ApiError ? e.message : "Re-export failed");
+      if (e instanceof ApiError && e.status === 429) setNote(e.message);
+      else setErr(e instanceof ApiError ? e.message : "Re-export failed");
     } finally { setSending(null); }
   }
 
@@ -4870,9 +4969,30 @@ function SheetBackfillCard() {
         Nothing is lost when this happens: the app is the system of record and the
         Sheet is a mirror. Read-only until you press Re-send.
       </div>
-      <button onClick={run} disabled={busy} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>
-        {busy ? "Comparing…" : "Run audit"}
-      </button>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={run} disabled={busy || !!sending} className="btnPrimary"
+                style={{ padding: "6px 14px", fontSize: 13 }}>
+          {busy ? "Comparing…" : "Run audit"}
+        </button>
+        {/* Disabled while ANY drain is in flight, but the button is not the real
+            guard - the server rejects a second batch with a 429 while the last
+            one is still draining. Two admins, or one admin with two tabs, would
+            walk straight past a disabled button. */}
+        {data?.connected && (data.total_missing ?? 0) > 0 && (
+          <button onClick={drainAll} disabled={busy || !!sending}
+                  style={{ padding: "6px 14px", fontSize: 13 }}>
+            {sending === "__all__" ? "Queuing…" : `Drain all (${data.total_missing})`}
+          </button>
+        )}
+      </div>
+      {data?.connected && (data.total_missing ?? 0) > 0 && (
+        <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+          Drain all is the cheaper option: it audits once and spreads one budget
+          across every sync. Re-sending them one at a time re-runs the whole audit
+          each time. Either way the exports run in the background, and Google caps
+          reads at 60 a minute, so a big backlog takes a few passes.
+        </div>
+      )}
 
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
       {note && <div className="small" style={{ color: "var(--ok)", marginTop: 8 }}>{note}</div>}
@@ -4887,6 +5007,36 @@ function SheetBackfillCard() {
                 ? `${data.total_missing} record(s) missing from the Sheet`
                 : "✓ Every record is in the Sheet"}
           </div>
+
+          {/* Why a record will not drain. The per-sync `failing` flag cannot
+              answer this: it compares the sync's last error to its last
+              success, so a sync where most records export fine reads as
+              healthy while specific records throw every single time. That is
+              exactly the case where Re-send looks like it does nothing. These
+              are the real exceptions from the export pool. */}
+          {data.connected && (data.recent_failures?.length ?? 0) > 0 && (
+            <div className="small" style={{
+              marginBottom: 10, padding: 8, borderRadius: 8,
+              border: "1px solid var(--danger)", color: "var(--danger)",
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                Recent export failures ({data.recent_failures!.length})
+              </div>
+              <div style={{ color: "var(--muted)", marginBottom: 6 }}>
+                These are why records below are not draining. A sync can look
+                healthy overall while specific records fail every time.
+              </div>
+              {data.recent_failures!.slice(0, 8).map((f, i) => (
+                <div key={i} style={{ marginBottom: 3 }}>
+                  <span className="mono">{f.fn}</span>: {f.error}
+                </div>
+              ))}
+              <div style={{ color: "var(--muted)", marginTop: 6 }}>
+                Kept in memory only, so this clears when the server restarts.
+                An empty list does not prove nothing failed.
+              </div>
+            </div>
+          )}
 
           {data.connected && withMissing.length > 0 && (
             <div style={{ overflowX: "auto" }}>
@@ -6624,9 +6774,20 @@ type PatchNoteRecord = {
   id: number;
   title: string;
   body: string;
+  /** The build this note describes, if linked. */
+  build_id: string | null;
   created_by_name: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type AppBuildRow = {
+  kind: string;
+  build_id: string;
+  version_name: string;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  notes: Array<{ id: number; title: string }>;
 };
 
 const NOTES_TAB_INITIAL = 3;
@@ -6641,9 +6802,17 @@ function NotesTab() {
   const [body, setBody] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // Builds a crew device has actually reported, newest first, so a note can be
+  // tied to the build it describes. Non-fatal if it fails: the note form still
+  // works, it just cannot offer a link.
+  const [builds, setBuilds] = useState<AppBuildRow[]>([]);
+  const [buildId, setBuildId] = useState("");
 
   function load() {
     setLoading(true);
+    apiFetch<{ builds: AppBuildRow[] }>("/api/patch-notes/history")
+      .then((h) => setBuilds(h.builds || []))
+      .catch(() => { /* non-fatal - see above */ });
     apiFetch<PatchNoteRecord[]>("/api/patch-notes")
       .then(setNotes)
       .catch((e: any) => setErr(e instanceof ApiError ? e.message : "Failed to load"))
@@ -6656,12 +6825,14 @@ function NotesTab() {
     setEditingId(n.id);
     setTitle(n.title);
     setBody(n.body);
+    setBuildId(n.build_id || "");
   }
 
   function clearForm() {
     setEditingId(null);
     setTitle("");
     setBody("");
+    setBuildId("");
   }
 
   async function save() {
@@ -6675,12 +6846,14 @@ function NotesTab() {
       if (editingId == null) {
         await apiFetch<PatchNoteRecord>("/api/patch-notes", {
           method: "POST",
-          body: JSON.stringify({ title: title.trim(), body: body.trim() }),
+          body: JSON.stringify({ title: title.trim(), body: body.trim(), build_id: buildId || null }),
         });
       } else {
+        // "" is sent deliberately, not omitted: it is how the server is told to
+        // UNLINK. Omitting the field means "leave the link alone".
         await apiFetch<PatchNoteRecord>(`/api/patch-notes/${editingId}`, {
           method: "PATCH",
-          body: JSON.stringify({ title: title.trim(), body: body.trim() }),
+          body: JSON.stringify({ title: title.trim(), body: body.trim(), build_id: buildId }),
         });
       }
       clearForm();
@@ -6723,6 +6896,31 @@ function NotesTab() {
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
+          {/* Linking a note to a build is what turns patch notes into a version
+              history: the crew see "Brave Otter - here is what changed" instead
+              of a dated announcement floating free of any release. Optional, so
+              a note can still be written before the build is out. */}
+          <label className="col" style={{ gap: 3 }}>
+            <span className="small" style={{ color: "var(--muted)" }}>
+              Build this note describes (optional)
+            </span>
+            <select value={buildId} onChange={(e) => setBuildId(e.target.value)}>
+              <option value="">Not linked to a build</option>
+              {builds.map((b) => (
+                <option key={b.build_id} value={b.build_id}>
+                  {b.version_name}
+                  {b.first_seen_at ? ` - ${new Date(b.first_seen_at).toLocaleDateString()}` : ""}
+                  {b.notes.length ? ` (${b.notes.length} note${b.notes.length === 1 ? "" : "s"})` : ""}
+                </option>
+              ))}
+            </select>
+            {builds.length === 0 && (
+              <span className="small" style={{ color: "var(--muted)" }}>
+                No builds recorded yet. A build appears here once a crew device
+                has loaded it.
+              </span>
+            )}
+          </label>
           {err && <div className="small" style={{ color: "var(--danger)" }}>{err}</div>}
           <div className="row" style={{ gap: 8 }}>
             <button className="btnPrimary" onClick={save} disabled={busy}>
@@ -7297,7 +7495,10 @@ function JobHourCorrections({
   refreshSignal,
 }: {
   jobUuid: string;
-  employees: Array<{ user_id: number; name: string }>;
+  /** `onJob` marks the people whose hours are on this job's report. They are
+   *  grouped first in the picker; the rest of the roster stays reachable
+   *  underneath. */
+  employees: Array<{ user_id: number; name: string; onJob?: boolean }>;
   refreshSignal: number;
 }) {
   const [resp, setResp] = useState<JobCorrectionsResp | null>(null);
@@ -7476,9 +7677,27 @@ function JobHourCorrections({
                 disabled={editingId !== null}
               >
                 <option value="">Pick…</option>
-                {employees.map((emp) => (
-                  <option key={emp.user_id} value={emp.user_id}>{emp.name}</option>
-                ))}
+                {/* Grouped, not filtered. Showing only the job's crew is what
+                    made this dropdown empty whenever no hours entry resolved to
+                    a user_id - and a name that did not match the roster is
+                    exactly when a correction is needed. Showing the whole
+                    roster flat read as an undifferentiated dump. Two labelled
+                    groups keep the common case first and the awkward case
+                    possible. */}
+                {employees.some((e) => e.onJob) && (
+                  <optgroup label="On this job">
+                    {employees.filter((e) => e.onJob).map((emp) => (
+                      <option key={emp.user_id} value={emp.user_id}>{emp.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {employees.some((e) => !e.onJob) && (
+                  <optgroup label="Rest of roster">
+                    {employees.filter((e) => !e.onJob).map((emp) => (
+                      <option key={emp.user_id} value={emp.user_id}>{emp.name}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </label>
             <label className="col" style={{ gap: 3 }}>
@@ -7768,6 +7987,9 @@ function BillCorrectionEditor({
 }
 
 function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null; onOpened?: () => void }) {
+  // Used only to keep `entered_by` populated in the request below. See the note
+  // there: dropping the field outright is not safe across a deploy skew.
+  const { user: currentAdmin } = useAuth();
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
   const [candidates, setCandidates] = useState<JobCandidate[] | null>(null);
@@ -7797,7 +8019,6 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
   // Admin data-entry checkpoint local state for the inputs on the
   // entry-status card; falls back to today's date so the typical
   // "I just entered this" path is one tap.
-  const [entryInitials, setEntryInitials] = useState("");
   const [entryDate, setEntryDate] = useState(() => mountainDateYYYYMMDD());
   const [entrySaving, setEntrySaving] = useState(false);
   const [entrySaved, setEntrySaved] = useState(false);
@@ -7850,8 +8071,10 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
       const data = await apiFetch<JobSummary>(`/api/admin/job-summary/${encodeURIComponent(jobUuid)}`);
       setSummary(data);
       // Pre-fill the entry-status form. Existing entries hydrate verbatim;
-      // new jobs default to today's Mountain date and an empty initials box.
-      setEntryInitials(data.entry_status?.entered_by ?? "");
+      // new jobs default to today's Mountain date. `entered_by` is no longer a
+      // form field (ADR 0037) - it is still READ below to show who reviewed the
+      // job, which for older rows is their typed initials and for newer ones
+      // their name.
       setEntryDate(data.entry_status?.entered_on || mountainDateYYYYMMDD());
       setEntryValidated(!!data.entry_status?.validated);
       setEntryCorrected(!!data.entry_status?.corrected);
@@ -7868,17 +8091,15 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
 
   async function saveEntryStatus() {
     if (!summary) return;
-    const initials = entryInitials.trim();
-    if (!initials) {
-      setEntryError("Initials are required.");
-      return;
-    }
+    // No initials to collect: the server takes the reviewer from the
+    // authenticated account (ADR 0037). The three checks below are the
+    // attestation and are still required.
     if (!entryDate) {
       setEntryError("Date is required.");
       return;
     }
     if (!(entryValidated && entryCorrected && entryConfirmedSheet)) {
-      setEntryError("Confirm all three checks before initialing.");
+      setEntryError("Confirm all three checks before marking this job reviewed.");
       return;
     }
     setEntrySaving(true);
@@ -7894,7 +8115,16 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
         {
           method: "PUT",
           body: JSON.stringify({
-            entered_by: initials,
+            // STILL SENT, even though the server now derives the reviewer from
+            // the authenticated account (ADR 0037).
+            //
+            // The frontend and backend deploy independently - Vercel and Render
+            // - and the frontend usually wins the race. A client that stopped
+            // sending this reached an older backend that still required it and
+            // got a 422, which surfaced to the admin as "[object Object]".
+            // Sending the same value the server would derive is harmless once
+            // both sides are up, and keeps the older one working meanwhile.
+            entered_by: currentAdmin?.name || currentAdmin?.email || "",
             entered_on: entryDate,
             validated: entryValidated,
             corrected: entryCorrected,
@@ -8010,6 +8240,12 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
       ta?.select();
     }
   }
+  // Total materials charge for the job, summed across submissions. Shown as one
+  // figure in the main panel; the per-item breakdown stays in the Materials
+  // section rather than being repeated at the top.
+  const materialsCharge = (summary?.materials ?? []).reduce(
+    (s, m) => s + (Number(m.total) || 0), 0,
+  );
   const billTotal = summary?.bill
     ? summary.bill.items.reduce((s, it) => {
         const qty = it.qty || 0;
@@ -8142,6 +8378,64 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
               {" "}{summary.photos.length} photo{summary.photos.length === 1 ? "" : "s"} ·
               {" "}{summary.admin_notes.length} admin note{summary.admin_notes.length === 1 ? "" : "s"}
             </div>
+
+            {/* Billing, up here in the main panel rather than only in the Bill
+                card further down. This is the number the office wants first when
+                they open a closed job, and it was previously several sections
+                away.
+
+                Materials appear as ONE total charge, not a list of every item
+                used. The itemised list still exists in the Materials section
+                below for anyone who needs it; repeating it here just buried the
+                figure that matters.
+
+                The two numbers are shown side by side and NOT added together on
+                purpose. Whether the bill already includes a materials line is a
+                property of how that bill was built, and silently summing them
+                would over-count every job whose invoice already carries one.
+                Showing both lets the office see at a glance if one is missing. */}
+            {(summary.bill || materialsCharge > 0) && (
+              <div className="row wrap" style={{ gap: 16, marginTop: 10, alignItems: "flex-start" }}>
+                <div className="col" style={{ gap: 2 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Bill total</span>
+                  <span style={{ fontWeight: 800, fontSize: 18 }}>
+                    {summary.bill ? `$${billTotal.toFixed(2)}` : "-"}
+                  </span>
+                  {summary.bill && (
+                    <span className="small" style={{ color: "var(--muted)" }}>
+                      {summary.bill.items.length} line item{summary.bill.items.length === 1 ? "" : "s"}
+                      {summary.bill.global_discount ? ` · ${summary.bill.global_discount}% off` : ""}
+                    </span>
+                  )}
+                </div>
+                <div className="col" style={{ gap: 2 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Materials charged</span>
+                  <span style={{ fontWeight: 800, fontSize: 18 }}>${materialsCharge.toFixed(2)}</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>
+                    {summary.materials.length} submission{summary.materials.length === 1 ? "" : "s"}
+                    {" "}(itemised below)
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {summary.bill && summary.bill.items.length > 0 && (
+              <div className="col" style={{ gap: 2, marginTop: 8 }}>
+                {summary.bill.items.map((it, i) => {
+                  const qty = it.qty ?? 1;
+                  const rate = Number(it.rate ?? 0);
+                  const line = qty * rate * (1 - (it.discount || 0) / 100);
+                  return (
+                    <div key={i} className="small" style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                      <span style={{ color: "var(--muted)" }}>
+                        {qty} × {it.label ?? ""}{it.discount ? ` (-${it.discount}%)` : ""}
+                      </span>
+                      <span className="mono">${line.toFixed(2)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Sticky section nav - jump anywhere in the job's data without scrolling
@@ -8416,14 +8710,26 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
                dropdown held nothing but "Pick...". You could not correct hours
                precisely when the name was wrong, which is exactly when a
                correction is needed. */
-            employees={Array.from(
-              new Map<number, { user_id: number; name: string }>([
-                ...(summary.job_report?.employee_hours ?? [])
-                  .filter((e) => typeof e.user_id === "number")
-                  .map((e) => [e.user_id as number, { user_id: e.user_id as number, name: e.name || "-" }] as const),
-                ...rosterForCorrections.map((u) => [u.user_id, u] as const),
-              ]).values(),
-            )}
+            employees={(() => {
+              // Built by hand rather than with `new Map([...crew, ...roster])`:
+              // the Map constructor lets a LATER entry overwrite an earlier one,
+              // so the roster copy would replace the crew copy and every person
+              // would lose their `onJob` flag. Insert crew first, then add only
+              // roster members not already present.
+              const out: Array<{ user_id: number; name: string; onJob?: boolean }> = [];
+              const seen = new Set<number>();
+              for (const e of summary.job_report?.employee_hours ?? []) {
+                if (typeof e.user_id !== "number" || seen.has(e.user_id)) continue;
+                seen.add(e.user_id);
+                out.push({ user_id: e.user_id, name: e.name || "-", onJob: true });
+              }
+              for (const u of rosterForCorrections) {
+                if (seen.has(u.user_id)) continue;
+                seen.add(u.user_id);
+                out.push({ ...u, onJob: false });
+              }
+              return out;
+            })()}
           />
 
           <div className="card" id="js-dvirs" style={{ scrollMarginTop: 64 }}>
@@ -8832,16 +9138,11 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
               );
             })()}
             <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
-              <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
-                <input
-                  type="text"
-                  value={entryInitials}
-                  onChange={(e) => { setEntryInitials(e.target.value); setEntrySaved(false); }}
-                  placeholder="e.g. JC"
-                  maxLength={16}
-                />
-              </label>
+              {/* The Initials box is gone (ADR 0037). This request is
+                  authenticated and admin-gated, so the server already knows who
+                  is attesting - better than a free-text field anyone could type
+                  anything into. The three checks above are the attestation and
+                  are unchanged. */}
               <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Date</span>
                 <input

@@ -68,11 +68,16 @@ type LineRow = {
 };
 
 type ReimbItem = {
+  uuid: string;
   date: string;
   kind: string;
   label: string;
   amount: number | null;
   miles: number | null;
+  /** submitted (nobody has looked) | approved | rejected (not paid). */
+  status: string;
+  notes: string;
+  approver: string;
 };
 
 type Employee = {
@@ -84,6 +89,7 @@ type Employee = {
   days: DayRow[];
   lines: LineRow[];
   reimbursement_items: ReimbItem[];
+  reimbursements_unreviewed: number;
   correction_count: number;
 };
 
@@ -389,6 +395,14 @@ export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: strin
                 ) : (j.job_name || "Unnamed job")}{" "}
                 <span className="mono" style={{ color: "var(--muted)" }}>#{j.job_uuid.slice(0, 8)}</span>
                 {j.reason ? <span style={{ color: "var(--danger)" }}> - {j.reason}</span> : null}
+                {/* Only offered for report-less jobs. A job that HAS a report
+                    needs reviewing, not waiving - the waiver is for jobs nobody
+                    is ever going to file a report on (off-job hours logged
+                    against a manual job, an unpaid drive leg), which otherwise
+                    block the period forever. */}
+                {j.reason === "no report filed" && (
+                  <WaiveReportButton jobUuid={j.job_uuid} jobName={j.job_name} onChanged={() => load(period)} />
+                )}
               </li>
             ))}
           </ul>
@@ -809,15 +823,36 @@ function EmployeeDetail({
       {emp.reimbursement_items.length > 0 && (
         <div>
           <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>
-            Reimbursements (approved, paid personally)
-          </div>
-          <div className="col" style={{ gap: 3 }}>
-            {emp.reimbursement_items.map((r, i) => (
-              <span key={i} className="small">
-                {shortDate(r.date)} - {r.label}
-                {r.amount != null ? ` - $${r.amount.toFixed(2)}` : ""}
-                {r.miles != null ? ` - ${r.miles} mi (see the Mileage $ total; set the rate in Settings)` : ""}
+            Reimbursements (paid personally)
+            {emp.reimbursements_unreviewed > 0 && (
+              <span style={{ color: "var(--warn)", marginLeft: 6 }}>
+                - {emp.reimbursements_unreviewed} not yet reviewed
               </span>
+            )}
+          </div>
+          {/* Everything here is PAID unless it is declined. That is deliberate:
+              a forgotten approval must never silently underpay somebody, which
+              is what the old approved-only gate did for months. So "Approve" is
+              really "reviewed, and it stands", and "Decline" is the action that
+              changes money and emails the crew member. */}
+          <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
+            These are paid unless you decline them. Declining emails the crew
+            member with your reason.
+          </div>
+          <div className="col" style={{ gap: 5 }}>
+            {emp.reimbursement_items.map((r) => (
+              <div key={r.uuid} className="row"
+                   style={{ gap: 8, alignItems: "center", flexWrap: "wrap",
+                            opacity: r.status === "rejected" ? 0.55 : 1 }}>
+                <span className="small" style={{
+                  textDecoration: r.status === "rejected" ? "line-through" : "none",
+                }}>
+                  {shortDate(r.date)} - {r.label}
+                  {r.amount != null ? ` - $${r.amount.toFixed(2)}` : ""}
+                  {r.miles != null ? ` - ${r.miles} mi (see the Mileage $ total; set the rate in Settings)` : ""}
+                </span>
+                <ReimbDecision item={r} onChanged={onChanged} />
+              </div>
             ))}
           </div>
         </div>
@@ -825,6 +860,138 @@ function EmployeeDetail({
     </div>
   );
 }
+
+// ── Job-report waiver ───────────────────────────────────────────────────────
+
+/**
+ * Drop one report-less job out of the finalize gate.
+ *
+ * The gate is right to exist - payroll should not run over unreviewed work -
+ * but some jobs never get a report by design and blocked the period forever.
+ * A reason is required so a period that finalized over a missing report can
+ * still be explained months later.
+ */
+function WaiveReportButton({
+  jobUuid, jobName, onChanged,
+}: { jobUuid: string; jobName: string; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function waive() {
+    const reason = window.prompt(
+      `Waive the job report requirement for "${jobName || "this job"}"?\n\n` +
+      "Use this for jobs that will never have a report - off-job hours logged " +
+      "against a manual job, an unpaid drive leg. Payroll will finalize without " +
+      "one.\n\nReason (recorded against the job):",
+      "",
+    );
+    if (reason === null) return;
+    if (!reason.trim()) { setErr("A reason is required."); return; }
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/admin/payroll/job/${encodeURIComponent(jobUuid)}/report-waiver`,
+        { method: "POST", body: JSON.stringify({ waived: true, reason }) });
+      onChanged();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Could not waive that job");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <>
+      <button type="button" disabled={busy} onClick={waive}
+              style={{ fontSize: 11, marginLeft: 6 }}
+              title="This job will never have a job report - let payroll finalize without one">
+        {busy ? "Waiving..." : "Waive report"}
+      </button>
+      {err && <span className="small" style={{ color: "var(--danger)" }}> {err}</span>}
+    </>
+  );
+}
+
+
+// ── Reimbursement approve / decline ─────────────────────────────────────────
+
+/**
+ * Per-claim decision control.
+ *
+ * Three states, not a checkbox: submitted (nobody has looked), approved
+ * (reviewed and it stands), rejected (not paid, crew told). An admin has to be
+ * able to put a claim BACK to submitted after a mis-click, and a boolean cannot
+ * say that.
+ */
+function ReimbDecision({ item, onChanged }: { item: ReimbItem; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function decide(status: "submitted" | "approved" | "rejected") {
+    let note: string | null = null;
+    if (status === "rejected") {
+      // Required, not optional. A decline with no explanation just generates a
+      // phone call to the office, and the crew member gets the reason in the
+      // email either way.
+      note = window.prompt(
+        `Why is this claim not approved?
+
+${item.label}
+
+The crew member is emailed this reason.`,
+        item.notes || "",
+      );
+      if (note === null) return;          // cancelled
+      if (!note.trim()) { setErr("A reason is required to decline."); return; }
+    }
+    setBusy(true); setErr(null);
+    try {
+      const res = await apiFetch<{ emailed: boolean; email_error: string | null }>(
+        `/api/admin/payroll/reimbursement/${encodeURIComponent(item.uuid)}/decision`,
+        { method: "POST", body: JSON.stringify({ status, note }) },
+      );
+      // The decision is saved even when the email fails - say so rather than
+      // letting the admin assume the crew member was told.
+      if (status === "rejected" && !res.emailed) {
+        setErr(`Declined, but the email did not send: ${res.email_error || "unknown"}. Tell them directly.`);
+      }
+      onChanged();
+    } catch (e: any) {
+      setErr(e instanceof ApiError ? e.message : "Could not save that decision");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <span className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      {item.status === "rejected" ? (
+        <>
+          <span className="small" style={{ color: "var(--danger)", fontWeight: 700 }}>
+            Declined{item.approver ? ` by ${item.approver}` : ""}
+          </span>
+          <button type="button" disabled={busy} onClick={() => decide("submitted")}
+                  style={{ fontSize: 11 }}>Undo</button>
+        </>
+      ) : (
+        <>
+          {item.status === "approved" ? (
+            <span className="small" style={{ color: "var(--ok)", fontWeight: 700 }}>
+              Approved{item.approver ? ` by ${item.approver}` : ""}
+            </span>
+          ) : (
+            <button type="button" disabled={busy} onClick={() => decide("approved")}
+                    style={{ fontSize: 11 }}>Approve</button>
+          )}
+          <button type="button" disabled={busy} onClick={() => decide("rejected")}
+                  style={{ fontSize: 11, color: "var(--danger)" }}>Decline</button>
+        </>
+      )}
+      {item.notes && (
+        <span className="small" style={{ color: "var(--muted)" }} title={item.notes}>
+          ({item.notes.length > 40 ? `${item.notes.slice(0, 40)}...` : item.notes})
+        </span>
+      )}
+      {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
+    </span>
+  );
+}
+
 
 // ── Correction form ──────────────────────────────────────────────────────────
 

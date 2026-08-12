@@ -7,6 +7,7 @@
  * and syncs on reconnect. Admin reads the payroll totals off the sheet.
  */
 
+import { persistJson } from "./persistQueue";
 import { apiFetch } from "../api/client";
 import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 import { readActiveJob } from "./bolStore";
@@ -22,6 +23,10 @@ export type LdDay = {
   drive_day: boolean;
   per_diem?: number;
   updated_at: string;
+  /** Set by `setLdDay`: false when the local write or the queue write was
+   *  refused (storage full). Transient - never persisted, never sent. A caller
+   *  showing "recorded" without checking this is the bug-5 pattern. */
+  stored?: boolean;
 };
 
 export function todayLocal(): string {
@@ -47,10 +52,8 @@ export function loadLdDay(date: string): LdDay | null {
   }
 }
 
-function saveLdDay(day: LdDay): void {
-  try {
-    localStorage.setItem(DAY_PREFIX + day.date, JSON.stringify(day));
-  } catch {}
+function saveLdDay(day: LdDay): boolean {
+  return persistJson(DAY_PREFIX + day.date, day);
 }
 
 /** Set fields on a date's record (creating it, attaching the active job), then
@@ -74,8 +77,9 @@ export function setLdDay(date: string, patch: Partial<Pick<LdDay, "out_of_town" 
     day.job_uuid = job.job_uuid;
     day.job_name = job.job_name || "";
   }
-  saveLdDay(day);
-  enqueue(day);
+  // Both writes are reported. The caller decides what to tell the crew; what it
+  // must NOT do is show a selection as recorded when neither write landed.
+  day.stored = saveLdDay(day) && enqueue(day);
   return day;
 }
 
@@ -95,13 +99,13 @@ function loadQueue(): QueuedDay[] {
   }
 }
 
-function saveQueue(q: QueuedDay[]): void {
-  try {
-    localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
-  } catch {}
+/** Returns false if the queue could not be persisted (bug 5, see
+ *  lib/persistQueue.ts). */
+function saveQueue(q: QueuedDay[]): boolean {
+  return persistJson(QUEUE_KEY, q);
 }
 
-function enqueue(day: LdDay): void {
+function enqueue(day: LdDay): boolean {
   const payload = {
     day_id: day.day_id,
     date: day.date,
@@ -112,7 +116,7 @@ function enqueue(day: LdDay): void {
   };
   const q = loadQueue().filter((x) => x.date !== day.date);
   q.push({ date: day.date, payload });
-  saveQueue(q);
+  return saveQueue(q);
 }
 
 /** Days the server permanently refused, kept for retry (ADR 0013). */

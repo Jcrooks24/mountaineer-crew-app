@@ -28,6 +28,34 @@ export const APP_BUILD_ID: string =
 export const APP_VERSION_NAME: string =
   typeof __APP_VERSION_NAME__ !== "undefined" ? __APP_VERSION_NAME__ : "Local Build";
 
+/**
+ * Tell the server which build this device is running.
+ *
+ * The build identity has always existed in the bundle, but nothing on the server
+ * knew a build had happened - so patch notes read as a list of announcements
+ * rather than a version history, and a build shipped without a note left no
+ * trace at all.
+ *
+ * Reports on load, idempotently. What this records is builds that were REACHED
+ * BY A DEVICE, not builds that were deployed; a build nobody loaded is not part
+ * of the crew's history, and one that never reaches a device shows up as an
+ * absence worth noticing.
+ *
+ * Fire-and-forget by design: this is bookkeeping, and a crew member must never
+ * see an error - or wait - because a version-history ping failed.
+ */
+export async function reportBuildSeen(): Promise<void> {
+  try {
+    const { apiFetch } = await import("../api/client");
+    await apiFetch("/api/patch-notes/build-seen", {
+      method: "POST",
+      body: JSON.stringify({ build_id: APP_BUILD_ID, version_name: APP_VERSION_NAME }),
+    });
+  } catch {
+    /* bookkeeping only - never surface this */
+  }
+}
+
 export async function checkForAppUpdate(timeoutMs = 8000): Promise<UpdateResult> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
     return { kind: "unsupported" };

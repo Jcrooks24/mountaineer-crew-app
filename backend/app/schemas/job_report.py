@@ -151,7 +151,13 @@ def truck_capacity_cuft(entry: dict) -> Optional[int]:
 
 
 class TruckFullnessEntry(BaseModel):
-    """One truck's fill estimate against the interior 25% marks.
+    """ONE TRUCKLOAD's fill estimate against the interior 25% marks.
+
+    An entry is a LOAD, not a truck. A truck that runs the job twice gets two
+    entries, because each trip is filled differently - a first load packed tight
+    and a second half-empty is the normal case, and one measurement multiplied by
+    two would describe neither. The picker therefore allows the same fleet truck
+    more than once.
 
     Fleet trucks must be one of TRUCK_IDS. Rental trucks (is_rental) carry a
     free-text label and an optional length_ft, since they're not in the fixed

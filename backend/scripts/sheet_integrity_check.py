@@ -192,10 +192,20 @@ def _completeness_checks(db, fails: list, warns: list) -> None:
     if not bf.get("connected"):
         fails.append(f"completeness: backfill audit could not run: {bf.get('error')}")
         return
+    # A check that could not RUN is a failure of this job, not a warning about
+    # the sheet. 2026-08-12 is the case that proves it: one missing column
+    # blinded every completeness check, and because the checks that would have
+    # found real gaps never executed, the FAIL count DROPPED from 11 to 2 and the
+    # report read as an improvement. A canary reporting clean because it could
+    # not look is worse than one reporting nothing. Count them and fail loudly.
+    not_audited: list = []
+    auditable_total = 0
     for r in bf.get("results", []):
         if r.get("auto"):
             continue  # Events/BOLs are counted separately below (not diffed here)
+        auditable_total += 1
         if r.get("error"):
+            not_audited.append(str(r.get("label") or r.get("key")))
             warns.append(f"completeness: {r.get('label')} ({r.get('tab')}) "
                          f"not audited: {r['error']}")
             continue
@@ -207,13 +217,38 @@ def _completeness_checks(db, fails: list, warns: list) -> None:
                 f"completeness: {r.get('label')} ({r.get('tab')}) - {mc} server "
                 f"record(s) MISSING from the sheet (db={r.get('in_db')}, "
                 f"sheet={r.get('in_sheet')}) e.g. {ids}{why}")
+
+    if not_audited:
+        fails.insert(0, (
+            f"completeness: INCOMPLETE AUDIT - {len(not_audited)} of "
+            f"{auditable_total} sync(s) could not be checked at all "
+            f"({', '.join(not_audited[:6])}"
+            + (" ..." if len(not_audited) > 6 else "")
+            + "). The FAIL count below is NOT comparable to a clean run: gaps in "
+              "these syncs would not have been detected. Fix the cause and re-run "
+              "before trusting this report."
+        ))
+
     # Events + BOLs are auto-reconciled and only counted, not diffed, by the audit.
+    #
+    # Each counter rolls back before it runs and after it fails, for the same
+    # reason audit_sheet_backfill does: Postgres refuses every statement after a
+    # failed one until the transaction is rolled back, so an earlier error would
+    # otherwise make both of these report a database problem that is not theirs.
+    def _rollback() -> None:
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 - nothing useful to do if this fails
+            pass
+
+    _rollback()
     try:
         from app.integrations.sheets_reconcile import count_unexported_events
         n = count_unexported_events(db)
         if n and n > 0:
             fails.append(f"completeness: Events - {n} server event(s) not yet in the sheet")
     except Exception as e:  # noqa: BLE001 - a counter hiccup must not kill the check
+        _rollback()
         warns.append(f"completeness: Events counter errored: {e}")
     try:
         from app.integrations.bol_reconcile import count_unexported_bols
@@ -221,6 +256,7 @@ def _completeness_checks(db, fails: list, warns: list) -> None:
         if n and n > 0:
             fails.append(f"completeness: BOLs - {n} server BOL(s) not yet in the sheet")
     except Exception as e:  # noqa: BLE001
+        _rollback()
         warns.append(f"completeness: BOL counter errored: {e}")
 
 

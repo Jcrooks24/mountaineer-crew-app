@@ -35,7 +35,12 @@ export default function Bulletin() {
       setPosts(f.posts);
       setNextBefore(f.next_before_id);
     } catch (e: any) {
-      setErr(e?.message ?? "Could not load the bulletin.");
+      // `||`, not `??`. An error carrying an EMPTY message - a 500 with no body,
+      // a proxy error page, an aborted request - left `err` as "", which is
+      // falsy, so the error card never rendered AND the `!err` empty state did.
+      // A failed load disguised itself as "Nothing posted yet", with no Retry
+      // button and no indication anything had gone wrong.
+      setErr(e?.message || "Could not load the bulletin.");
     } finally {
       setLoading(false);
     }
@@ -154,7 +159,10 @@ function Composer({ onPosted }: { onPosted: (p: BulletinPost) => void }) {
       onPosted(created);
       reset();
     } catch (e: any) {
-      setErr(e?.message ?? "Could not post. Check your connection and try again.");
+      // `||` not `??`, same reason as the feed loader above: an empty message
+      // left the composer silently showing nothing after a failed post, so the
+      // crew member believed it had gone through.
+      setErr(e?.message || "Could not post. Check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -193,6 +201,12 @@ function Composer({ onPosted }: { onPosted: (p: BulletinPost) => void }) {
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setFile(f); setLinkOpen(false); } }}
           style={{ display: "none" }}
         />
+        {/* Says "Photo" and not "Media" on purpose. The picker is image-only
+            (accept="image/*"), and crews were trying to post video and reporting
+            it as broken. Video is not built: bulletin images are stored in
+            Postgres, so clips would need Drive-backed storage first. Until then
+            the label and the hint below say what the button actually does,
+            rather than letting the crew find out by failing. */}
         <button type="button" onClick={() => fileRef.current?.click()} style={{ fontSize: 13 }}>📷 Photo</button>
         <button type="button" onClick={() => { setLinkOpen((v) => !v); setFile(null); }} style={{ fontSize: 13 }}>🔗 Link</button>
         <button
@@ -204,6 +218,9 @@ function Composer({ onPosted }: { onPosted: (p: BulletinPost) => void }) {
         >
           {busy ? "Posting…" : "Post"}
         </button>
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+        Photos and links only. Video is not supported yet.
       </div>
     </div>
   );
@@ -266,7 +283,23 @@ function PostCard({
           src={postImageSrc(post)!}
           alt=""
           loading="lazy"
-          style={{ display: "block", width: "100%", maxHeight: 520, objectFit: "cover", background: "var(--raised, rgba(0,0,0,0.04))" }}
+          // `contain`, not `cover`. With `cover` a portrait photo lost its top
+          // and bottom to the 520px cap - crews reported "images are getting
+          // cropped". The upload path never cropped: resizeImage scales by
+          // min(1, max/longest side) onto a canvas of exactly that size, so the
+          // aspect ratio is preserved. The crop was purely this style.
+          //
+          // `height: auto` lets a normal photo size itself naturally; the cap
+          // only engages for something very tall, and `contain` letterboxes it
+          // against the background rather than cutting the picture.
+          style={{
+            display: "block",
+            width: "100%",
+            height: "auto",
+            maxHeight: 520,
+            objectFit: "contain",
+            background: "var(--raised, rgba(0,0,0,0.04))",
+          }}
         />
       )}
       {post.kind === "link" && post.link_url && <LinkCard post={post} />}
@@ -312,6 +345,9 @@ function LinkCard({ post }: { post: BulletinPost }) {
       rel="noreferrer"
       style={{ display: "block", textDecoration: "none", color: "inherit", borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}
     >
+      {/* A link preview image is decorative chrome, not the crew's own photo, so
+          `cover` stays here: it fills the card band cleanly and nobody is trying
+          to read detail out of an OG thumbnail. */}
       {post.link_image_url && (
         <img src={post.link_image_url} alt="" style={{ display: "block", width: "100%", maxHeight: 320, objectFit: "cover" }} />
       )}

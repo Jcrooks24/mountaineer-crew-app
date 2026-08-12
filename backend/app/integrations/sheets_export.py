@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Callable, List, Dict, Any, Optional, Set
@@ -149,6 +150,49 @@ def _lock_for_event_timestamp(event_id: str) -> threading.Lock:
         return _bounded_lock(_event_timestamp_locks, event_id)
 
 
+# ── Recent export failures ───────────────────────────────────────────────────
+# `sheet_sync_status` holds ONE row per export FUNCTION, so it cannot answer the
+# question an admin actually has when a backfill will not drain: "these 33 bills
+# keep failing - why?". If 322 bills export fine and 33 do not, `last_ok_at` is
+# newer than `last_error_at`, the sync reads as healthy, and the panel correctly
+# shows nothing. The failure is per RECORD; the status row is per function.
+#
+# That is the blind spot this module's own docstring describes, and it is why
+# pressing Re-send looked like it did nothing: the work WAS queued, it ran, it
+# threw, and the only trace was a line on stdout.
+#
+# This is a small bounded ring of the most recent failures so the reason reaches
+# the admin panel. Deliberately in memory and deliberately not a table: it is a
+# diagnostic for "what just happened when I pressed the button", it is read
+# within minutes of being written, and a durable per-record failure log is a
+# bigger design than this (it would want the record id threaded through every
+# export path). Lost on a worker recycle, which is fine for that purpose - but it
+# does mean an empty list is NOT proof that nothing failed.
+_MAX_RECENT_FAILURES = 50
+_recent_failures: "deque" = deque(maxlen=_MAX_RECENT_FAILURES)
+_recent_failures_lock = threading.Lock()
+
+
+def note_export_failure(fn_name: str, error: str) -> None:
+    with _recent_failures_lock:
+        _recent_failures.append({
+            "fn": fn_name,
+            "error": (error or "")[:400],
+            "at": datetime.utcnow().isoformat(),
+        })
+
+
+def recent_export_failures() -> List[Dict[str, Any]]:
+    """Newest first. See the note above: empty does not prove success."""
+    with _recent_failures_lock:
+        return list(reversed(list(_recent_failures)))
+
+
+def clear_export_failures() -> None:
+    with _recent_failures_lock:
+        _recent_failures.clear()
+
+
 def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
     """Submit a sheets export to the bounded background pool with a fresh
     DB session, so a slow or failing Google call never blocks the API
@@ -167,6 +211,7 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
             record_sheet_sync(db, export_fn.__name__, True)
         except Exception as exc:
             print(f"[sheets] background export failed ({export_fn.__name__}): {exc}")
+            note_export_failure(export_fn.__name__, str(exc))
             try:
                 db.rollback()
             except Exception:
@@ -194,6 +239,21 @@ def record_sheet_sync(db: Session, fn_name: str, ok: bool, error: Optional[str] 
             db.add(row)
         if ok:
             row.last_ok_at = now
+            # Clear the error TEXT on a success, keep the timestamp.
+            #
+            # This row is current state, not a history - there is one per export
+            # function and it is overwritten in place. Leaving `last_error`
+            # populated after a recovery meant System Check kept printing a
+            # resolved failure in red, indefinitely, with no way to tell it from a
+            # live one. That happened for real on 2026-08-12: the JobReports grid
+            # error stayed on screen after the backfill had already fixed it and
+            # drained the backlog, so the panel said broken while the sync was
+            # working.
+            #
+            # `last_error_at` is deliberately kept: Admin.tsx uses it to show
+            # "recovered from an error <date>", which is genuinely useful. It is
+            # only the red error text that must not outlive the error.
+            row.last_error = None
         else:
             row.last_error_at = now
             row.last_error = (error or "")[:500]
@@ -325,6 +385,45 @@ def _api(fn, max_attempts: int = 4):
 # The tab layout only changes when we create a tab (or an admin renames one in
 # the sheet), so a short TTL is safe: stale-metadata failures self-heal because
 # every consumer refreshes and retries once before giving up.
+# ── Header row cache ─────────────────────────────────────────────────────────
+# One entry per (spreadsheet, tab). See the note in `_ensure_tab` for why this
+# exists and why the TTL is short. Shares the metadata TTL: both cache "the shape
+# of the workbook", both are invalidated explicitly when this code changes that
+# shape, and giving the same class of fact two different staleness windows would
+# only be something to get wrong later.
+_header_cache: Dict[tuple, tuple] = {}  # (sid, tab) -> (expires_at, headers)
+_header_cache_lock = threading.Lock()
+
+
+def _header_cache_get(spreadsheet_id: str, tab: str) -> Optional[List[Any]]:
+    with _header_cache_lock:
+        entry = _header_cache.get((spreadsheet_id, tab))
+    if entry and entry[0] > time.monotonic():
+        return list(entry[1])
+    return None
+
+
+def _header_cache_put(spreadsheet_id: str, tab: str, headers: List[Any]) -> None:
+    with _header_cache_lock:
+        _header_cache[(spreadsheet_id, tab)] = (
+            time.monotonic() + _META_TTL_SECONDS, list(headers),
+        )
+
+
+def _header_cache_drop(
+    spreadsheet_id: Optional[str] = None, tab: Optional[str] = None
+) -> None:
+    # Forget a cached header. No arguments clears everything.
+    with _header_cache_lock:
+        if spreadsheet_id is None:
+            _header_cache.clear()
+        elif tab is None:
+            for k in [k for k in _header_cache if k[0] == spreadsheet_id]:
+                del _header_cache[k]
+        else:
+            _header_cache.pop((spreadsheet_id, tab), None)
+
+
 _META_TTL_SECONDS = 30.0
 _meta_cache: Dict[str, tuple] = {}  # spreadsheet_id -> (expires_at, {title: sheetId})
 _meta_cache_lock = threading.Lock()
@@ -422,12 +521,33 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
             pass
         return list(headers)
 
-    # Tab exists - read current header row
-    result = _api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=f"{tab}!1:1",
-    ).execute())
-    current = result.get("values", [[]])[0] if result.get("values") else []
+    # Tab exists - read its header row, or reuse a very recent read.
+    #
+    # This ran on EVERY export: one read per record, and the single biggest
+    # contributor to Sheets read quota. Re-driving 100 records cost 100 header
+    # reads on top of the writes, against a limit of 60 reads per minute, which
+    # is what put the export pool into 429 backoff on 2026-08-12.
+    #
+    # The header only changes when this code appends a column (which invalidates
+    # explicitly below) or when a person edits row 1 by hand. A short TTL is the
+    # same trade `_meta_cache` already makes for tab metadata, for the same
+    # reason: the cached fact changes rarely and a stale read self-heals within
+    # seconds.
+    #
+    # Kept deliberately short because this value drives POSITIONAL column mapping
+    # in `_build_row`. A stale header would misalign a written row, which is far
+    # worse than a wasted read - so this window is small by design and is not a
+    # knob to turn up.
+    cached = _header_cache_get(spreadsheet_id, tab)
+    if cached is not None:
+        current = cached
+    else:
+        result = _api(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!1:1",
+        ).execute())
+        current = result.get("values", [[]])[0] if result.get("values") else []
+        _header_cache_put(spreadsheet_id, tab, current)
 
     # Fail closed on header corruption. If the tab already has a header row but
     # its KEY column (the first expected header - the entity's uuid/id) is not in
@@ -458,6 +578,8 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
         #
         # A tab created by this code starts at the Sheets default of 26 columns,
         # so the 27th expected column is where any growing tab hits the wall.
+        # The header is about to change, so no cached copy may survive it.
+        _header_cache_drop(spreadsheet_id, tab)
         _widen_grid_for_columns(svc, spreadsheet_id, tab, len(current) + len(missing))
         start_letter = _col_letter(len(current))
         _api(lambda: svc.spreadsheets().values().update(
@@ -467,6 +589,7 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
             body={"values": [missing]},
         ).execute())
         current = current + missing
+        _header_cache_put(spreadsheet_id, tab, current)
 
     return current
 
@@ -1152,36 +1275,59 @@ def _has_non_billable(entries: Optional[list]) -> str:
     return "No"
 
 
+def _truck_label(e: dict) -> str:
+    """Display name for one truckload.
+
+    Rentals note their length (if given) and that fill is a best guess, since
+    they have no interior markers: "Penske 26ft (rental)". Used by BOTH the
+    repeat-count pass and the row-building pass in `_format_truck_fullness` -
+    they have to agree, or a repeat is counted under one name and rendered under
+    another and never gets numbered.
+    """
+    truck = (e.get("truck") or "").strip() or "-"
+    label = truck
+    if e.get("is_rental"):
+        length = e.get("length_ft")
+        if length not in (None, "", 0):
+            try:
+                length = int(float(length))
+            except (TypeError, ValueError):
+                length = None
+            if length:
+                label = f"{truck} {length}ft"
+        label = f"{label} (rental)"
+    return label
+
+
 def _format_truck_fullness(entries: Optional[list]) -> str:
     """One line per truck used, e.g. "26Int: V75×H50 (38%)". The composite %
     is vertical×horizontal/100, matching the interior 25% fill marks. Semicolon-
     joined so it stays a single readable cell."""
     if not entries:
         return ""
+    # Pre-count each truck so a repeat can be numbered. Done up front because the
+    # first of two loads has to know it is one of two.
+    #
+    # Both passes MUST build the label the same way. They did not at first: the
+    # count keyed on "Penske (rental)" while the row built "Penske 26ft
+    # (rental)", so repeated rentals were never numbered. One function now, used
+    # by both.
+    counts: dict = {}
+    for e in entries:
+        if isinstance(e, dict):
+            counts[_truck_label(e)] = counts.get(_truck_label(e), 0) + 1
+    seen: dict = {}
     parts: list[str] = []
     for e in entries:
         if not isinstance(e, dict):
             continue
-        truck = (e.get("truck") or "").strip() or "-"
         try:
             v = int(e.get("vertical_pct") or 0)
             h = int(e.get("horizontal_pct") or 0)
         except (TypeError, ValueError):
             v = h = 0
         combined = round(v * h / 100)
-        # Rental trucks: note the length (if given) and that fill is a best
-        # guess (no interior markers). e.g. "Penske 26ft (rental): V75×H50 (38%)".
-        label = truck
-        if e.get("is_rental"):
-            length = e.get("length_ft")
-            if length not in (None, "", 0):
-                try:
-                    length = int(float(length))
-                except (TypeError, ValueError):
-                    length = None
-                if length:
-                    label = f"{truck} {length}ft"
-            label = f"{label} (rental)"
+        label = _truck_label(e)
         # Cubic feet loaded, derived from the truck's interior at export time
         # (see TRUCK_SPECS). The percentage is the crew's observation; the
         # volume is what the office actually reasons about, so put both in the
@@ -1192,6 +1338,12 @@ def _format_truck_fullness(entries: Optional[list]) -> str:
         except Exception:  # noqa: BLE001 - never let a spec lookup kill an export
             capacity = None
         volume = f", {round(capacity * combined / 100):,} cu ft" if capacity else ""
+        # One entry is one LOAD, so a truck that ran twice appears twice with its
+        # own fill each time. Number the repeats ("26Int (load 2)") or the cell
+        # reads as a duplicated row rather than a second trip.
+        seen[label] = seen.get(label, 0) + 1
+        if counts.get(label, 0) > 1:
+            label = f"{label} (load {seen[label]})"
         parts.append(f"{label}: V{v}×H{h} ({combined}%{volume})")
     return "; ".join(parts)
 

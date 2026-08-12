@@ -454,7 +454,9 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    512Mi) and immediately reported 11 FAILs. The **root cause of the biggest
    one is fixed**; the rest are open and listed here so nobody re-discovers them.
 
-   **Fixed: new columns could not be added to a full tab.** `_ensure_tab`
+   **Fixed and CONFIRMED 2026-08-12** (the backfill re-drive drained the
+   JobReports backlog, which only happens if the header append succeeded):
+   **new columns could not be added to a full tab.** `_ensure_tab`
    appended headers with `values().update`, which does **not** grow a sheet's
    grid. Past the allocated width Google returns a hard, non-retryable 400:
 
@@ -472,8 +474,26 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
 
    **Still open, all on prod:**
 
-   - **`Events` has 2 duplicated `event_id`s (4 rows).** The dedupe did not hold.
-     Not yet diagnosed.
+   - **`Events` duplicated `event_id`s.** Diagnosed 2026-08-12.
+     `export_events_to_sheets` writes rows to the sheet (step 4) and THEN marks
+     them exported and commits (step 5). Killed in between, the rows are in the
+     sheet but unmarked, so the next reconcile writes them again. The worker is
+     recycled every 1000 requests by design, so that kill window recurs.
+
+     **To clear the existing rows:** `cleanup_sheet.py --step dedupe` now
+     separates the two causes. Byte-identical copies are the crash case and are
+     removed automatically (with `--apply`); rows that DIFFER are a timestamp
+     edit, where one row is the admin's manual correction, and are still reported
+     for a human to resolve.
+
+     **Do NOT "fix" this by marking before writing.** It looks like the obvious
+     reorder and it trades a visible problem for an invisible one: both
+     `find_unexported_events` and `count_unexported_events` read the marker
+     table, so an event marked-but-never-written would be invisible to the
+     reconciler AND to its own counter. A duplicate is at least detectable. The
+     real fix is an idempotent write (delete-by-key before insert, as the
+     replace-style exports do) or a two-phase marker, and either deserves its own
+     change with an ADR rather than a reordering.
    - **`Bills` is missing 33 records** (db=355, sheet=327), `DVIRs` 1, and
      `PriorOnDuty` 1. Some of these may drain now that the grid bug is fixed;
      re-read the next run before investigating, and use Admin -> backfill to
@@ -492,9 +512,77 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
      populated staging header with no recognisable key column WARNs, everything
      else is silent. Do not reinstate a name-based junk check.
 
+   **Reading a stale error in System Check.** `sheet_sync_status` holds one row
+   per export function and is overwritten in place, so `last_error` is current
+   state, not history. It used to survive a recovery, which meant System Check
+   printed a fixed failure in red indefinitely - exactly what happened after the
+   grid fix landed and the backfill had already drained the backlog. A success
+   now clears the error TEXT and keeps `last_error_at`, so the "recovered from an
+   error <date>" line still works. An existing row keeps its stale text until the
+   next successful export of that kind.
+
    Note the exit code: this job exits 1 when it finds FAILs. A Render "failed"
    badge on it means **the canary worked**, not that the canary broke. Only
    exit 137 is an OOM.
+
+2. **A calendar job can fork into two identities, so crews stop seeing each
+   other's work on it. Client fixed; existing forks need the repair script.**
+
+   Reported as "job set up data is not being carried over that has been entered
+   by another user, even after refresh". It is not a job-setup bug: that GET is
+   not user-filtered (`job_setup.py` queries by `job_uuid` alone), so the server
+   hands over whatever exists. The two devices were asking about **different
+   job_uuids for the same job.**
+
+   Two sources of truth that can never agree:
+
+   - **Server** (`sync.py`): `str(_uuid.uuid4())`, random, stored against the
+     calendar event id in `calendar_jobs`.
+   - **Client fallback** (`calEventToJobUuid` in `lib/bolStore.ts`): a
+     deterministic FNV hash of that same event id.
+
+   When `/api/jobs/resolve` failed, the client adopted the hash. That id was then
+   bound locally and persisted as the active job, so it survived a refresh.
+   Everything keyed on `job_uuid` forks with it: job setup, events, materials,
+   BOL, DVIRs, job report, bill, photos, incidents.
+
+   **The trigger is routine.** The backend recycles its worker every 1000
+   requests by design (the `--limit-max-requests` flag in CLAUDE.md, which is
+   load-bearing). Every recycle is a short window where that call can fail.
+
+   **Client side is fixed:** the resolve is retried three times with backoff, and
+   on failure the id already bound for that event is reused before any hash is
+   minted. The server is still re-asked on every selection, so a device that did
+   fall back converges back to canonical once it can reach the server.
+
+   **Repairing jobs that already forked:**
+
+   ```
+   python backend/scripts/repair_forked_jobs.py            # report only
+   python backend/scripts/repair_forked_jobs.py --apply    # move the rows
+   ```
+
+   Detection is COMPUTED, not guessed: the fallback is a pure function of the
+   calendar event id, so the orphan twin's uuid is derived exactly for every row
+   in `calendar_jobs`. See
+   [ADR 0038](decisions/0038-forked-job-repair-moves-rows-and-refuses-to-merge.md).
+
+   Three things to know before running it:
+
+   - **Run it AFTER the client fix is deployed**, not before. A device still
+     holding the orphan uuid keeps writing under it until it next resolves the
+     job online, so repairing first just lets new orphan rows appear behind you.
+   - **Conflicts are refused, not merged.** Where both identities hold a row in a
+     one-per-job table (two job reports for the same job, written by people who
+     could not see each other's), the script names it and moves nothing for that
+     table. Choosing is a judgement about the work, and picking "newest" would
+     quietly destroy somebody's account of the job.
+   - **It does not touch the Sheet.** Re-drive the affected records from Admin ->
+     Sheet Backfill afterwards, then remove the orphan rows by hand.
+
+   If it reports zero forks and you expected some, suspect
+   `app/core/job_uuid_fallback.py` having drifted from `calEventToJobUuid` in the
+   frontend - a drift there reports nothing, which looks exactly like success.
 
 2. **The crew bottom nav drifts upward on scroll, on mobile (prod/`main`).**
    The nav is `position: fixed; left/right/bottom: 0; zIndex: 50`, styled inline
@@ -846,9 +934,15 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
     httplib2 service shared across concurrent upload threads - the same
     OpenSSL-not-thread-safe crash the sheets service already avoids).
 
-  **Accepted, not fixed (low priority):** every replace-style sheet export still does
+  **Partly fixed 2026-08-12.** `_ensure_tab` no longer reads the header row on
+  every export - it caches it per tab for 30s, the same window `_meta_cache`
+  already uses, invalidated explicitly whenever a column is appended. That was
+  one read PER RECORD and the biggest single consumer of the 60-reads-per-minute
+  quota; it is what put the export pool into 429 backoff when a backfill of 100
+  records ran. Still outstanding from the original note: replace-style exports do
   two full-spreadsheet metadata `get`s plus a full single-column read in
-  `_delete_sheet_rows_by_value`, so per-export cost grows slowly with each tab. And
+  `_delete_sheet_rows_by_value`, so per-export cost still grows slowly with each
+  tab. And
   `GET /api/users/directory` still returns `profile_photo` data URLs (bounded to 200,
   client-cached) because the crew avatar feature depends on them; dropping the field
   would need a separate per-photo fetch endpoint first.

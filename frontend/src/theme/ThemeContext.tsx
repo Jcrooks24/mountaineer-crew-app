@@ -339,7 +339,7 @@ export const DEFAULT_HELP_TEXTS: HelpTexts = {
   skillScaleHint:
     "1 star = actively detracted from job flow, needs follow-up. 5 stars = operated on par with the most seasoned crew leaders.",
   jobTypeHint: "Tag the kind of work on this job (select all that apply). This decides which skills you rate below.",
-  truckFullnessHint: "Add one reading per truck used - vertical and horizontal fill against the interior 25% marks.",
+  truckFullnessHint: "Add one reading per LOAD - vertical and horizontal fill against the interior 25% marks. A truck that ran twice gets two readings, since each trip is filled differently.",
   overageHint: "Actual inventory ran over the estimate. Note what the extra items were and whether you discussed the overage with the customer.",
 };
 

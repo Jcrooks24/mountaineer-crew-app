@@ -13,6 +13,7 @@
  *   reliability bar as crew materials.
  */
 
+import { persistJson } from "./persistQueue";
 import { apiFetch } from "../api/client";
 import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 
@@ -151,10 +152,11 @@ export function loadQueue(): QueueOp[] {
   }
 }
 
-function saveQueue(ops: QueueOp[]): void {
-  try {
-    localStorage.setItem(OFFICE_HOURS_QUEUE_KEY, JSON.stringify(ops));
-  } catch {}
+/** Returns false if the queue could not be persisted (bug 5, see
+ *  lib/persistQueue.ts). A caller on a capture path must surface that rather
+ *  than reporting the work saved. */
+function saveQueue(ops: QueueOp[]): boolean {
+  return persistJson(OFFICE_HOURS_QUEUE_KEY, ops);
 }
 
 // ── Read ─────────────────────────────────────────────────────────────────────
@@ -233,7 +235,9 @@ export function discardFailedOfficeHours(entryUuid: string): void {
 
 // ── Write ────────────────────────────────────────────────────────────────────
 
-export function enqueueUpsert(input: OfficeHoursInput, userName: string): void {
+/** Returns false when the queue could not be persisted (storage full). The
+ *  caller must NOT report the entry saved in that case - office hours feed pay. */
+export function enqueueUpsert(input: OfficeHoursInput, userName: string): boolean {
   const q = loadQueue();
   // Collapse multiple edits of the same entry while offline - only the most
   // recent payload matters when we eventually drain.
@@ -246,7 +250,7 @@ export function enqueueUpsert(input: OfficeHoursInput, userName: string): void {
     submitted_at: new Date().toISOString(),
     user_name: userName,
   });
-  saveQueue(filtered);
+  return saveQueue(filtered);
 }
 
 /** If the entry is still a pending upsert, cancel it. Otherwise queue a delete. */

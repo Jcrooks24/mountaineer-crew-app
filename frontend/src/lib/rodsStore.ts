@@ -14,6 +14,7 @@
  */
 
 import { apiFetch } from "../api/client";
+import { persistJson } from "./persistQueue";
 import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 import { mountainDateYYYYMMDD, mountainHHMM } from "./time";
 
@@ -263,10 +264,11 @@ export function loadDay(date: string, driver = ""): RodsDay | null {
   }
 }
 
-export function saveDay(day: RodsDay): void {
-  try {
-    localStorage.setItem(dayKey(day.log_date, day.driver_name || ""), JSON.stringify(day));
-  } catch {}
+/** Persist a day's log locally. Returns false if storage refused it.
+ *  A RODS day is a DOT compliance record, so a failed write must reach the
+ *  driver rather than being swallowed behind a signed-off screen. */
+export function saveDay(day: RodsDay): boolean {
+  return persistJson(dayKey(day.log_date, day.driver_name || ""), day);
 }
 
 export function newDay(date: string, driverName: string, carryFrom?: RodsDay | null, jobUuid?: string, jobName?: string): RodsDay {
@@ -326,10 +328,10 @@ function loadQueue(): QueuedDay[] {
   }
 }
 
-function saveQueue(q: QueuedDay[]): void {
-  try {
-    localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
-  } catch {}
+/** Returns false if the queue could not be persisted (bug 5, see
+ *  lib/persistQueue.ts). Callers on a capture path MUST surface that. */
+function saveQueue(q: QueuedDay[]): boolean {
+  return persistJson(QUEUE_KEY, q);
 }
 
 function dayToPayload(day: RodsDay): Record<string, unknown> {
@@ -363,11 +365,11 @@ function dayToPayload(day: RodsDay): Record<string, unknown> {
 
 /** Queue a signed day for upsert (replaces any earlier queued payload for the
  * same date - only the latest state matters). */
-export function enqueueDay(day: RodsDay): void {
+export function enqueueDay(day: RodsDay): boolean {
   const driver = day.driver_name || "";
   const q = loadQueue().filter((x) => !(x.log_date === day.log_date && x.driver_name === driver));
   q.push({ log_date: day.log_date, driver_name: driver, payload: dayToPayload(day) });
-  saveQueue(q);
+  return saveQueue(q);
 }
 
 export function pendingCount(): number {

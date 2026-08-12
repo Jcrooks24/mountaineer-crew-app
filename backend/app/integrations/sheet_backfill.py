@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -487,6 +489,75 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
 ]
 
 
+# ── Backfill throttle ────────────────────────────────────────────────────────
+# Re-driving one record is READ-expensive: its export does a header read, two
+# spreadsheet metadata gets and a full key-column read - roughly four reads
+# against a quota of 60 reads per minute per user. A hundred records is ~400
+# reads, or about seven minutes of quota for a single sync.
+#
+# On 2026-08-12 an admin pressed the backfill twice and the export pool spent
+# minutes in 429 backoff. Nothing was lost (the retry ladder handled it), but the
+# Sheet stopped updating for everyone while it cleared.
+#
+# A plain in-flight lock around the REQUEST does not help: the endpoint returns
+# as soon as work is QUEUED, so the lock would release while the pool was still
+# reading. The throttle therefore runs on a deadline estimated from the size of
+# the last batch, which outlives the request that queued it.
+READS_PER_REEXPORT = 4
+READS_PER_MINUTE = 60
+# Never hold the door shut longer than this, however big the batch. A stuck
+# throttle that cannot be cleared is worse than a second 429.
+MAX_COOLDOWN_SECONDS = 600
+
+_throttle_lock = threading.Lock()
+_backfill_ready_at: float = 0.0  # time.monotonic() deadline
+
+
+def backfill_cooldown_remaining() -> int:
+    """Seconds until another backfill batch may be queued. 0 when free."""
+    with _throttle_lock:
+        return max(0, int(round(_backfill_ready_at - time.monotonic())))
+
+
+def note_backfill_queued(count: int) -> None:
+    """Record that `count` records were queued, and hold the door for roughly as
+    long as they will take to drain within quota."""
+    if count <= 0:
+        return
+    seconds = min((count * READS_PER_REEXPORT) / READS_PER_MINUTE * 60.0,
+                  float(MAX_COOLDOWN_SECONDS))
+    global _backfill_ready_at
+    with _throttle_lock:
+        _backfill_ready_at = max(_backfill_ready_at, time.monotonic() + seconds)
+
+
+def reset_backfill_throttle() -> None:
+    """Clear the cooldown. For tests and for an admin who knows the pool is idle."""
+    global _backfill_ready_at
+    with _throttle_lock:
+        _backfill_ready_at = 0.0
+
+
+def _norm_key(value: Any) -> str:
+    """Compare keys without letting stray whitespace invent a missing record.
+
+    The Availability sync keys on `f"{user_name}||{window_start}"`, and some
+    roster names carry a trailing space, so the database produced
+    `"Josh Fairmont ||2026-07-19"` while the sheet held `"Josh Fairmont||..."`.
+    The nightly audit reported 20 records MISSING on a tab that actually had MORE
+    rows than the database (208 vs 212) - which is the tell: a genuine missing
+    record cannot make the sheet longer. Nothing was lost; the two sides were
+    spelling the same key differently.
+
+    Stripping each component compares like with like. Harmless for the uuid-keyed
+    syncs, which have no whitespace to begin with, and it is a comparison-time
+    normalisation only - neither side's stored value is changed. The underlying
+    data hygiene (names saved with trailing spaces) is a separate problem and is
+    NOT fixed here; this stops the canary crying wolf about it.
+    """
+    return "||".join(part.strip() for part in str(value).split("||"))
+
+
 def _entry_for(key: str) -> Optional[Dict[str, Any]]:
     return next((e for e in BACKFILL_REGISTRY if e["key"] == key), None)
 
@@ -602,6 +673,22 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
         try:
             records = entry["source"](db)
         except Exception as e:  # noqa: BLE001 - one bad kind must not kill the audit
+            # ROLL BACK, or the comment above is a lie. Postgres aborts the whole
+            # transaction on the first failed statement and refuses every
+            # subsequent one with InFailedSqlTransaction until someone rolls back.
+            # Without this, one bad table takes out all seventeen audits AND the
+            # Events/BOL counters below - the audit reports "not audited" across
+            # the board and, worse, the FAIL count DROPS, because checks that
+            # would have found real gaps never got to run. A clean-looking report
+            # produced by a broken audit is the worst possible output here.
+            #
+            # Seen 2026-08-12: a single missing column on job_reports (new code
+            # deployed ahead of its migration) blinded all 19 completeness checks
+            # and made the nightly report look better than the night before.
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001 - nothing useful to do if this fails
+                pass
             row_out["error"] = f"could not read from the database: {e}"
             row_out["in_db"] = 0
             row_out["missing"] = []
@@ -634,9 +721,9 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
                 for j in rel:
                     col = cols[j] if j < len(cols) else []
                     parts.append(col[r] if r < len(col) else "")
-                sheet_keys.add("||".join(str(p) for p in parts))
+                sheet_keys.add(_norm_key("||".join(str(p) for p in parts)))
 
-        missing = [r for r in records if r["id"] not in sheet_keys]
+        missing = [r for r in records if _norm_key(r["id"]) not in sheet_keys]
         row_out["in_sheet"] = len(sheet_keys)
         row_out["missing_count"] = len(missing)
         row_out["missing"] = [{
@@ -657,6 +744,18 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
             })
 
     result["total_missing"] = sum(r["missing_count"] for r in result["results"])
+    # Why a record will not drain, when `failing` cannot say.
+    #
+    # `failing` compares this sync's last error against its last success, and a
+    # sync where MOST records export fine reads as healthy - so 33 bills that
+    # throw every time show up as "missing" with no explanation anywhere. These
+    # are the actual exceptions the background pool hit, newest first.
+    #
+    # See the note in sheets_export: this is an in-memory ring, so an empty list
+    # does NOT prove nothing failed. It proves nothing failed since the last
+    # worker recycle.
+    from app.integrations.sheets_export import recent_export_failures
+    result["recent_failures"] = recent_export_failures()
     return result
 
 
@@ -717,6 +816,7 @@ def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE)
             per_sync[row["key"]] = q
             total_queued += q
             budget -= q
+    note_backfill_queued(total_queued)
     return {"ok": True, "queued": total_queued, "per_sync": per_sync,
             "remaining_missing": remaining_missing}
 
@@ -752,6 +852,7 @@ def reexport_missing(db: Session, key: str, ids: Optional[List[str]] = None) -> 
             print(f"[backfill] re-export failed for {key}/{rid}: {e}")
             skipped += 1
 
+    note_backfill_queued(queued)
     return {
         "ok": True,
         "key": key,

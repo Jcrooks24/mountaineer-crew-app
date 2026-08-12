@@ -293,6 +293,22 @@ Two consequences worth knowing before you touch the nightly email:
   so the column was nearly always empty. It is now rebuilt from the `photos` table on
   export, and tagging a photo re-exports its incident.
 
+## The second GitHub remote (`work`)
+
+The repo is pushed to two GitHub remotes: `origin` (Jcrooks24, primary) and
+`work` (management909, a mirror for the business account). The automatic
+push-mirror is broken, so **every push needs both commands** - `git push origin
+<branch>` then `git push work <branch>`.
+
+**Both Actions workflows are DISABLED on the mirror** (2026-08-12, via
+`gh workflow disable`). They ran there on every push, failed every time because
+that repo has none of the required secrets, and emailed a failure notice for each
+one. They remain active on `origin`, which is the one that matters - the gate and
+the docs mirror both belong to the primary repo.
+
+If a workflow ever needs to run on the mirror, it needs that repo's own secrets
+first; re-enabling it as-is just restores the email spam.
+
 ## The docs mirror
 
 There is one CI workflow, and it has nothing to do with shipping code.

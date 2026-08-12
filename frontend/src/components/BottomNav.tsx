@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch } from "../api/client";
+import { getToken } from "../auth/token";
 import { hasUnseenPatchNotes } from "../lib/patchNotesSeen";
 import { fetchLatestId, getSeenId } from "../lib/bulletin";
 
@@ -38,6 +39,24 @@ export default function BottomNav() {
   const loc = useLocation();
   const nav = useNavigate();
 
+  const p = loc.pathname;
+
+  // Whether this nav renders at all. Computed BEFORE the effects on purpose.
+  //
+  // The early return that used to be the only check sits after them, and hooks
+  // run unconditionally - React skips the render, not the effects. So on /login,
+  // /signup and the password-reset screens this component was still calling two
+  // AUTHENTICATED endpoints: /api/patch-notes once, and /api/bulletin/latest on
+  // every navigation. Logged out, both 401.
+  //
+  // That is not just log noise. `apiFetch` clears the stored token on ANY 401,
+  // so a poller firing across a login can wipe a token that was just issued -
+  // and crew login is a core invariant (CLAUDE.md). Cheaper and safer not to ask
+  // when there is nothing to ask with.
+  const hidden = HIDE_PREFIXES.some((h) => p === h || p.startsWith(h + "/"));
+  const signedIn = !!getToken();
+  const shouldPoll = !hidden && signedIn;
+
   // "New patch notes" indicator, relocated here from the old top-bar Profile
   // button (that button was redundant with this tab). Fetch the latest note's
   // timestamp once; hasUnseenPatchNotes is re-read every render against the
@@ -45,23 +64,23 @@ export default function BottomNav() {
   // (the Profile page marks notes seen).
   const [latestNote, setLatestNote] = useState<string | null>(null);
   useEffect(() => {
+    if (!shouldPoll) return;
     apiFetch<{ id: number; updated_at: string }[]>("/api/patch-notes")
       .then((rows) => setLatestNote(rows[0]?.updated_at ?? null))
       .catch(() => { /* non-fatal - no indicator */ });
-  }, []);
+  }, [shouldPoll]);
   const patchNotesUnseen = hasUnseenPatchNotes(latestNote);
-
-  const p = loc.pathname;
 
   // "New bulletin activity" dot: the newest post id vs the last one the crew
   // saw (Bulletin marks it seen on open). Re-checked on each navigation so a new
   // post by someone else lights the dot without a full reload.
   const [latestBulletinId, setLatestBulletinId] = useState(0);
   useEffect(() => {
+    if (!shouldPoll) return;
     fetchLatestId().then((r) => setLatestBulletinId(r.latest_id)).catch(() => { /* non-fatal */ });
-  }, [p]);
+  }, [p, shouldPoll]);
   const bulletinUnseen = latestBulletinId > getSeenId() && !(p === "/bulletin" || p.startsWith("/bulletin/"));
-  if (HIDE_PREFIXES.some((h) => p === h || p.startsWith(h + "/"))) return null;
+  if (hidden) return null;
 
   // "/" matches only the hub exactly; the others match their subtree.
   const isActive = (path: string) => (path === "/" ? p === "/" : p === path || p.startsWith(path + "/"));

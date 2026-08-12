@@ -223,9 +223,32 @@ DATA_FLOW.md Deviations and Known defects in [RUNBOOKS.md](RUNBOOKS.md).
 
 ## The `online` / boot drain set has grown
 
-`App.tsx:1878` (`online`) and the mount effect now also call `drainBugReports`,
+`App.tsx` (`online`) and the mount effect now also call `drainBugReports`,
 `drainFeatureRequests`, `drainJobSetups`, `drainChecklistChecks`. All four are wired
 to **both** boot and `online`, correctly.
+
+**`drainReimbursements` joined them 2026-08-12**, and it is the reason to check this
+list when adding a queue. Mileage and expense claims drained **only while
+`Reimbursement.tsx` was mounted**, so a claim that hit a transient failure sat in
+IndexedDB until the crew member happened to open that screen again. It read to them
+as "resend is broken": resend worked, nothing retried after it. A receipt could go
+unsent for days with the crew member believing it was filed.
+
+It is now on boot, on `online`, and additionally on a **2-minute timer** while the
+app is open. The timer exists because neither boot nor `online` fires when the app
+stays connected and the SERVER has a bad minute (a deploy, a 503, a cold start).
+Cost is one IndexedDB read per tick: `syncQueue()` returns immediately when offline,
+already draining, or empty.
+
+Reimbursements are the only queue on a timer. The others are boot + `online` only,
+so the same stranding is possible for any of them - most notably the estimator
+queue, which has its own Known defects entry for exactly this.
+
+| Queue | boot | `online` | timer |
+|---|---|---|---|
+| incidents, off-job, bug reports, feature requests, photos, job inventory, job setups, checklist checks | yes | yes | no |
+| reimbursements | yes | yes | **yes, 2 min** |
+| estimator | **no - tab-mounted only** | no | no |
 
 ---
 
@@ -575,6 +598,204 @@ workbook. See Known defects in [RUNBOOKS.md](RUNBOOKS.md).
 **This is the first thing in the system that checks hop 3 end to end.** Before it,
 `sheet_sync_status` could only say which export *function* last failed, never which
 record was lost.
+
+---
+
+## Reimbursement approval + payroll report waiver (2026-08-12)
+
+**Class A.** Two admin decisions that change what payroll pays and whether it can
+finalize at all.
+
+| Field | Path | Adherence |
+|---|---|---|
+| `reimbursements.status` | Payroll detail -> `POST /api/admin/payroll/reimbursement/{uuid}/decision` -> Postgres | read |
+| `reimbursements.approver_id` / `approver_name` / `approved_at` | same | read |
+| `reimbursements.approval_notes` | same; also the body of the decline email | read |
+| `admin_entry_status.report_waived` | Payroll gate -> `POST /api/admin/payroll/job/{uuid}/report-waiver` -> Postgres | read |
+| `admin_entry_status.report_waived_reason` / `_by_name` / `_at` | same | read |
+
+Marked **read**, not `[x]`: verified by executing the endpoints against a real
+database, not by tracing a value from a device through to the Sheet. None of
+these reach the Sheet at all today, which is itself the thing to decide before
+promoting them to `[x]` (see Open questions).
+
+**Direction of the money, and why.** Payroll pays every claim EXCEPT one an admin
+explicitly declined. It does not pay only what was approved. That is deliberate:
+the approved-only gate was unreachable for months and silently reported $0 for
+everyone, and a forgotten approval must never underpay somebody. `unreviewed`
+counts per employee and finalize returns `reimbursements_unreviewed` so "nobody
+looked" is visible rather than silent. It warns; it does not block.
+
+**Rejected rows are fetched but not summed.** They have to stay visible so a
+decline can be undone from the payroll screen.
+
+**Emails.** A NEW decline emails the crew member (Postmark, `SMTP_FROM`). Re-saving
+a note on an already-declined claim does not re-send. An approval never emails.
+A send failure does NOT roll back the decision - refusing to record a decline
+because a mailbox bounced would leave a claim being paid that an admin judged
+wrong - and the failure comes back in the response so the admin can follow up.
+
+**The waiver** drops a report-less job out of the finalize gate. Per job and
+explicit, never global: a blanket "ignore report-less jobs" would retire the gate
+rather than handle the exception. It borrows no initials - `entered_by` is set to
+`(waived)` so a waiver is never mistaken for an ADR 0032 attestation.
+
+---
+
+## App build history (2026-08-12)
+
+**Class A.** New `app_builds` table plus `patch_notes.build_id`.
+
+| Field | Path | Adherence |
+|---|---|---|
+| `app_builds.build_id` / `version_name` | device on load -> `POST /api/patch-notes/build-seen` -> Postgres | read |
+| `app_builds.first_seen_at` / `last_seen_at` | same | read |
+| `patch_notes.build_id` | Admin -> `POST`/`PATCH /api/patch-notes` -> Postgres | read |
+
+The build identity already existed in the bundle (`__APP_BUILD_ID__`,
+`__APP_VERSION_NAME__`, baked by vite.config.ts). What was missing was any server
+record that a build happened, so a build shipped without a note left no trace.
+
+**This records builds REACHED BY A DEVICE, not builds deployed.** The client
+reports its own build on load. That is the more useful fact: a build nobody
+loaded is not part of the crew's history, and a build that never reaches a device
+appears here as an absence, which is a deployment problem worth seeing. It also
+means the history is only as current as the last crew member to open the app.
+
+Dev builds (`dev-*`) are rejected server-side so a local machine cannot litter
+production history.
+
+**Does not reach the Sheet**, deliberately - this is app metadata, not business
+record. Worth confirming at the vet alongside the reimbursement-approval fields,
+which are in the same position.
+
+---
+
+## Worked Hours: jobs per week (2026-08-12)
+
+**Class D (read cache).** `GET /api/hours/worked-history` weeks now carry a
+`jobs` list: `{job_uuid, job_name, hours, date}` per job behind that week's
+billable hours.
+
+Read-only, nothing new is stored, no migration. The names come from one extra
+grouped `Event.job_name` query bounded to the jobs that already survived the
+window filter, so the endpoint's scan is unchanged in shape - it does not become
+a per-job lookup, which on a 512 MB worker is the thing to avoid.
+
+Only job hours are listed. Off-job and office time are not jobs and stay as
+column totals; the UI says so rather than leaving the crew to wonder why a week's
+job hours do not add up to its total.
+
+---
+
+## Truck loads: one entry per LOAD (2026-08-12)
+
+**Class A.** No new field. A `truck_fullness` entry now means ONE TRUCKLOAD
+rather than one truck.
+
+| Field | Path | Adherence |
+|---|---|---|
+| `truck_fullness[]` (an entry = a load) | Job Report -> `PUT /api/job-report` -> `truck_fullness_json` -> JobReports sheet `truck_fullness` cell | read |
+
+A truck that runs the job twice gets TWO entries, each with its own fill
+estimate. A first load packed tight and a second half-empty is the normal case,
+so one measurement multiplied by a load count would describe neither trip. The
+picker therefore offers a fleet truck again after it is already on the list,
+which it previously refused.
+
+**No migration and no schema change.** Nothing was added to the payload; what
+changed is what an entry MEANS. Every existing entry is a single load, which is
+what it already was.
+
+**A `loads` count was built first and reversed.** It multiplied one fill estimate
+by a trip count, which also corrupted the per-truck weight readout: the deck
+gauge and the `~lbs` figure describe a single fill, and doubling them implied a
+truck carried twice its capacity in one trip.
+
+**Sheet cell:** a repeated truck is numbered - `26Int (load 1)`, `26Int (load 2)` -
+so two entries do not read as a duplicated row. A truck appearing once is
+unnumbered, so single-load cells are unchanged.
+
+---
+
+## Sheet plumbing changes (2026-08-12)
+
+**Class B/C.** Not new domains - changes to how existing exports read, report and
+are driven. Logged because the same-commit rule covers write strategy, endpoints
+and reconciler coverage, and a `/vet` found these missing.
+
+| Change | Path | Adherence |
+|---|---|---|
+| `_ensure_tab` caches the header row per (spreadsheet, tab) for 30s | every Sheet export | read |
+| `_sheet_ids` `fields` mask | every Sheet export | read |
+| `record_sheet_sync` clears `last_error` on success | `sheet_sync_status` | read |
+| `recent_failures` on the backfill audit response | `GET /api/admin/system-check/sheet-backfill` | read |
+| `POST /api/admin/system-check/sheet-backfill-all` | drains every sync in one budgeted pass | read |
+| Backfill throttle, 429 while a batch drains | both backfill endpoints | read |
+
+**Header cache.** `_ensure_tab` read row 1 on EVERY export - one read per record,
+the biggest consumer of the 60-reads-per-minute quota. Now cached for 30s, the
+same window `_meta_cache` uses, and invalidated explicitly whenever a column is
+appended. **The TTL is short on purpose:** this value drives positional column
+mapping in `_build_row`, so a stale header would misalign a written row. It is a
+small window by design, not a knob to turn up. The `SheetHeaderError` corruption
+guard still evaluates on every call, cached or not.
+
+**Drain-all.** Built on the existing `reconcile_all_missing`, the same code path
+the auto-reconciler uses: audits once, spends one budget across all syncs. The
+per-sync endpoint re-runs the FULL audit per call, so clearing syncs one at a
+time cost an audit each. The throttle is server-side because the endpoint returns
+when work is QUEUED, not when it lands - a request-scoped lock would release
+while the pool was still reading.
+
+**`recent_failures`** exists because `sheet_sync_status` is per export FUNCTION:
+when most records succeed and a few throw every time, the sync reads as healthy
+and the failing records have no visible explanation. In-memory and bounded, so an
+empty list does not prove nothing failed.
+
+---
+
+## Job review attestation: reviewer from the account (2026-08-12)
+
+**Class A, changed field.** ADR 0037.
+
+| Field | Path | Adherence |
+|---|---|---|
+| `admin_entry_status.entered_by` | Job Summary -> `PUT /api/admin/job-entry-status/{job_uuid}` -> Postgres -> `update_entry_status_in_sheets` -> Events/JobReports `entered_by` cells | read |
+
+The value CHANGES SHAPE. It was typed initials; it is now the reviewer's account
+name (falling back to email), and the payroll waiver writes the literal
+`(waived)`. Existing rows keep their initials - not backfilled, because those are
+a true record of what was entered.
+
+**This reaches the Sheet.** The `entered_by` column the office already reads
+starts showing full names instead of initials. Anything parsing that column must
+treat it as free text, which it always was.
+
+---
+
+## Bulletin feed: runtime shape validation (2026-08-12)
+
+**Class D (read).** `fetchFeed` validated nothing - `apiFetch<Feed>` is a type
+assertion erased at runtime - so a degraded response flowed into JSX. A malformed
+body now throws (surfacing the error card and Retry) while a genuinely empty feed
+still resolves to the empty state. `comments` is guaranteed an array on every path
+that puts a post into component state.
+
+Read-only, nothing stored, no migration.
+
+---
+
+## Forked-job repair (2026-08-12)
+
+**Class A, offline tool.** `backend/scripts/repair_forked_jobs.py` re-keys rows
+from a fork's orphan `job_uuid` onto the canonical one, across the 20 tables that
+carry `job_uuid`. Never `calendar_jobs`, which is the canonical mapping itself.
+
+Dry-run by default. Refuses to merge where both identities hold a row in a
+one-per-job table. **Does not touch the Sheet** - rows exported under the orphan
+key keep it, and are re-driven from Admin -> Sheet Backfill afterwards. See
+[ADR 0038](decisions/0038-forked-job-repair-moves-rows-and-refuses-to-merge.md).
 
 ---
 
