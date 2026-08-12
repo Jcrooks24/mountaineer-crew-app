@@ -447,50 +447,54 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    one-line edit. Found 2026-08-10 while moving DQ files to their own folder;
    the folder move neither caused nor worsened it.
 
-2. **The nightly sheet-integrity cron OOMs. Cause found and fixed 2026-08-12;
-   awaiting one clean prod run before this entry is deleted.**
+2. **The Sheet mirror has real gaps, found by the first successful integrity run
+   (2026-08-12). Several are still open.**
 
-   Until a run is confirmed green, assume **nothing is watching the mirror** and
-   treat the 2026-08-05 audit class (header overwrites, duplicate rows) as
-   undetected rather than absent.
+   The nightly canary completed for the first time that night (peak 336Mi of
+   512Mi) and immediately reported 11 FAILs. The **root cause of the biggest
+   one is fixed**; the rest are open and listed here so nobody re-discovers them.
 
-   **What it actually was.** The `[mem]` checkpoints (`app/core/memprobe.py`)
-   showed RSS climbing **~18.7 MB per Sheets API call and never falling**,
-   dying partway through the *structural* pass at the `EstimateItems` tab:
+   **Fixed: new columns could not be added to a full tab.** `_ensure_tab`
+   appended headers with `values().update`, which does **not** grow a sheet's
+   grid. Past the allocated width Google returns a hard, non-retryable 400:
 
    ```
-   about to read Materials   step=+58Mi   (Events: 3 calls)
-   about to read JobReports  step=+38Mi   (Materials: 2 calls)
-   about to read Bills       step=+56Mi   (JobReports: 3 calls)
-   about to read DVIRs       step=+37Mi   (Bills: 2 calls)
-   about to read Estimates   step=+0Mi    (LongDistancePay: tab absent, 0 calls)
+   Range (JobReports!AB1) exceeds grid limits. Max rows: 1352, max columns: 27
    ```
 
-   The cost tracked **call count, not data volume**: tiny `PriorOnDuty` cost the
-   same per call as `JobReports`, and the tab that does not exist cost exactly
-   zero. So the fix was to stop making ~50 calls. The structural pass now uses
-   `values().batchGet` (8 ranges per request) for all headers and all key
-   columns, and `_sheet_ids` sends a `fields` mask - unmasked, that single
-   metadata call pulled the full spreadsheet resource for all 42 tabs and cost
-   66 MB by itself. About 7 calls total now.
+   That killed the whole export, so **every save of an affected record had been
+   failing silently since the day the column was added**: 7 close-out columns
+   stranded on `JobReports`, 11 on `BOLs` (the ones the promotion checklist
+   predicted would land "at the far right" and never did), and 5 job reports
+   missing from the sheet entirely. `_ensure_tab` now widens the grid first.
+   A tab starts at the Sheets default of 26 columns, so the 27th expected column
+   is where any growing tab hits this.
 
-   Also found: for every keyed tab in `REGISTRY` the unique key **is** the first
-   expected header, so the duplicate check and the residue check were reading
-   the identical column twice in two separate calls.
+   **Still open, all on prod:**
 
-   **Two things to know before touching this again:**
+   - **`Events` has 2 duplicated `event_id`s (4 rows).** The dedupe did not hold.
+     Not yet diagnosed.
+   - **`Bills` is missing 33 records** (db=355, sheet=327), `DVIRs` 1, and
+     `PriorOnDuty` 1. Some of these may drain now that the grid bug is fixed;
+     re-read the next run before investigating, and use Admin -> backfill to
+     re-drive whatever is still missing.
+   - **`Availability` reports 20 missing while the sheet holds MORE rows than the
+     database** (db=208, sheet=212), which means this is a key mismatch, not a
+     lost record. The keys shown carry a trailing space in the name
+     (`Josh Fairmont ||2026-07-19`), so `f"{user_name}||{window_start}"` is not
+     matching the sheet. Fix the name hygiene, not the sync.
+   - ~~Four junk env-var-named tabs~~ **Not a defect. This was the check being
+     wrong**, corrected 2026-08-12. It FAILed any tab matching
+     `startswith("sheets") and endswith("Staging")` and hit four real staging
+     mirrors. Prod and staging share one workbook by design, and a prod-side job
+     cannot read staging's env vars, so a name can never establish that a tab is
+     junk. `*Staging` tabs are now scanned (header only) instead of judged: a
+     populated staging header with no recognisable key column WARNs, everything
+     else is silent. Do not reinstate a name-based junk check.
 
-   - **The earlier suspicion was wrong.** The standing theory was the shared
-     SQLAlchemy Session in `audit_sheet_backfill` pinning every ORM row in its
-     identity map. The log killed it: the job dies in the structural pass and
-     **never reaches the completeness pass at all.** That is a good argument for
-     measuring before fixing, and against this entry's own earlier confidence.
-   - **The completeness pass has still never run in production.** It has been
-     shielded by an OOM that happened before it. The identity-map concern above
-     is unproven in both directions - the next successful run is its first real
-     exercise. Keep the `[mem]` checkpoints until it has passed cleanly, and
-     look specifically at whether `total=` climbs across the
-     `audit: loaded source ...` lines and never falls.
+   Note the exit code: this job exits 1 when it finds FAILs. A Render "failed"
+   badge on it means **the canary worked**, not that the canary broke. Only
+   exit 137 is an OOM.
 
 2. **The crew bottom nav drifts upward on scroll, on mobile (prod/`main`).**
    The nav is `position: fixed; left/right/bottom: 0; zIndex: 50`, styled inline
@@ -793,6 +797,21 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    the new scan cost here.
 
 ### Recently fixed (kept briefly so you do not re-report them)
+
+- Nightly sheet-integrity cron OOM. Fixed 2026-08-12, **confirmed by a completed
+  prod run at 336Mi peak against a 512Mi limit**. Two earlier attempts missed it
+  because they reasoned from the code; the [mem] checkpoints in
+  `app/core/memprobe.py` showed RSS climbing ~18.7 MB per Sheets API call and
+  never falling, independent of how much data a tab held. The structural pass now
+  batches (`values().batchGet`, 8 ranges per request) and `_sheet_ids` sends a
+  `fields` mask instead of pulling the whole spreadsheet resource for 42 tabs,
+  which alone cost 66Mi. ~50 calls became ~7.
+
+  Worth recording because two separate confident diagnoses were wrong: first
+  whole-tab reads (real, but not sufficient), then the shared SQLAlchemy Session
+  in `audit_sheet_backfill` pinning ORM rows in its identity map. The completed
+  run disproves the second outright - every `audit: loaded source` step costs
+  +0Mi, and the pass the theory blamed had never even executed. Measure first.
 
 - BOL self-overwrite when a job ran with two trucks. Fixed 2026-07-27 (staging,
   [ADR 0024](decisions/0024-bol-guards-against-self-overwrite.md)): the manual-job

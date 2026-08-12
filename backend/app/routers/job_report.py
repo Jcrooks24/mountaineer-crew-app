@@ -118,6 +118,8 @@ def _to_response(r: JobReport) -> JobReportResponse:
         job_uuid=r.job_uuid,
         submitted_by_id=r.submitted_by_id,
         submitted_by_name=r.submitted_by_name,
+        last_edited_by_id=r.last_edited_by_id,
+        last_edited_by_name=r.last_edited_by_name,
         personal_vehicles=r.personal_vehicles,
         dumpster_pct=r.dumpster_pct,
         recycling_pct=r.recycling_pct,
@@ -180,6 +182,7 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "job_uuid": report.job_uuid,
         "job_name": _job_name_for(db, report.job_uuid),
         "submitted_by_name": report.submitted_by_name,
+        "last_edited_by_name": report.last_edited_by_name,
         "personal_vehicles": report.personal_vehicles,
         "dumpster_pct": report.dumpster_pct,
         "recycling_pct": report.recycling_pct,
@@ -297,8 +300,17 @@ def upsert_job_report(
     )
 
     if existing:
-        existing.submitted_by_id = current_user.id
-        existing.submitted_by_name = current_user.name or current_user.email
+        # submitted_by_* is deliberately NOT touched here. It records who filed
+        # the report, not who last saved it. Reassigning it on every update meant
+        # an admin who opened a closed job and saved anything - or saved nothing
+        # and just re-submitted the same values - became "the person who
+        # submitted the report" despite never being on the job.
+        #
+        # The one exception is a row that has no submitter at all, which can only
+        # come from data written before this column was populated. Claiming it
+        # for the current user would be inventing a fact, so it is left null.
+        existing.last_edited_by_id = current_user.id
+        existing.last_edited_by_name = current_user.name or current_user.email
         existing.personal_vehicles = body.personal_vehicles
         existing.dumpster_pct = body.dumpster_pct
         existing.recycling_pct = body.recycling_pct

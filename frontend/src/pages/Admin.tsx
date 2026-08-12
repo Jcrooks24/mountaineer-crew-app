@@ -7132,6 +7132,7 @@ type JobSummary = {
   }>;
   job_report: {
     submitted_by_name: string | null;
+    last_edited_by_name: string | null;
     personal_vehicles: number;
     bill_personal_vehicles: boolean;
     dumpster_pct: number;
@@ -8489,6 +8490,17 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
             ) : (
               <div className="col" style={{ gap: 4 }}>
                 <div className="small"><strong>Submitted by:</strong> {summary.job_report.submitted_by_name ?? "-"}</div>
+                {/* Only shown when somebody OTHER than the submitter has edited
+                    the report. Showing "last edited by" for every self-edit was
+                    noise; the point of the line is to make a third party's
+                    change visible, which is what went unnoticed before these
+                    were two separate fields. */}
+                {summary.job_report.last_edited_by_name
+                  && summary.job_report.last_edited_by_name !== summary.job_report.submitted_by_name && (
+                  <div className="small" style={{ color: "var(--muted)" }}>
+                    <strong>Last edited by:</strong> {summary.job_report.last_edited_by_name}
+                  </div>
+                )}
                 <div className="small"><strong>Personal vehicles:</strong> {summary.job_report.personal_vehicles}</div>
                 <div className="small"><strong>M1 dumpster:</strong> {summary.job_report.dumpster_pct}%</div>
                 <div className="small"><strong>M1 recycling:</strong> {summary.job_report.recycling_pct}%</div>
