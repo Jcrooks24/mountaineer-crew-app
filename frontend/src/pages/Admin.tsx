@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { getToken } from "../auth/token";
 import { getCompanyInfoCached, setCompanyInfoCache, type CompanyInfo } from "../lib/companyInfo";
+import { compareRoster } from "../lib/nameSort";
 import { useJobTypes } from "../lib/jobTypesStore";
 import { newClaimNumber } from "../lib/incidentStore";
 
@@ -640,6 +641,14 @@ function IncidentsAdminTab() {
 function EmployeesTab() {
   const nav = useNavigate();
   const [users, setUsers] = useState<AdminUser[]>([]);
+  // Roster order: active first, alphabetically by LAST name, then inactive in the
+  // same order. The table used to render `users` in whatever order the API
+  // returned, so the list of people who actually work here was interrupted by
+  // people who do not, and nobody could find a surname. Sorted here rather than
+  // server-side because /api/admin/users is shared with other callers that do
+  // not want this ordering imposed on them. Same surname rule payroll uses -
+  // see lib/nameSort.ts, mirrored in app/core/name_sort.py.
+  const rosterUsers = useMemo(() => [...users].sort(compareRoster), [users]);
   const [tags, setTags] = useState<EmployeeTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -803,11 +812,11 @@ function EmployeesTab() {
             </tr>
           </thead>
           <tbody>
-            {users.map((u, i) => (
+            {rosterUsers.map((u, i) => (
               <tr
                 key={u.id}
                 style={{
-                  borderBottom: i < users.length - 1 ? "1px solid var(--border)" : "none",
+                  borderBottom: i < rosterUsers.length - 1 ? "1px solid var(--border)" : "none",
                   opacity: u.is_active ? 1 : 0.45,
                 }}
               >

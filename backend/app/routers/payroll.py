@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_db, require_admin
 from app.core.mailer import send_email
+from app.core.name_sort import surname_key
 from app.core.payroll_period import set_last_finalized_period
 from app.core.time_utils import (
     MOUNTAIN_TZ,
@@ -800,7 +801,10 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
         if uid not in by_user and uid in roster:
             employees.append(_employee_summary(roster[uid], [], start, end, r, rates))
 
-    employees.sort(key=lambda e: (e["name"] or "").lower())
+    # By LAST name. Sorting on the full string put everyone in first-name order,
+    # which is not how anyone looks a person up on a payroll run. Mirrors the
+    # admin roster, which uses the same rule in frontend/src/lib/nameSort.ts.
+    employees.sort(key=lambda e: surname_key(e.get("name"), e.get("email")))
 
     # Review gate (ADR 0032): the jobs whose hours feed this period, and which of
     # them the admin has reviewed + initialed on the Job Summary. A job is
