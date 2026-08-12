@@ -447,31 +447,50 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
    one-line edit. Found 2026-08-10 while moving DQ files to their own folder;
    the folder move neither caused nor worsened it.
 
-2. **The nightly sheet-integrity cron is OOM-killed on every run (prod/`main`).**
-   `sheet_integrity_check.py` exits 137 on the 512 MB Render Cron Job, so the
-   canary that is supposed to catch Sheet drift is not running at all. **Nothing
-   is watching the mirror right now** - treat the 2026-08-05 audit class
-   (header overwrites, duplicate rows) as undetected, not as absent.
+2. **The nightly sheet-integrity cron OOMs. Cause found and fixed 2026-08-12;
+   awaiting one clean prod run before this entry is deleted.**
 
-   One fix has already been made and was **real but insufficient**: the structural
-   pass no longer reads whole tabs, only `{tab}!1:1` and one key column
-   (`_header` / `_column`). It still OOMs after that change.
+   Until a run is confirmed green, assume **nothing is watching the mirror** and
+   treat the 2026-08-05 audit class (header overwrites, duplicate rows) as
+   undetected rather than absent.
 
-   **Do not fix this by reading it again.** Two rounds have now been spent on
-   inspection. The job now prints `[mem]` RSS checkpoints (see
-   `app/core/memprobe.py`) before each tab and around each pass, unbuffered, so
-   the last line in the Render log before the kill names the culprit. Get that log
-   first. **This instrumentation is on `staging` and reaches the cron only at the
-   next promotion** - the Cron Job deploys from `main`.
+   **What it actually was.** The `[mem]` checkpoints (`app/core/memprobe.py`)
+   showed RSS climbing **~18.7 MB per Sheets API call and never falling**,
+   dying partway through the *structural* pass at the `EstimateItems` tab:
 
-   The standing suspect, to be confirmed or killed by that log rather than acted
-   on: every `_src_*` in `sheet_backfill.py` is a full-table `.all()` of ORM
-   entities, seventeen of them run in sequence, and they all share the one Session
-   opened at `sheet_integrity_check.py:176`. SQLAlchemy's identity map holds a
-   strong reference to every row loaded by every earlier sync until that session
-   closes, so the audit's memory only grows. `JobReport` is 19 Text/JSON columns
-   of 28; `Estimate` is 44 columns. If the log shows a `total=` that climbs across
-   the `audit: loaded source ...` lines and never falls, that is it.
+   ```
+   about to read Materials   step=+58Mi   (Events: 3 calls)
+   about to read JobReports  step=+38Mi   (Materials: 2 calls)
+   about to read Bills       step=+56Mi   (JobReports: 3 calls)
+   about to read DVIRs       step=+37Mi   (Bills: 2 calls)
+   about to read Estimates   step=+0Mi    (LongDistancePay: tab absent, 0 calls)
+   ```
+
+   The cost tracked **call count, not data volume**: tiny `PriorOnDuty` cost the
+   same per call as `JobReports`, and the tab that does not exist cost exactly
+   zero. So the fix was to stop making ~50 calls. The structural pass now uses
+   `values().batchGet` (8 ranges per request) for all headers and all key
+   columns, and `_sheet_ids` sends a `fields` mask - unmasked, that single
+   metadata call pulled the full spreadsheet resource for all 42 tabs and cost
+   66 MB by itself. About 7 calls total now.
+
+   Also found: for every keyed tab in `REGISTRY` the unique key **is** the first
+   expected header, so the duplicate check and the residue check were reading
+   the identical column twice in two separate calls.
+
+   **Two things to know before touching this again:**
+
+   - **The earlier suspicion was wrong.** The standing theory was the shared
+     SQLAlchemy Session in `audit_sheet_backfill` pinning every ORM row in its
+     identity map. The log killed it: the job dies in the structural pass and
+     **never reaches the completeness pass at all.** That is a good argument for
+     measuring before fixing, and against this entry's own earlier confidence.
+   - **The completeness pass has still never run in production.** It has been
+     shielded by an OOM that happened before it. The identity-map concern above
+     is unproven in both directions - the next successful run is its first real
+     exercise. Keep the `[mem]` checkpoints until it has passed cleanly, and
+     look specifically at whether `total=` climbs across the
+     `audit: loaded source ...` lines and never falls.
 
 2. **The crew bottom nav drifts upward on scroll, on mobile (prod/`main`).**
    The nav is `position: fixed; left/right/bottom: 0; zIndex: 50`, styled inline
