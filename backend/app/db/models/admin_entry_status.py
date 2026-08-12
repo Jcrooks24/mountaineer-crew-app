@@ -36,6 +36,20 @@ class AdminEntryStatus(Base):
     corrected = Column(Boolean, nullable=True)
     confirmed_in_sheet = Column(Boolean, nullable=True)
 
+    # Payroll report waiver. Some jobs legitimately never get a job report - the
+    # off-job hours a crew member logged against a manual job, an unpaid drive
+    # leg - and the finalize gate would otherwise block payroll forever waiting
+    # for a report nobody is going to file. An admin waives the requirement for
+    # that specific job, with a reason, and it drops out of the gate.
+    #
+    # Deliberately per-job and explicit rather than a blanket setting: the gate
+    # exists to stop payroll running on unreviewed work, and a global off switch
+    # would retire the gate instead of handling the exception.
+    report_waived = Column(Boolean, nullable=True, default=False)
+    report_waived_reason = Column(String, nullable=True)
+    report_waived_by_name = Column(String, nullable=True)
+    report_waived_at = Column(DateTime, nullable=True)
+
     updated_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_by_name = Column(String, nullable=True)
     updated_at = Column(DateTime, nullable=False)

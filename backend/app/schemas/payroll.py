@@ -98,3 +98,51 @@ class PayrollFinalizeRequest(BaseModel):
     # Crew whose corrections were already discussed in person. They are stamped
     # notified so a later finalize does not mail what was deliberately withheld.
     suppress_user_ids: Optional[List[int]] = None
+
+
+class ReimbursementDecision(BaseModel):
+    """Approve or decline one reimbursement claim from the payroll detail view.
+
+    `status` is deliberately the full word rather than a boolean: the model has
+    three states (submitted / approved / rejected) and an admin needs to be able
+    to put a claim BACK to submitted after a mis-click, which a boolean cannot
+    express.
+    """
+    status: str
+    # Shown to the crew member in the decline email, so it is worth requiring
+    # something. A decline with no explanation generates a phone call.
+    note: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def known_status(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in ("submitted", "approved", "rejected"):
+            raise ValueError("status must be submitted, approved or rejected")
+        return v
+
+    @field_validator("note")
+    @classmethod
+    def note_length(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 2000:
+            raise ValueError("note too long")
+        return v
+
+
+class ReportWaiverRequest(BaseModel):
+    """Waive (or un-waive) the job-report requirement for one job at finalize."""
+    waived: bool
+    reason: Optional[str] = None
+
+    @field_validator("reason")
+    @classmethod
+    def reason_length(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 500:
+            raise ValueError("reason too long")
+        return v

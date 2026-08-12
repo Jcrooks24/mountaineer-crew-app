@@ -601,6 +601,47 @@ record was lost.
 
 ---
 
+## Reimbursement approval + payroll report waiver (2026-08-12)
+
+**Class A.** Two admin decisions that change what payroll pays and whether it can
+finalize at all.
+
+| Field | Path | Adherence |
+|---|---|---|
+| `reimbursements.status` | Payroll detail -> `POST /api/admin/payroll/reimbursement/{uuid}/decision` -> Postgres | read |
+| `reimbursements.approver_id` / `approver_name` / `approved_at` | same | read |
+| `reimbursements.approval_notes` | same; also the body of the decline email | read |
+| `admin_entry_status.report_waived` | Payroll gate -> `POST /api/admin/payroll/job/{uuid}/report-waiver` -> Postgres | read |
+| `admin_entry_status.report_waived_reason` / `_by_name` / `_at` | same | read |
+
+Marked **read**, not `[x]`: verified by executing the endpoints against a real
+database, not by tracing a value from a device through to the Sheet. None of
+these reach the Sheet at all today, which is itself the thing to decide before
+promoting them to `[x]` (see Open questions).
+
+**Direction of the money, and why.** Payroll pays every claim EXCEPT one an admin
+explicitly declined. It does not pay only what was approved. That is deliberate:
+the approved-only gate was unreachable for months and silently reported $0 for
+everyone, and a forgotten approval must never underpay somebody. `unreviewed`
+counts per employee and finalize returns `reimbursements_unreviewed` so "nobody
+looked" is visible rather than silent. It warns; it does not block.
+
+**Rejected rows are fetched but not summed.** They have to stay visible so a
+decline can be undone from the payroll screen.
+
+**Emails.** A NEW decline emails the crew member (Postmark, `SMTP_FROM`). Re-saving
+a note on an already-declined claim does not re-send. An approval never emails.
+A send failure does NOT roll back the decision - refusing to record a decline
+because a mailbox bounced would leave a claim being paid that an admin judged
+wrong - and the failure comes back in the response so the admin can follow up.
+
+**The waiver** drops a report-less job out of the finalize gate. Per job and
+explicit, never global: a blanket "ignore report-less jobs" would retire the gate
+rather than handle the exception. It borrows no initials - `entered_by` is set to
+`(waived)` so a waiver is never mistaken for an ADR 0032 attestation.
+
+---
+
 # Deviations new on staging
 
 **Everything in this section is a promotion blocker** until fixed or waived in
