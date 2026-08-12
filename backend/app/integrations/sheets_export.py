@@ -341,7 +341,16 @@ def _sheet_ids(svc: Any, spreadsheet_id: str, refresh: bool = False) -> Dict[str
         if entry and entry[0] > now:
             return entry[1]
 
-    meta = _api(lambda: svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute())
+    # `fields` mask is load-bearing, not a micro-optimisation. Unmasked,
+    # spreadsheets().get returns the ENTIRE spreadsheet resource for every tab:
+    # all sheet properties, conditional formats, banded ranges, protected ranges,
+    # filter views and developer metadata. On the live workbook (42 tabs) that
+    # single call cost 66 MB of RSS on the 512 MB worker, measured 2026-08-12.
+    # This function reads exactly two fields, so it asks for exactly two.
+    meta = _api(lambda: svc.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets.properties.title,sheets.properties.sheetId",
+    ).execute())
     ids = {
         s["properties"]["title"]: s["properties"]["sheetId"]
         for s in meta.get("sheets", [])

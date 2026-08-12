@@ -95,33 +95,81 @@ def _tab_name(env_var: str, default: str) -> str:
     return os.getenv(env_var, default).strip() or default
 
 
-# Reading a whole tab is what OOM-killed this job on the 512 MB Render worker.
-# `range=tab` pulls every cell of every column - including the long free-text
-# columns (notes, feedback, walkthrough) - for every registered tab in a loop,
-# and holds it while counting duplicates. The check never needed any of that: it
-# wants the header row, and one key column.
+# ── Why this pass is batched, and why it must stay batched ───────────────────
 #
-# These two reads are bounded by ROW count on a single column instead of
-# rows x columns across the whole workbook. Do not "simplify" them back into one
-# whole-tab fetch.
+# Two OOM fixes have been made here. The first replaced whole-tab reads
+# (`range=tab`, every cell of every column including the long free-text ones)
+# with a header row plus one key column. That was real and necessary, and it was
+# NOT sufficient - the job still died. The second fix is this one, and it came
+# from a measurement rather than a third reading of the code.
+#
+# The 2026-08-12 log, with the [mem] checkpoints below, showed RSS climbing
+# ~18.7 MB per Sheets API call and never falling:
+#
+#     about to read Materials   step=+58Mi   (Events: 3 calls)
+#     about to read JobReports  step=+38Mi   (Materials: 2 calls)
+#     about to read Bills       step=+56Mi   (JobReports: 3 calls)
+#     about to read DVIRs       step=+37Mi   (Bills: 2 calls)
+#     about to read Estimates   step=+0Mi    (LongDistancePay: tab absent, 0 calls)
+#
+# Two and three-call tabs cost 37 and 56 MB regardless of how much data they
+# hold: tiny PriorOnDuty cost the same per call as JobReports, and the tab that
+# does not exist cost exactly nothing. **The cost tracks the number of API
+# calls, not the volume of data.** So the fix is to make far fewer calls, which
+# is correct whatever is retaining the per-call allocations.
+#
+# `spreadsheets().values().batchGet` takes many ranges in one request. That
+# takes the structural pass from ~50 calls to ~5. Note also that for every
+# keyed tab in REGISTRY the unique key IS the first expected header, so the
+# duplicate check and the residue check were reading the same column twice, in
+# two separate calls.
+#
+# `audit_sheet_backfill` has been batched like this from the start - its
+# docstring promises "three Sheets calls for the whole audit regardless of how
+# many syncs are registered". This pass was the naive half.
+#
+# Do not "simplify" this back into a per-tab loop of single `values().get()`
+# calls, and do not reintroduce a whole-tab fetch.
 
-def _header(svc, sid, tab):
-    """Row 1 only."""
-    vals = se._api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=sid, range=f"{tab}!1:1", valueRenderOption="UNFORMATTED_VALUE",
-    ).execute()).get("values", [])
-    return vals[0] if vals else []
+# Ranges per batchGet request. Bounds the size of any single response so the
+# saving in call count is not traded for one enormous parse: the failure being
+# fixed was per-call overhead, and collapsing 50 calls to 1 would fix that while
+# creating a new peak. Five-ish requests is well past the point of diminishing
+# returns on the per-call cost.
+_BATCH_RANGES = 8
 
 
-def _column(svc, sid, tab, index: int):
-    """One column, data rows only (header dropped), as a flat list."""
-    letter = se._col_letter(index)
-    vals = se._api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=sid, range=f"{tab}!{letter}:{letter}",
-        valueRenderOption="UNFORMATTED_VALUE", majorDimension="COLUMNS",
-    ).execute()).get("values", [])
-    col = vals[0] if vals else []
-    return col[1:]  # drop the header cell
+def _batch_get(svc, sid, ranges: list, major: str) -> dict:
+    """Read many ranges in as few API calls as possible.
+
+    Returns {requested range string: values}. Results are keyed by the range
+    string as sent, and matched to the response positionally, so the caller does
+    not depend on Google echoing the range back in the same form it was given.
+    """
+    out: dict = {}
+    for start in range(0, len(ranges), _BATCH_RANGES):
+        chunk = ranges[start:start + _BATCH_RANGES]
+        # chunk bound as a default arg: the lambda is called by _api after the
+        # loop variable would otherwise have moved on.
+        resp = se._api(lambda c=chunk: svc.spreadsheets().values().batchGet(
+            spreadsheetId=sid, ranges=c, majorDimension=major,
+            valueRenderOption="UNFORMATTED_VALUE",
+        ).execute())
+        for requested, value_range in zip(chunk, resp.get("valueRanges", [])):
+            out[requested] = value_range.get("values", []) or []
+    return out
+
+
+def _quote_tab(tab: str) -> str:
+    """A1 range prefix for a tab. Single-quoted, with internal quotes doubled,
+    so a tab named `Bob's Jobs` does not produce a malformed range."""
+    return "'" + tab.replace("'", "''") + "'"
+
+
+def _column_from(values: list) -> list:
+    """Data rows of a COLUMNS-major single-column read, header cell dropped."""
+    col = values[0] if values else []
+    return col[1:]
 
 
 def _completeness_checks(db, fails: list, warns: list) -> None:
@@ -210,38 +258,73 @@ def main() -> None:
         if low.startswith("sheets") and name.endswith("Staging"):
             fails.append(f"junk tab present: {name!r} (env-var-named; should not exist)")
 
-    # 2) per registered tab
+    # 2) per registered tab, in three phases: read all headers, read all key
+    #    columns, then judge. An absent tab costs no API call at all, which is
+    #    why LongDistancePay showed a step of exactly +0Mi in the log above.
+    scan = []  # [(tab, expected headers, unique key or None)]
     for env_var, default, headers_attr, ukey in REGISTRY:
         tab = _tab_name(env_var, default)
-        # Probed BEFORE the tab is read, not after: if the process is killed here,
-        # the last line in the log names the tab that was being read when it died.
-        memprobe.probe(f"structural: about to read {tab}")
-        expected = getattr(se, headers_attr)
         if tab not in all_tabs:
             continue  # tab is created on first write; absence is not a defect
-        header = [str(h).strip() for h in _header(svc, sid, tab)]
+        scan.append((tab, getattr(se, headers_attr), ukey))
+
+    # 2a) every header row, batched.
+    header_ranges = [f"{_quote_tab(tab)}!1:1" for tab, _, _ in scan]
+    header_vals = _batch_get(svc, sid, header_ranges, "ROWS")
+    headers = {}
+    for (tab, _, _), rng in zip(scan, header_ranges):
+        rows = header_vals.get(rng) or []
+        headers[tab] = [str(h).strip() for h in (rows[0] if rows else [])]
+    del header_vals
+    memprobe.probe(f"structural: {len(scan)} header rows read")
+
+    # 2b) the key column of every tab that has a usable header, batched. Built
+    #     as a set of column INDEXES per tab: the duplicate check and the residue
+    #     check want the same column on every tab in REGISTRY today, so this is
+    #     one range per tab, but it stays correct if a future entry keys its
+    #     duplicate check on some other column.
+    col_range_of = {}  # (tab, column index) -> range string
+    for tab, expected, ukey in scan:
+        header = headers[tab]
+        if not header or expected[0] not in header:
+            continue  # reported below; do not spend a read on it
+        want = {header.index(expected[0])}
+        if ukey and ukey in header:
+            want.add(header.index(ukey))
+        for idx in sorted(want):
+            letter = se._col_letter(idx)
+            col_range_of[(tab, idx)] = f"{_quote_tab(tab)}!{letter}:{letter}"
+    col_vals = _batch_get(svc, sid, list(col_range_of.values()), "COLUMNS")
+    memprobe.probe(f"structural: {len(col_range_of)} key columns read")
+
+    def _key_column(tab: str, index: int) -> list:
+        return _column_from(col_vals.get(col_range_of.get((tab, index), ""), []))
+
+    # 2c) judge. No API calls past this point.
+    for tab, expected, ukey in scan:
+        header = headers[tab]
         if not header:
             warns.append(f"{tab}: exists but has no header row")
             continue
 
-        # 2a) KEY column present (the corruption check - mirrors _ensure_tab guard)
+        # KEY column present (the corruption check - mirrors _ensure_tab guard)
         key0 = expected[0]
         if key0 not in header:
             fails.append(f"{tab}: KEY column {key0!r} missing from header {header} "
                          f"(row 1 renamed/overwritten?)")
             continue  # everything downstream keys off this; don't cascade noise
 
-        # 2b) all other expected columns present (usually un-promoted work -> warn)
+        # all other expected columns present (usually un-promoted work -> warn)
         missing = [h for h in expected if h not in header]
         if missing:
             warns.append(f"{tab}: expected column(s) absent: {missing}")
 
-        # 2c) duplicate rows for a one-per-key tab
+        # duplicate rows for a one-per-key tab
         if ukey and ukey in header:
             # Count straight into the Counter rather than materializing a list of
             # every key first: same result, one copy of the data instead of two.
             counts = Counter(
-                s for s in (str(v).strip() for v in _column(svc, sid, tab, header.index(ukey)))
+                s for s in (str(v).strip() for v in _key_column(tab, header.index(ukey)))
                 if s
             )
             dups = {k: c for k, c in counts.items() if c > 1}
@@ -250,22 +333,28 @@ def main() -> None:
                 fails.append(f"{tab}: {len(dups)} duplicated {ukey}(s) "
                              f"({sum(dups.values())} rows) e.g. {shown}")
 
-        # 2d) residue rows: a data row whose KEY cell is empty.
+        # residue rows: a data row whose KEY cell is empty.
         #
         # This used to test whether an ENTIRE row was blank, which needed every
-        # cell of the tab in memory - the read that OOM-killed this job. The key
+        # cell of the tab in memory - the read that caused the first OOM. The key
         # column answers the same question within the memory budget, and answers
         # a slightly better one: a row with no key is a defect whether or not the
         # rest of it is empty, because every lookup, dedupe and replace-style
         # delete on this tab is keyed off that column. A blank-key row is either
         # residue or a row that has lost its identity, and both want reporting.
-        key_col = _column(svc, sid, tab, header.index(key0))
+        key_col = _key_column(tab, header.index(key0))
         # +2: the list is data rows only (header dropped), and sheet rows are
         # 1-based, so element 0 is sheet row 2.
         blanks = [i + 2 for i, v in enumerate(key_col) if not str(v).strip()]
         if blanks:
             warns.append(f"{tab}: {len(blanks)} row(s) with an empty {key0!r} at "
                          f"{blanks[:10]}" + (" ..." if len(blanks) > 10 else ""))
+
+    # Release the key-column data before the completeness pass, which does its
+    # own large reads. `.clear()` and not `del`: `_key_column` closes over this
+    # dict, so rebinding the name would leave the closure cell holding every
+    # column alive and free nothing. Mutating the object frees the data for real.
+    col_vals.clear()
 
     # COMPLETENESS: does the sheet mirror every current server record? -----------
     # The Sheet is the long-term record; the server data is treated as transient.

@@ -554,6 +554,24 @@ diffable syncs, the Events and BOL marker-table counters for the two auto-reconc
 ones). Exit 0 on no FAILs, 1 otherwise. Emails on FAIL; `--email-warnings`,
 `--force-email`, `--no-email`, `--no-completeness` available.
 
+**Read pattern (changed 2026-08-12).** Both passes are now batched, and the read
+cost is flat in the number of tabs:
+
+| Phase | Sheets API calls |
+|---|---|
+| Workbook metadata | 1, with a `fields` mask for title + sheetId only |
+| Structural: every header row | `ceil(tabs / 8)` batchGet |
+| Structural: every key column | `ceil(tabs / 8)` batchGet |
+| Completeness | 3, unchanged (`audit_sheet_backfill` was already batched) |
+
+Roughly 7 calls for the whole run against ~50 before. This is a **memory**
+constraint, not a quota one: RSS was measured climbing ~18.7 MB per API call and
+never falling, which OOM-killed the job on the 512 MB worker partway through the
+structural pass. The count of calls is the thing being controlled. Do not
+un-batch these, and do not drop the `fields` mask on
+`sheets_export._sheet_ids` - unmasked, that one call cost 66 MB on a 42-tab
+workbook. See Known defects in [RUNBOOKS.md](RUNBOOKS.md).
+
 **This is the first thing in the system that checks hop 3 end to end.** Before it,
 `sheet_sync_status` could only say which export *function* last failed, never which
 record was lost.
