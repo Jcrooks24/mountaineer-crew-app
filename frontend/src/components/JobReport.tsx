@@ -104,6 +104,7 @@ import { hhgWeightLbs } from "../lib/hhg";
 import {
   TRUCK_IDS,
   filledCuFt,
+  loadCount,
   truckCapacityCuFt,
   type TruckFullnessEntry,
 } from "../lib/jobTypes";
@@ -3260,6 +3261,32 @@ function TruckFullnessEditor({
                 />
               </label>
             )}
+            {/* Loads: one truck can run a job more than once, and until now that
+                was unrecordable. The picker deliberately refuses to list a fleet
+                truck twice (so two rentals cannot collide), which also made "we
+                used two truck loads" impossible to say. Counting the loads here
+                says it directly and keeps that constraint.
+
+                The fill gauge below describes ONE load - how full the truck was
+                each time - and the cubic-foot figure multiplies by this count. */}
+            <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+              <span className="small" style={{ color: "var(--muted)" }}>Loads (trips with this truck)</span>
+              <NumberField
+                min={1}
+                step={1}
+                integer
+                value={loadCount(t)}
+                onEmpty={() => patchAt(i, { loads: 1 })}
+                onChange={(loads) => patchAt(i, { loads: Math.max(1, Math.floor(loads || 1)) })}
+                aria-label="Number of loads with this truck"
+                style={{ width: 80 }}
+              />
+              {loadCount(t) > 1 && (
+                <span className="small" style={{ color: "var(--muted)" }}>
+                  Fill below is per load; the total multiplies by {loadCount(t)}.
+                </span>
+              )}
+            </label>
             <TruckDeckGauge
               verticalPct={t.vertical_pct}
               horizontalPct={t.horizontal_pct}

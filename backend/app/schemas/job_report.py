@@ -162,6 +162,28 @@ class TruckFullnessEntry(BaseModel):
     horizontal_pct: int
     is_rental: bool = False
     length_ft: Optional[float] = None
+    # How many times this truck was filled and emptied on the job. A single
+    # truck doing two runs was previously unrecordable: the picker refuses to
+    # list a fleet truck twice (so two rentals cannot collide), which also made
+    # "we used two truck loads" impossible to say. Counting loads on the entry
+    # says it directly and keeps that constraint.
+    #
+    # Defaults to 1, and every row written before this field existed reads as 1
+    # without a backfill, which is what those rows meant.
+    loads: int = 1
+
+    @field_validator("loads")
+    @classmethod
+    def _sane_loads(cls, v: int) -> int:
+        # Upper bound is a typo guard, not a policy: nobody runs a truck twenty
+        # times on one job, but a fat-fingered 11 should not silently multiply
+        # the job's volume by eleven either.
+        if v is None:
+            return 1
+        v = int(v)
+        if v < 1:
+            return 1
+        return min(v, 20)
 
     @model_validator(mode="after")
     def _validate_truck(self) -> "TruckFullnessEntry":

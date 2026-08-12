@@ -71,23 +71,41 @@ export function combinedFillPct(vertical_pct: number, horizontal_pct: number): n
   return Math.round((vertical_pct * horizontal_pct) / 100);
 }
 
-/** Cubic feet loaded, or null when the truck's capacity is unknown. */
+/** How many times this truck was filled. Missing, zero and nonsense all read as
+ *  1: an entry that predates the field described a single load. */
+export function loadCount(entry: { loads?: number }): number {
+  const n = Number(entry.loads);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
+/** Cubic feet loaded ACROSS ALL LOADS, or null when capacity is unknown.
+ *
+ *  A truck that ran twice moved roughly twice the volume, and this figure feeds
+ *  the weight estimate, so multiplying here is the whole point of recording
+ *  loads. A single-load entry is unaffected, which is every entry written before
+ *  the field existed. */
 export function filledCuFt(entry: {
   truck: string;
   vertical_pct: number;
   horizontal_pct: number;
   is_rental?: boolean;
   length_ft?: number;
+  loads?: number;
 }): number | null {
   const cap = truckCapacityCuFt(entry);
   if (cap === null) return null;
-  return Math.round((cap * combinedFillPct(entry.vertical_pct, entry.horizontal_pct)) / 100);
+  const perLoad = (cap * combinedFillPct(entry.vertical_pct, entry.horizontal_pct)) / 100;
+  return Math.round(perLoad * loadCount(entry));
 }
 
 export type TruckFullnessEntry = {
   truck: string;
   vertical_pct: number;
   horizontal_pct: number;
+  /** How many times this truck was filled and emptied on the job. Optional and
+   *  absent on every entry written before it existed, which is why every reader
+   *  treats missing as 1 - that is what those entries meant. */
+  loads?: number;
   // Rental trucks aren't in the fixed fleet: free-text label + optional length,
   // and their fill is a best guess since they have no interior 25% markers.
   is_rental?: boolean;

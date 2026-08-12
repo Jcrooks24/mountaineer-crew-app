@@ -642,6 +642,31 @@ rather than handle the exception. It borrows no initials - `entered_by` is set t
 
 ---
 
+## Truck loads (2026-08-12)
+
+**Class A.** `truck_fullness` entries gain `loads`.
+
+| Field | Path | Adherence |
+|---|---|---|
+| `truck_fullness[].loads` | Job Report -> `PUT /api/job-report` -> `truck_fullness_json` -> JobReports sheet `truck_fullness` cell | read |
+
+One truck running a job twice was unrecordable: the picker refuses to list a
+fleet truck twice (so two rentals cannot collide), which also made "we used two
+truck loads" impossible to say. The count lives on the entry, so that constraint
+stays.
+
+**No migration.** It rides inside the existing `truck_fullness_json` column.
+Entries written before the field have no `loads` key, and every reader treats
+missing as 1 - which is exactly what those entries meant.
+
+**The Sheet cell changes shape only when loads > 1.** A single-load truck renders
+byte-identical to before, so nothing in the existing column shifts. Two loads
+appends ` ×2 loads` and the cubic-foot figure is multiplied, because the office
+reasons about total volume moved. The percentage stays per-load: it is the crew's
+observation of one fill, not a total.
+
+---
+
 # Deviations new on staging
 
 **Everything in this section is a promotion blocker** until fixed or waived in

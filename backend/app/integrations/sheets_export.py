@@ -1251,8 +1251,21 @@ def _format_truck_fullness(entries: Optional[list]) -> str:
             capacity = truck_capacity_cuft(e)
         except Exception:  # noqa: BLE001 - never let a spec lookup kill an export
             capacity = None
-        volume = f", {round(capacity * combined / 100):,} cu ft" if capacity else ""
-        parts.append(f"{label}: V{v}×H{h} ({combined}%{volume})")
+        # Loads: a truck that ran the job twice moved roughly twice the volume,
+        # and the office reasons about the total. Missing or nonsense reads as 1,
+        # which is what every entry written before the field existed meant.
+        try:
+            loads = int(e.get("loads") or 1)
+        except (TypeError, ValueError):
+            loads = 1
+        loads = max(1, loads)
+        volume = (
+            f", {round(capacity * combined / 100) * loads:,} cu ft" if capacity else ""
+        )
+        # Only stated when it is not 1, so the common single-load cell reads
+        # exactly as it always has and nothing in the Sheet shifts for no reason.
+        loads_note = f" ×{loads} loads" if loads > 1 else ""
+        parts.append(f"{label}: V{v}×H{h} ({combined}%{volume}){loads_note}")
     return "; ".join(parts)
 
 
