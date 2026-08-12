@@ -849,9 +849,29 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
             period_jobs.setdefault(r["source_key"], r.get("source_label") or "")
     reviewed: set = set()
     if period_jobs:
+        # A WAIVER ROW IS NOT A REVIEW.
+        #
+        # This set used to be "has an AdminEntryStatus row at all". The report
+        # waiver creates such a row for a job that had none (entered_by
+        # "(waived)", attestation left unset), so waiving a report-less job would
+        # ALSO have exempted it from the initialing gate the moment somebody
+        # filed a report for it later and it entered period_jobs. The gate exists
+        # to stop payroll running over unreviewed work; a waiver says only "no
+        # report is coming", never "I checked this".
+        #
+        # Excluding exactly `report_waived AND validated IS NULL` - a row created
+        # by the waiver and never initialed since. Legacy rows (both null, from
+        # before ADR 0032's attestation existed) still count as reviewed, so this
+        # does not retroactively reopen old periods.
         reviewed = {
             u for (u,) in db.query(AdminEntryStatus.job_uuid)
-            .filter(AdminEntryStatus.job_uuid.in_(list(period_jobs))).all()
+            .filter(
+                AdminEntryStatus.job_uuid.in_(list(period_jobs)),
+                ~(
+                    (AdminEntryStatus.report_waived.is_(True))
+                    & (AdminEntryStatus.validated.is_(None))
+                ),
+            ).all()
         }
     period_pending = [
         {"job_uuid": u, "job_name": n, "reason": "not initialed"}

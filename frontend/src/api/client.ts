@@ -4,11 +4,49 @@ import { getToken, clearToken } from "../auth/token";
 // where import.meta.env is undefined. In the app Vite always defines it.
 const API = (import.meta as any).env?.VITE_API_URL || "http://127.0.0.1:8000";
 
+/**
+ * Turn a FastAPI error body into something a person can read.
+ *
+ * `detail` is a plain string for our own `raise HTTPException(...)`, but on a
+ * 422 FastAPI produces a LIST of pydantic error objects. Passing that straight
+ * to `Error` stringifies it as "[object Object]", which is what an admin saw
+ * when the job-report initialing call failed - a message that says nothing about
+ * what went wrong and cannot be searched for.
+ */
+function describeDetail(detail: any, status: number): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d) => {
+        if (typeof d === "string") return d;
+        // loc is like ["body", "entered_by"]; the field name is the useful half.
+        const field = Array.isArray(d?.loc)
+          ? d.loc.filter((x: any) => x !== "body").join(".")
+          : "";
+        const msg = d?.msg || d?.type || "invalid";
+        return field ? `${field}: ${msg}` : String(msg);
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  // `!Array.isArray` matters: an array IS an object, so an EMPTY detail list
+  // would otherwise stringify to "[]" and be shown to a crew member as the
+  // explanation. An empty list explains nothing; fall through to the status.
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      /* fall through */
+    }
+  }
+  return `API Error ${status}`;
+}
+
 export class ApiError extends Error {
   status: number;
   body: any;
   constructor(status: number, body: any) {
-    super(body?.detail || `API Error ${status}`);
+    super(describeDetail(body?.detail, status));
     this.status = status;
     this.body = body;
   }

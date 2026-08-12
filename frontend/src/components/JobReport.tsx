@@ -104,7 +104,6 @@ import { hhgWeightLbs } from "../lib/hhg";
 import {
   TRUCK_IDS,
   filledCuFt,
-  loadCount,
   truckCapacityCuFt,
   type TruckFullnessEntry,
 } from "../lib/jobTypes";
@@ -1569,11 +1568,20 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
         {trucks.length > 0 && section("Truck fullness", (
           <>
             {trucks.map((t, i) => {
+              // One entry is one LOAD, so these figures describe a single trip.
+              // A truck that ran twice appears twice, each with its own fill.
               const cuft = filledCuFt(t);
               const pct = Math.round((t.vertical_pct * t.horizontal_pct) / 100);
+              const same = trucks.filter((x) => (x.truck || "") === (t.truck || ""));
+              const loadNo = same.length > 1
+                ? same.indexOf(t) + 1
+                : 0;
               return (
                 <div key={i}>
-                  {row(t.truck || "Truck", `${pct}% full${cuft !== null ? ` · ${cuft.toLocaleString()} cu ft · ~${hhgWeightLbs(cuft).toLocaleString()} lbs` : ""}`)}
+                  {row(
+                    `${t.truck || "Truck"}${loadNo ? ` (load ${loadNo})` : ""}`,
+                    `${pct}% full${cuft !== null ? ` · ${cuft.toLocaleString()} cu ft · ~${hhgWeightLbs(cuft).toLocaleString()} lbs` : ""}`,
+                  )}
                 </div>
               );
             })}
@@ -3215,8 +3223,13 @@ function TruckFullnessEditor({
 }) {
   // Only fleet entries reserve a fixed id; rentals are free-text so several can
   // coexist. Updates/removes go by index so two rentals never collide.
-  const usedFleet = new Set(value.filter((t) => !t.is_rental).map((t) => t.truck));
-  const availableFleet = TRUCK_IDS.filter((t) => !usedFleet.has(t));
+  // Every fleet truck stays offerable, including one already on the list: an
+  // entry is one LOAD, so adding the same truck again is how a second trip is
+  // recorded. It used to be filtered out, which is what made "we used two truck
+  // loads" impossible to say - and a single fill estimate multiplied by two
+  // would describe neither trip, since a first load packed tight and a second
+  // half-empty is the normal case.
+  const availableFleet = TRUCK_IDS;
 
   const patchAt = (i: number, patch: Partial<TruckFullnessEntry>) =>
     onChange(value.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
@@ -3231,7 +3244,10 @@ function TruckFullnessEditor({
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {value.map((t, i) => {
         return (
-          <div key={t.is_rental ? `rental-${i}` : t.truck} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+          // Keyed by INDEX, not by truck name: the same truck can now appear
+          // more than once (one entry per load), and a name key would collide
+          // and make React reuse the wrong card's state.
+          <div key={`load-${i}`} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
             <div className="row" style={{ alignItems: "center", gap: 8 }}>
               {t.is_rental ? (
                 <input
@@ -3261,32 +3277,6 @@ function TruckFullnessEditor({
                 />
               </label>
             )}
-            {/* Loads: one truck can run a job more than once, and until now that
-                was unrecordable. The picker deliberately refuses to list a fleet
-                truck twice (so two rentals cannot collide), which also made "we
-                used two truck loads" impossible to say. Counting the loads here
-                says it directly and keeps that constraint.
-
-                The fill gauge below describes ONE load - how full the truck was
-                each time - and the cubic-foot figure multiplies by this count. */}
-            <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Loads (trips with this truck)</span>
-              <NumberField
-                min={1}
-                step={1}
-                integer
-                value={loadCount(t)}
-                onEmpty={() => patchAt(i, { loads: 1 })}
-                onChange={(loads) => patchAt(i, { loads: Math.max(1, Math.floor(loads || 1)) })}
-                aria-label="Number of loads with this truck"
-                style={{ width: 80 }}
-              />
-              {loadCount(t) > 1 && (
-                <span className="small" style={{ color: "var(--muted)" }}>
-                  Fill below is per load; the total multiplies by {loadCount(t)}.
-                </span>
-              )}
-            </label>
             <TruckDeckGauge
               verticalPct={t.vertical_pct}
               horizontalPct={t.horizontal_pct}
@@ -3308,7 +3298,7 @@ function TruckFullnessEditor({
                 onClick={() => removeAt(i)}
                 style={{ color: "var(--danger)", fontSize: 13 }}
               >
-                Remove truck
+                Remove load
               </button>
             </div>
           </div>
@@ -3317,7 +3307,7 @@ function TruckFullnessEditor({
       <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {availableFleet.length > 0 && (
           <>
-            <span className="small" style={{ color: "var(--muted)" }}>Add truck:</span>
+            <span className="small" style={{ color: "var(--muted)" }}>Add a load:</span>
             {availableFleet.map((t) => (
               <button
                 key={t}

@@ -688,28 +688,33 @@ job hours do not add up to its total.
 
 ---
 
-## Truck loads (2026-08-12)
+## Truck loads: one entry per LOAD (2026-08-12)
 
-**Class A.** `truck_fullness` entries gain `loads`.
+**Class A.** No new field. A `truck_fullness` entry now means ONE TRUCKLOAD
+rather than one truck.
 
 | Field | Path | Adherence |
 |---|---|---|
-| `truck_fullness[].loads` | Job Report -> `PUT /api/job-report` -> `truck_fullness_json` -> JobReports sheet `truck_fullness` cell | read |
+| `truck_fullness[]` (an entry = a load) | Job Report -> `PUT /api/job-report` -> `truck_fullness_json` -> JobReports sheet `truck_fullness` cell | read |
 
-One truck running a job twice was unrecordable: the picker refuses to list a
-fleet truck twice (so two rentals cannot collide), which also made "we used two
-truck loads" impossible to say. The count lives on the entry, so that constraint
-stays.
+A truck that runs the job twice gets TWO entries, each with its own fill
+estimate. A first load packed tight and a second half-empty is the normal case,
+so one measurement multiplied by a load count would describe neither trip. The
+picker therefore offers a fleet truck again after it is already on the list,
+which it previously refused.
 
-**No migration.** It rides inside the existing `truck_fullness_json` column.
-Entries written before the field have no `loads` key, and every reader treats
-missing as 1 - which is exactly what those entries meant.
+**No migration and no schema change.** Nothing was added to the payload; what
+changed is what an entry MEANS. Every existing entry is a single load, which is
+what it already was.
 
-**The Sheet cell changes shape only when loads > 1.** A single-load truck renders
-byte-identical to before, so nothing in the existing column shifts. Two loads
-appends ` ×2 loads` and the cubic-foot figure is multiplied, because the office
-reasons about total volume moved. The percentage stays per-load: it is the crew's
-observation of one fill, not a total.
+**A `loads` count was built first and reversed.** It multiplied one fill estimate
+by a trip count, which also corrupted the per-truck weight readout: the deck
+gauge and the `~lbs` figure describe a single fill, and doubling them implied a
+truck carried twice its capacity in one trip.
+
+**Sheet cell:** a repeated truck is numbered - `26Int (load 1)`, `26Int (load 2)` -
+so two entries do not read as a duplicated row. A truck appearing once is
+unnumbered, so single-load cells are unchanged.
 
 ---
 

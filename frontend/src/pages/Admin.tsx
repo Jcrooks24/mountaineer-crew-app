@@ -7987,6 +7987,9 @@ function BillCorrectionEditor({
 }
 
 function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null; onOpened?: () => void }) {
+  // Used only to keep `entered_by` populated in the request below. See the note
+  // there: dropping the field outright is not safe across a deploy skew.
+  const { user: currentAdmin } = useAuth();
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
   const [candidates, setCandidates] = useState<JobCandidate[] | null>(null);
@@ -8112,6 +8115,16 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
         {
           method: "PUT",
           body: JSON.stringify({
+            // STILL SENT, even though the server now derives the reviewer from
+            // the authenticated account (ADR 0037).
+            //
+            // The frontend and backend deploy independently - Vercel and Render
+            // - and the frontend usually wins the race. A client that stopped
+            // sending this reached an older backend that still required it and
+            // got a 422, which surfaced to the admin as "[object Object]".
+            // Sending the same value the server would derive is harmless once
+            // both sides are up, and keeps the older one working meanwhile.
+            entered_by: currentAdmin?.name || currentAdmin?.email || "",
             entered_on: entryDate,
             validated: entryValidated,
             corrected: entryCorrected,

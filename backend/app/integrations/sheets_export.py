@@ -1275,36 +1275,59 @@ def _has_non_billable(entries: Optional[list]) -> str:
     return "No"
 
 
+def _truck_label(e: dict) -> str:
+    """Display name for one truckload.
+
+    Rentals note their length (if given) and that fill is a best guess, since
+    they have no interior markers: "Penske 26ft (rental)". Used by BOTH the
+    repeat-count pass and the row-building pass in `_format_truck_fullness` -
+    they have to agree, or a repeat is counted under one name and rendered under
+    another and never gets numbered.
+    """
+    truck = (e.get("truck") or "").strip() or "-"
+    label = truck
+    if e.get("is_rental"):
+        length = e.get("length_ft")
+        if length not in (None, "", 0):
+            try:
+                length = int(float(length))
+            except (TypeError, ValueError):
+                length = None
+            if length:
+                label = f"{truck} {length}ft"
+        label = f"{label} (rental)"
+    return label
+
+
 def _format_truck_fullness(entries: Optional[list]) -> str:
     """One line per truck used, e.g. "26Int: V75×H50 (38%)". The composite %
     is vertical×horizontal/100, matching the interior 25% fill marks. Semicolon-
     joined so it stays a single readable cell."""
     if not entries:
         return ""
+    # Pre-count each truck so a repeat can be numbered. Done up front because the
+    # first of two loads has to know it is one of two.
+    #
+    # Both passes MUST build the label the same way. They did not at first: the
+    # count keyed on "Penske (rental)" while the row built "Penske 26ft
+    # (rental)", so repeated rentals were never numbered. One function now, used
+    # by both.
+    counts: dict = {}
+    for e in entries:
+        if isinstance(e, dict):
+            counts[_truck_label(e)] = counts.get(_truck_label(e), 0) + 1
+    seen: dict = {}
     parts: list[str] = []
     for e in entries:
         if not isinstance(e, dict):
             continue
-        truck = (e.get("truck") or "").strip() or "-"
         try:
             v = int(e.get("vertical_pct") or 0)
             h = int(e.get("horizontal_pct") or 0)
         except (TypeError, ValueError):
             v = h = 0
         combined = round(v * h / 100)
-        # Rental trucks: note the length (if given) and that fill is a best
-        # guess (no interior markers). e.g. "Penske 26ft (rental): V75×H50 (38%)".
-        label = truck
-        if e.get("is_rental"):
-            length = e.get("length_ft")
-            if length not in (None, "", 0):
-                try:
-                    length = int(float(length))
-                except (TypeError, ValueError):
-                    length = None
-                if length:
-                    label = f"{truck} {length}ft"
-            label = f"{label} (rental)"
+        label = _truck_label(e)
         # Cubic feet loaded, derived from the truck's interior at export time
         # (see TRUCK_SPECS). The percentage is the crew's observation; the
         # volume is what the office actually reasons about, so put both in the
@@ -1314,21 +1337,14 @@ def _format_truck_fullness(entries: Optional[list]) -> str:
             capacity = truck_capacity_cuft(e)
         except Exception:  # noqa: BLE001 - never let a spec lookup kill an export
             capacity = None
-        # Loads: a truck that ran the job twice moved roughly twice the volume,
-        # and the office reasons about the total. Missing or nonsense reads as 1,
-        # which is what every entry written before the field existed meant.
-        try:
-            loads = int(e.get("loads") or 1)
-        except (TypeError, ValueError):
-            loads = 1
-        loads = max(1, loads)
-        volume = (
-            f", {round(capacity * combined / 100) * loads:,} cu ft" if capacity else ""
-        )
-        # Only stated when it is not 1, so the common single-load cell reads
-        # exactly as it always has and nothing in the Sheet shifts for no reason.
-        loads_note = f" ×{loads} loads" if loads > 1 else ""
-        parts.append(f"{label}: V{v}×H{h} ({combined}%{volume}){loads_note}")
+        volume = f", {round(capacity * combined / 100):,} cu ft" if capacity else ""
+        # One entry is one LOAD, so a truck that ran twice appears twice with its
+        # own fill each time. Number the repeats ("26Int (load 2)") or the cell
+        # reads as a duplicated row rather than a second trip.
+        seen[label] = seen.get(label, 0) + 1
+        if counts.get(label, 0) > 1:
+            label = f"{label} (load {seen[label]})"
+        parts.append(f"{label}: V{v}×H{h} ({combined}%{volume})")
     return "; ".join(parts)
 
 
