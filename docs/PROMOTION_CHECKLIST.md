@@ -207,9 +207,95 @@ looks wrong, and who to contact.
 Items that were on a previous promotion's list and never got done. **Clear this
 section as part of the promotion, or explain why it is still here.**
 
+### After the 2026-08-12 promotion (25 commits) - DO THESE IN ORDER
+
+1. **Confirm the Render PROD deploy finished and all FOUR migrations ran**
+   (`d4f6h8c0e2g4`, `e5g7i9d1f3h5`, `f6h8j0e2g4i6`, `g7i9k1f3h5j7`). Look for
+   `[migrations] Alembic upgrade head - done.` in the deploy log.
+
+   **This is the first thing, not a formality.** Both symptoms reported on
+   2026-08-12 - a 404 on the waiver and `[object Object]` on report initialing -
+   were a frontend deployed ahead of its backend. Vercel and Render deploy
+   independently and the frontend usually wins.
+
+   If the deploy half-fails, the visible symptom of the missing `worker_leases`
+   table is the auto-reconciler silently not sweeping, which reads as "nothing to
+   reconcile" rather than as an error.
+
+2. **Read the next nightly integrity email.** Expect the JobReports and BOLs
+   "expected column(s) absent" warnings to CLEAR once an export runs and widens
+   those grids. `Bills` (33), `DVIRs` (1) and `PriorOnDuty` (1) may also drain.
+   Anything still missing after that is genuinely stuck.
+
+3. **Grep the prod Render log for `[sheets] background export failed`.** This is
+   the one open question the code cannot answer for itself: it names the actual
+   exception behind records that will not drain. The new failure panel in Admin
+   -> Sheet Backfill surfaces the same thing now that it is promoted.
+
+4. **Only after crews have loaded the new bundle**, repair forked jobs:
+   ```
+   python backend/scripts/repair_forked_jobs.py            # report first
+   python backend/scripts/repair_forked_jobs.py --apply
+   ```
+   Not before. A device still holding an orphan uuid keeps writing under it until
+   it next resolves online, so repairing early just lets new orphans appear
+   behind the script. See [ADR 0038](decisions/0038-forked-job-repair-moves-rows-and-refuses-to-merge.md).
+
+5. **Tell the office the Sheet's `entered_by` column changes.** It now shows full
+   names instead of typed initials, and `(waived)` on a waived job (ADR 0037).
+   Anything reading that column must treat it as free text.
+
+6. **Device testing. Nothing in this promotion has run on a phone.** Three static
+   review passes each found bugs the previous one missed, and none of them can
+   substitute for this. Highest value first:
+   - the mobile roster breakpoint (760px, cards + tap-to-expand)
+   - the timeline confirmation toast's position against the fixed bottom nav
+   - the bulletin feed and photo aspect ratio
+   - the truck-fullness editor, now one entry per LOAD
+   - the long-outstanding bottom-nav drift test
+
+7. **Decide whether these should reach the Sheet.** Reimbursement approval
+   status, the payroll report waiver, and the app build history all live only in
+   Postgres. Logged as "read" not `[x]` in DATA_FLOW_STAGING. The Sheet is the
+   durable record, so this is worth deciding rather than discovering.
+
+8. **Publish a patch note, and consider a crew email.** Unlike the 2026-08-11
+   promotion, this one CHANGES HOW TWO TASKS ARE DONE, which is the test in
+   section 10 - not size, but whether muscle memory now leads somewhere else:
+
+   - **Truck fullness is now one entry per LOAD, not per truck.** A truck that
+     runs the job twice gets two entries with its own fill estimate each, and the
+     picker will offer the same truck again. Crews who learned "one row per
+     truck" will get this wrong without being told.
+   - **Admin no longer types initials** when marking a job reviewed. The three
+     checkboxes remain; the reviewer is taken from the signed-in account.
+
+   Draft patch note (no em dashes, per the company invariant):
+
+   > **Timeline confirmations.** Logging an arrival, departure, start or finish
+   > now shows a confirmation like "Departure at 3:00 PM added to timeline", so
+   > you can see it landed without opening the Timeline.
+   >
+   > **Truck fullness: one entry per load.** If a truck runs the job twice, add
+   > it twice and estimate each load separately. Loads are rarely packed the
+   > same, and the second trip is usually lighter.
+   >
+   > **Bulletin photos are no longer cropped.** Tall photos used to lose their
+   > top and bottom. They now fit whole.
+   >
+   > **Your hours, by week.** Tap a week in Worked Hours to see the jobs behind
+   > it.
+   >
+   > **Office:** the employee roster is sorted by last name with inactive
+   > accounts grouped at the end, works properly on a phone, and payroll is
+   > sorted by last name too. Reimbursements can be approved or declined from
+   > the payroll detail, and a declined claim emails the crew member the reason.
+
+---
+
 - **Fold `docs/DATA_FLOW_STAGING.md` into `docs/DATA_FLOW.md`.** Deferred at the
-  v1.8 promotion and again at the 2026-08-11 instrumentation promotion. **This is
-  now two promotions old.**
+  v1.8 promotion, again on 2026-08-11, and again on 2026-08-12. **This is now
+  three promotions old**, and the delta has grown considerably.
 
   Why it is still here: the delta's "Reconciliation `7fe20a4` -> `7f41611`"
   section covers five data paths (Mountain-time recording, the two payroll
