@@ -474,8 +474,26 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
 
    **Still open, all on prod:**
 
-   - **`Events` has 2 duplicated `event_id`s (4 rows).** The dedupe did not hold.
-     Not yet diagnosed.
+   - **`Events` duplicated `event_id`s.** Diagnosed 2026-08-12.
+     `export_events_to_sheets` writes rows to the sheet (step 4) and THEN marks
+     them exported and commits (step 5). Killed in between, the rows are in the
+     sheet but unmarked, so the next reconcile writes them again. The worker is
+     recycled every 1000 requests by design, so that kill window recurs.
+
+     **To clear the existing rows:** `cleanup_sheet.py --step dedupe` now
+     separates the two causes. Byte-identical copies are the crash case and are
+     removed automatically (with `--apply`); rows that DIFFER are a timestamp
+     edit, where one row is the admin's manual correction, and are still reported
+     for a human to resolve.
+
+     **Do NOT "fix" this by marking before writing.** It looks like the obvious
+     reorder and it trades a visible problem for an invisible one: both
+     `find_unexported_events` and `count_unexported_events` read the marker
+     table, so an event marked-but-never-written would be invisible to the
+     reconciler AND to its own counter. A duplicate is at least detectable. The
+     real fix is an idempotent write (delete-by-key before insert, as the
+     replace-style exports do) or a two-phase marker, and either deserves its own
+     change with an ADR rather than a reordering.
    - **`Bills` is missing 33 records** (db=355, sheet=327), `DVIRs` 1, and
      `PriorOnDuty` 1. Some of these may drain now that the grid bug is fixed;
      re-read the next run before investigating, and use Admin -> backfill to

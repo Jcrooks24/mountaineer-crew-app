@@ -183,10 +183,23 @@ def step_dedupe(svc, sid, apply):
             _delete_rows(svc, sid, meta[tab]["sheetId"], drop)
             print(f"    deleted {len(drop)} row(s).")
 
-    # Events: REPORT ONLY. Duplicates are timestamp edits; the authoritative row
-    # is the admin's manual correction (a clean, non-device time). No safe
-    # automated rule, so print both rows and recommend - the human deletes the
-    # device-time row by hand to keep the correction.
+    # Events duplicates come from TWO causes and only one is safe to resolve
+    # automatically.
+    #
+    #  (a) IDENTICAL rows. export_events_to_sheets writes rows to the sheet and
+    #      THEN marks them exported and commits. Killed in between - and the
+    #      worker is recycled every 1000 requests by design - the rows are in the
+    #      sheet but unmarked, so the next reconcile writes them again. The
+    #      copies are byte-identical, nothing distinguishes them, and dropping
+    #      all but one loses nothing.
+    #
+    #  (b) DIFFERING rows. A timestamp edit: one row carries the device time, one
+    #      the admin's manual correction. Which to keep is a judgement about
+    #      which time is true, so this reports and recommends rather than
+    #      choosing.
+    #
+    # Case (a) used to fall into the report-only path and get labelled
+    # "device-time" on BOTH rows, which told the reader nothing.
     if "Events" in meta:
         vals = _values(svc, sid, "Events")
         h = vals[0]
@@ -197,9 +210,33 @@ def step_dedupe(svc, sid, apply):
             if k:
                 grp[k].append((i, vals[i]))
         dupes = {k: r for k, r in grp.items() if len(r) > 1}
-        if dupes:
-            print(f"\n  Events: {len(dupes)} duplicated event_id(s) - REPORT ONLY (resolve by hand):")
-            for k, rows in dupes.items():
+        identical_drop = []
+        differing = {}
+        for k, rows in dupes.items():
+            # Compare whole rows, padded to the widest, so a row that is merely
+            # shorter (trailing blanks trimmed by the API) still reads as the
+            # same record rather than as a difference.
+            width = max(len(r) for _, r in rows)
+            shapes = {
+                tuple(str(r[c]).strip() if c < len(r) else "" for c in range(width))
+                for _, r in rows
+            }
+            if len(shapes) == 1:
+                identical_drop.extend(i for i, _ in rows[1:])  # keep the first
+            else:
+                differing[k] = rows
+
+        if identical_drop:
+            print(f"\n  Events: {len(identical_drop)} byte-identical duplicate row(s) - safe to remove.")
+            print("    Cause: the sheet write landed but its dedupe marker never committed,")
+            print("    so the reconciler wrote the same event again. The copies are the same row.")
+            if apply:
+                _delete_rows(svc, sid, meta["Events"]["sheetId"], identical_drop)
+                print(f"    deleted {len(identical_drop)} row(s).")
+
+        if differing:
+            print(f"\n  Events: {len(differing)} duplicated event_id(s) whose rows DIFFER - REPORT ONLY:")
+            for k, rows in differing.items():
                 print(f"    {k}")
                 for i, row in rows:
                     ts = str(row[ii]) if ii < len(row) else ""
