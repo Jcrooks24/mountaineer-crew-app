@@ -724,9 +724,13 @@ def job_summary(
 # ---------------------------
 
 class EntryStatusUpsert(BaseModel):
-    entered_by: str
+    # Optional since ADR 0037: the reviewer is taken from the authenticated
+    # account. Still accepted so an older client keeps working, and so the
+    # payroll waiver can mark a row "(waived)" instead of naming a person.
+    entered_by: Optional[str] = None
     entered_on: str  # YYYY-MM-DD
-    # The three-part attestation (ADR 0032). All must be true to record initials.
+    # The three-part attestation (ADR 0032), unchanged. This is the part that
+    # carries meaning; each box is a distinct claim about the record.
     validated: bool = False
     corrected: bool = False
     confirmed_in_sheet: bool = False
@@ -763,15 +767,25 @@ def upsert_entry_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ) -> Dict[str, Any]:
-    initials = (payload.entered_by or "").strip()
-    if not initials:
-        raise HTTPException(status_code=400, detail="entered_by is required")
+    # The reviewer is taken from the ACCOUNT, not typed. ADR 0032 asked for
+    # initials plus three checkboxes; the initials added a step without adding
+    # information, because the request is already authenticated and admin-gated -
+    # the server knows exactly who is attesting, better than a free-text box that
+    # anyone could type anything into. Superseded by ADR 0037.
+    #
+    # Still accepted from the payload if sent, so an older client keeps working
+    # and so the waiver path can mark a row "(waived)" rather than implying a
+    # person reviewed it.
+    initials = (payload.entered_by or "").strip() or (
+        current_user.name or current_user.email or "admin"
+    )
     entered_on = (payload.entered_on or "").strip()
     if not entered_on:
         raise HTTPException(status_code=400, detail="entered_on is required")
-    # Initialing is a three-part attestation now (ADR 0032). All three must be
-    # affirmed; the initials are the signature on that statement, so recording
-    # them without it would be signing a claim that was never made.
+    # The three-part attestation stays (ADR 0032). It is the part that carries
+    # meaning: each box is a distinct claim about the record. Dropping the
+    # initials does not weaken it - the identity behind the claim is now the
+    # authenticated account rather than two letters.
     if not (payload.validated and payload.corrected and payload.confirmed_in_sheet):
         raise HTTPException(
             status_code=400,

@@ -7447,7 +7447,10 @@ function JobHourCorrections({
   refreshSignal,
 }: {
   jobUuid: string;
-  employees: Array<{ user_id: number; name: string }>;
+  /** `onJob` marks the people whose hours are on this job's report. They are
+   *  grouped first in the picker; the rest of the roster stays reachable
+   *  underneath. */
+  employees: Array<{ user_id: number; name: string; onJob?: boolean }>;
   refreshSignal: number;
 }) {
   const [resp, setResp] = useState<JobCorrectionsResp | null>(null);
@@ -7626,9 +7629,27 @@ function JobHourCorrections({
                 disabled={editingId !== null}
               >
                 <option value="">Pick…</option>
-                {employees.map((emp) => (
-                  <option key={emp.user_id} value={emp.user_id}>{emp.name}</option>
-                ))}
+                {/* Grouped, not filtered. Showing only the job's crew is what
+                    made this dropdown empty whenever no hours entry resolved to
+                    a user_id - and a name that did not match the roster is
+                    exactly when a correction is needed. Showing the whole
+                    roster flat read as an undifferentiated dump. Two labelled
+                    groups keep the common case first and the awkward case
+                    possible. */}
+                {employees.some((e) => e.onJob) && (
+                  <optgroup label="On this job">
+                    {employees.filter((e) => e.onJob).map((emp) => (
+                      <option key={emp.user_id} value={emp.user_id}>{emp.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {employees.some((e) => !e.onJob) && (
+                  <optgroup label="Rest of roster">
+                    {employees.filter((e) => !e.onJob).map((emp) => (
+                      <option key={emp.user_id} value={emp.user_id}>{emp.name}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </label>
             <label className="col" style={{ gap: 3 }}>
@@ -7947,7 +7968,6 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
   // Admin data-entry checkpoint local state for the inputs on the
   // entry-status card; falls back to today's date so the typical
   // "I just entered this" path is one tap.
-  const [entryInitials, setEntryInitials] = useState("");
   const [entryDate, setEntryDate] = useState(() => mountainDateYYYYMMDD());
   const [entrySaving, setEntrySaving] = useState(false);
   const [entrySaved, setEntrySaved] = useState(false);
@@ -8000,8 +8020,10 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
       const data = await apiFetch<JobSummary>(`/api/admin/job-summary/${encodeURIComponent(jobUuid)}`);
       setSummary(data);
       // Pre-fill the entry-status form. Existing entries hydrate verbatim;
-      // new jobs default to today's Mountain date and an empty initials box.
-      setEntryInitials(data.entry_status?.entered_by ?? "");
+      // new jobs default to today's Mountain date. `entered_by` is no longer a
+      // form field (ADR 0037) - it is still READ below to show who reviewed the
+      // job, which for older rows is their typed initials and for newer ones
+      // their name.
       setEntryDate(data.entry_status?.entered_on || mountainDateYYYYMMDD());
       setEntryValidated(!!data.entry_status?.validated);
       setEntryCorrected(!!data.entry_status?.corrected);
@@ -8018,17 +8040,15 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
 
   async function saveEntryStatus() {
     if (!summary) return;
-    const initials = entryInitials.trim();
-    if (!initials) {
-      setEntryError("Initials are required.");
-      return;
-    }
+    // No initials to collect: the server takes the reviewer from the
+    // authenticated account (ADR 0037). The three checks below are the
+    // attestation and are still required.
     if (!entryDate) {
       setEntryError("Date is required.");
       return;
     }
     if (!(entryValidated && entryCorrected && entryConfirmedSheet)) {
-      setEntryError("Confirm all three checks before initialing.");
+      setEntryError("Confirm all three checks before marking this job reviewed.");
       return;
     }
     setEntrySaving(true);
@@ -8044,7 +8064,6 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
         {
           method: "PUT",
           body: JSON.stringify({
-            entered_by: initials,
             entered_on: entryDate,
             validated: entryValidated,
             corrected: entryCorrected,
@@ -8566,14 +8585,26 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
                dropdown held nothing but "Pick...". You could not correct hours
                precisely when the name was wrong, which is exactly when a
                correction is needed. */
-            employees={Array.from(
-              new Map<number, { user_id: number; name: string }>([
-                ...(summary.job_report?.employee_hours ?? [])
-                  .filter((e) => typeof e.user_id === "number")
-                  .map((e) => [e.user_id as number, { user_id: e.user_id as number, name: e.name || "-" }] as const),
-                ...rosterForCorrections.map((u) => [u.user_id, u] as const),
-              ]).values(),
-            )}
+            employees={(() => {
+              // Built by hand rather than with `new Map([...crew, ...roster])`:
+              // the Map constructor lets a LATER entry overwrite an earlier one,
+              // so the roster copy would replace the crew copy and every person
+              // would lose their `onJob` flag. Insert crew first, then add only
+              // roster members not already present.
+              const out: Array<{ user_id: number; name: string; onJob?: boolean }> = [];
+              const seen = new Set<number>();
+              for (const e of summary.job_report?.employee_hours ?? []) {
+                if (typeof e.user_id !== "number" || seen.has(e.user_id)) continue;
+                seen.add(e.user_id);
+                out.push({ user_id: e.user_id, name: e.name || "-", onJob: true });
+              }
+              for (const u of rosterForCorrections) {
+                if (seen.has(u.user_id)) continue;
+                seen.add(u.user_id);
+                out.push({ ...u, onJob: false });
+              }
+              return out;
+            })()}
           />
 
           <div className="card" id="js-dvirs" style={{ scrollMarginTop: 64 }}>
@@ -8982,16 +9013,11 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
               );
             })()}
             <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
-              <label className="col" style={{ gap: 2, flex: "1 1 120px", minWidth: 100 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Initials</span>
-                <input
-                  type="text"
-                  value={entryInitials}
-                  onChange={(e) => { setEntryInitials(e.target.value); setEntrySaved(false); }}
-                  placeholder="e.g. JC"
-                  maxLength={16}
-                />
-              </label>
+              {/* The Initials box is gone (ADR 0037). This request is
+                  authenticated and admin-gated, so the server already knows who
+                  is attesting - better than a free-text field anyone could type
+                  anything into. The three checks above are the attestation and
+                  are unchanged. */}
               <label className="col" style={{ gap: 2, flex: "1 1 160px", minWidth: 140 }}>
                 <span className="small" style={{ color: "var(--muted)" }}>Date</span>
                 <input
