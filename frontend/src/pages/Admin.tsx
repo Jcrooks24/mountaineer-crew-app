@@ -8179,6 +8179,12 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
       ta?.select();
     }
   }
+  // Total materials charge for the job, summed across submissions. Shown as one
+  // figure in the main panel; the per-item breakdown stays in the Materials
+  // section rather than being repeated at the top.
+  const materialsCharge = (summary?.materials ?? []).reduce(
+    (s, m) => s + (Number(m.total) || 0), 0,
+  );
   const billTotal = summary?.bill
     ? summary.bill.items.reduce((s, it) => {
         const qty = it.qty || 0;
@@ -8311,6 +8317,64 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
               {" "}{summary.photos.length} photo{summary.photos.length === 1 ? "" : "s"} ·
               {" "}{summary.admin_notes.length} admin note{summary.admin_notes.length === 1 ? "" : "s"}
             </div>
+
+            {/* Billing, up here in the main panel rather than only in the Bill
+                card further down. This is the number the office wants first when
+                they open a closed job, and it was previously several sections
+                away.
+
+                Materials appear as ONE total charge, not a list of every item
+                used. The itemised list still exists in the Materials section
+                below for anyone who needs it; repeating it here just buried the
+                figure that matters.
+
+                The two numbers are shown side by side and NOT added together on
+                purpose. Whether the bill already includes a materials line is a
+                property of how that bill was built, and silently summing them
+                would over-count every job whose invoice already carries one.
+                Showing both lets the office see at a glance if one is missing. */}
+            {(summary.bill || materialsCharge > 0) && (
+              <div className="row wrap" style={{ gap: 16, marginTop: 10, alignItems: "flex-start" }}>
+                <div className="col" style={{ gap: 2 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Bill total</span>
+                  <span style={{ fontWeight: 800, fontSize: 18 }}>
+                    {summary.bill ? `$${billTotal.toFixed(2)}` : "-"}
+                  </span>
+                  {summary.bill && (
+                    <span className="small" style={{ color: "var(--muted)" }}>
+                      {summary.bill.items.length} line item{summary.bill.items.length === 1 ? "" : "s"}
+                      {summary.bill.global_discount ? ` · ${summary.bill.global_discount}% off` : ""}
+                    </span>
+                  )}
+                </div>
+                <div className="col" style={{ gap: 2 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Materials charged</span>
+                  <span style={{ fontWeight: 800, fontSize: 18 }}>${materialsCharge.toFixed(2)}</span>
+                  <span className="small" style={{ color: "var(--muted)" }}>
+                    {summary.materials.length} submission{summary.materials.length === 1 ? "" : "s"}
+                    {" "}(itemised below)
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {summary.bill && summary.bill.items.length > 0 && (
+              <div className="col" style={{ gap: 2, marginTop: 8 }}>
+                {summary.bill.items.map((it, i) => {
+                  const qty = it.qty ?? 1;
+                  const rate = Number(it.rate ?? 0);
+                  const line = qty * rate * (1 - (it.discount || 0) / 100);
+                  return (
+                    <div key={i} className="small" style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                      <span style={{ color: "var(--muted)" }}>
+                        {qty} × {it.label ?? ""}{it.discount ? ` (-${it.discount}%)` : ""}
+                      </span>
+                      <span className="mono">${line.toFixed(2)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Sticky section nav - jump anywhere in the job's data without scrolling
