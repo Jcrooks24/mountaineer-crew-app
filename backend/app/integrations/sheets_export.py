@@ -385,6 +385,45 @@ def _api(fn, max_attempts: int = 4):
 # The tab layout only changes when we create a tab (or an admin renames one in
 # the sheet), so a short TTL is safe: stale-metadata failures self-heal because
 # every consumer refreshes and retries once before giving up.
+# ── Header row cache ─────────────────────────────────────────────────────────
+# One entry per (spreadsheet, tab). See the note in `_ensure_tab` for why this
+# exists and why the TTL is short. Shares the metadata TTL: both cache "the shape
+# of the workbook", both are invalidated explicitly when this code changes that
+# shape, and giving the same class of fact two different staleness windows would
+# only be something to get wrong later.
+_header_cache: Dict[tuple, tuple] = {}  # (sid, tab) -> (expires_at, headers)
+_header_cache_lock = threading.Lock()
+
+
+def _header_cache_get(spreadsheet_id: str, tab: str) -> Optional[List[Any]]:
+    with _header_cache_lock:
+        entry = _header_cache.get((spreadsheet_id, tab))
+    if entry and entry[0] > time.monotonic():
+        return list(entry[1])
+    return None
+
+
+def _header_cache_put(spreadsheet_id: str, tab: str, headers: List[Any]) -> None:
+    with _header_cache_lock:
+        _header_cache[(spreadsheet_id, tab)] = (
+            time.monotonic() + _META_TTL_SECONDS, list(headers),
+        )
+
+
+def _header_cache_drop(
+    spreadsheet_id: Optional[str] = None, tab: Optional[str] = None
+) -> None:
+    # Forget a cached header. No arguments clears everything.
+    with _header_cache_lock:
+        if spreadsheet_id is None:
+            _header_cache.clear()
+        elif tab is None:
+            for k in [k for k in _header_cache if k[0] == spreadsheet_id]:
+                del _header_cache[k]
+        else:
+            _header_cache.pop((spreadsheet_id, tab), None)
+
+
 _META_TTL_SECONDS = 30.0
 _meta_cache: Dict[str, tuple] = {}  # spreadsheet_id -> (expires_at, {title: sheetId})
 _meta_cache_lock = threading.Lock()
@@ -482,12 +521,33 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
             pass
         return list(headers)
 
-    # Tab exists - read current header row
-    result = _api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=f"{tab}!1:1",
-    ).execute())
-    current = result.get("values", [[]])[0] if result.get("values") else []
+    # Tab exists - read its header row, or reuse a very recent read.
+    #
+    # This ran on EVERY export: one read per record, and the single biggest
+    # contributor to Sheets read quota. Re-driving 100 records cost 100 header
+    # reads on top of the writes, against a limit of 60 reads per minute, which
+    # is what put the export pool into 429 backoff on 2026-08-12.
+    #
+    # The header only changes when this code appends a column (which invalidates
+    # explicitly below) or when a person edits row 1 by hand. A short TTL is the
+    # same trade `_meta_cache` already makes for tab metadata, for the same
+    # reason: the cached fact changes rarely and a stale read self-heals within
+    # seconds.
+    #
+    # Kept deliberately short because this value drives POSITIONAL column mapping
+    # in `_build_row`. A stale header would misalign a written row, which is far
+    # worse than a wasted read - so this window is small by design and is not a
+    # knob to turn up.
+    cached = _header_cache_get(spreadsheet_id, tab)
+    if cached is not None:
+        current = cached
+    else:
+        result = _api(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{tab}!1:1",
+        ).execute())
+        current = result.get("values", [[]])[0] if result.get("values") else []
+        _header_cache_put(spreadsheet_id, tab, current)
 
     # Fail closed on header corruption. If the tab already has a header row but
     # its KEY column (the first expected header - the entity's uuid/id) is not in
@@ -518,6 +578,8 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
         #
         # A tab created by this code starts at the Sheets default of 26 columns,
         # so the 27th expected column is where any growing tab hits the wall.
+        # The header is about to change, so no cached copy may survive it.
+        _header_cache_drop(spreadsheet_id, tab)
         _widen_grid_for_columns(svc, spreadsheet_id, tab, len(current) + len(missing))
         start_letter = _col_letter(len(current))
         _api(lambda: svc.spreadsheets().values().update(
@@ -527,6 +589,7 @@ def _ensure_tab(svc: Any, spreadsheet_id: str, tab: str, headers: List[str]) -> 
             body={"values": [missing]},
         ).execute())
         current = current + missing
+        _header_cache_put(spreadsheet_id, tab, current)
 
     return current
 

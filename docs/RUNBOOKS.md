@@ -875,9 +875,15 @@ is fixed, and add one when a `/vet` pass finds something you cannot fix that day
     httplib2 service shared across concurrent upload threads - the same
     OpenSSL-not-thread-safe crash the sheets service already avoids).
 
-  **Accepted, not fixed (low priority):** every replace-style sheet export still does
+  **Partly fixed 2026-08-12.** `_ensure_tab` no longer reads the header row on
+  every export - it caches it per tab for 30s, the same window `_meta_cache`
+  already uses, invalidated explicitly whenever a column is appended. That was
+  one read PER RECORD and the biggest single consumer of the 60-reads-per-minute
+  quota; it is what put the export pool into 429 backoff when a backfill of 100
+  records ran. Still outstanding from the original note: replace-style exports do
   two full-spreadsheet metadata `get`s plus a full single-column read in
-  `_delete_sheet_rows_by_value`, so per-export cost grows slowly with each tab. And
+  `_delete_sheet_rows_by_value`, so per-export cost still grows slowly with each
+  tab. And
   `GET /api/users/directory` still returns `profile_photo` data URLs (bounded to 200,
   client-cached) because the crew avatar feature depends on them; dropping the field
   would need a separate per-photo fetch endpoint first.
