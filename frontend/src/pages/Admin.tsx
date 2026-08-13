@@ -34,6 +34,7 @@ import PayrollTool from "../components/PayrollTool";
 import DqFilesTab from "../components/DqFilesTab";
 import DqDocTypesCard from "../components/DqDocTypesCard";
 import { roundBillableQuarter } from "../components/JobReport";
+import { billTotal as calcBillTotal } from "../lib/billTotal";
 import {
   formatMountainDate,
   formatMountainDateTime,
@@ -7802,14 +7803,11 @@ type ReportBilling = {
   bill_personal_vehicles: boolean;
 };
 
+// Kept as a named wrapper because the correction flow reads better with it, but
+// the arithmetic is the shared one. This was the fifth hand-written copy of the
+// same formula in the codebase.
 function billLineTotal(items: BillItem[], globalDiscount: number): number {
-  const subtotal = items.reduce((s, it) => {
-    const qty = Number(it.qty) || 0;
-    const rate = Number(it.rate) || 0;
-    const disc = Number(it.discount) || 0;
-    return s + qty * rate * (1 - disc / 100);
-  }, 0);
-  return subtotal * (1 - (globalDiscount || 0) / 100);
+  return calcBillTotal(items, globalDiscount);
 }
 
 /** Admin correction of a job's billing (2e): the bill invoice AND the job-report
@@ -8286,14 +8284,9 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
   const materialsCharge = (summary?.materials ?? []).reduce(
     (s, m) => s + (Number(m.total) || 0), 0,
   );
-  const billTotal = summary?.bill
-    ? summary.bill.items.reduce((s, it) => {
-        const qty = it.qty || 0;
-        const rate = it.rate || 0;
-        const disc = it.discount || 0;
-        return s + qty * rate * (1 - disc / 100);
-      }, 0) * (1 - (summary.bill.global_discount || 0) / 100)
-    : 0;
+  // Shared with the crew closed-job panel via lib/billTotal, so the office and
+  // the crew cannot end up looking at different amounts for the same job.
+  const billTotal = calcBillTotal(summary?.bill?.items, summary?.bill?.global_discount);
 
   return (
     <div style={{ marginTop: 16 }}>

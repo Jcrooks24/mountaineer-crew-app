@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../api/client";
 import JobChecklistCard from "./JobChecklistCard";
 import { loadJobSetup } from "../lib/jobSetupStore";
+import { billTotal, fmtMoney, type BillLineLike } from "../lib/billTotal";
 
 type Crew = { name?: string; source?: string; confirmed?: boolean };
 type JobSetupOut = {
@@ -51,7 +52,11 @@ type Summary = {
   bol: null | { bol_id: string; status: string; item_count: number; signed_pdf_url: string | null };
   ld_days: Array<{ driver_name: string; date: string; out_of_town: boolean; drive_day: boolean }>;
   reimbursements: Array<{ reimbursement_uuid: string; type: string; user_name: string; amount: number | null; status: string | null }>;
-  bill: null | { saved_by_name: string | null; items: unknown[]; global_discount: number; notes: string };
+  // `items` was `unknown[]`, which is why the panel could only ever count them.
+  // The priced fields are what this screen needs; the rest of a line is not its
+  // business, so BillLineLike (an optional-field shape) is the honest type for a
+  // payload decoded from items_json.
+  bill: null | { saved_by_name: string | null; items: BillLineLike[]; global_discount: number; notes: string };
   photos: Array<{ id: number; caption: string | null; drive_url: string | null; created_by: string | null }>;
 };
 
@@ -291,7 +296,24 @@ export default function JobClosedPanel({
       {s && (s.bill || s.materials.length > 0 || s.inventory.items.length > 0 || s.bol || s.reimbursements.length > 0 || s.ld_days.length > 0) && (
         <Section title="Billing, materials & inventory">
           <div className="col" style={{ gap: 0 }}>
-            {s.bill && <Row label="Bill" value={`${(s.bill.items || []).length} line(s)${s.bill.global_discount ? ` · ${s.bill.global_discount}% off` : ""}`} />}
+            {/* The AMOUNT first - that is what anyone opening a closed job is
+                looking for. This row used to read "3 line(s)" and nothing else,
+                which is the one fact about a bill nobody needs. Line count and
+                discount stay as the sub-line, since they explain the number. */}
+            {s.bill && (
+              <Row
+                label="Bill total"
+                value={
+                  <span>
+                    <strong>{fmtMoney(billTotal(s.bill.items, s.bill.global_discount))}</strong>
+                    <span className="small" style={{ color: "var(--muted)" }}>
+                      {` · ${(s.bill.items || []).length} line(s)`}
+                      {s.bill.global_discount ? ` · ${s.bill.global_discount}% off` : ""}
+                    </span>
+                  </span>
+                }
+              />
+            )}
             {s.materials.length > 0 && <Row label="Materials" value={`$${s.materials.reduce((a, m) => a + (m.total || 0), 0).toFixed(2)}`} />}
             {(s.inventory.furniture_count > 0 || s.inventory.box_count > 0) && (
               <Row label="Inventory" value={`${s.inventory.furniture_count} furniture · ${s.inventory.box_count} boxes`} />

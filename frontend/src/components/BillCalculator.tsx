@@ -23,6 +23,7 @@ import {
 import { roundBillableQuarter, DEFAULT_LABOR_RATE, type EmployeeHoursEntry } from "../lib/employeeHours";
 import BetaTag from "./BetaTag";
 import NumberField from "./NumberField";
+import { billLineSubtotal } from "../lib/billTotal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -142,8 +143,10 @@ function uuid(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// Both delegate to lib/billTotal so the editable bill, the admin Job Summary and
+// the crew closed-job panel cannot drift apart on money math.
 function lineSubtotal(item: LineItem): number {
-  return item.qty * item.rate * (1 - item.discount / 100);
+  return billLineSubtotal(item);
 }
 
 function calcTotals(items: LineItem[], globalDiscount: number) {
