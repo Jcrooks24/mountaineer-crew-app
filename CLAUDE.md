@@ -72,6 +72,28 @@ python scripts/run_migrations.py && uvicorn app.main:app --host 0.0.0.0 --port $
 If you change either flag, document the reason here. Removing them
 reintroduces the recurring OOM class we spent multiple deploys chasing.
 
+**`--limit-max-requests 1000` has a cost, and it is the one crews feel.** Every
+recycle takes the service down while migrations run and the app is imported. The
+app import alone measures ~2.3 s on a fast laptop and Render's CPU is slower, so
+a recycle is a multi-second outage. Opening one job costs about twenty requests,
+so 1000 requests is roughly fifty job screens: on a working afternoon the service
+restarts repeatedly and crews experience it as the app hanging for no reason.
+
+Do not just raise the number. The flag exists to cap a slow leak, and trading a
+visible pause for an OOM kill is a bad trade. **Decide it with the data:**
+`GET /api/admin/system-check/worker` reports this process's RSS alongside
+`requests_served`. Read it on a fresh worker and again near a recycle:
+
+- **RSS flat as requests climb** - nothing is leaking on this build, and the
+  limit can go up (5000 is a 5x reduction in restarts). Re-check after.
+- **RSS climbing with requests** - the flag is doing its job. Find the leak
+  before touching the number.
+
+`scripts/run_migrations.py` already skips the alembic upgrade entirely when the
+database is stamped at head, which it is on every recycle (as opposed to every
+deploy). That removed a few hundred milliseconds of a multi-second window; the
+frequency is the rest of it.
+
 Render's Root Directory is set to `backend` for both services, so the
 working directory at start time is already `backend/`. Don't prefix the
 script path with `backend/`, that produces a duplicated segment and the

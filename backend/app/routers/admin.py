@@ -1414,6 +1414,45 @@ def app_health(
     }
 
 
+@router.get("/system-check/worker")
+def system_check_worker(_: User = Depends(require_admin)):
+    """This worker process: how much memory it holds and how long it has served.
+
+    EXISTS TO ANSWER ONE QUESTION WITH DATA. Uvicorn is recycled every
+    `--limit-max-requests` (1000), and each recycle takes the service down for
+    the time it costs to run migrations and import the app - which crews feel as
+    the app hanging. The obvious fix is to recycle less often, but that flag is
+    load-bearing: it exists to cap a slow leak, and raising it without knowing
+    whether memory actually grows would trade a visible pause for an OOM kill.
+
+    `rss_mb` against `requests_served` is that number. Check it on a fresh worker
+    and again near a recycle: flat means the leak the flag guards against is not
+    happening on this build and the limit can safely go up. Climbing means the
+    flag is doing its job and the pause is the price.
+
+    Stdlib only (see app/core/memprobe) - no psutil, no new dependency for a
+    diagnostic.
+    """
+    from app.core import memprobe
+    from app.core.limits import REQUESTS_SERVED
+
+    rss = memprobe.current_kb()
+    peak = memprobe.peak_kb()
+    return {
+        "rss_mb": round(rss / 1024, 1) if rss else None,
+        "peak_mb": round(peak / 1024, 1) if peak else None,
+        # Render's tier. The limit the OOM killer actually enforces.
+        "limit_mb": 512,
+        "pct_of_limit": round((rss / 1024) / 512 * 100) if rss else None,
+        "requests_served": REQUESTS_SERVED[0],
+        "recycle_at": 1000,
+        "pid": os.getpid(),
+        # Available only on Linux (/proc). Locally this reads None, which is
+        # honest rather than a fabricated number.
+        "available": rss is not None,
+    }
+
+
 @router.get("/system-check/sheets")
 def system_check_sheets(
     db: Session = Depends(get_db),

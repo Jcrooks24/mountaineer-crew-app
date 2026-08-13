@@ -28,6 +28,20 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
+# How many HTTP requests THIS process has served.
+#
+# Uvicorn keeps its own count to enforce --limit-max-requests and does not expose
+# it, but that count is exactly what makes worker memory readable: RSS alone says
+# how much this process holds, RSS against requests-served says whether it is
+# GROWING. The second question is the one that decides whether the recycle
+# interval can safely be raised, and raising it is the main lever on the restart
+# pauses crews feel.
+#
+# A single integer in a list so it can be mutated from a module-level function
+# without `global`. One increment per request; nothing measurable.
+REQUESTS_SERVED = [0]
+
+
 def _too_large_response_messages(limit: int) -> list[Message]:
     body = (
         b'{"detail":"Request body exceeds the '
@@ -65,6 +79,11 @@ class BodySizeLimitMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+
+        # Counted here because this middleware already sees every HTTP request
+        # and is raw ASGI, so it costs one integer add rather than another
+        # middleware layer on the stack.
+        REQUESTS_SERVED[0] += 1
 
         # 1) Fast path - reject upfront based on Content-Length.
         headers = dict(scope.get("headers") or [])
