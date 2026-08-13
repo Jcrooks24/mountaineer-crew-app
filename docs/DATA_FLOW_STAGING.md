@@ -877,6 +877,27 @@ what hid this for months.
 Nothing about the payloads, keys, tabs or endpoints changed - this is purely how
 fast the existing self-heal is allowed to consume shared quota.
 
+## Bulletin reaction mode (per post, owner only)
+
+New column and new endpoint. No queue, no offline path, no Sheet export - the
+bulletin has none of those by design.
+
+| | |
+|---|---|
+| Storage | `bulletin_posts.reaction_mode` (NOT NULL, server default `like`) |
+| Endpoint | `POST /api/bulletin/posts/{post_uuid}/reaction-mode` body `{mode}` |
+| Who | one hardcoded address, checked server-side; 404 for everyone else |
+| Read path | `reaction_mode` + `can_set_reaction_mode` on every post in `/feed` and on both create paths |
+| Reaction rows | `bulletin_likes`, UNCHANGED by a switch - see ADR 0039 |
+
+The reaction rows are the same either way. `reaction_mode` decides what a
+reaction is called, which is why switching is reversible and why a post can show
+dislikes from people who pressed Like. `can_set_reaction_mode` is computed by the
+server per request, so the client never holds the permission rule.
+
+Migration `h8j0l2g4i6k8`. Guarded by
+`backend/scripts/verify_bulletin_reaction_mode.py`.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified

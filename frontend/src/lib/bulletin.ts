@@ -33,7 +33,17 @@ export type BulletinPost = {
   like_count: number;
   liked_by_me: boolean;
   comments: BulletinComment[];
+  /** Which reaction this post accepts. The server decides; the client renders.
+   *  Optional so a client running against an older backend still works - it
+   *  falls back to "like", which is what every post was before this existed. */
+  reaction_mode?: ReactionMode;
+  /** Whether THIS viewer may switch the mode. Computed server-side; the client
+   *  never holds the rule about who is allowed. Hiding the control is a
+   *  courtesy - the endpoint refuses anyone else regardless. */
+  can_set_reaction_mode?: boolean;
 };
+
+export type ReactionMode = "like" | "dislike";
 
 export type Feed = { posts: BulletinPost[]; next_before_id: number | null };
 
@@ -164,6 +174,22 @@ export function fetchLatestId(): Promise<{ latest_id: number }> {
 
 export function toggleLike(postUuid: string): Promise<{ liked: boolean; like_count: number }> {
   return apiFetch(`/api/bulletin/posts/${encodeURIComponent(postUuid)}/like`, { method: "POST" });
+}
+
+/**
+ * Switch one post between accepting likes and accepting dislikes.
+ *
+ * Returns 404 (not 403) for anyone who is not permitted, so a caller that has no
+ * business knowing this endpoint exists learns nothing from it.
+ */
+export function setReactionMode(
+  postUuid: string,
+  mode: ReactionMode,
+): Promise<{ post_uuid: string; reaction_mode: ReactionMode; like_count: number }> {
+  return apiFetch(`/api/bulletin/posts/${encodeURIComponent(postUuid)}/reaction-mode`, {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
 }
 
 export function addComment(postUuid: string, text: string): Promise<BulletinComment> {

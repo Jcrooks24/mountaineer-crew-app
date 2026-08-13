@@ -12,7 +12,7 @@ import { BetaTag } from "../components/BetaTag";
 import { useAuth } from "../auth/AuthContext";
 import {
   fetchFeed, createTextPost, createLinkPost, createPhotoPost,
-  toggleLike, addComment, removePost, removeComment, timeAgo,
+  toggleLike, setReactionMode, addComment, removePost, removeComment, timeAgo,
   postImageSrc, setSeenId, fetchLatestId,
   type BulletinPost, type BulletinComment,
 } from "../lib/bulletin";
@@ -236,6 +236,44 @@ function PostCard({
   onRemoved: (uuid: string) => void;
 }) {
   const [liking, setLiking] = useState(false);
+  const [switchingMode, setSwitchingMode] = useState(false);
+
+  // Absent means "like" - a client running against a backend that predates this
+  // feature, or a post row written before the migration.
+  const disliking = post.reaction_mode === "dislike";
+
+  /**
+   * Flip this post between likes and dislikes.
+   *
+   * Reactions already recorded are reinterpreted, not moved: a post with 12
+   * likes becomes a post with 12 dislikes, and switching back restores the 12
+   * likes. That is why the confirm below spells it out - the people counted
+   * there did not choose the new label.
+   */
+  const switchMode = async () => {
+    if (switchingMode) return;
+    const next = disliking ? "like" : "dislike";
+    if (!disliking && post.like_count > 0) {
+      const ok = confirm(
+        `This post has ${post.like_count} like${post.like_count === 1 ? "" : "s"}. ` +
+        `Switching to dislikes will show ${post.like_count === 1 ? "that person" : "those people"} ` +
+        `as disliking it, which is not what they pressed.\n\n` +
+        `Switching back restores the likes. Continue?`
+      );
+      if (!ok) return;
+    }
+    setSwitchingMode(true);
+    try {
+      const r = await setReactionMode(post.post_uuid, next);
+      onChange({ ...post, reaction_mode: r.reaction_mode, like_count: r.like_count });
+    } catch {
+      // Left deliberately silent and unchanged: the only person who can see this
+      // control is the owner, the post is untouched on failure, and the button
+      // simply stays as it was. Pressing again retries.
+    } finally {
+      setSwitchingMode(false);
+    }
+  };
 
   const like = async () => {
     if (liking) return;
@@ -317,17 +355,55 @@ function PostCard({
           type="button"
           onClick={like}
           aria-pressed={post.liked_by_me}
+          aria-label={
+            disliking
+              ? (post.liked_by_me ? "Remove your dislike" : "Dislike this post")
+              : (post.liked_by_me ? "Remove your like" : "Like this post")
+          }
           style={{
             display: "inline-flex", alignItems: "center", gap: 6, background: "none", border: "none",
-            cursor: "pointer", padding: 0, color: post.liked_by_me ? "var(--danger)" : "var(--muted)", fontSize: 14, fontWeight: 700,
+            cursor: "pointer", padding: 0,
+            // A pressed dislike reads as muted-strong rather than red: red is the
+            // app's danger colour and a dislike is an opinion, not an incident.
+            color: post.liked_by_me
+              ? (disliking ? "var(--text)" : "var(--danger)")
+              : "var(--muted)",
+            fontSize: 14, fontWeight: 700,
           }}
         >
-          <span style={{ fontSize: 18 }}>{post.liked_by_me ? "♥" : "♡"}</span>
+          <span style={{ fontSize: 18 }}>
+            {disliking
+              ? (post.liked_by_me ? "👎" : "👎🏻")
+              : (post.liked_by_me ? "♥" : "♡")}
+          </span>
           {post.like_count > 0 && post.like_count}
         </button>
         <span className="small" style={{ color: "var(--muted)" }}>
           {post.comments.length} comment{post.comments.length === 1 ? "" : "s"}
         </span>
+
+        {/* Owner-only, and only rendered when the SERVER says so. Sits at the end
+            of the row so it never displaces what everyone else sees. */}
+        {post.can_set_reaction_mode && (
+          <button
+            type="button"
+            onClick={switchMode}
+            disabled={switchingMode}
+            className="small"
+            style={{
+              marginLeft: "auto", background: "none", border: "1px solid var(--line)",
+              borderRadius: 999, padding: "2px 10px", cursor: switchingMode ? "default" : "pointer",
+              color: "var(--muted)", fontSize: 11, opacity: switchingMode ? 0.5 : 1,
+            }}
+            title={
+              disliking
+                ? "Put this post back to likes. The dislikes it has now become likes again."
+                : "Turn the like button into a dislike button for this post. The likes it already has become dislikes."
+            }
+          >
+            {switchingMode ? "…" : disliking ? "Enable likes" : "Disable likes"}
+          </button>
+        )}
       </div>
 
       <Comments post={post} isAdmin={isAdmin} onChange={onChange} />

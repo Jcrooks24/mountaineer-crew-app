@@ -48,6 +48,17 @@ class BulletinPost(Base):
 
     created_at = Column(DateTime, nullable=False, index=True)
 
+    # "like" | "dislike" - which reaction this post accepts. Set per post by the
+    # owner only (see BULLETIN_REACTION_MODE_EMAIL in routers/bulletin.py).
+    #
+    # The reaction ROWS are the same either way: bulletin_likes stores "user X
+    # reacted to post Y", and this column decides what that reaction is called
+    # and how it renders. That is a deliberate choice with a consequence worth
+    # stating plainly - flipping a post to "dislike" means the people who
+    # pressed Like are now shown as disliking it, and they never chose that.
+    # Flipping back restores them, because nothing was moved. See ADR 0039.
+    reaction_mode = Column(String, nullable=False, default="like", server_default="like")
+
     # Soft moderation: kept, not deleted, so removal is auditable.
     removed_at = Column(DateTime, nullable=True)
     removed_by = Column(String, nullable=True)

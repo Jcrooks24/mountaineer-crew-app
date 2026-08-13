@@ -43,8 +43,16 @@ def _image_url(p: BulletinPost) -> Optional[str]:
     return p.image_thumb_url
 
 
-def _post_out(p: BulletinPost, like_count: int, liked: bool, comments: list) -> dict:
+def _post_out(p: BulletinPost, like_count: int, liked: bool, comments: list,
+              can_set_mode: bool = False) -> dict:
     return {
+        # "like" | "dislike". The client renders the button from this; it does
+        # not decide it. Defaulted here as well as in the column so a row written
+        # before the migration cannot render a blank button.
+        "reaction_mode": p.reaction_mode or "like",
+        # Whether THIS caller may switch the mode. Computed server-side from the
+        # one hardcoded address, so the client never holds the rule.
+        "can_set_reaction_mode": can_set_mode,
         "post_uuid": p.post_uuid,
         "author_id": p.author_id,
         "author_name": p.author_name,
@@ -109,6 +117,8 @@ def feed(
         .filter(BulletinLike.post_id.in_(ids), BulletinLike.user_id == current_user.id)
         .all()
     }
+    # Computed once for the page, not per post - it is a property of the caller.
+    can_set_mode = can_set_reaction_mode(current_user)
     comments_by_post: dict[int, list] = defaultdict(list)
     for c in (
         db.query(BulletinComment)
@@ -119,7 +129,8 @@ def feed(
         comments_by_post[c.post_id].append(_comment_out(c))
 
     out = [
-        _post_out(p, int(like_counts.get(p.id, 0)), p.id in my_likes, comments_by_post.get(p.id, []))
+        _post_out(p, int(like_counts.get(p.id, 0)), p.id in my_likes,
+                  comments_by_post.get(p.id, []), can_set_mode)
         for p in posts
     ]
     return {"posts": out, "next_before_id": ids[-1] if len(posts) == limit else None}
@@ -142,7 +153,7 @@ def create_post(
     post_uuid - a retry returns the existing post."""
     existing = db.query(BulletinPost).filter(BulletinPost.post_uuid == body.post_uuid).first()
     if existing:
-        return _post_out(existing, 0, False, [])
+        return _post_out(existing, 0, False, [], can_set_reaction_mode(current_user))
 
     kind = body.kind if body.kind in ("text", "link") else "text"
     text = (body.text or "").strip()[:MAX_TEXT]
@@ -177,7 +188,7 @@ def create_post(
     except IntegrityError:
         db.rollback()  # raced the same post_uuid
         post = db.query(BulletinPost).filter(BulletinPost.post_uuid == body.post_uuid).first()
-    return _post_out(post, 0, False, [])
+    return _post_out(post, 0, False, [], can_set_reaction_mode(current_user))
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB. JPEGs are resized client-side first; GIFs upload raw to keep animation.
@@ -196,7 +207,7 @@ def create_photo_post(
     Idempotent on post_uuid."""
     existing = db.query(BulletinPost).filter(BulletinPost.post_uuid == post_uuid).first()
     if existing:
-        return _post_out(existing, 0, False, [])
+        return _post_out(existing, 0, False, [], can_set_reaction_mode(current_user))
 
     data = file.file.read(MAX_IMAGE_BYTES + 1)
     if not data:
@@ -223,7 +234,7 @@ def create_photo_post(
     except IntegrityError:
         db.rollback()
         post = db.query(BulletinPost).filter(BulletinPost.post_uuid == post_uuid).first()
-    return _post_out(post, 0, False, [])
+    return _post_out(post, 0, False, [], can_set_reaction_mode(current_user))
 
 
 @router.get("/image/{post_uuid}")
@@ -273,7 +284,70 @@ def toggle_like(
         db.rollback()  # raced a concurrent like; treat as liked
         liked = True
     count = db.query(func.count(BulletinLike.id)).filter(BulletinLike.post_id == post.id).scalar() or 0
-    return {"liked": liked, "like_count": int(count)}
+    return {"liked": liked, "like_count": int(count), "reaction_mode": post.reaction_mode or "like"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-post reaction mode (owner only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# HARDCODED BY REQUEST, and deliberately in exactly one place.
+#
+# This is the only hardcoded identity in the app - everything else is gated on
+# role or on a per-person flag an admin sets from the roster. It is written here,
+# server-side, so that: (a) there is one line to change or delete when this stops
+# being wanted, and (b) the client never decides who is allowed. The frontend
+# hides the control using the `can_set_reaction_mode` flag this file computes,
+# but hiding a button is a courtesy, not a permission - the check below is what
+# actually enforces it, and it runs on every call.
+BULLETIN_REACTION_MODE_EMAIL = "j.a.crooks24@gmail.com"
+
+REACTION_MODES = ("like", "dislike")
+
+
+def can_set_reaction_mode(user: User) -> bool:
+    """Case-insensitive, whitespace-tolerant. An address that differs only by
+    capitalisation is the same mailbox, and a stored address with a stray space
+    would otherwise silently lock the one person this exists for out of it."""
+    return (user.email or "").strip().lower() == BULLETIN_REACTION_MODE_EMAIL
+
+
+class ReactionModeIn(BaseModel):
+    mode: str
+
+
+@router.post("/posts/{post_uuid}/reaction-mode")
+def set_reaction_mode(
+    post_uuid: str,
+    body: ReactionModeIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Switch one post between accepting likes and accepting dislikes.
+
+    404, not 403, when the caller is not the owner. A 403 confirms the endpoint
+    exists and that someone is allowed to use it; 404 is what every other URL on
+    this router says to a request for something that is not there, and this
+    feature is meant to be invisible rather than merely locked.
+
+    Reactions already recorded are NOT touched. They are reinterpreted: a post
+    with 12 likes becomes a post with 12 dislikes, and switching back restores
+    the 12 likes because nothing moved. That was chosen knowingly - see ADR 0039
+    for what it means and why the alternative was worse.
+    """
+    if not can_set_reaction_mode(current_user):
+        raise HTTPException(status_code=404, detail="Not found")
+    mode = (body.mode or "").strip().lower()
+    if mode not in REACTION_MODES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"mode must be one of {', '.join(REACTION_MODES)}",
+        )
+    post = _require_post(db, post_uuid)
+    post.reaction_mode = mode
+    db.commit()
+    count = db.query(func.count(BulletinLike.id)).filter(BulletinLike.post_id == post.id).scalar() or 0
+    return {"post_uuid": post.post_uuid, "reaction_mode": mode, "like_count": int(count)}
 
 
 class CommentIn(BaseModel):
