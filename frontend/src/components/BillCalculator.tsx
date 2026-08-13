@@ -683,6 +683,25 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     if (lowTruck.length && longestShift > 1) {
       w.push(`${lowTruck.length} truck line${lowTruck.length > 1 ? "s" : ""} at 1h or less while a shift ran ${longestShift}h - check truck hours.`);
     }
+    // NO truck line at all. This was the hole: the checks above catch a truck
+    // billed for too little, and nothing caught a truck billed for nothing.
+    //
+    // The line autofills from the Report's Truck fullness section, so a crew
+    // member who bills before filling that in gets an invoice silently short by
+    // the entire truck charge. Reported 2026-08-13 as "the truck did not
+    // autofill" - and it looks correct afterwards, because filling the section
+    // later adds the line.
+    //
+    // Keyed on billable labour existing: a job where somebody worked hours
+    // almost certainly involved a truck. Advisory like the others, not a block -
+    // a genuinely truckless job is possible and the crew can ignore it.
+    const hasTruckLine = bill.items.some((it) => it.source === "truck");
+    if (!hasTruckLine && longestShift > 0) {
+      w.push(
+        `No truck line - fill in Truck fullness on the Report tab and it will be added. ` +
+        `A ${longestShift}h job with no truck is usually a missed step, and the bill is short until it is there.`,
+      );
+    }
     return w;
   }, [bill.items, employeeHours]);
 

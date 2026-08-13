@@ -1721,7 +1721,16 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       personalVehicleCount={loaded && data.bill_personal_vehicles ? data.personal_vehicles : 0}
       truckCount={
         loaded
-          ? data.truck_fullness.filter((t) => (t.truck || "").trim().length > 0).length
+          // DISTINCT trucks, not entries. An entry is one LOAD since 2026-08-12,
+          // so a truck that ran the job twice has two entries - counting entries
+          // would autofill two "Truck (per hour)" lines and bill the client
+          // twice for one truck. Duration belongs in the line's hours, not in a
+          // second line.
+          ? new Set(
+              data.truck_fullness
+                .map((t) => (t.truck || "").trim().toLowerCase())
+                .filter((name) => name.length > 0),
+            ).size
           : undefined
       }
     >

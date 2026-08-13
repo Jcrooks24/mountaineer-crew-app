@@ -430,6 +430,15 @@ Live bugs that are known and not yet fixed. If you hit one of these, you have fo
 a real issue, not a misunderstanding. Keep this list honest: delete an entry when it
 is fixed, and add one when a `/vet` pass finds something you cannot fix that day.
 
+**Billing under-bill, 2026-08-13 (fixed).** Crew reported billing the wrong
+amount because "the truck did not autofill on the invoice builder". The truck
+line autofills from the Report tab's Truck fullness section, so a bill built
+before that section is filled has NO truck line, and the bill's warnings covered
+a truck billed for too little but not one billed for nothing. It looks correct
+afterwards, because filling the section later adds the line - which is why this
+reads as crew error at first glance. The bill now warns when there are billable
+hours and no truck line at all.
+
 1. **DQ documents are world-readable to anyone with the link.** Every DQ upload
    gets a Drive `{"type": "anyone", "role": "reader"}` permission
    (`drive_upload.py::upload_dq_file_to_drive`). These are medical cards,
