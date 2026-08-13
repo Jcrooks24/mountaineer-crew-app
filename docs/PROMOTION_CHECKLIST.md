@@ -338,8 +338,14 @@ old), device testing, and `repair_forked_jobs.py`.
 ---
 
 - **Fold `docs/DATA_FLOW_STAGING.md` into `docs/DATA_FLOW.md`.** Deferred at the
-  v1.8 promotion, again on 2026-08-11, and again on 2026-08-12. **This is now
-  three promotions old**, and the delta has grown considerably.
+  v1.8 promotion, again on 2026-08-11, on 2026-08-12, and twice on 2026-08-13.
+  **This is now five promotions old**, and the delta has grown to 900+ lines
+  against a 576-line production ledger.
+
+  It needs a session with the app RUNNING, not another reading pass. That is the
+  whole reason it keeps slipping: the five payroll/time paths have to be traced
+  device to Postgres into the actual Sheet before they can be folded in as `[x]`,
+  and no amount of source review earns that mark.
 
   Why it is still here: the delta's "Reconciliation `7fe20a4` -> `7f41611`"
   section covers five data paths (Mountain-time recording, the two payroll
