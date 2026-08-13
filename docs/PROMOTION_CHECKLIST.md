@@ -207,7 +207,26 @@ looks wrong, and who to contact.
 Items that were on a previous promotion's list and never got done. **Clear this
 section as part of the promotion, or explain why it is still here.**
 
-### After the 2026-08-13 promotion (`a35011a`, 4 commits, no migrations)
+### After the 2026-08-13 promotion (`ac98585`, 5 commits, ONE migration)
+
+`h8j0l2g4i6k8` adds `bulletin_posts.reaction_mode`. It is NOT NULL with a server
+default, so nothing needs backfilling, but the deploy must run it before the new
+frontend reaches a phone - both bugs reported on 08-12 were a frontend deployed
+ahead of its backend, and Vercel usually wins that race.
+
+1. **Confirm the Render PROD deploy ran `h8j0l2g4i6k8`.** Look for
+   `[migrations] Alembic upgrade head - done.` If the frontend lands first, the
+   bulletin feed will 500 on `reaction_mode` until the backend catches up.
+2. **The dislike control renders only for `j.a.crooks24@gmail.com`.** Sign in as
+   that account and confirm the pill appears; sign in as anyone else and confirm
+   it does not. The server refuses everyone else regardless (404), so a UI slip
+   here is cosmetic, not a hole - but it is worth one look.
+3. **Bill total on the crew closed-job panel.** Open any closed job and confirm
+   the amount matches what the admin Job Summary shows for the same job. Those
+   two now share one implementation; if they disagree, the shared helper is wrong
+   for both.
+
+### Still outstanding from the 2026-08-13 promotion (`a35011a`)
 
 The truck-billing fixes, the auto-reconcile throttle fix, and the drain estimate.
 Nothing to configure - but one thing genuinely needs watching, because the fix

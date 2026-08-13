@@ -67,6 +67,19 @@ The switch is a column on the post. There is deliberately no bulletin-wide
 setting, because a global "no likes anywhere" is a different product decision
 about the feed's tone, and this was asked for as a per-post tool.
 
+### 4. No beta tag (waived by the owner, 2026-08-13)
+
+Core Behavior 6 in the vetting protocol expects a new crew-visible feature to
+carry `<BetaTag feature="..." />` until the next `APP_VERSION` bump, and the
+dislike button IS crew-visible. It was raised as a Low finding on the promotion
+vet and **explicitly waived by the owner for this control only**: it is not an
+opt-in feature crew adopt, it is an existing button whose meaning the owner
+changes per post, and a beta tag on that reads as noise.
+
+Recorded here rather than left in a conversation, because a waiver nobody can
+find later is indistinguishable from an oversight. The waiver covers this control
+and nothing else.
+
 ## Consequences
 
 - One hardcoded address to change or delete when this stops being wanted, in one
