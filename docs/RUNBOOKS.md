@@ -439,6 +439,27 @@ afterwards, because filling the section later adds the line - which is why this
 reads as crew error at first glance. The bill now warns when there are billable
 hours and no truck line at all.
 
+**The mechanism, found while vetting the fix, is worse than "a step was
+skipped".** `JobReport.tsx` PRE-SEEDS truck entries from the job's assigned
+vehicle units at `vertical_pct: 0, horizontal_pct: 0`, and the submit filter then
+DROPS any row whose fill is still 0. So the crew sees their truck listed in the
+Truck fullness section, saves, and it is silently discarded - after which
+`truckCount` is 0 and the invoice has no truck line. The section looks filled
+because the app filled it.
+
+The root problem is that billing is coupled to a VOLUME estimate: whether a truck
+is billed depends on whether somebody rated how full it was. Two candidate fixes,
+neither taken yet because both change billing semantics and want a decision:
+
+  (a) keep seeded rows with a truck name even at 0 fill, so the truck counts;
+      cost is 0% rows in the Sheet and in volume totals.
+  (b) count the job's ASSIGNED VEHICLE UNITS for billing instead of
+      truck_fullness, so the invoice bills the trucks the job had rather than the
+      ones somebody measured.
+
+(b) is probably right, and is a bigger change. The warning above is the stopgap:
+it fires in exactly this case and names the section to fill.
+
 1. **DQ documents are world-readable to anyone with the link.** Every DQ upload
    gets a Drive `{"type": "anyone", "role": "reader"}` permission
    (`drive_upload.py::upload_dq_file_to_drive`). These are medical cards,
