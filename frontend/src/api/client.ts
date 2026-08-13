@@ -67,7 +67,22 @@ export class ApiError extends Error {
 // Retry pacing for a request caught by a backend restart. Four attempts over
 // ~7 seconds covers a normal boot (measured at a few seconds) without holding a
 // crew member's screen hostage if the server is genuinely down.
+//
+// USED ONLY WHEN THE SERVER POSITIVELY SAID SO - a 502/503/504 means a proxy
+// answered and could not reach the app, which is exactly what a restart looks
+// like from outside.
 const RESTART_RETRY_DELAYS_MS = [700, 1500, 2500, 3000];
+
+// A failed fetch while the device believes it is online is AMBIGUOUS: either a
+// refused connection to a booting server, or one bar in a canyon.
+// `navigator.onLine` cannot separate those - it reports true for a phone
+// attached to a tower with no usable throughput.
+//
+// So that case gets ONE fast retry rather than the ladder above. Spending ~7
+// seconds before falling back to cached data would have made the app slower for
+// exactly the crews with the worst signal, which is the opposite of the point.
+// One quick retry still recovers a genuinely refused connection.
+const AMBIGUOUS_RETRY_DELAYS_MS = [700];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -106,11 +121,11 @@ export async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise
     try {
       res = await fetch(`${API}${path}`, { ...opts, headers });
     } catch (err) {
-      // Network-layer failure: offline, or a refused connection to a server
-      // that is mid-boot.
-      if (looksLikeRestart(err) && isSafeToRetry(opts.method) && attempt < RESTART_RETRY_DELAYS_MS.length) {
+      // Network-layer failure: offline, weak signal, or a refused connection to
+      // a server that is mid-boot. Ambiguous, so one quick retry only.
+      if (looksLikeRestart(err) && isSafeToRetry(opts.method) && attempt < AMBIGUOUS_RETRY_DELAYS_MS.length) {
         noteServerUnavailable();
-        await sleep(RESTART_RETRY_DELAYS_MS[attempt++]);
+        await sleep(AMBIGUOUS_RETRY_DELAYS_MS[attempt++]);
         continue;
       }
       if (looksLikeRestart(err)) noteServerUnavailable();

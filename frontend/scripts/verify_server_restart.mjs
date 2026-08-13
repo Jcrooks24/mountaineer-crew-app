@@ -99,6 +99,43 @@ const total = delays.reduce((a, b) => a + b, 0);
 check("total retry window is seconds, not minutes", total > 3000 && total < 15000,
   `${total} ms over ${delays.length} attempts`);
 
+// A 502/503/504 is a proxy ANSWERING - positive evidence of a restart. A failed
+// fetch while "online" is ambiguous: navigator.onLine reports true for a phone
+// on a tower with no usable throughput. Spending the full ladder on that would
+// make every request slower for the crews with the worst signal.
+const ambiguous = client.match(/AMBIGUOUS_RETRY_DELAYS_MS = \[([^\]]+)\]/)[1]
+  .split(",").map((n) => parseInt(n.trim(), 10));
+check("an ambiguous network failure retries once, briefly",
+  ambiguous.length === 1 && ambiguous[0] <= 1000, `${ambiguous.join(",")} ms`);
+check("the ambiguous ladder is shorter than the confirmed one",
+  ambiguous.reduce((a, b) => a + b, 0) < total);
+check("the network-error path uses the ambiguous ladder",
+  /catch \(err\)[\s\S]{0,400}AMBIGUOUS_RETRY_DELAYS_MS/.test(client));
+check("the status path uses the confirmed ladder",
+  /looksLikeRestart\(null, res\.status\)[\s\S]{0,300}RESTART_RETRY_DELAYS_MS/.test(client));
+
+console.log("\nA deploy cannot strand a crew member on a dead chunk:");
+const lazyRoute = readFileSync(`${ROOT}/frontend/src/lib/lazyRoute.ts`, "utf8");
+check("chunk-load failures are recognised across browsers",
+  /ChunkLoadError/.test(lazyRoute)
+  && /Failed to fetch dynamically imported module/.test(lazyRoute)
+  && /Importing a module script failed/.test(lazyRoute));
+// A reload loop would lock a crew member out of the WHOLE app rather than one
+// screen, which is far worse than the error page it replaces.
+check("it reloads at most once per route", /alreadyReloadedFor\(key\)/.test(lazyRoute));
+check("the once-only mark is persisted", /sessionStorage\.setItem/.test(lazyRoute));
+check("no sessionStorage is treated as already-reloaded, not as free rein",
+  /return true;/.test(lazyRoute.split("function alreadyReloadedFor")[1].split("}")[3] || "")
+  || /catch \{[\s\S]{0,200}return true;/.test(lazyRoute));
+// Reloading an offline PWA turns "this screen is unavailable" into "the app is
+// gone".
+check("an offline device is never reloaded", /navigator\.onLine === false/.test(lazyRoute));
+const mainSrc = readFileSync(`${ROOT}/frontend/src/main.tsx`, "utf8");
+check("every route uses it", (mainSrc.match(/lazyRoute\(/g) || []).length >= 12,
+  `${(mainSrc.match(/lazyRoute\(/g) || []).length} routes`);
+check("bare React.lazy is no longer used for routes",
+  !/= lazy\(\(\) => import\(/.test(mainSrc));
+
 console.log("\nThe banner does not overclaim:");
 const banner = readFileSync(`${ROOT}/frontend/src/components/ServerRestartBanner.tsx`, "utf8");
 check("no countdown to zero is promised", !/setTimeout[\s\S]{0,80}remaining/i.test(banner));
@@ -110,8 +147,8 @@ check("it is announced to screen readers", /aria-live="polite"/.test(banner));
 
 console.log("\nRoutes are code split, and the timeline is not:");
 const main = readFileSync(`${ROOT}/frontend/src/main.tsx`, "utf8");
-check("Admin is lazy", /const Admin = lazy\(/.test(main));
-check("Availability is lazy", /const Availability = lazy\(/.test(main));
+check("Admin is lazy", /const Admin = lazyRoute\("Admin"/.test(main));
+check("Availability is lazy", /const Availability = lazyRoute\("Availability"/.test(main));
 // The timeline is what crews open. Making the common case wait on a second
 // round trip would be a pessimisation dressed as an optimisation.
 check("App (the timeline) stays a static import",

@@ -1,6 +1,6 @@
 import "./index.css";
 
-import { StrictMode, Suspense, lazy } from "react";
+import { StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
@@ -13,6 +13,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateBanner from "./components/UpdateBanner";
 import AvailabilityReminderBanner from "./components/AvailabilityReminderBanner";
 import ServerRestartBanner from "./components/ServerRestartBanner";
+import { lazyRoute } from "./lib/lazyRoute";
 import RolePreviewSwitch from "./components/RolePreviewSwitch";
 import BottomNav from "./components/BottomNav";
 
@@ -33,18 +34,18 @@ import MechanicSign from "./pages/MechanicSign";
 // The timeline (App) stays a STATIC import: it is the screen crews open, and
 // making the common case wait on a second round trip would be a pessimisation
 // dressed as an optimisation. Everything reached by navigating stays lazy.
-const Profile = lazy(() => import("./pages/Profile"));
-const Admin = lazy(() => import("./pages/Admin"));
-const DVIRPage = lazy(() => import("./pages/DVIR"));
-const LongDistance = lazy(() => import("./pages/LongDistance"));
-const DocumentLibrary = lazy(() => import("./pages/DocumentLibrary"));
-const Reimbursement = lazy(() => import("./pages/Reimbursement"));
-const OffJob = lazy(() => import("./pages/OffJob"));
-const Availability = lazy(() => import("./pages/Availability"));
-const ReportBug = lazy(() => import("./pages/ReportBug"));
-const RequestFeature = lazy(() => import("./pages/RequestFeature"));
-const Tools = lazy(() => import("./pages/Tools"));
-const Bulletin = lazy(() => import("./pages/Bulletin"));
+const Profile = lazyRoute("Profile", () => import("./pages/Profile"));
+const Admin = lazyRoute("Admin", () => import("./pages/Admin"));
+const DVIRPage = lazyRoute("DVIRPage", () => import("./pages/DVIR"));
+const LongDistance = lazyRoute("LongDistance", () => import("./pages/LongDistance"));
+const DocumentLibrary = lazyRoute("DocumentLibrary", () => import("./pages/DocumentLibrary"));
+const Reimbursement = lazyRoute("Reimbursement", () => import("./pages/Reimbursement"));
+const OffJob = lazyRoute("OffJob", () => import("./pages/OffJob"));
+const Availability = lazyRoute("Availability", () => import("./pages/Availability"));
+const ReportBug = lazyRoute("ReportBug", () => import("./pages/ReportBug"));
+const RequestFeature = lazyRoute("RequestFeature", () => import("./pages/RequestFeature"));
+const Tools = lazyRoute("Tools", () => import("./pages/Tools"));
+const Bulletin = lazyRoute("Bulletin", () => import("./pages/Bulletin"));
 
 /** Shown while a route chunk downloads. Deliberately plain and quiet: on a good
  *  connection it is visible for a few hundred milliseconds, and a spinner that

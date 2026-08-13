@@ -187,11 +187,29 @@ def _git(*args: str) -> str:
         return ""
 
 
+def _strip_comments(block: str) -> str:
+    """Drop `#` comments before scraping quoted strings out of a header list.
+
+    Without this the scraper reads QUOTED PHRASES IN COMMENTS as column names.
+    A comment explaining that a tri-state column distinguishes "nobody filled
+    this in" from "the crew could not name a cause" made the 2026-08-13 report
+    announce four new Sheet columns instead of two, two of them named after
+    sentence fragments. Nobody would find those columns, because they do not
+    exist - and a promotion report that invents columns is worse than one that
+    says nothing, since section 2 of the checklist is where someone decides
+    whether prod's tab order needs fixing by hand.
+
+    A naive line-wise strip is right here: these lists are literal strings on
+    their own lines, so there is no case of a `#` inside a header value.
+    """
+    return "\n".join(line.split("#", 1)[0] for line in block.splitlines())
+
+
 def _headers_lists(ref: str) -> dict[str, list[str]]:
     src = _git("show", f"{ref}:backend/app/integrations/sheets_export.py")
     out: dict[str, list[str]] = {}
     for m in re.finditer(r"^([A-Z0-9_]*HEADERS)\s*(?::[^=]+)?=\s*\[(.*?)\]", src, re.M | re.S):
-        out[m.group(1)] = re.findall(r'"([^"]*)"', m.group(2))
+        out[m.group(1)] = re.findall(r'"([^"]*)"', _strip_comments(m.group(2)))
     return out
 
 
