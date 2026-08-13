@@ -45,11 +45,32 @@ _creds_lock = threading.Lock()
 _SSL_ERRORS = ("DECRYPTION_FAILED", "BAD_RECORD_MAC", "SSL", "ssl", "EOF occurred")
 
 
+# Seconds before a Google HTTP call gives up. httplib2 defaults to None, which
+# means BLOCK FOREVER on the socket.
+#
+# That default is dangerous here specifically because of what sits behind it: the
+# Sheets export pool is a ThreadPoolExecutor with max_workers=2. A stalled TLS
+# read - a half-open connection after a network blip, routine on a cloud host -
+# parks one of those two threads permanently. Two of them and the pool is wedged:
+# every later export submit() just queues behind threads that will never return.
+#
+# The failure mode is SILENCE, which is why it is worth a constant and this
+# comment. Nothing raises, so nothing reaches the failure ring; nothing succeeds,
+# so no row appears; the backfill still reports work as "queued" because handing
+# a task to a saturated pool succeeds. From the outside it is indistinguishable
+# from "the export did nothing", and it survives until the worker is recycled.
+#
+# 60s is generous for a Sheets/Drive call (batch writes on a large tab are the
+# slow case) and still bounded. A call that has not finished in a minute is not
+# going to.
+GOOGLE_HTTP_TIMEOUT_S = 60
+
+
 def _build_authorized_http(creds):
     import certifi
     import httplib2
     import google_auth_httplib2
-    http = httplib2.Http(ca_certs=certifi.where())
+    http = httplib2.Http(ca_certs=certifi.where(), timeout=GOOGLE_HTTP_TIMEOUT_S)
     return google_auth_httplib2.AuthorizedHttp(creds, http=http)
 
 

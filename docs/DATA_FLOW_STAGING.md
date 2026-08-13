@@ -898,6 +898,57 @@ server per request, so the client never holds the permission rule.
 Migration `h8j0l2g4i6k8`. Guarded by
 `backend/scripts/verify_bulletin_reaction_mode.py`.
 
+## Reimbursement decisions and report waivers now reach the Sheet
+
+Answers the "should these reach the Sheet" question left open after the
+2026-08-12 promotion. Owner decided 2026-08-13: yes to both. App build history
+was NOT included and stays Postgres-only.
+
+### Reimbursement approve / decline
+
+| | |
+|---|---|
+| Trigger | `POST /api/payroll/reimbursement/{uuid}/decide` |
+| Export | `export_reimbursement_to_sheets`, replace-style on `reimbursement_uuid` |
+| Tab | existing `Reimbursements` (`SHEETS_REIMBURSEMENTS_TAB`) |
+| Columns | none new - `status`, `approver`, `approved_at`, `approval_notes` already existed |
+
+No new tab, no new column, no migration. The columns were there and the decision
+endpoint simply never called the export, so the Sheet recorded every claim as
+`submitted` no matter what the office decided. Fixed by reusing
+`reimbursement.py::_queue_export`, so the decide path and the submit path cannot
+drift.
+
+### Payroll job-report waiver (NEW TAB)
+
+| | |
+|---|---|
+| Trigger | `POST /api/payroll/job/{job_uuid}/report-waiver`, on waive AND un-waive |
+| Export | `export_report_waiver_to_sheets`, replace-style on `job_uuid` |
+| Tab | **new** `ReportWaivers` (`SHEETS_REPORT_WAIVERS_TAB`) |
+| Columns | `job_uuid`, `job_name`, `waived`, `waived_by`, `waived_at`, `reason`, `entered_by`, `entered_on`, `updated_at` |
+| Registry | `SHEET_SYNC_REGISTRY` + backfill registry (`report_waivers`) |
+
+**Its own tab, not a JobReports column, and the reason is the feature itself:** a
+waiver exists precisely for jobs that have NO job report, so a JobReports column
+would live on a row that is by definition usually absent.
+
+Un-waiving writes `not waived` rather than deleting the row - a waiver granted
+and then revoked is a thing that happened, and the backfill source deliberately
+includes revoked waivers so the two sides do not disagree forever.
+
+New env var `SHEETS_REPORT_WAIVERS_TAB` (CREDENTIALS.md + .env.staging.example).
+
+### Export pool health is now observable
+
+`export_pool_status()` reports what the two export threads are doing, surfaced in
+the Sheet Backfill audit and shown in Admin only when saturated or stuck. Added
+alongside the real fix: the Google HTTP client had **no timeout**
+(`httplib2.Http` defaults to blocking forever), so a stalled TLS read could park
+an export thread permanently and two of them wedged all exporting - with no
+exception raised, no row written, and the backfill still reporting work as
+"queued". Now `GOOGLE_HTTP_TIMEOUT_S = 60`.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified

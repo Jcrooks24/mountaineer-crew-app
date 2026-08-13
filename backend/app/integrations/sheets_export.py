@@ -193,6 +193,39 @@ def clear_export_failures() -> None:
         _recent_failures.clear()
 
 
+_inflight_lock = threading.Lock()
+_inflight: Dict[str, float] = {}   # worker key -> monotonic start time
+_inflight_seq = 0
+
+
+def export_pool_status() -> Dict[str, Any]:
+    """What the two export threads are doing right now.
+
+    This exists because a wedged pool is invisible. The pool is
+    max_workers=2, and until 2026-08-13 the Google HTTP client had NO timeout,
+    so one stalled TLS read parked a thread forever and two of them stopped all
+    exports permanently - with no exception to log, no row written, and the
+    backfill still reporting work as "queued" because submitting to a saturated
+    pool succeeds. The only symptom was silence.
+
+    `oldest_seconds` is the number that matters: an export running longer than
+    the HTTP timeout means a thread is stuck somewhere the timeout does not
+    cover, and the pool is that much closer to being dead.
+    """
+    now = time.monotonic()
+    with _inflight_lock:
+        ages = sorted((now - t) for t in _inflight.values())
+    return {
+        "workers": 2,
+        "running": len(ages),
+        "oldest_seconds": round(ages[-1], 1) if ages else 0,
+        # Both threads busy is normal under load; both busy for a long time is
+        # the shape of the failure above.
+        "saturated": len(ages) >= 2,
+        "stuck": bool(ages and ages[-1] > 180),
+    }
+
+
 def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
     """Submit a sheets export to the bounded background pool with a fresh
     DB session, so a slow or failing Google call never blocks the API
@@ -203,8 +236,15 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
     followed by whatever caller args were passed. The fresh session is
     created inside the worker.
     """
+    global _inflight_seq
+    with _inflight_lock:
+        _inflight_seq += 1
+        key = f"{export_fn.__name__}#{_inflight_seq}"
+
     def _worker() -> None:
         from app.db.session import SessionLocal
+        with _inflight_lock:
+            _inflight[key] = time.monotonic()
         db = SessionLocal()
         try:
             export_fn(db, *args, **kwargs)
@@ -218,6 +258,8 @@ def run_export_in_background(export_fn: Callable[..., Any], *args: Any, **kwargs
                 pass
             record_sheet_sync(db, export_fn.__name__, False, str(exc))
         finally:
+            with _inflight_lock:
+                _inflight.pop(key, None)
             try:
                 db.close()
             except Exception:
@@ -3694,6 +3736,7 @@ SHEET_SYNC_REGISTRY = [
     {"key": "reimbursements",    "label": "Reimbursements",      "env": "SHEETS_REIMBURSEMENTS_TAB",     "default": "Reimbursements",    "fn": "export_reimbursement_to_sheets"},
     {"key": "availability",      "label": "Availability",        "env": "SHEETS_AVAILABILITY_TAB",       "default": "Availability",      "fn": "export_availability_window_to_sheets"},
     {"key": "off_job_hours",     "label": "Off-job hours",       "env": "SHEETS_OFF_JOB_TAB",            "default": "OffJobHours",       "fn": "export_off_job_to_sheets"},
+    {"key": "report_waivers",    "label": "Report waivers",      "env": "SHEETS_REPORT_WAIVERS_TAB",     "default": "ReportWaivers",     "fn": "export_report_waiver_to_sheets"},
     {"key": "bug_reports",       "label": "Bug reports",         "env": "SHEETS_BUGS_TAB",               "default": "Bugs",              "fn": "export_bug_report_to_sheets"},
     {"key": "feature_requests",  "label": "Feature requests",    "env": "SHEETS_FEATURE_REQUESTS_TAB",   "default": "FeatureRequests",   "fn": "export_feature_request_to_sheets"},
 ]
@@ -3800,6 +3843,57 @@ def export_off_job_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         "pay_other_note": entry.get("pay_other_note") or "",
         "notes": entry.get("notes") or "",
         "created_at": entry.get("created_at") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
+REPORT_WAIVER_HEADERS = [
+    "job_uuid", "job_name", "waived", "waived_by", "waived_at", "reason",
+    "entered_by", "entered_on", "updated_at",
+]
+
+
+def export_report_waiver_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """Replace-style export: one row per job_uuid on the ReportWaivers tab.
+
+    THIS NEEDS ITS OWN TAB rather than a column on JobReports, and the reason is
+    the whole point of the feature: a waiver exists precisely for jobs that have
+    NO job report. Hanging it off the JobReports row would put it on a row that,
+    by definition, is usually not there.
+
+    A waiver is the record of an admin deciding payroll may finalize over missing
+    paperwork. Until now it lived only in Postgres, so the one artifact explaining
+    why a period closed without a report was also the one artifact with no durable
+    copy. The Sheet is the long-term record; Postgres is not.
+
+    Un-waiving writes the row back as "not waived" rather than deleting it. A
+    waiver that was granted and then revoked is a thing that happened, and a tab
+    showing only current waivers cannot answer "was this ever waived".
+    """
+    tab = os.getenv("SHEETS_REPORT_WAIVERS_TAB", "ReportWaivers").strip() or "ReportWaivers"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    job_uuid = (entry.get("job_uuid") or "").strip()
+    if not job_uuid:
+        return 0
+
+    svc = _get_sheets_svc(db)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, REPORT_WAIVER_HEADERS)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "job_uuid", job_uuid)
+
+    row = {
+        "job_uuid": job_uuid,
+        "job_name": entry.get("job_name") or "",
+        # Spelled out rather than TRUE/FALSE: a human reading this column is
+        # asking "was payroll allowed to skip this one", and the words answer
+        # that without them having to remember which way the boolean points.
+        "waived": "waived" if entry.get("waived") else "not waived",
+        "waived_by": entry.get("waived_by_name") or "",
+        "waived_at": _iso(entry.get("waived_at")),
+        "reason": entry.get("reason") or "",
+        "entered_by": entry.get("entered_by") or "",
+        "entered_on": entry.get("entered_on") or "",
+        "updated_at": _iso(entry.get("updated_at")),
     }
     _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
     return 1

@@ -1650,6 +1650,23 @@ def decide_reimbursement(
         row.approved_at = datetime.utcnow()
     db.commit()
 
+    # RE-EXPORT, or the Sheet keeps saying "submitted" forever.
+    #
+    # The Reimbursements tab has carried status / approver / approved_at /
+    # approval_notes since the feature shipped, and the export is replace-style
+    # keyed on reimbursement_uuid, so this rewrites the row in place. What was
+    # missing was anyone calling it after a DECISION: the only export was on
+    # submit, so the Sheet recorded every claim as undecided no matter what the
+    # office did to it. The Sheet is the durable record and Postgres is not, so
+    # that gap meant the decision existed in exactly one place.
+    #
+    # Imported here rather than at module scope: reimbursement.py imports from
+    # payroll's neighbourhood and a top-level import risks a cycle. Reusing ITS
+    # payload builder is the point - a second hand-written dict would drift from
+    # the submit path the first time a column is added.
+    from app.routers.reimbursement import _queue_export
+    _queue_export(row)
+
     emailed = False
     email_error: Optional[str] = None
     # Only on a NEW decline. Re-saving a note on an already-declined claim must
@@ -1698,6 +1715,38 @@ def decide_reimbursement(
 
 # ── Job-report waiver ────────────────────────────────────────────────────────
 
+
+def _waiver_export_dict(db: Session, row: AdminEntryStatus) -> dict:
+    """One payload builder, shared by the endpoint and the backfill re-driver.
+
+    A second hand-written dict at the backfill site would drift from this one the
+    first time a column is added, and the drift would show up as a re-driven row
+    that quietly differs from the row the live path writes.
+
+    `_job_label` falls back to the first 8 characters of the uuid when a job has
+    no events to name it - which is common here, since these are precisely the
+    jobs nobody filed paperwork for.
+    """
+    return {
+        "job_uuid": row.job_uuid,
+        "job_name": _job_label(db, row.job_uuid),
+        "waived": bool(row.report_waived),
+        "waived_by_name": row.report_waived_by_name or "",
+        "waived_at": row.report_waived_at,
+        "reason": row.report_waived_reason or "",
+        "entered_by": row.entered_by or "",
+        "entered_on": row.entered_on or "",
+        "updated_at": row.updated_at,
+    }
+
+
+def _queue_waiver_export(db: Session, row: AdminEntryStatus) -> None:
+    from app.integrations.sheets_export import (
+        export_report_waiver_to_sheets,
+        run_export_in_background,
+    )
+    run_export_in_background(export_report_waiver_to_sheets, _waiver_export_dict(db, row))
+
 @router.post("/job/{job_uuid}/report-waiver")
 def set_report_waiver(
     job_uuid: str,
@@ -1741,6 +1790,14 @@ def set_report_waiver(
     row.report_waived_at = datetime.utcnow() if body.waived else None
     row.updated_at = datetime.utcnow()
     db.commit()
+
+    # The waiver is the record of an admin letting payroll finalize over missing
+    # paperwork. Until now it lived only in Postgres, so the single artifact
+    # explaining why a period closed without a report was also the only one with
+    # no durable copy. Exported on BOTH waive and un-waive: a revoked waiver
+    # writes back as "not waived" rather than vanishing, because a waiver that
+    # was granted and then taken back is a thing that happened.
+    _queue_waiver_export(db, row)
     return {
         "ok": True,
         "job_uuid": job_uuid,

@@ -63,7 +63,11 @@ sheet. This is the most common configuration mistake in this system.
 `SHEETS_BOLS_TAB`, `SHEETS_BOL_ITEMS_TAB`, `SHEETS_JOB_INVENTORY_TAB`,
 `SHEETS_JOB_INVENTORY_ITEMS_TAB`, `SHEETS_INCIDENTS_TAB`, `SHEETS_OFFICE_HOURS_TAB`,
 `SHEETS_REIMBURSEMENTS_TAB`, `SHEETS_AVAILABILITY_TAB`, `SHEETS_OFF_JOB_TAB`,
-`SHEETS_BUGS_TAB` (default `Bugs`; the Report-a-Bug feature)
+`SHEETS_BUGS_TAB` (default `Bugs`; the Report-a-Bug feature),
+`SHEETS_REPORT_WAIVERS_TAB` (default `ReportWaivers`; the payroll job-report
+waiver, new 2026-08-13). Unset is harmless on prod (the default is correct)
+but on STAGING it writes test waivers into the production tab, like every
+other var in this list.
 
 Staging value is the production name plus `Staging` (`Events` → `EventsStaging`).
 

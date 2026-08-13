@@ -207,6 +207,33 @@ def _src_office_hours(db: Session) -> List[Dict[str, Any]]:
     } for r in rows if r.entry_uuid]
 
 
+def _src_report_waivers(db: Session) -> List[Dict[str, Any]]:
+    """Jobs whose report requirement was waived, or was waived and then revoked.
+
+    Deliberately NOT filtered to `report_waived == True`. A revoked waiver still
+    has a row on the tab reading "not waived", and the audit compares what
+    Postgres thinks should be there against what is - so filtering here would
+    make every revoked waiver look like a row that ought to be deleted, and the
+    two sides would disagree forever.
+    """
+    from app.db.models.admin_entry_status import AdminEntryStatus
+    rows = (
+        db.query(AdminEntryStatus)
+        .filter(
+            (AdminEntryStatus.report_waived.is_(True))
+            | (AdminEntryStatus.report_waived_at.isnot(None))
+        )
+        .order_by(AdminEntryStatus.updated_at.desc())
+        .all()
+    )
+    return [{
+        "id": r.job_uuid,
+        "label": f"waived by {r.report_waived_by_name or 'unknown'}"
+                 if r.report_waived else "waiver revoked",
+        "created_at": _iso(r.report_waived_at or r.updated_at),
+    } for r in rows if r.job_uuid]
+
+
 def _src_reimbursements(db: Session) -> List[Dict[str, Any]]:
     from app.db.models.reimbursement import Reimbursement
     rows = db.query(Reimbursement).order_by(Reimbursement.created_at.desc()).all()
@@ -393,6 +420,14 @@ def _re_reimbursement(db: Session, ref: Any) -> None:
         _queue_export(row)
 
 
+def _re_report_waiver(db: Session, ref: Any) -> None:
+    from app.db.models.admin_entry_status import AdminEntryStatus
+    from app.routers.payroll import _queue_waiver_export
+    row = db.query(AdminEntryStatus).filter(AdminEntryStatus.job_uuid == ref).first()
+    if row:
+        _queue_waiver_export(db, row)
+
+
 def _re_off_job(db: Session, ref: Any) -> None:
     from app.db.models.off_job_entry import OffJobEntry
     from app.routers.off_job import _export
@@ -480,6 +515,9 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
     {"key": "off_job_hours", "label": "Off-job hours", "env": "SHEETS_OFF_JOB_TAB",
      "default": "OffJobHours", "key_cols": ["entry_uuid"],
      "source": _src_off_job, "reexport": _re_off_job},
+    {"key": "report_waivers", "label": "Report waivers", "env": "SHEETS_REPORT_WAIVERS_TAB",
+     "default": "ReportWaivers", "key_cols": ["job_uuid"],
+     "source": _src_report_waivers, "reexport": _re_report_waiver},
     {"key": "bug_reports", "label": "Bug reports", "env": "SHEETS_BUGS_TAB",
      "default": "Bugs", "key_cols": ["bug_uuid"],
      "source": _src_bug_reports, "reexport": _re_bug_report},
@@ -774,8 +812,13 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
     # See the note in sheets_export: this is an in-memory ring, so an empty list
     # does NOT prove nothing failed. It proves nothing failed since the last
     # worker recycle.
-    from app.integrations.sheets_export import recent_export_failures
+    from app.integrations.sheets_export import export_pool_status, recent_export_failures
     result["recent_failures"] = recent_export_failures()
+    # A saturated or stuck pool is the one failure this whole page cannot
+    # otherwise show: nothing throws, nothing lands, and every count stays put.
+    # Without it, "the backfill does nothing" and "the export threads are wedged"
+    # look identical from here.
+    result["export_pool"] = export_pool_status()
     return result
 
 

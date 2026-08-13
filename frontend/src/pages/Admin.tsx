@@ -4891,6 +4891,13 @@ type BackfillAudit = {
   /** Actual exceptions from the background export pool, newest first. In-memory
    *  and bounded, so an empty list does not prove nothing failed. */
   recent_failures?: ExportFailure[];
+  /** Live state of the 2-thread export pool. A wedged pool is the one failure
+   *  this page cannot otherwise show: nothing throws, nothing lands, counts
+   *  freeze. See export_pool_status(). */
+  export_pool?: {
+    workers: number; running: number; oldest_seconds: number;
+    saturated: boolean; stuck: boolean;
+  };
 };
 
 /**
@@ -5055,6 +5062,34 @@ function SheetBackfillCard() {
               healthy while specific records throw every single time. That is
               exactly the case where Re-send looks like it does nothing. These
               are the real exceptions from the export pool. */}
+          {/* The export pool itself. Shown ONLY when it looks wrong, because in
+              steady state "2 threads, 0 running" is noise. When it is wrong it
+              is the whole answer: no exception is thrown by a thread that never
+              returns, so every other panel here stays silent and reassuring. */}
+          {data.connected && data.export_pool && (data.export_pool.stuck || data.export_pool.saturated) && (
+            <div className="small" style={{
+              marginBottom: 10, padding: 8, borderRadius: 8,
+              border: `1px solid ${data.export_pool.stuck ? "var(--danger)" : "var(--warn, var(--muted))"}`,
+              color: data.export_pool.stuck ? "var(--danger)" : "var(--text)",
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                {data.export_pool.stuck
+                  ? "Export threads are stuck"
+                  : "Both export threads are busy"}
+              </div>
+              <div style={{ color: "var(--muted)" }}>
+                {data.export_pool.running} of {data.export_pool.workers} running,
+                oldest {data.export_pool.oldest_seconds}s.
+                {data.export_pool.stuck
+                  ? " Nothing will export while both threads are parked, and no error is raised" +
+                    " by a call that never returns, so every other check on this page will look" +
+                    " healthy. Redeploy the backend to clear it, then check Render logs for the" +
+                    " call that hung."
+                  : " Normal under load. If this does not clear, re-run the audit in a minute."}
+              </div>
+            </div>
+          )}
+
           {data.connected && (data.recent_failures?.length ?? 0) > 0 && (
             <div className="small" style={{
               marginBottom: 10, padding: 8, borderRadius: 8,
