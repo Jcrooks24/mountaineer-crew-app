@@ -1273,6 +1273,16 @@ JOB_REPORT_HEADERS = [
     # since it was created. Before this split, `submitted_by` silently became
     # whoever saved last, which is the bug the two columns exist to separate.
     "last_edited_by",
+    # Appended 2026-08-13 with the close-out redesign. Both were previously
+    # INFERRED by the client from the causes list and neither was stored, so the
+    # office was reading a direction nobody entered and could not tell "nobody
+    # filled this in" from "the crew could not name a cause".
+    #
+    # `client_readiness` / `client_unready` above are now write-frozen - the
+    # question was retired as a duplicate of the client_not_ready cause - but the
+    # columns stay because a year of rows carry values. Expect them blank on new
+    # reports and populated on old ones; that is not a sync fault.
+    "variance_direction", "variance_cause_identified",
 ]
 
 
@@ -1683,6 +1693,17 @@ def export_job_report_to_sheets(db: Session, report: Dict[str, Any]) -> int:
             or ([report["variance_cause"]] if report.get("variance_cause") else [])
         ),
         "variance_note": report.get("variance_note", "") or "",
+        # Words, not "more"/"less". The office reads this column; the key is an
+        # internal token and "more" alone does not say more of what.
+        "variance_direction": {
+            "more": "Ran longer",
+            "less": "Ran shorter",
+            "as_quoted": "As quoted",
+        }.get(report.get("variance_direction") or "", ""),
+        # Tri-state on purpose. Blank = nobody answered; "No" = the crew looked
+        # and could not name a cause, which is a real finding and not the same
+        # thing as an unfilled field.
+        "variance_cause_identified": _yes_no_blank(report.get("variance_cause_identified")),
         "client_readiness": _closeout_label(report.get("client_readiness")),
         "client_unready": _format_closeout_list(report.get("client_unready")),
         "scope_change_count": len(report.get("scope_changes") or []) or "",

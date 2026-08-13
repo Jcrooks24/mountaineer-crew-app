@@ -91,6 +91,7 @@ import { formatMountainTime, mountainHHMM, mountainDateYYYYMMDD } from "../lib/t
 import DVIRReminderModal from "./DVIRReminderModal";
 import BillCalculator, { type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
+import CloseoutStepper, { type CloseoutValue } from "./CloseoutStepper";
 import WrapUpEstimator from "./WrapUpEstimator";
 import { fireConfetti } from "../lib/confetti";
 
@@ -184,6 +185,16 @@ type ReportData = {
   // Multi-select since 2026-07-28 - a long day usually has more than one cause.
   variance_causes: string[];
   variance_note: string;
+  /** null = unanswered, "as_quoted" = ran as quoted, "more"/"less" = differed.
+   *  Persisted from 2026-08-13; before that it was inferred from the causes and
+   *  defaulted to "more", so a report could claim a direction nobody entered. */
+  variance_direction: string | null;
+  /** null = unanswered. false = the crew looked and cannot name a cause, which
+   *  is a real answer and not the same as leaving it blank. */
+  variance_cause_identified: boolean | null;
+  /** RETIRED from the UI 2026-08-13 (duplicated the client_not_ready cause).
+   *  Still loaded and still sent back so an admin editing an old report does not
+   *  silently wipe what it carries. */
   client_readiness: string | null;
   client_unready: string[];
   scope_changes: ScopeChangeEntry[];
@@ -266,6 +277,8 @@ function normalizeDraftData(d: ReportData): ReportData {
     // upgrade rather than assume - see normalize* in lib/closeout.
     variance_causes: normalizeVarianceCauses(d.variance_causes, (d as any).variance_cause),
     variance_note: d.variance_note ?? "",
+    variance_direction: (d as any).variance_direction ?? null,
+    variance_cause_identified: (d as any).variance_cause_identified ?? null,
     client_readiness: d.client_readiness ?? null,
     client_unready: Array.isArray(d.client_unready) ? d.client_unready : [],
     scope_changes: normalizeScopeChanges(d.scope_changes),
@@ -514,6 +527,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     overage_note: "",
     variance_causes: [],
     variance_note: "",
+    variance_direction: null,
+    variance_cause_identified: null,
     client_readiness: null,
     client_unready: [],
     scope_changes: [],
@@ -574,9 +589,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     // the previous job's "closed" view would stick to a fresh/unsubmitted job.
     setView("edit");
     // Same for the close-out tree gates - they re-seed from this job's data.
-    setRanDiff(null);
-    setScopeChanged(null);
-    setVarianceDir(null);
 
     // Safety net: force `loaded` true after 15 seconds even if the fetch is
     // stuck. Previously a hung /api/job-report request could leave the tab
@@ -626,6 +638,11 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             (r as any).variance_cause,
           ),
           variance_note: (r as any).variance_note ?? "",
+          variance_direction: (r as any).variance_direction || null,
+          variance_cause_identified:
+            typeof (r as any).variance_cause_identified === "boolean"
+              ? (r as any).variance_cause_identified
+              : null,
           client_readiness: (r as any).client_readiness ?? null,
           client_unready: (r as any).client_unready ?? [],
           scope_changes: normalizeScopeChanges((r as any).scope_changes),
@@ -666,6 +683,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
             overage_note: "",
             variance_causes: [],
             variance_note: "",
+            variance_direction: null,
+            variance_cause_identified: null,
             client_readiness: null,
             client_unready: [],
             scope_changes: [],
@@ -856,24 +875,6 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // Close-out surfaces one question at a time (a small tree) instead of all at
   // once. Two yes/no gates drive the reveal; they seed from any saved answers so
   // a reopened report shows what was already filled rather than hiding it.
-  const [ranDiff, setRanDiff] = useState<boolean | null>(null);
-  const [scopeChanged, setScopeChanged] = useState<boolean | null>(null);
-  // Which way the job differed (longer vs shorter). Drives the second branch of
-  // Q1 so only that direction's reasons are shown.
-  const [varianceDir, setVarianceDir] = useState<"more" | "less" | null>(null);
-  useEffect(() => { if (data.variance_causes.length > 0) setRanDiff((p) => (p == null ? true : p)); }, [data.variance_causes.length]);
-  useEffect(() => { if (data.scope_changes.length > 0) setScopeChanged((p) => (p == null ? true : p)); }, [data.scope_changes.length]);
-  useEffect(() => {
-    setVarianceDir((prev) => {
-      if (prev != null || data.variance_causes.length === 0) return prev;
-      // Seed the direction from any saved grouped cause; if only "Other" was
-      // picked we can't tell, so default to "longer".
-      const g = data.variance_causes
-        .map((k) => VARIANCE_CAUSES.find((o) => o.key === k)?.group)
-        .find((x) => x === "more" || x === "less");
-      return g ?? "more";
-    });
-  }, [data.variance_causes]);
 
   // First START on the timeline + last FINISH = the natural bookends for a
   // typical crew day. Prefilling these means the common case (everyone
@@ -1598,12 +1599,22 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
 
         {!driveOnly && section("Close-out", (
           <>
-            {row("Ran differently", ranDiff === true
-              ? `Yes - ran ${varianceDir === "less" ? "shorter" : "longer"}`
-              : ranDiff === false ? "No, as quoted" : "Not answered")}
+            {/* Reads from the STORED direction now, not from an inference over
+                the causes. The old line guessed "longer" whenever it could not
+                tell, so a recap could assert a direction the crew never gave. */}
+            {row("Ran differently",
+              data.variance_direction === "more" ? "Yes - ran longer"
+              : data.variance_direction === "less" ? "Yes - ran shorter"
+              : data.variance_direction === "as_quoted" ? "No, as quoted"
+              : "Not answered")}
+            {data.variance_cause_identified === false
+              && row("Cause", "Crew could not identify one")}
             {data.variance_causes.length > 0 && row("Reasons", data.variance_causes.map((k) => labelOf(VARIANCE_CAUSES, k)).join(", "))}
             {data.variance_note.trim() && row("Note", data.variance_note.trim())}
-            {row("Client readiness", data.client_readiness ? labelOf(CLIENT_READINESS, data.client_readiness) : "Not answered")}
+            {/* Retired questions. Shown ONLY when an older report actually
+                carries them, so a new report does not display two dead rows and
+                an old one does not lose what it recorded. */}
+            {data.client_readiness && row("Client readiness (retired)", labelOf(CLIENT_READINESS, data.client_readiness))}
             {data.client_unready.length > 0 && row("Not ready", data.client_unready.map((k) => labelOf(CLIENT_UNREADY_REASONS, k)).join(", "))}
             {row("Scope changes", scope.length === 0 ? "None" : String(scope.length))}
             {scope.map((c, i) => (
@@ -2319,159 +2330,39 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           did. Each one leads to the next; answer them in order.
         </div>
 
-        {/* Q1 - did the job run differently? "Yes" reveals the reason chips;
-            either answer unlocks Q2. */}
-        <div style={{ fontWeight: 700, fontSize: 13 }}>Did the job run differently than quoted?</div>
-        <div style={{ marginTop: 8 }}>
-          <YesNo
-            value={ranDiff}
-            onChange={(v) => {
-              setRanDiff(v);
-              if (!v) { set("variance_causes", []); set("variance_note", ""); setVarianceDir(null); }
-              setSaved(false);
-            }}
-            yesLabel="Yes, it differed"
-            noLabel="No, as quoted"
-          />
-        </div>
-        {ranDiff === true && (
-          <div style={{ marginTop: 12 }}>
-            {/* Branch again: which way, then only that direction's reasons -
-                keeps the list short and the follow-up specific. */}
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>Which way?</div>
-            <div
-              role="group"
-              aria-label="Ran longer or shorter"
-              style={{ display: "inline-flex", gap: 0, border: "1px solid var(--border)", borderRadius: 999, overflow: "hidden" }}
-            >
-              {([["more", "Ran longer"], ["less", "Ran shorter"]] as const).map(([dir, label]) => {
-                const on = varianceDir === dir;
-                return (
-                  <button
-                    key={dir}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => {
-                      setVarianceDir(dir);
-                      // Drop any reasons that belonged to the other direction so
-                      // the two can't mix; "Other" (ungrouped) survives.
-                      setWith("variance_causes", (prev) =>
-                        prev.filter((k) => {
-                          const o = VARIANCE_CAUSES.find((x) => x.key === k);
-                          return !o?.group || o.group === dir;
-                        }));
-                      setSaved(false);
-                    }}
-                    style={{
-                      padding: "8px 18px", fontSize: 13, fontWeight: on ? 700 : 500, cursor: "pointer", border: "none",
-                      background: on ? "var(--brand)" : "transparent",
-                      color: on ? "var(--on-brand)" : "var(--muted)",
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-            {varianceDir && (
-              <div style={{ marginTop: 12 }}>
-                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-                  Tick every reason that applied. The note is for anything the list misses.
-                </div>
-                <ChipPicker
-                  options={VARIANCE_CAUSES.filter((o) => o.group === varianceDir || !o.group)}
-                  selected={data.variance_causes}
-                  onToggle={(key) =>
-                    setWith("variance_causes", (prev) =>
-                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
-                  }
-                />
-                {data.variance_causes.length > 0 && (
-                  <textarea
-                    value={data.variance_note}
-                    onChange={(e) => { set("variance_note", e.target.value); setSaved(false); }}
-                    placeholder="What happened? (optional)"
-                    rows={2}
-                    style={{ width: "100%", marginTop: 8, resize: "vertical" }}
-                  />
-                )}
+        <CloseoutStepper
+          value={{
+            variance_direction: data.variance_direction,
+            variance_cause_identified: data.variance_cause_identified,
+            variance_causes: data.variance_causes,
+            variance_note: data.variance_note,
+          }}
+          onChange={(patch: Partial<CloseoutValue>) => {
+            (Object.keys(patch) as (keyof typeof patch)[]).forEach((k) => {
+              set(k as any, (patch as any)[k]);
+            });
+            setSaved(false);
+          }}
+          showScope
+          scopeSlot={
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px dashed var(--border)" }}>
+              {/* Scope changes survive the redesign but are no longer their own
+                  top-level question - they only make sense once the crew has
+                  said site conditions differed, and asking twice is what the
+                  office objected to. The hours field is why this was kept
+                  rather than folded into the dropdown: it is the one close-out
+                  number that maps to billable time. */}
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
+                Was anything actually added or dropped? One entry per change.
+                Hours are a rough guess at time it cost or gave back, not a bill.
               </div>
-            )}
-          </div>
-        )}
-
-        {/* Q2 - client readiness, revealed once Q1 is answered (or if a saved
-            answer exists downstream). */}
-        {(ranDiff !== null || data.client_readiness != null || data.scope_changes.length > 0) && (
-          <>
-            <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-              Was the client ready when you arrived?
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <ChipPicker
-                options={CLIENT_READINESS}
-                selected={data.client_readiness ? [data.client_readiness] : []}
-                onToggle={(key) => {
-                  const next = data.client_readiness === key ? null : key;
-                  set("client_readiness", next);
-                  // Clearing back to ready (or to no answer) drops the detail, so the
-                  // two answers can never contradict each other in the sheet.
-                  if (!readinessNeedsDetail(next)) set("client_unready", []);
-                  setSaved(false);
-                }}
+              <ScopeChangeEditor
+                value={data.scope_changes}
+                onChange={(fn) => setWith("scope_changes", fn)}
               />
             </div>
-            {readinessNeedsDetail(data.client_readiness) && (
-              <div style={{ marginTop: 12 }}>
-                <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
-                  What was not ready? Tick all that applied.
-                </div>
-                <ChipPicker
-                  options={CLIENT_UNREADY_REASONS}
-                  selected={data.client_unready}
-                  onToggle={(key) =>
-                    setWith("client_unready", (prev) =>
-                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
-                  }
-                />
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Q3 - on-site scope changes, revealed once Q2 is answered. "Yes"
-            reveals the change editor. */}
-        {(data.client_readiness != null || data.scope_changes.length > 0) && (
-          <>
-            <div style={{ fontWeight: 700, fontSize: 13, marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-              Anything added or changed on site?
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <YesNo
-                value={scopeChanged}
-                onChange={(v) => {
-                  setScopeChanged(v);
-                  if (!v) set("scope_changes", []);
-                  setSaved(false);
-                }}
-                yesLabel="Yes"
-                noLabel="No"
-              />
-            </div>
-            {scopeChanged === true && (
-              <div style={{ marginTop: 12 }}>
-                <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
-                  One entry per change, added or dropped. Tick every reason that fits it.
-                  Hours are a rough guess at the time it cost you or gave back, not a bill.
-                </div>
-                <ScopeChangeEditor
-                  value={data.scope_changes}
-                  onChange={(fn) => setWith("scope_changes", fn)}
-                />
-              </div>
-            )}
-          </>
-        )}
+          }
+        />
 
         <div id="jrq-review_candidate" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Review candidate *</div>
         <div className="small" style={{ color: "var(--muted)", marginTop: 2, marginBottom: 10 }}>

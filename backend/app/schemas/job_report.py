@@ -30,23 +30,63 @@ ReviewCandidate = Literal["yes", "no", "na"]
 # The list runs in BOTH directions. The original vocabulary only described a job
 # that ran LONG, so a job that finished well under the estimate had nothing
 # truthful to pick and the office lost the signal that its estimate was high.
+#
+# Grouped into three CAUSE BUCKETS on 2026-08-13 (site / environment / crew).
+# The bucket lives in the frontend's closeout.ts, which owns the labels and the
+# question wording; this set is only the guard that rejects an invented key.
+# Both files must be updated together - the mirror note at the top of
+# closeout.ts is the reciprocal of this one.
+#
+# EVERY RETIRED KEY STAYS IN THIS SET. It is a validation allow-list, not a
+# menu: dropping a key here would make a re-save of an untouched old report fail
+# validation on data the crew never entered and cannot see.
 VARIANCE_CAUSES = {
-    # Ran longer than estimated
+    # ── Site and client ───────────────────────────────────────────────────────
     "underestimated_volume",
     "access_stairs_carry",
     "client_not_ready",
-    "crew_size_or_skill",
     "scope_added_on_site",
-    "travel_or_traffic",
-    "damage_or_repack",
-    # Ran shorter than estimated
+    "site_other",
     "overestimated_volume",
     "easier_access",
     "client_ahead_of_prep",
     "scope_reduced_on_site",
+    "site_other_less",
+    # ── Travel and conditions ─────────────────────────────────────────────────
+    "travel_or_traffic",
+    "weather",
+    "road_closure_or_detour",
+    "environment_other",
+    "travel_clear",
+    "environment_other_less",
+    # ── Crew and equipment ────────────────────────────────────────────────────
+    "crew_size_or_skill",
+    "crew_late_start",
+    "equipment_failure",
+    "damage_or_repack",
+    "crew_other",
     "crew_faster_than_expected",
+    "crew_other_less",
+    # ── Retired, still stored on old reports ──────────────────────────────────
     "other",
 }
+
+# Which way the job differed, and whether it differed at all. Persisted from
+# 2026-08-13; before that the client inferred it from whichever cause happened to
+# be stored first and defaulted to "more" when it could not tell, so a report
+# with only "Other" claimed the job ran LONG on no evidence at all.
+#
+# THREE VALUES, NOT TWO, and `as_quoted` is the reason this is one column instead
+# of a direction plus a separate ran_differently boolean:
+#
+#   None        nobody answered
+#   as_quoted   the crew answered, and the job ran as quoted
+#   more/less   the crew answered, and it differed this way
+#
+# Without `as_quoted`, "answered No" and "not answered yet" both collapse to an
+# empty direction with no causes - the exact ambiguity this field was added to
+# remove, reintroduced one question earlier in the flow.
+VARIANCE_DIRECTIONS = {"more", "less", "as_quoted"}
 
 # How ready the client was on arrival. Single-select, ordered worst to best in
 # meaning but stored as opaque keys.
@@ -371,6 +411,15 @@ class JobReportUpsert(BaseModel):
     variance_causes: Optional[List[str]] = None
     variance_cause: Optional[str] = None
     variance_note: Optional[str] = None
+    # Which way, and whether the crew could actually name a reason. Both were
+    # previously implied by the causes list, which could not distinguish
+    # "nobody has answered yet" from "the crew looked and honestly cannot say".
+    # Those mean opposite things to an estimator reviewing the job.
+    variance_direction: Optional[str] = None
+    variance_cause_identified: Optional[bool] = None
+    # RETIRED from the UI 2026-08-13 (duplicated the client_not_ready cause), but
+    # still accepted and still returned: old reports carry values, and an admin
+    # re-saving one must not have them silently dropped.
     client_readiness: Optional[str] = None
     client_unready: Optional[List[str]] = None
     scope_changes: Optional[List[ScopeChangeEntry]] = None
@@ -401,6 +450,17 @@ class JobReportUpsert(BaseModel):
             raise ValueError(f"unknown variance cause(s): {unknown}")
         seen: set = set()
         return [t for t in cleaned if not (t in seen or seen.add(t))]
+
+    @field_validator("variance_direction")
+    @classmethod
+    def variance_direction_known(cls, v: Optional[str]) -> Optional[str]:
+        if v in (None, ""):
+            return None
+        if v not in VARIANCE_DIRECTIONS:
+            raise ValueError(
+                f"variance_direction must be one of {sorted(VARIANCE_DIRECTIONS)}"
+            )
+        return v
 
     @field_validator("job_type_tags")
     @classmethod
@@ -521,6 +581,8 @@ class JobReportResponse(BaseModel):
     # singular column - the router normalizes on read.
     variance_causes: Optional[List[str]] = None
     variance_note: Optional[str] = None
+    variance_direction: Optional[str] = None
+    variance_cause_identified: Optional[bool] = None
     client_readiness: Optional[str] = None
     client_unready: Optional[List[str]] = None
     scope_changes: Optional[List[ScopeChangeEntry]] = None

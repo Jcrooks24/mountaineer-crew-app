@@ -124,8 +124,29 @@ class JobReport(Base):
     variance_causes_json = Column(Text, nullable=True)
     variance_note = Column(Text, nullable=True)
 
-    # How ready the client was on arrival, plus what specifically was not ready
-    # (JSON list of keys from CLIENT_UNREADY_REASONS).
+    # "more" | "less". Which way the job differed from the estimate.
+    #
+    # Persisted from 2026-08-13. It was previously reconstructed on the client by
+    # looking for the first cause that carried a direction, and DEFAULTED TO
+    # "more" when it could not tell - so a report whose only cause was "Other"
+    # told the office the job ran long on no evidence. NULL now means nobody
+    # answered, which is a thing the old inference could not express.
+    variance_direction = Column(String, nullable=True)
+
+    # Whether the crew could actually name a reason for the variance.
+    #
+    # NULL = not asked or not answered. False = asked, and the honest answer is
+    # "we cannot say". Those are different from each other and from "no causes
+    # ticked", which is what an empty list used to have to mean for all three.
+    # An estimator reviewing a job needs to tell "nobody filled this in" from
+    # "the crew looked and there was no identifiable cause".
+    variance_cause_identified = Column(Boolean, nullable=True)
+
+    # RETIRED FROM THE UI 2026-08-13: the question duplicated the
+    # `client_not_ready` variance cause, so crews answered it twice and the two
+    # answers could disagree. Columns kept, and still read and written by the
+    # API, because a year of reports carry values and the Sheet has a year of
+    # the column. Nothing new writes them.
     client_readiness = Column(String, nullable=True)
     client_unready_json = Column(Text, nullable=True)
 

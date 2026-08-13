@@ -136,6 +136,8 @@ def _to_response(r: JobReport) -> JobReportResponse:
         overage_note=r.overage_note,
         variance_causes=_decode_variance_causes(r),
         variance_note=r.variance_note,
+        variance_direction=r.variance_direction,
+        variance_cause_identified=r.variance_cause_identified,
         client_readiness=r.client_readiness,
         client_unready=_decode_str_list(r.client_unready_json),
         scope_changes=_decode_scope_changes(r.scope_changes_json),
@@ -201,6 +203,8 @@ def _export_report_to_sheets(db: Session, report: JobReport) -> None:
         "overage_note": report.overage_note or "",
         "variance_causes": _decode_variance_causes(report) or [],
         "variance_note": report.variance_note or "",
+        "variance_direction": report.variance_direction or "",
+        "variance_cause_identified": report.variance_cause_identified,
         "client_readiness": report.client_readiness or "",
         "client_unready": _decode_str_list(report.client_unready_json) or [],
         "scope_changes": [c.model_dump() for c in (_decode_scope_changes(report.scope_changes_json) or [])],
@@ -332,6 +336,8 @@ def upsert_job_report(
         existing.variance_causes_json = variance_causes_json
         existing.variance_cause = None
         existing.variance_note = body.variance_note
+        existing.variance_direction = body.variance_direction
+        existing.variance_cause_identified = body.variance_cause_identified
         existing.client_readiness = body.client_readiness
         existing.client_unready_json = client_unready_json
         existing.scope_changes_json = scope_changes_json
@@ -363,6 +369,8 @@ def upsert_job_report(
         overage_note=body.overage_note,
         variance_causes_json=variance_causes_json,
         variance_note=body.variance_note,
+        variance_direction=body.variance_direction,
+        variance_cause_identified=body.variance_cause_identified,
         client_readiness=body.client_readiness,
         client_unready_json=client_unready_json,
         scope_changes_json=scope_changes_json,

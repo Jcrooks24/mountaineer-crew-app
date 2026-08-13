@@ -949,6 +949,36 @@ an export thread permanently and two of them wedged all exporting - with no
 exception raised, no row written, and the backfill still reporting work as
 "queued". Now `GOOGLE_HTTP_TIMEOUT_S = 60`.
 
+## Close-out redesign (job report)
+
+Office feedback 2026-08-13. Two duplicate questions retired, the flat cause list
+split into three bucketed single-selects, and two inferred values made into
+stored answers. Full reasoning in
+[ADR 0040](decisions/0040-closeout-is-a-stepper-with-three-cause-buckets.md).
+
+| Field | Storage | Sheet | Status |
+|---|---|---|---|
+| `variance_direction` | **new** column on `job_reports` | **new** `variance_direction` (appended) | `[x]` device -> Postgres -> Sheet, traced by reading both write paths and the export row builder |
+| `variance_cause_identified` | **new** column on `job_reports` | **new** `variance_cause_identified` (appended, tri-state Yes/No/blank) | `[x]` same |
+| `variance_causes` | unchanged | unchanged (`variance_cause`) | `[x]` unchanged path; now at most one key per bucket |
+| `variance_note` | unchanged | unchanged | `[x]` unchanged path |
+| `client_readiness` / `client_unready` | unchanged, **write-frozen** | unchanged | `[-]` retired from the UI; still read, returned and exported for old reports |
+| `scope_changes` | unchanged | unchanged | `[x]` unchanged path; now reached only via the site-and-client question |
+
+Migration `i9k1m3h5j7l9`, both columns nullable with no backfill. NULL means "not
+answered", which is the truth for every report written before this - backfilling a
+direction from the existing causes would recreate the guess the column exists to
+remove.
+
+No new endpoint, no new queue, no new env var. The offline draft shape gains the
+two fields and tolerates their absence, so a device holding a pre-deploy draft
+restores it without losing the rest.
+
+Guarded by `frontend/scripts/verify_closeout.mjs` (47 assertions), which includes
+a frontend-to-backend vocabulary comparison - an offered cause the server would
+reject is a 422 on save, and the two lists live in different languages in
+different files.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified
