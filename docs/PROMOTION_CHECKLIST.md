@@ -207,6 +207,29 @@ looks wrong, and who to contact.
 Items that were on a previous promotion's list and never got done. **Clear this
 section as part of the promotion, or explain why it is still here.**
 
+### Device testing status for the pending promotion (`e7c1b7e`)
+
+Kept here rather than in a chat log, because "was this actually tried on a phone"
+is the question every one of these promotions turns on.
+
+**Verified on staging, on a device (2026-08-13):**
+
+- [x] **Offline navigation after the route split.** This was the batch's biggest
+      risk: route chunks are downloaded separately, so a chunk missing from the
+      service-worker precache would white-screen a crew member the moment they
+      navigated with no signal. Confirmed working.
+
+**Still unverified, and honestly cannot be from a desk:**
+
+- [ ] **Chunk recovery across a deploy** (`lib/lazyRoute.ts`). Needs the app open
+      on a device, a deploy landing under it, then navigating to a lazy route.
+      Two deploys and a live phone. The offline test above does NOT cover this -
+      it proves the chunks are cached, not that a build MISMATCH recovers.
+      Failure mode if the guard is wrong: an error page on one screen, cleared by
+      a manual refresh. Bounded, not dangerous.
+- [ ] **The close-out stepper** on a real job report. The screen crews use daily.
+- [ ] **The restart banner** actually appearing during a recycle, and clearing.
+
 ### After the 2026-08-13 promotion (`ac98585`, 5 commits, ONE migration)
 
 `h8j0l2g4i6k8` adds `bulletin_posts.reaction_mode`. It is NOT NULL with a server
