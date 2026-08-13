@@ -104,6 +104,75 @@ its own finding, and silence is not a waiver. A stale or under-reported doc is i
 a blocker, because the whole point is that a successor can trust it without
 re-deriving it.
 
+## STEP 0 - classify the change, before you look at the diff
+
+Added 2026-08-13 after a review of every defect that reached crews since the v1.8
+merge (docs/VET_POSTMORTEM_2026-08.md). The finding that drove it: **all three of
+the worst defects were interactions between a change and a lifecycle event, not
+defects in the changed lines.** A diff-scoped pass cannot see those, so the class
+checks below are deliberately NOT derived from the diff.
+
+Name every class the change touches. Each carries a mandatory obligation.
+
+| Class | You must also |
+|---|---|
+| **Asset / bundle / service worker** | Walk the SW lifecycle in writing: install, activate, precache eviction, `controllerchange`, reload. State what the change assumes is already in memory at each step. **Route code splitting black-screened the app here** - the precache is evicted 150 ms before the reload, and split routes could ask for a chunk that had just been deleted. |
+| **Offline queue / one-copy data** | Run the durability vet at the end of this doc. Not optional for this class. |
+| **Auth / session** | Logout, shared-device user switch, token expiry mid-operation. A full device is the interesting case: **sign-out silently destroyed signed BOLs** when the backup write hit quota. |
+| **Money** | Recompute one real historical record by hand and compare against what the change produces. **A truck double-bill reached a customer** because the count changed meaning and nothing recomputed an old job. |
+| **Schema / migration** | Apply it to a copy of the PREVIOUS schema, not to head. Head already has your column. |
+| **Scheduled / background work** | Prove it still runs after a worker recycle. **The generic self-heal sweep did not run for months** because its schedule was a counter in a process the platform recycles by design. |
+| **Crew-facing UI** | Device test BEFORE promotion, not after (see the blocking rule below). |
+
+### The four lifecycle questions
+
+Answer all four in writing on every vet, even where the answer is "not
+applicable". This app has exactly four events that routinely invalidate an
+assumption, and each has produced a severe defect:
+
+1. **Worker recycle** (every 1000 requests, by design). What does this change keep
+   in process memory, and what happens when that memory is discarded?
+2. **Service-worker update.** What does it assume is already loaded, and what
+   happens in the window where the old precache is gone but the page has not yet
+   reloaded?
+3. **User switch / logout.** What un-synced data exists at that instant, and does
+   the wipe destroy it?
+4. **Offline to online.** What drains, in what order, and what happens if it fails
+   halfway?
+
+### "Cannot verify from here" BLOCKS a crew-facing promotion
+
+The protocol used to allow promoting with a written caveat about an unverified
+risk. That was used twice in one week; **both caveats were accurate and both
+ships were still wrong.** An honest note about a risk is not a substitute for
+retiring it.
+
+If a change's principal risk can only be exercised on a device, or across two
+deploys, it does not reach `main` until that has happened. The alternative is not
+"ship it with a note" - it is "ship everything else and hold this back".
+
+For anything in the asset / service-worker class, the specific requirement is:
+**deploy to staging twice and update a real device across the second deploy.**
+The black screen was reproducible in about ninety seconds by anyone who tried it.
+
+### Before fixing a behavioural or performance defect, measure
+
+Record the hypothesis, the observation that would DISPROVE it, and the result of
+taking that observation - before writing the fix. The backfill stall was
+diagnosed and fixed three times before anyone measured; the one time measurement
+came first, it killed two wrong hypotheses in a single run. Tools:
+`app/core/memprobe.py`, `GET /api/admin/system-check/worker`, the export-pool
+readout in the Sheet Backfill panel.
+
+### Every verification block names the symptom it would have caught
+
+A check that cannot name a production symptom is a check about its author's
+imagination. Assertion counts are not evidence: the route-splitting change
+shipped with 38 passing assertions, one of which correctly proved that all 28
+chunks were precached - a true statement with no bearing on the failure.
+
+---
+
 ## Run the mechanical gate first
 
 ```

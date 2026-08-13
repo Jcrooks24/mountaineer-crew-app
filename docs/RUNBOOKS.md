@@ -465,6 +465,19 @@ durability bugs shipped the first time.
 
 ## Known defects
 
+### The vetting protocol itself was reviewed 2026-08-13
+
+`docs/VET_POSTMORTEM_2026-08.md` reviews every defect that reached crews since
+the v1.8 merge. The number worth carrying: **of nine escapes, eight were found by
+crews, by the office, or by accident.** One was found by a vet, and only because
+that vet had been told to distrust the previous one.
+
+The protocol gained a STEP 0 as a result: classify the change, answer four
+lifecycle questions, and treat "cannot verify from here" as a blocker rather than
+a footnote. `scripts/verify_promotion_gate.py` now tests the gate, which had two
+defects of its own and was checked by nothing.
+
+
 ### App update showed a black screen (route code splitting, reverted same day)
 
 **Shipped and reverted 2026-08-13.** Crews updating the app got a black screen
