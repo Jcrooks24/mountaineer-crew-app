@@ -98,6 +98,38 @@ res = sb.reconcile_all_missing(None)
 check("failures travel with the result", bool(res.get("failures")))
 check("and name the cause", "429" in (res.get("failures") or [{}])[0].get("error", ""))
 
+print("\nThe drain estimate matches the door the throttle shuts:")
+# If the operator is told a different figure than the throttle enforces, one of
+# the two is a lie and the person waiting cannot tell which.
+for n in (1, 15, 40, 100):
+    sb.reset_backfill_throttle()
+    est = sb.estimate_drain_seconds(n)
+    sb.note_backfill_queued(n)
+    actual = sb.backfill_cooldown_remaining()
+    check(f"{n} records: estimate {est}s matches cooldown {actual}s",
+          abs(est - actual) <= 1)
+check("zero records estimates zero", sb.estimate_drain_seconds(0) == 0)
+check("negative is not negative time", sb.estimate_drain_seconds(-5) == 0)
+check("estimate is capped like the cooldown",
+      sb.estimate_drain_seconds(10_000) == sb.MAX_COOLDOWN_SECONDS)
+sb.reset_backfill_throttle()
+
+print("\nThe manual drain keeps its own budget:")
+# reconcile_all_missing is shared with the unattended sweep. When the sweep's
+# default was cut to 15, the admin endpoint inherited the cut and the button got
+# six times weaker without anyone changing that endpoint.
+import io  # noqa: E402
+# Read the file rather than import it: importing the admin router drags in the
+# whole FastAPI app and its env requirements, and this script must run anywhere.
+_admin = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "app", "routers", "admin.py")
+src = io.open(_admin, encoding="utf-8").read()
+check("drain-all passes an explicit budget",
+      "reconcile_all_missing(db, max_total=" in src,
+      "endpoint would silently inherit the sweep's small default")
+check("and that budget is the manual cap, not the sweep's",
+      "max_total=MAX_REEXPORT_PER_REQUEST" in src)
+
 print("\nError paths keep the same shape:")
 
 

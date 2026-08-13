@@ -1504,11 +1504,20 @@ def run_sheet_backfill_all(
     so there is no second behaviour to keep in step.
     """
     from app.integrations.sheet_backfill import (
+        MAX_REEXPORT_PER_REQUEST,
         backfill_cooldown_remaining,
         reconcile_all_missing,
     )
     _reject_if_draining(backfill_cooldown_remaining())
-    result = reconcile_all_missing(db)
+    # PASS THE MANUAL BUDGET EXPLICITLY. This shares `reconcile_all_missing` with
+    # the unattended sweep, whose default budget is small on purpose - it runs
+    # every 20 minutes with nobody watching and must not eat the read quota. A
+    # human pressing Drain all is the opposite case: one deliberate act, watched,
+    # with the throttle already stopping them from doing it again too soon. When
+    # the sweep's default was cut from 100 to 15, this call inherited the cut and
+    # quietly made the button six times weaker; the default is not this endpoint's
+    # to borrow.
+    result = reconcile_all_missing(db, max_total=MAX_REEXPORT_PER_REQUEST)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Backfill failed")
     return result

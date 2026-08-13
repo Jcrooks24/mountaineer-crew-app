@@ -519,13 +519,33 @@ def backfill_cooldown_remaining() -> int:
         return max(0, int(round(_backfill_ready_at - time.monotonic())))
 
 
+def estimate_drain_seconds(count: int) -> int:
+    """Roughly how long `count` queued records take to reach the Sheet.
+
+    This is the SAME number the cooldown uses, deliberately: the throttle holds
+    the door for as long as the batch should take, so if the operator is told a
+    different figure than the door enforces, one of the two is a lie and the
+    person waiting cannot tell which. Callers show this so "when can I re-run the
+    audit and see whether it worked" has an answer other than "in a minute".
+
+    It is an estimate of QUOTA time, not of work: ~4 reads per record against 60
+    reads a minute. Live crew exports share that quota, so a busy afternoon runs
+    longer. Rounding is upward - being told 3 minutes and waiting 4 is a much
+    smaller annoyance than being told 3, re-running at 3, seeing records still
+    missing, and concluding the tool is broken.
+    """
+    if count <= 0:
+        return 0
+    seconds = (count * READS_PER_REEXPORT) / READS_PER_MINUTE * 60.0
+    return int(min(seconds, float(MAX_COOLDOWN_SECONDS)))
+
+
 def note_backfill_queued(count: int) -> None:
     """Record that `count` records were queued, and hold the door for roughly as
     long as they will take to drain within quota."""
     if count <= 0:
         return
-    seconds = min((count * READS_PER_REEXPORT) / READS_PER_MINUTE * 60.0,
-                  float(MAX_COOLDOWN_SECONDS))
+    seconds = float(estimate_drain_seconds(count))
     global _backfill_ready_at
     with _throttle_lock:
         _backfill_ready_at = max(_backfill_ready_at, time.monotonic() + seconds)
@@ -853,7 +873,8 @@ def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE)
     # to it used to be grepping Render logs for a line nobody knew to look for.
     from app.integrations.sheets_export import recent_export_failures
     return {"ok": True, "queued": total_queued, "per_sync": per_sync,
-            "backlog": backlog, "failures": recent_export_failures()[:5]}
+            "backlog": backlog, "failures": recent_export_failures()[:5],
+            "drain_seconds": estimate_drain_seconds(total_queued)}
 
 
 def reexport_missing(db: Session, key: str, ids: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -895,4 +916,5 @@ def reexport_missing(db: Session, key: str, ids: Optional[List[str]] = None) -> 
         "skipped": skipped,
         "not_queued": max(0, len(ids) - len(capped)),
         "cap": MAX_REEXPORT_PER_REQUEST,
+        "drain_seconds": estimate_drain_seconds(queued),
     }

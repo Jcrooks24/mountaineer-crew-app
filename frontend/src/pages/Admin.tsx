@@ -4892,6 +4892,32 @@ type BackfillAudit = {
   recent_failures?: ExportFailure[];
 };
 
+/**
+ * "Come back in about N and re-run the audit."
+ *
+ * Exports are fire-and-forget into a background pool, so a drain returns the
+ * moment work is QUEUED, not when it lands. Without a figure here the honest
+ * answer is "some time later", and the failure mode is specific: the operator
+ * re-runs the audit immediately, still sees the records missing, and concludes
+ * the backfill does not work. It did; they measured too early.
+ *
+ * `drain_seconds` comes from the server and is the SAME number the throttle
+ * enforces, so the wait shown and the wait imposed cannot drift apart.
+ */
+function drainAdvice(seconds?: number): string {
+  const s = Math.max(0, Math.round(seconds ?? 0));
+  if (!s) return "Exports run in the background; re-run the audit in a minute to confirm.";
+  // Rounded up and phrased loosely. This is quota time, shared with live crew
+  // syncs, so a precise-looking "3m 20s" would be a false promise.
+  const label = s < 90 ? "about a minute" : `about ${Math.ceil(s / 60)} minutes`;
+  return (
+    `Exports run in the background and should finish in ${label}` +
+    ` (roughly 4 Google reads per record, capped at 60 a minute, shared with live` +
+    ` crew syncs - allow longer on a busy afternoon). Re-run the audit after that` +
+    ` to confirm they landed; the Drain button is locked until then anyway.`
+  );
+}
+
 function SheetBackfillCard() {
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
@@ -4918,16 +4944,18 @@ function SheetBackfillCard() {
     setSending("__all__"); setErr(null); setNote(null);
     try {
       const res = await apiFetch<{
-        queued: number; per_sync: Record<string, number>; remaining_missing: number;
+        queued: number; per_sync: Record<string, number>; backlog: number | null;
+        drain_seconds?: number;
       }>("/api/admin/system-check/sheet-backfill-all", { method: "POST" });
       const syncs = Object.keys(res.per_sync || {}).length;
+      const backlog = res.backlog ?? 0;
       setNote(
         res.queued
           ? `Queued ${res.queued} record(s) across ${syncs} sync(s)` +
-            (res.remaining_missing > res.queued
-              ? `. ${res.remaining_missing - res.queued} still to go - run it again once this batch lands.`
+            (backlog > res.queued
+              ? `. ${backlog - res.queued} still to go - run it again once this batch lands.`
               : ".") +
-            " Exports run in the background; re-run the audit in a minute to confirm."
+            ` ${drainAdvice(res.drain_seconds)}`
           : "Nothing to queue - everything the audit can see is already in the Sheet."
       );
     } catch (e: any) {
@@ -4941,7 +4969,10 @@ function SheetBackfillCard() {
   async function resend(row: BackfillRow) {
     setSending(row.key); setErr(null); setNote(null);
     try {
-      const res = await apiFetch<{ queued: number; skipped: number; not_queued: number; cap: number }>(
+      const res = await apiFetch<{
+        queued: number; skipped: number; not_queued: number; cap: number;
+        drain_seconds?: number;
+      }>(
         "/api/admin/system-check/sheet-backfill",
         { method: "POST", body: JSON.stringify({ key: row.key }) },
       );
@@ -4949,7 +4980,7 @@ function SheetBackfillCard() {
         `${row.label}: queued ${res.queued} record(s)` +
         (res.skipped ? `, ${res.skipped} skipped` : "") +
         (res.not_queued ? `, ${res.not_queued} left over (cap ${res.cap} per run - run it again)` : "") +
-        ". Exports run in the background; re-run the audit in a minute to confirm.",
+        `. ${drainAdvice(res.drain_seconds)}`,
       );
     } catch (e: any) {
       if (e instanceof ApiError && e.status === 429) setNote(e.message);
@@ -4968,6 +4999,15 @@ function SheetBackfillCard() {
         but whose sheet row is missing - usually the leftovers of a sync outage.
         Nothing is lost when this happens: the app is the system of record and the
         Sheet is a mirror. Read-only until you press Re-send.
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        <strong>How long a drain takes.</strong> Re-sending is read-heavy: roughly
+        four Google reads per record against a cap of 60 a minute, so about{" "}
+        <strong>a minute per 15 records</strong> - 100 records is around 7 minutes.
+        Draining tells you what it queued and when to come back. Re-sending returns
+        as soon as the work is queued, not when it lands, so re-running the audit
+        straight away will still show the records missing. Wait out the estimate
+        first; the Drain button stays locked until then, which is the same clock.
       </div>
       <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <button onClick={run} disabled={busy || !!sending} className="btnPrimary"
