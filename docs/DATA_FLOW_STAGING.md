@@ -979,6 +979,45 @@ a frontend-to-backend vocabulary comparison - an offered cause the server would
 reject is a 422 on save, and the two lists live in different languages in
 different files.
 
+## App speed: restart handling and route code splitting
+
+No new endpoint, no storage, no queue. Two changes to how the existing exchanges
+are made, both aimed at the wait crews reported.
+
+### The backend recycle is now handled rather than shown as an error
+
+`apiFetch` retries a request that fails during a worker recycle: 502/503/504, or
+a network failure while `navigator.onLine` is not false. Four attempts over
+~7.7 s. **GET and HEAD only** - writes are not blindly retried, because the
+bulletin like endpoint TOGGLES and a retry would silently undo the tap. Writes are
+already covered better by the offline queues that own them.
+
+`lib/serverStatus.ts` tracks the inferred state and `ServerRestartBanner` explains
+it after 1.2 s, so a recycle the retry swallows is never mentioned at all. A 500
+is deliberately NOT treated as a restart: the app is up and throwing, and telling
+a crew member to wait for a restart that is not coming would strand them.
+
+### Routes are lazily loaded
+
+Every screen was a static import, so the app shipped as one 1.5 MB bundle
+(462 KB gz) that every crew phone downloaded and parsed before showing the
+timeline - including `Admin.tsx`, 9,268 lines, which almost nobody opens.
+
+| | Before | After |
+|---|---|---|
+| Initial download | 462 KB gz, one chunk | **174 KB gz** |
+| Admin | in the main bundle | 69 KB gz, on demand |
+| PDF library | in the main bundle | 174 KB gz, on demand |
+
+`App` (the timeline) stays a STATIC import: it is the screen crews open, and
+making the common case wait on a second round trip would be a pessimisation
+dressed as an optimisation.
+
+**Offline is unaffected and this was checked, not assumed:** all 28 chunks are in
+the service worker precache, so they download in the background after first
+paint and a crew member navigating with no signal still gets the screen.
+`verify_server_restart.mjs` asserts the precache contains each lazy chunk.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified

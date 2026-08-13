@@ -1,4 +1,5 @@
 import { getToken, clearToken } from "../auth/token";
+import { looksLikeRestart, noteServerReachable, noteServerUnavailable } from "../lib/serverStatus";
 
 // `?.` so the module is importable outside Vite (dev-tools / node checks),
 // where import.meta.env is undefined. In the app Vite always defines it.
@@ -63,6 +64,27 @@ export class ApiError extends Error {
 // If you are reaching for a failure classifier, import `isPermanentRejection`
 // from `lib/queueFailure`. Do not add a second one. See ADR 0013.
 
+// Retry pacing for a request caught by a backend restart. Four attempts over
+// ~7 seconds covers a normal boot (measured at a few seconds) without holding a
+// crew member's screen hostage if the server is genuinely down.
+const RESTART_RETRY_DELAYS_MS = [700, 1500, 2500, 3000];
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * ONLY these methods are retried automatically.
+ *
+ * A GET is safe to repeat by definition. A write is not: most of this app's
+ * writes are idempotent on a client-minted uuid, but not all of them - the
+ * bulletin like endpoint TOGGLES, so a blind retry would silently undo the
+ * crew member's tap. Writes are still covered, better, by the offline queues
+ * that own them; they surface the banner and drain when the server returns.
+ */
+function isSafeToRetry(method: string | undefined): boolean {
+  const m = (method || "GET").toUpperCase();
+  return m === "GET" || m === "HEAD";
+}
+
 export async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();
 
@@ -74,19 +96,52 @@ export async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const res = await fetch(`${API}${path}`, { ...opts, headers });
+  // Retry loop for the worker recycle. The backend is recycled every 1000
+  // requests BY DESIGN, so a request landing in that window is expected
+  // operation, not an incident - and erroring the screen for a few seconds of
+  // planned restart is what crews were reporting as the app being broken.
+  let attempt = 0;
+  for (;;) {
+    let res: Response;
+    try {
+      res = await fetch(`${API}${path}`, { ...opts, headers });
+    } catch (err) {
+      // Network-layer failure: offline, or a refused connection to a server
+      // that is mid-boot.
+      if (looksLikeRestart(err) && isSafeToRetry(opts.method) && attempt < RESTART_RETRY_DELAYS_MS.length) {
+        noteServerUnavailable();
+        await sleep(RESTART_RETRY_DELAYS_MS[attempt++]);
+        continue;
+      }
+      if (looksLikeRestart(err)) noteServerUnavailable();
+      throw err;
+    }
 
-  const text = await res.text();
-  let body: any = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = text;
+    if (looksLikeRestart(null, res.status)) {
+      if (isSafeToRetry(opts.method) && attempt < RESTART_RETRY_DELAYS_MS.length) {
+        noteServerUnavailable();
+        await sleep(RESTART_RETRY_DELAYS_MS[attempt++]);
+        continue;
+      }
+      noteServerUnavailable();
+    } else {
+      // Any real answer means the server is up, including a 4xx: the request
+      // reached the app and the app replied.
+      noteServerReachable();
+    }
+
+    const text = await res.text();
+    let body: any = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = text;
+    }
+
+    if (res.status === 401) clearToken();
+
+    if (!res.ok) throw new ApiError(res.status, body);
+
+    return body as T;
   }
-
-  if (res.status === 401) clearToken();
-
-  if (!res.ok) throw new ApiError(res.status, body);
-
-  return body as T;
 }

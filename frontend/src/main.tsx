@@ -1,6 +1,6 @@
 import "./index.css";
 
-import { StrictMode } from "react";
+import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
@@ -12,6 +12,7 @@ import RequireAuth from "./auth/RequireAuth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateBanner from "./components/UpdateBanner";
 import AvailabilityReminderBanner from "./components/AvailabilityReminderBanner";
+import ServerRestartBanner from "./components/ServerRestartBanner";
 import RolePreviewSwitch from "./components/RolePreviewSwitch";
 import BottomNav from "./components/BottomNav";
 
@@ -20,18 +21,43 @@ import Signup from "./pages/Signup";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import MechanicSign from "./pages/MechanicSign";
-import Profile from "./pages/Profile";
-import Admin from "./pages/Admin";
-import DVIRPage from "./pages/DVIR";
-import LongDistance from "./pages/LongDistance";
-import DocumentLibrary from "./pages/DocumentLibrary";
-import Reimbursement from "./pages/Reimbursement";
-import OffJob from "./pages/OffJob";
-import Availability from "./pages/Availability";
-import ReportBug from "./pages/ReportBug";
-import RequestFeature from "./pages/RequestFeature";
-import Tools from "./pages/Tools";
-import Bulletin from "./pages/Bulletin";
+
+// ── Route-level code splitting ────────────────────────────────────────────────
+//
+// Everything used to be a static import, so the whole app shipped as ONE 1.5 MB
+// bundle (462 KB gzipped) that every crew phone downloaded and parsed before it
+// could show the timeline. Admin.tsx alone is 9,268 lines and is opened by a
+// handful of people, but every crew member paid for it on every cold load and on
+// every deploy, over whatever signal they had at the time.
+//
+// The timeline (App) stays a STATIC import: it is the screen crews open, and
+// making the common case wait on a second round trip would be a pessimisation
+// dressed as an optimisation. Everything reached by navigating stays lazy.
+const Profile = lazy(() => import("./pages/Profile"));
+const Admin = lazy(() => import("./pages/Admin"));
+const DVIRPage = lazy(() => import("./pages/DVIR"));
+const LongDistance = lazy(() => import("./pages/LongDistance"));
+const DocumentLibrary = lazy(() => import("./pages/DocumentLibrary"));
+const Reimbursement = lazy(() => import("./pages/Reimbursement"));
+const OffJob = lazy(() => import("./pages/OffJob"));
+const Availability = lazy(() => import("./pages/Availability"));
+const ReportBug = lazy(() => import("./pages/ReportBug"));
+const RequestFeature = lazy(() => import("./pages/RequestFeature"));
+const Tools = lazy(() => import("./pages/Tools"));
+const Bulletin = lazy(() => import("./pages/Bulletin"));
+
+/** Shown while a route chunk downloads. Deliberately plain and quiet: on a good
+ *  connection it is visible for a few hundred milliseconds, and a spinner that
+ *  flashes is more unsettling than a line of text. */
+function RouteLoading() {
+  return (
+    <div className="container" style={{ maxWidth: 480 }}>
+      <div className="card" style={{ color: "var(--muted)", fontSize: 13 }}>
+        Loading...
+      </div>
+    </div>
+  );
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -42,8 +68,14 @@ createRoot(document.getElementById("root")!).render(
         {/* App-wide; fixed-position, renders over whatever route is active */}
         <UpdateBanner />
         <AvailabilityReminderBanner />
+        {/* Explains the periodic backend recycle instead of leaving a spinner */}
+        <ServerRestartBanner />
         {/* Staging-only role preview (self-hides on production) */}
         <RolePreviewSwitch />
+        {/* Suspense wraps the routes, not the app: the fallback must never
+            replace the bottom nav or the banners above, or a crew member loading
+            a screen loses the way back out of it. */}
+        <Suspense fallback={<RouteLoading />}>
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
@@ -77,6 +109,7 @@ createRoot(document.getElementById("root")!).render(
             }
           />
         </Routes>
+        </Suspense>
         {/* Persistent crew bottom nav; self-hides on public + admin routes */}
         <BottomNav />
         </ErrorBoundary>
