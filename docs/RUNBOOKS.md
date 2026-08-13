@@ -235,6 +235,22 @@ Job; emails jacob@ on any FAIL - see CREDENTIALS) and can be run by hand any tim
   a cycle. Symptoms were `POST .../sheet-backfill-all -> 429` next to a repeating
   `[auto-reconcile] generic: N re-driven ..., N still missing`.
 
+  **Before blaming the export, confirm the sweep is RUNNING.** Until 2026-08-13
+  it very often was not. Its cadence was an in-process counter (`_cycle_count %
+  4`), and the web worker is recycled every 1000 requests by design - so every
+  recycle reset the counter and the sweep needed 20+ uninterrupted minutes of
+  worker life to fire once. One crew member opening one job costs ~20 requests,
+  so on a busy day the counter never got there: the more the crew used the app,
+  the less the self-heal ran. Nothing logged it, because a sweep that never runs
+  writes no line. The schedule now lives in a `worker_leases` row keyed to the
+  database clock, and the sweep prints `generic: nothing missing` when it has
+  nothing to do, so silence now means something is wrong.
+
+  Grep prod logs for `[auto-reconcile]`. Expect a line roughly every 20 minutes.
+  If you see `starting (interval 300s)` more often than that, the worker is
+  recycling faster than the sweep interval - which is survivable now but tells
+  you the service is busy or restarting.
+
   **That log line also lied.** The count after "still missing" was the backlog
   measured BEFORE the sweep, so whenever the budget covered the backlog it
   printed the same number twice on every cycle, including cycles where every

@@ -858,6 +858,22 @@ manual admin endpoints checked it; the sweep set it and ignored it.
 
 Guarded by `backend/scripts/verify_reconcile_throttle.py` (bare python, no deps).
 
+**The sweep's schedule moved from process memory into Postgres (2026-08-13).**
+Cadence is unchanged at ~20 minutes, but it was previously `_cycle_count % 4`, an
+in-process counter that every worker recycle reset to zero. The worker recycles
+every 1000 requests by design, so the sweep needed 20+ uninterrupted minutes of
+worker life to fire at all, and on a busy day it simply did not - the busier the
+crew, the less the self-heal ran. It now claims a `worker_leases` row named
+`generic_reconcile` with a 1200s TTL and deliberately never releases it: the
+unexpired lease IS the "not yet due" state, so the schedule survives recycling
+and is shared across workers on the database clock. No migration - the table
+already exists and the row is created on first use. Guarded by
+`backend/scripts/verify_generic_sweep_schedule.py`.
+
+The sweep also now prints `generic: nothing missing` on an idle run. It was
+silent, and a silent sweep is indistinguishable from one that never ran, which is
+what hid this for months.
+
 Nothing about the payloads, keys, tabs or endpoints changed - this is purely how
 fast the existing self-heal is allowed to consume shared quota.
 

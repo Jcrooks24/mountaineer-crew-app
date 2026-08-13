@@ -72,10 +72,24 @@ ON_ERROR_BACKOFF_S = 60
 # above; everything else fired once at write time and, if it died, was stranded
 # until a human re-saved the record. This runs the backfill audit (DB vs sheet)
 # and re-drives what never landed. It is a full DB-vs-sheet diff, heavier than
-# the marker-table sweeps, so it runs on a slower cadence: every Nth cycle
-# (~20 min at the 5-min base interval), not every cycle.
-GENERIC_RECONCILE_EVERY_N_CYCLES = 4
-_cycle_count = 0
+# the marker-table sweeps, so it runs on a slower cadence: ~20 minutes.
+#
+# THE SCHEDULE LIVES IN POSTGRES, NOT IN THIS PROCESS. It used to be
+# `_cycle_count % 4`, an in-memory counter reset to 0 on every worker start - and
+# the worker is recycled every 1000 requests BY DESIGN (see the start command in
+# CLAUDE.md; the flag is load-bearing and the recycles are routine, not failures).
+# Four claimed cycles at five minutes each means the generic sweep needed the
+# worker to survive 20+ uninterrupted minutes to run even once. On a busy
+# afternoon - a single crew member opening one job costs ~20 requests - 1000
+# requests can elapse well inside that window, so the counter restarted from zero
+# every time and the sweep could go an entire working day without running. The
+# more the crew used the app, the less the self-heal ran, which is exactly
+# backwards, and it is silent: nothing logs a sweep that never happened.
+#
+# An unexpired lease row is now the "not yet due" state. It survives recycling,
+# is shared across workers, and is keyed to the DATABASE clock.
+GENERIC_RECONCILE_INTERVAL_S = 1200  # ~20 minutes, as before
+_GENERIC_LEASE = "generic_reconcile"
 
 _started = False
 _started_lock = threading.Lock()
@@ -93,8 +107,8 @@ def start_auto_reconciler() -> None:
     t.start()
 
 
-def _try_claim_lease(db) -> bool:
-    """Claim the cross-worker lease. True if this worker should sweep.
+def _try_claim_lease(db, name: str = _LEASE_NAME, ttl: float = None) -> bool:
+    """Claim the cross-worker lease `name`. True if this worker should sweep.
 
     This replaced `pg_try_advisory_lock`, which is SESSION-scoped and so only
     guarantees single-flight while the whole cycle runs on one backend
@@ -114,8 +128,18 @@ def _try_claim_lease(db) -> bool:
 
     `now()` and the expiry are both the DATABASE's clock. Two workers with skewed
     clocks would otherwise disagree about who holds the lease.
+
+    Two callers, using the same primitive for two different purposes:
+
+      name=_LEASE_NAME       a mutual-exclusion lock, RELEASED when the cycle
+                             ends so the next cycle can start at once.
+      name=_GENERIC_LEASE    an INTERVAL TIMER, deliberately NOT released. The
+                             unexpired lease *is* the "not yet due" state, so the
+                             schedule lives in Postgres instead of in a process
+                             that gets recycled. See its constant below.
     """
     from sqlalchemy import text
+    ttl = float(LEASE_TTL_S if ttl is None else ttl)
     try:
         # INSERT first so the row exists; ON CONFLICT DO NOTHING makes the race
         # between two workers creating it harmless.
@@ -124,7 +148,7 @@ def _try_claim_lease(db) -> bool:
                 "INSERT INTO worker_leases (name, holder, expires_at, updated_at) "
                 "VALUES (:n, :h, now(), now()) ON CONFLICT (name) DO NOTHING"
             ),
-            {"n": _LEASE_NAME, "h": _holder()},
+            {"n": name, "h": _holder()},
         )
         got = db.execute(
             text(
@@ -135,7 +159,7 @@ def _try_claim_lease(db) -> bool:
                 "WHERE name = :n AND expires_at <= now() "
                 "RETURNING id"
             ),
-            {"n": _LEASE_NAME, "h": _holder(), "ttl": float(LEASE_TTL_S)},
+            {"n": name, "h": _holder(), "ttl": ttl},
         ).first()
         db.commit()
         return got is not None
@@ -146,7 +170,7 @@ def _try_claim_lease(db) -> bool:
             db.rollback()
         except Exception:
             pass
-        print(f"[auto-reconcile] lease claim failed: {exc}")
+        print(f"[auto-reconcile] lease claim failed ({name}): {exc}")
         return False
 
 
@@ -206,11 +230,20 @@ def _run_once() -> None:
             )
 
         # Generic self-heal for the remaining 17 syncs, on a slower cadence.
-        # Runs inside the same advisory lock, so only one worker sweeps.
-        global _cycle_count
-        _cycle_count += 1
-        if _cycle_count % GENERIC_RECONCILE_EVERY_N_CYCLES == 0:
-            from app.integrations.sheet_backfill import reconcile_all_missing
+        # Runs inside the same lease, so only one worker sweeps. The claim below
+        # is the interval timer AND the cross-worker guard: whoever claims it
+        # owns the next 20 minutes, and it is deliberately never released.
+        from app.integrations.sheet_backfill import (
+            backfill_cooldown_remaining,
+            reconcile_all_missing,
+        )
+        # Check the cooldown BEFORE claiming, so a sweep that would only skip
+        # does not burn the 20-minute timer and push the real sweep out behind an
+        # admin's manual drain. reconcile_all_missing checks it again itself -
+        # that one is the guard, this one just avoids wasting the slot.
+        if backfill_cooldown_remaining() == 0 and _try_claim_lease(
+            db, _GENERIC_LEASE, GENERIC_RECONCILE_INTERVAL_S
+        ):
             gen = reconcile_all_missing(db)
             backlog = gen.get("backlog")
             if gen.get("queued", 0) or backlog or not gen.get("ok", True):
@@ -233,6 +266,14 @@ def _run_once() -> None:
                 for f in (gen.get("failures") or [])[:3]:
                     msg += f"\n    last failure: {f.get('fn')}: {f.get('error')}"
                 print(msg)
+            else:
+                # A LIVENESS LINE, and worth the ~72 lines a day it costs. The
+                # sweep was previously silent when it had nothing to do, which is
+                # indistinguishable in a log from the sweep never running at all -
+                # and it WAS never running, for months, because its schedule sat
+                # in a counter that every worker recycle reset. Silence that
+                # cannot be told apart from absence is not quiet, it is blind.
+                print("[auto-reconcile] generic: nothing missing")
     finally:
         # Release before closing so the next cycle can start at once rather than
         # waiting out the TTL. If this never runs - the worker was killed - the
