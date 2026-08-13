@@ -151,8 +151,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // BOL ops + their signature drafts (ADR 0021), because a signed BOL handed
         // off mid-job has pending ops the wipe would otherwise lose. User-scoped,
         // so it only ever restores to this same crew member.
-        backupFailedWork(previous.id);
-        clearCrewState();
+        // Same rule as logout(): only wipe if the departing user's work is
+        // safely stored. A failed backup here would destroy crew A's signed BOL
+        // the moment crew B logs in.
+        if (backupFailedWork(previous.id)) {
+          clearCrewState();
+        } else {
+          // eslint-disable-next-line no-console
+          console.error("[auth] keeping previous user's local work: backup failed");
+        }
       }
       setUser(me);
       // Restore any failed work this user left on THIS device previously.
@@ -195,10 +202,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearToken();
     // Preserve this user's failed work AND pending BOL work before wiping, so it
     // is waiting for them if they log back in on this device (ADR 0013 / 0021).
-    backupFailedWork(user?.id);
-    // Wipe per-user storage so the next crew member to log in on this
-    // device starts clean: no leftover queues, drafts, or dismiss flags.
-    clearCrewState();
+    //
+    // THE WIPE IS CONDITIONAL ON THE BACKUP SUCCEEDING. It was not, and the
+    // failure that matters is QuotaExceededError on a full device: the backup
+    // threw, the throw was swallowed, and the wipe then destroyed the signed BOL
+    // the backup existed to save. Silent one-copy loss, on exactly the phones
+    // carrying the most work.
+    //
+    // Not wiping means the next crew member on this shared phone can see the
+    // previous one's queued work, which is a real cost - but a visible
+    // attribution problem an admin can sort out is strictly better than a signed
+    // legal document that no longer exists anywhere. See ADR 0021.
+    if (!backupFailedWork(user?.id)) {
+      // eslint-disable-next-line no-console
+      console.error("[logout] keeping local work: it could not be backed up");
+    } else {
+      // Wipe per-user storage so the next crew member to log in on this
+      // device starts clean: no leftover queues, drafts, or dismiss flags.
+      clearCrewState();
+    }
     setPreviewRole(null);
     setUserState(null);
   }

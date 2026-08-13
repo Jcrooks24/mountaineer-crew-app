@@ -74,8 +74,8 @@ function loadArray(key: string): unknown[] {
  * Snapshot the outgoing user's FAILED queue entries. Call BEFORE clearCrewState.
  * A no-op when there is nothing failed, so it never writes an empty backup.
  */
-export function backupFailedWork(userId: number | string | undefined | null): void {
-  if (userId == null) return;
+export function backupFailedWork(userId: number | string | undefined | null): boolean {
+  if (userId == null) return true;
   try {
     const backup: FailedBackup = {};
     let any = false;
@@ -95,24 +95,63 @@ export function backupFailedWork(userId: number | string | undefined | null): vo
     }
     // Preserve the BOL drafts too - the pdf op regenerates the signed PDF from
     // the draft, so a restored pdf op with no draft would have nothing to build.
-    const drafts = collectBolDrafts();
+    //
+    // ONLY THE DRAFTS A PRESERVED OP ACTUALLY NEEDS. This used to copy EVERY
+    // `crew_bol_draft_v1:*` on the device, unconditionally, even when there were
+    // no BOL ops at all - and each draft holds up to four base64 signature PNGs.
+    // On a phone with a season of drafts that is megabytes of synchronous
+    // getItem + JSON.stringify + setItem on the main thread at logout, which is
+    // the freeze crews reported. It also briefly DOUBLED the stored bytes, at
+    // the exact moment before the wipe, on the devices most likely to be near
+    // quota already.
+    const drafts = collectBolDraftsFor(neededDraftJobs(backup[BOL_QUEUE_KEY]));
     if (drafts.length > 0) {
       backup[BOL_DRAFTS_SECTION] = drafts;
       any = true;
     }
     if (any) localStorage.setItem(backupKey(userId), JSON.stringify(backup));
-  } catch {
-    /* storage unavailable - nothing to preserve */
+    return true;
+  } catch (e) {
+    // NOT SWALLOWED ANY MORE. The caller wipes immediately after this returns,
+    // so a failure here - realistically QuotaExceededError, on exactly the full
+    // devices this matters most for - meant the preservation silently failed and
+    // the wipe then destroyed the signed BOL it was meant to save. That is the
+    // one-copy loss ADR 0021 exists to prevent, reintroduced by the code written
+    // to prevent it.
+    // eslint-disable-next-line no-console
+    console.error("[preserveFailedWork] backup FAILED, work is still at risk:", e);
+    return false;
   }
 }
 
-/** Snapshot every `crew_bol_draft_v1:*` entry as [{k, v}] pairs. */
-function collectBolDrafts(): Array<{ k: string; v: string }> {
+/** The job_uuids whose signature drafts a preserved op still needs.
+ *
+ *  Only the `pdf` op rebuilds from a draft, and it is the only op that carries a
+ *  job_uuid. A submit or sign op holds its own payload and needs nothing else. */
+function neededDraftJobs(bolOps: unknown[] | undefined): Set<string> {
+  const jobs = new Set<string>();
+  for (const op of bolOps || []) {
+    if (!op || typeof op !== "object") continue;
+    const o = op as { op?: unknown; job_uuid?: unknown };
+    if (o.op === "pdf" && typeof o.job_uuid === "string" && o.job_uuid) {
+      jobs.add(o.job_uuid);
+    }
+  }
+  return jobs;
+}
+
+/** Snapshot only the named jobs' drafts as [{k, v}] pairs.
+ *
+ *  Returns immediately for an empty set, which is the common case - most logouts
+ *  have no pending pdf op - so the usual cost of this function is now zero
+ *  instead of a full localStorage scan plus a copy of every signature on the
+ *  device. */
+function collectBolDraftsFor(jobs: Set<string>): Array<{ k: string; v: string }> {
   const out: Array<{ k: string; v: string }> = [];
+  if (jobs.size === 0) return out;
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k || !k.startsWith(BOL_DRAFT_PREFIX)) continue;
+    for (const job of jobs) {
+      const k = `${BOL_DRAFT_PREFIX}${job}`;
       const v = localStorage.getItem(k);
       if (v != null) out.push({ k, v });
     }

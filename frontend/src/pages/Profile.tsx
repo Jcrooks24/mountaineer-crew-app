@@ -13,6 +13,7 @@ import {
 } from "../lib/appUpdate";
 import { BetaTag } from "../components/BetaTag";
 import AppHeader from "../components/AppHeader";
+import { buildStorageReport, formatBytes, type StorageReport } from "../lib/storageReport";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
@@ -284,6 +285,9 @@ export default function Profile() {
 
       {/* Patch Notes - latest notes collapsed to a preview */}
       <PatchNotesCard />
+
+      {/* Device storage - on demand only. See lib/storageReport. */}
+      <DeviceStorageCard />
 
       {/* Sign out */}
       <div className="card">
@@ -715,6 +719,88 @@ function PatchNotesCard() {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * What this device is carrying. Run on demand, never on mount.
+ *
+ * Crews reported the app being slow "especially on certain devices", which is a
+ * description of per-device storage rather than of the app. This turns that into
+ * a number a crew member can read out over the phone, and gives the office a way
+ * to tell a slow phone from a slow build.
+ *
+ * The scan itself costs O(total bytes) - on a loaded phone that IS the cost being
+ * measured - so it must stay behind a button. Measuring the problem must not
+ * become the problem.
+ */
+function DeviceStorageCard() {
+  const [report, setReport] = useState<StorageReport | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    setBusy(true);
+    try {
+      setReport(await buildStorageReport());
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>Device storage</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        How much this phone is holding for the app. Worth checking if the app
+        feels slow on this device but not on others: the app reads this whole
+        surface when you sign out, so a large number here is felt as a pause.
+      </div>
+      <button
+        onClick={run}
+        disabled={busy}
+        style={{ padding: "8px 16px", fontSize: 13, minHeight: 40 }}
+      >
+        {busy ? "Measuring…" : report ? "Measure again" : "Measure"}
+      </button>
+
+      {report && (
+        <div style={{ marginTop: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+            <span style={{ fontWeight: 700, fontSize: 18 }}>{formatBytes(report.totalBytes)}</span>
+            <span className="small" style={{ color: "var(--muted)" }}>saved data</span>
+          </div>
+          {report.quota && (
+            <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+              {formatBytes(report.quota.usageBytes)} of {formatBytes(report.quota.quotaBytes)} used
+              overall ({report.quota.pct}%), including photos waiting to upload.
+            </div>
+          )}
+          {report.heavy && (
+            <div
+              className="small"
+              style={{
+                marginTop: 10, padding: 8, borderRadius: 8,
+                border: "1px solid var(--danger)", color: "var(--danger)",
+              }}
+            >
+              This is enough saved data to slow the app down on this device. Let
+              the office know, and make sure everything has synced - most of this
+              clears once queued work reaches the server.
+            </div>
+          )}
+          <div className="col" style={{ gap: 2, marginTop: 12 }}>
+            {report.groups.slice(0, 8).map((g) => (
+              <div key={g.group} className="row small" style={{ justifyContent: "space-between" }}>
+                <span style={{ color: "var(--muted)" }}>
+                  {g.group}{g.count > 1 ? ` (${g.count})` : ""}
+                </span>
+                <span className="mono">{formatBytes(g.bytes)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

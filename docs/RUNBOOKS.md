@@ -465,6 +465,47 @@ durability bugs shipped the first time.
 
 ## Known defects
 
+### The app is slow on SOME devices (and worst at sign-out)
+
+**Fixed 2026-08-13, and worth knowing why, because the shape recurs.**
+
+Sign-out runs `backupFailedWork()` then `clearCrewState()`. The backup used to
+copy EVERY `crew_bol_draft_v1:*` on the device - each holding up to four base64
+signature PNGs - unconditionally, even when there was no BOL work to preserve at
+all. Read every draft, `JSON.stringify` the lot, write it back as one key. All
+synchronous, all on the main thread. On a phone with a season of drafts that is
+megabytes of string work while the UI is frozen, which is why it was felt as a
+pause and why it was device-specific: same build, same network, wildly different
+amounts of accumulated data.
+
+It now copies only the drafts a preserved `pdf` op actually needs (that op is the
+only one that rebuilds from a draft, and the only one carrying a `job_uuid`). A
+logout with no pending BOL work went from copying ~3 MB to writing 58 characters.
+
+**The worse half was not performance.** That write briefly DOUBLED stored bytes at
+the moment before the wipe, on exactly the devices nearest quota - and the
+`QuotaExceededError` was swallowed by a bare `catch`, after which
+`clearCrewState()` destroyed the signed BOL the backup existed to save. Silent
+one-copy loss, on the phones carrying the most work. `backupFailedWork` now
+returns a boolean and **the wipe is conditional on it**. A failed backup leaves
+the work on the device and logs loudly; the next crew member may see the previous
+one's queued work, which is a visible attribution problem an admin can sort out,
+and is strictly better than a signed legal document that no longer exists.
+
+**To diagnose a slow device:** Profile -> Device storage -> Measure. It reports
+total localStorage bytes, the largest key groups, and `navigator.storage.estimate()`
+(which covers IndexedDB and the photo queue). It is on demand only and must stay
+that way - the scan costs O(total bytes), which on a loaded phone is the very
+cost being measured.
+
+**Still open, not fixed:** boot fires 13 drain functions plus a user-directory
+fetch in one burst (`App.tsx`, the `onOnline` handler and its mount-time twin).
+Each is individually cheap and mostly async, but on a slow connection they
+contend, and no measurement has been taken of what that costs in the field. Take
+the measurement before changing it - the last two performance guesses in this
+repo were both wrong.
+
+
 Live bugs that are known and not yet fixed. If you hit one of these, you have found
 a real issue, not a misunderstanding. Keep this list honest: delete an entry when it
 is fixed, and add one when a `/vet` pass finds something you cannot fix that day.
