@@ -21,6 +21,7 @@
  */
 
 import { apiFetch } from "../api/client";
+import { coalesce, invalidate } from "./sharedFetch";
 
 export type AvailabilityStatus = "available" | "unavailable" | "conditional";
 
@@ -158,14 +159,29 @@ export function clearDraft(): void {
 
 // ── Server sync ──────────────────────────────────────────────────────────────
 
-export async function fetchState(): Promise<AvailabilityState | null> {
-  try {
-    const r = await apiFetch<AvailabilityState>("/api/availability");
-    saveCache(r);
-    return r;
-  } catch {
-    return null;
-  }
+export async function fetchState(opts: { force?: boolean } = {}): Promise<AvailabilityState | null> {
+  // The reminder banner re-fetches this on EVERY navigation (its effect depends
+  // on the pathname), which made /api/availability 11% of all backend traffic in
+  // a production sample. That matters twice over: it is a round trip on every
+  // tab change, and every request counts toward the 1000 that recycles the
+  // worker - so the polling was helping cause the restart pauses crews feel.
+  //
+  // A reminder about a MONTH-long availability horizon does not need
+  // per-navigation freshness. Invalidated on submit below, so a crew member
+  // still sees their own change immediately.
+  return coalesce(
+    "availability:state",
+    async () => {
+      try {
+        const r = await apiFetch<AvailabilityState>("/api/availability");
+        saveCache(r);
+        return r;
+      } catch {
+        return null;
+      }
+    },
+    { ttlMs: 60_000, force: opts.force },
+  );
 }
 
 /** POST the supplied draft to the backend. On success, returns + persists
@@ -186,6 +202,8 @@ export async function submitDraft(draft: AvailabilityDraft): Promise<Availabilit
   });
   saveCache(r);
   clearDraft();
+  // The crew member just changed this; the banner must not read a stale horizon.
+  invalidate("availability:state");
   return r;
 }
 

@@ -59,14 +59,25 @@ async function fetchDirectory(): Promise<DirectoryEntry[]> {
  * background, so somebody added to the crew this morning shows up without a
  * reload. A failed refresh is silent by design; the cache is still good.
  */
+// How long a background revalidate is skipped for. The roster changes when
+// somebody is hired; re-checking on every job open (six times in a production
+// sample) buys nothing and spends the request budget that recycles the worker.
+const REVALIDATE_AFTER_MS = 60_000;
+let lastFetchAt = 0;
+
 export function ensureDirectory(): Promise<DirectoryEntry[]> {
-  if (!inflight) {
+  const stale = Date.now() - lastFetchAt >= REVALIDATE_AFTER_MS;
+  // Still stale-while-revalidate - the cached roster is returned instantly and
+  // an offline launch is unaffected. What is rate-limited is the REVALIDATE:
+  // this used to fire a background fetch on every single call.
+  if (!inflight && (stale || !cached)) {
+    lastFetchAt = Date.now();
     inflight = fetchDirectory()
       .catch(() => cached ?? [])
       .finally(() => { inflight = null; });
   }
   if (cached) return Promise.resolve(cached);
-  return inflight;
+  return inflight ?? Promise.resolve([]);
 }
 
 /**

@@ -6,6 +6,7 @@
  */
 import { apiFetch } from "../api/client";
 import { getToken } from "../auth/token";
+import { coalesce } from "./sharedFetch";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -169,7 +170,15 @@ export function setSeenId(id: number): void {
   try { localStorage.setItem(SEEN_KEY, String(id)); } catch { /* noop */ }
 }
 export function fetchLatestId(): Promise<{ latest_id: number }> {
-  return apiFetch<{ latest_id: number }>("/api/bulletin/latest");
+  // Called by the bottom nav on EVERY navigation to decide whether to show a
+  // dot, which made this 11% of all backend traffic in a production sample. A
+  // dot saying "somebody posted" does not need per-tap freshness, and every
+  // request spent here brings the 1000-request worker recycle closer.
+  return coalesce(
+    "bulletin:latest",
+    () => apiFetch<{ latest_id: number }>("/api/bulletin/latest"),
+    { ttlMs: 60_000 },
+  );
 }
 
 export function toggleLike(postUuid: string): Promise<{ liked: boolean; like_count: number }> {

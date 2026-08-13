@@ -114,28 +114,6 @@ check("the network-error path uses the ambiguous ladder",
 check("the status path uses the confirmed ladder",
   /looksLikeRestart\(null, res\.status\)[\s\S]{0,300}RESTART_RETRY_DELAYS_MS/.test(client));
 
-console.log("\nA deploy cannot strand a crew member on a dead chunk:");
-const lazyRoute = readFileSync(`${ROOT}/frontend/src/lib/lazyRoute.ts`, "utf8");
-check("chunk-load failures are recognised across browsers",
-  /ChunkLoadError/.test(lazyRoute)
-  && /Failed to fetch dynamically imported module/.test(lazyRoute)
-  && /Importing a module script failed/.test(lazyRoute));
-// A reload loop would lock a crew member out of the WHOLE app rather than one
-// screen, which is far worse than the error page it replaces.
-check("it reloads at most once per route", /alreadyReloadedFor\(key\)/.test(lazyRoute));
-check("the once-only mark is persisted", /sessionStorage\.setItem/.test(lazyRoute));
-check("no sessionStorage is treated as already-reloaded, not as free rein",
-  /return true;/.test(lazyRoute.split("function alreadyReloadedFor")[1].split("}")[3] || "")
-  || /catch \{[\s\S]{0,200}return true;/.test(lazyRoute));
-// Reloading an offline PWA turns "this screen is unavailable" into "the app is
-// gone".
-check("an offline device is never reloaded", /navigator\.onLine === false/.test(lazyRoute));
-const mainSrc = readFileSync(`${ROOT}/frontend/src/main.tsx`, "utf8");
-check("every route uses it", (mainSrc.match(/lazyRoute\(/g) || []).length >= 12,
-  `${(mainSrc.match(/lazyRoute\(/g) || []).length} routes`);
-check("bare React.lazy is no longer used for routes",
-  !/= lazy\(\(\) => import\(/.test(mainSrc));
-
 console.log("\nThe banner does not overclaim:");
 const banner = readFileSync(`${ROOT}/frontend/src/components/ServerRestartBanner.tsx`, "utf8");
 check("no countdown to zero is promised", !/setTimeout[\s\S]{0,80}remaining/i.test(banner));
@@ -145,27 +123,27 @@ check("the data claim is about THIS device, which is checkable",
 check("it sits above the bottom nav, not over it", /bottom: 78/.test(banner));
 check("it is announced to screen readers", /aria-live="polite"/.test(banner));
 
-console.log("\nRoutes are code split, and the timeline is not:");
-const main = readFileSync(`${ROOT}/frontend/src/main.tsx`, "utf8");
-check("Admin is lazy", /const Admin = lazyRoute\("Admin"/.test(main));
-check("Availability is lazy", /const Availability = lazyRoute\("Availability"/.test(main));
-// The timeline is what crews open. Making the common case wait on a second
-// round trip would be a pessimisation dressed as an optimisation.
-check("App (the timeline) stays a static import",
-  /^import App from "\.\/App";$/m.test(main) && !/const App = lazy\(/.test(main));
-check("a Suspense fallback exists", /<Suspense fallback=\{<RouteLoading \/>\}>/.test(main));
-check("the fallback does not replace the nav or banners",
-  main.indexOf("<Suspense") > main.indexOf("<ServerRestartBanner />"));
 
-console.log("\nThe split did not break offline navigation:");
-// Crews work offline. A lazy chunk that the service worker does not precache is
-// a white screen the moment they navigate with no signal.
-const sw = readFileSync(`${ROOT}/frontend/dist/sw.js`, "utf8");
-for (const chunk of ["Admin", "Availability", "LongDistance", "Bulletin", "Profile"]) {
-  check(`${chunk} chunk is precached`, new RegExp(`assets/${chunk}-`).test(sw));
-}
+console.log("\nRoute code splitting is REVERTED, and that is the intended state:");
+// Splitting cut the initial download by 62%, and it made the SERVICE-WORKER
+// UPDATE fatal. Workbox evicts the old precache the moment the new worker
+// activates; the app then waits 150 ms before reloading so React can unmount.
+// With one bundle that window is harmless - all the code is already in memory.
+// With split routes, any chunk not yet loaded had just been deleted, and crews
+// got a black screen that only a manual refresh cleared.
+//
+// These assertions exist so the next person to re-land splitting has to delete
+// them deliberately, having read why.
+const mainSrc = readFileSync(`${ROOT}/frontend/src/main.tsx`, "utf8");
+const mainCode = mainSrc.replace(/\/\/[^\n]*/g, "");
+check("routes are static imports again",
+  /^import Admin from "\.\/pages\/Admin";$/m.test(mainSrc));
+check("no lazy route remains", !/lazyRoute\(/.test(mainCode));
+check("no Suspense boundary remains", !/<Suspense/.test(mainCode));
+check("the reason is recorded where somebody would change it back",
+  /black screen/.test(mainSrc) && /150 ms/.test(mainSrc));
 
-console.log("\nThe initial download actually got smaller:");
+console.log("\nThe cost of the revert, recorded rather than hidden:");
 const out = execFileSync("node", ["-e", `
   const {readdirSync,readFileSync}=require("fs");
   const {gzipSync}=require("zlib");
@@ -174,8 +152,8 @@ const out = execFileSync("node", ["-e", `
   process.stdout.write(String(gzipSync(readFileSync(d+"/"+f)).length));
 `], { encoding: "utf8" });
 const gz = parseInt(out, 10);
-check("index chunk is well under the old 462 KB single bundle", gz < 250 * 1024,
-  `${(gz / 1024).toFixed(0)} KB gzipped`);
+check("one bundle carries the app again", gz > 300 * 1024,
+  `${(gz / 1024).toFixed(0)} KB gzipped, back from 174 KB - the price of the revert`);
 
 console.log("\n" + (fails.length ? `${fails.length} FAILED: ${fails.join(", ")}` : "ALL PASS"));
 process.exit(fails.length ? 1 : 0);

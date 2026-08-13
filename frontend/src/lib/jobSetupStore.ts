@@ -9,7 +9,7 @@
  */
 import { apiFetch } from "../api/client";
 import { isPermanentRejection, failureMark, CLEARED_FAILURE, type MaybeFailed } from "./queueFailure";
-import { coalesce } from "./sharedFetch";
+import { coalesce, invalidate } from "./sharedFetch";
 
 export type CrewMember = {
   user_id: number | null;
@@ -87,6 +87,9 @@ export function getCachedJobSetup(jobUuid: string): JobSetupData | null {
   return loadBag(CACHE_KEY)[jobUuid] ?? null;
 }
 function cacheJobSetup(jobUuid: string, data: JobSetupData) {
+  // Anything that writes the header drops the coalesced read, so the reuse
+  // window above can never serve a value older than the crew member's own save.
+  invalidate(`job-setup:${jobUuid}`);
   const bag = loadBag(CACHE_KEY);
   bag[jobUuid] = data;
   saveBag(CACHE_KEY, bag);
@@ -107,11 +110,16 @@ function dequeue(jobUuid: string) {
 /** Load a job's header. Cached-first so an offline open still shows the last
  *  known header; a successful fetch refreshes the cache. */
 export async function loadJobSetup(jobUuid: string): Promise<JobSetupData | null> {
-  // COALESCE ONLY, NO TTL. Six components load a job's header and several mount
-  // together, so opening one job fetched it two or three times. But this is a
-  // record crew actively edit, so a reuse window would risk showing someone
-  // their own save undone. Sharing an in-flight request has no such risk: every
-  // caller gets exactly the answer it would have got anyway.
+  // Coalescing alone was not enough. It collapses CONCURRENT callers, but a
+  // production sample showed this fetched seven times for one job on one device
+  // - the components mount at different moments, so the calls are sequential and
+  // share nothing.
+  //
+  // Hence a SHORT reuse window, and a deliberately short one: this is a record
+  // crew actively edit, and the risk of a longer window is showing somebody
+  // their own save undone. Every write path below invalidates the key, so a
+  // stale read cannot outlive a save at all - the window only ever covers a
+  // burst of mounts.
   return coalesce(`job-setup:${jobUuid}`, async () => {
     try {
       const r = await apiFetch<{ setup: JobSetupData | null }>(
@@ -122,7 +130,7 @@ export async function loadJobSetup(jobUuid: string): Promise<JobSetupData | null
     } catch {
       return getCachedJobSetup(jobUuid);
     }
-  });
+  }, { ttlMs: 10_000 });
 }
 
 /** Save a job's header. Returns synced:false and queues on a network failure

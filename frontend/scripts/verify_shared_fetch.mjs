@@ -111,10 +111,20 @@ const files = {
 for (const [f, re] of Object.entries(files)) {
   check(`${f} coalesces`, re.test(readFileSync(`${ROOT}/frontend/src/lib/${f}`, "utf8")));
 }
-// The job header is actively edited, so a reuse window could show a crew member
-// their own save undone. Coalescing alone carries no such risk.
+// The job header is actively edited, so a reuse window could in principle show a
+// crew member their own save undone. Coalescing alone turned out not to be
+// enough - a production sample showed it fetched seven times for one job on one
+// device, because the components mount at different moments and sequential calls
+// share nothing. So it has a SHORT window, and safety comes from invalidating on
+// every write rather than from having no window at all.
 const setup = readFileSync(`${ROOT}/frontend/src/lib/jobSetupStore.ts`, "utf8");
-check("the actively-edited job header has NO ttl", !/ttlMs/.test(setup));
+const ttl = parseInt((setup.match(/ttlMs:\s*([0-9_]+)/) || [])[1]?.replace(/_/g, "") || "0", 10);
+check("the job header's window is short", ttl > 0 && ttl <= 15_000, `${ttl} ms`);
+check("and shorter than the config reads' window", ttl < 60_000);
+// This is what makes the window safe: the write path drops the key, so a stale
+// read cannot outlive a save.
+check("every write to the header invalidates the read",
+  /function cacheJobSetup[\s\S]{0,300}invalidate\(`job-setup:\$\{jobUuid\}`\)/.test(setup));
 
 console.log("\nAdmin edits are visible immediately, not a minute later:");
 const admin = readFileSync(`${ROOT}/frontend/src/pages/Admin.tsx`, "utf8");

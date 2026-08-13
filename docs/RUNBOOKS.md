@@ -465,6 +465,40 @@ durability bugs shipped the first time.
 
 ## Known defects
 
+### App update showed a black screen (route code splitting, reverted same day)
+
+**Shipped and reverted 2026-08-13.** Crews updating the app got a black screen
+that only a manual page refresh cleared.
+
+`applyWaitingUpdate()` posts SKIP_WAITING, and **Workbox evicts the old precache
+the moment the new worker activates**. It then waits 150 ms before reloading, so
+React can unmount cleanly. With a single bundle that gap is harmless: every line
+of code is already in memory and nothing more will be fetched. Route code
+splitting broke that assumption - any route chunk not yet loaded had just been
+deleted, and the page was still live and able to ask for it.
+
+`lib/lazyRoute.ts` does not cover this. It was written for the neighbouring
+problem, a chunk missing after a DEPLOY, and its remedy is a reload - which is
+useless here, because a reload is already 150 ms away and the page is mid
+teardown.
+
+**The splitting was worth having** (initial download 462 KB -> 174 KB gzipped,
+about 62%), so this is a deferral, not a rejection. Re-landing it means fixing
+the UPDATE PATH first, not changing the routes back:
+
+  - reload IMMEDIATELY on `controllerchange` rather than after 150 ms, or
+  - do not let the new worker evict the old precache until the page has
+    reloaded, or
+  - keep an `updatefound` flag and have the app stop rendering new routes once
+    an update is activating.
+
+Whichever is chosen, it must be tested by actually updating a device across two
+deploys. Static verification cannot reach this: the failure lives in a 150 ms
+window between two events that only occur on a real service-worker update. The
+static checks all passed, and offline navigation was confirmed on a device, and
+neither touched the update path.
+
+
 ### The app is slow on SOME devices (and worst at sign-out)
 
 **Fixed 2026-08-13, and worth knowing why, because the shape recurs.**

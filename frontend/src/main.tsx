@@ -1,6 +1,6 @@
 import "./index.css";
 
-import { StrictMode, Suspense } from "react";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
@@ -13,7 +13,6 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateBanner from "./components/UpdateBanner";
 import AvailabilityReminderBanner from "./components/AvailabilityReminderBanner";
 import ServerRestartBanner from "./components/ServerRestartBanner";
-import { lazyRoute } from "./lib/lazyRoute";
 import RolePreviewSwitch from "./components/RolePreviewSwitch";
 import BottomNav from "./components/BottomNav";
 
@@ -23,42 +22,37 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import MechanicSign from "./pages/MechanicSign";
 
-// ── Route-level code splitting ────────────────────────────────────────────────
+// ── STATIC IMPORTS, deliberately. Route code splitting was reverted 2026-08-13.
 //
-// Everything used to be a static import, so the whole app shipped as ONE 1.5 MB
-// bundle (462 KB gzipped) that every crew phone downloaded and parsed before it
-// could show the timeline. Admin.tsx alone is 9,268 lines and is opened by a
-// handful of people, but every crew member paid for it on every cold load and on
-// every deploy, over whatever signal they had at the time.
+// Splitting cut the initial download from 462 KB to 174 KB gzipped, which was
+// real. It also made the SERVICE-WORKER UPDATE fatal, and that trade is not
+// close.
 //
-// The timeline (App) stays a STATIC import: it is the screen crews open, and
-// making the common case wait on a second round trip would be a pessimisation
-// dressed as an optimisation. Everything reached by navigating stays lazy.
-const Profile = lazyRoute("Profile", () => import("./pages/Profile"));
-const Admin = lazyRoute("Admin", () => import("./pages/Admin"));
-const DVIRPage = lazyRoute("DVIRPage", () => import("./pages/DVIR"));
-const LongDistance = lazyRoute("LongDistance", () => import("./pages/LongDistance"));
-const DocumentLibrary = lazyRoute("DocumentLibrary", () => import("./pages/DocumentLibrary"));
-const Reimbursement = lazyRoute("Reimbursement", () => import("./pages/Reimbursement"));
-const OffJob = lazyRoute("OffJob", () => import("./pages/OffJob"));
-const Availability = lazyRoute("Availability", () => import("./pages/Availability"));
-const ReportBug = lazyRoute("ReportBug", () => import("./pages/ReportBug"));
-const RequestFeature = lazyRoute("RequestFeature", () => import("./pages/RequestFeature"));
-const Tools = lazyRoute("Tools", () => import("./pages/Tools"));
-const Bulletin = lazyRoute("Bulletin", () => import("./pages/Bulletin"));
-
-/** Shown while a route chunk downloads. Deliberately plain and quiet: on a good
- *  connection it is visible for a few hundred milliseconds, and a spinner that
- *  flashes is more unsettling than a line of text. */
-function RouteLoading() {
-  return (
-    <div className="container" style={{ maxWidth: 480 }}>
-      <div className="card" style={{ color: "var(--muted)", fontSize: 13 }}>
-        Loading...
-      </div>
-    </div>
-  );
-}
+// applyWaitingUpdate() sends SKIP_WAITING, and Workbox evicts the old precache
+// the moment the new worker activates. It then waits 150 ms before reloading so
+// React can unmount. With one bundle that window was harmless: all the code was
+// already in memory. With split routes, any chunk not yet loaded had just been
+// deleted, so the app could break in the gap between "old precache gone" and
+// "page reloaded" - crews saw a black screen that only a manual refresh cleared.
+//
+// lib/lazyRoute.ts was written for the neighbouring problem (a chunk missing
+// after a deploy) and does not cover this one: the failure happens while the
+// page is mid-teardown, where a reload guard has nothing useful to do.
+//
+// Re-landing this needs the update path fixed first, not the routes changed
+// back. See RUNBOOKS "App update showed a black screen".
+import Profile from "./pages/Profile";
+import Admin from "./pages/Admin";
+import DVIRPage from "./pages/DVIR";
+import LongDistance from "./pages/LongDistance";
+import DocumentLibrary from "./pages/DocumentLibrary";
+import Reimbursement from "./pages/Reimbursement";
+import OffJob from "./pages/OffJob";
+import Availability from "./pages/Availability";
+import ReportBug from "./pages/ReportBug";
+import RequestFeature from "./pages/RequestFeature";
+import Tools from "./pages/Tools";
+import Bulletin from "./pages/Bulletin";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -73,10 +67,6 @@ createRoot(document.getElementById("root")!).render(
         <ServerRestartBanner />
         {/* Staging-only role preview (self-hides on production) */}
         <RolePreviewSwitch />
-        {/* Suspense wraps the routes, not the app: the fallback must never
-            replace the bottom nav or the banners above, or a crew member loading
-            a screen loses the way back out of it. */}
-        <Suspense fallback={<RouteLoading />}>
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
@@ -110,7 +100,6 @@ createRoot(document.getElementById("root")!).render(
             }
           />
         </Routes>
-        </Suspense>
         {/* Persistent crew bottom nav; self-hides on public + admin routes */}
         <BottomNav />
         </ErrorBoundary>
