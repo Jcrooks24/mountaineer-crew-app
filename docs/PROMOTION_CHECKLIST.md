@@ -207,7 +207,42 @@ looks wrong, and who to contact.
 Items that were on a previous promotion's list and never got done. **Clear this
 section as part of the promotion, or explain why it is still here.**
 
-### Device testing status for the pending promotion (`e7c1b7e`)
+### After the 2026-08-13 PM promotion (`7081f4f`, 11 commits, ONE migration)
+
+The performance batch. Migration `i9k1m3h5j7l9` adds two nullable columns to
+`job_reports` with no backfill.
+
+1. **Confirm Render PROD ran `i9k1m3h5j7l9` BEFORE the Vercel build reaches a
+   phone.** The close-out screen writes `variance_direction` and
+   `variance_cause_identified`; a frontend ahead of its backend is what caused
+   both 08-12 bugs, and Vercel usually wins that race.
+
+2. **Read the boot line in the Render log.** It now prints its own timing:
+   `[migrations] already at head (i9k1m3h5j7l9) - nothing to do [N ms]`. On the
+   DEPLOY it will run the real upgrade; on every recycle after, it should say
+   "already at head" in single-digit milliseconds. If it is still running a full
+   upgrade on recycles, the fast path is not engaging and the boot is slower than
+   it needs to be.
+
+3. **THE ONE THAT UNLOCKS THE REST: read
+   `GET /api/admin/system-check/worker`** on a fresh worker, then again near a
+   recycle (`requests_served` approaching 1000). RSS flat across that span means
+   nothing leaks on this build and `--limit-max-requests` can go up - 5000 is a
+   5x cut in the restart pauses, which is a bigger win than everything else in
+   this promotion combined. RSS climbing means the flag is earning its keep and
+   the leak comes first. See the start-command section in CLAUDE.md.
+
+4. **Watch the first prod deploy for chunk-recovery** (see the unverified list
+   below). Anyone with the app open across the deploy who then navigates to a
+   lazy route is the test. Symptom if the guard is wrong: an error page on one
+   screen, cleared by a refresh. Bounded.
+
+5. **Crew-visible change worth a patch note:** the job report close-out is now a
+   short stepper, two duplicate questions are gone, and causes are picked from
+   three dropdowns instead of one long chip list. Crews who learned the old
+   screen will notice immediately.
+
+### Device testing status for the 2026-08-13 PM promotion (`7081f4f`)
 
 Kept here rather than in a chat log, because "was this actually tried on a phone"
 is the question every one of these promotions turns on.
