@@ -207,6 +207,31 @@ looks wrong, and who to contact.
 Items that were on a previous promotion's list and never got done. **Clear this
 section as part of the promotion, or explain why it is still here.**
 
+### After the 2026-08-13 promotion (`a35011a`, 4 commits, no migrations)
+
+The truck-billing fixes, the auto-reconcile throttle fix, and the drain estimate.
+Nothing to configure - but one thing genuinely needs watching, because the fix
+that shipped only removes a KNOWN cause and cannot prove it was the only one.
+
+1. **Read the next `[auto-reconcile] generic:` line in the prod Render log**
+   (within ~20 minutes of the deploy). The number after `backlog before sweep`
+   is the one to track ACROSS two or three sweeps. Falling means the storm was
+   the whole story and it is now draining on its own. Flat means there is a
+   second, independent reason those records will not export - in which case the
+   `last failure:` lines now printed underneath name it, and that is the thread
+   to pull. **Do not conclude anything from a single sweep**: the count is
+   measured before the sweep runs, so one line in isolation says nothing.
+2. **Watch that the sweep is actually skipping, not stalling.** `skipped:
+   previous batch still draining` is correct and expected between sweeps. Seeing
+   it on every sweep for over an hour is not - that would mean something is
+   re-arming the cooldown continuously, and the sweep would never run again.
+3. **Nothing was device-tested here**, but the only crew-visible change is the
+   missing-truck-line warning on the invoice builder. Worth one look at a real
+   job on a phone before trusting it to prevent the next under-bill.
+
+Still open from the promotion below: the DATA_FLOW fold (now four promotions
+old), device testing, and `repair_forked_jobs.py`.
+
 ### After the 2026-08-12 promotion (25 commits) - DO THESE IN ORDER
 
 1. **Confirm the Render PROD deploy finished and all FOUR migrations ran**
