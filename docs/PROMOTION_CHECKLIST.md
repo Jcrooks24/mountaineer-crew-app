@@ -285,6 +285,28 @@ old), device testing, and `repair_forked_jobs.py`.
    it next resolves online, so repairing early just lets new orphans appear
    behind the script. See [ADR 0038](decisions/0038-forked-job-repair-moves-rows-and-refuses-to-merge.md).
 
+   **How to know it is safe, instead of guessing at a number of days.**
+   `GET /api/patch-notes/history` returns every build a crew device has actually
+   reported, each with `last_seen_at`. Adoption is readable, not estimated:
+
+   - Find the builds whose `first_seen_at` PREDATES the promotion.
+   - Look at their `last_seen_at`. A recent timestamp on an old build means at
+     least one device is still running the old bundle right now.
+   - When no pre-promotion build has been seen for a couple of days, the devices
+     that open the app have taken the update.
+
+   **The limit of that signal, which matters here specifically.** The table
+   records builds REPORTED BY A DEVICE. A phone that has not opened the app at
+   all reports nothing, so "no old build seen recently" means "nobody who has
+   used the app recently is stale" - not "everybody updated". A crew member back
+   from a week off, opening a bundle from before the promotion, is exactly the
+   device that creates a fresh orphan, and it is invisible to this check until
+   they open the app.
+
+   So: use the history to rule out the obvious "too early", then run the DRY RUN
+   whenever you like. It only reads. If it reports forks that keep appearing
+   between runs, devices are still stale and the answer is to wait, not to apply.
+
 5. **Tell the office the Sheet's `entered_by` column changes.** It now shows full
    names instead of typed initials, and `(waived)` on a waived job (ADR 0037).
    Anything reading that column must treat it as free text.
