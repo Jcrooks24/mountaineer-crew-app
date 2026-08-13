@@ -41,6 +41,9 @@ import {
   formatMountainTime,
   mountainDateYYYYMMDD,
 } from "../lib/time";
+import { invalidateJobTypes } from "../lib/jobTypesStore";
+import { invalidateChecklistItems } from "../lib/jobChecklistStore";
+import { invalidateUnits } from "../lib/vehicleUnits";
 
 type AdminUser = {
   id: number;
@@ -3212,6 +3215,9 @@ function JobTypesManagerCard() {
     setBusy(true); setErr(null);
     try {
       await apiFetch(`/api/admin/job-types/${t.id}`, { method: "DELETE" });
+      // The crew-side read is coalesced with a reuse window; drop it so the
+      // change is visible immediately rather than up to a minute later.
+      invalidateJobTypes();
       setTypes((prev) => prev.filter((x) => x.id !== t.id));
     } catch (e: any) {
       setErr(e instanceof ApiError ? e.message : "Failed to delete");
@@ -6095,6 +6101,7 @@ function JobChecklistCard() {
     setErr(null);
     try {
       await apiFetch("/api/admin/config/job-checklist", { method: "PUT", body: JSON.stringify({ items }) });
+      invalidateChecklistItems();
       setSaved(true);
     } catch (e: any) {
       setErr(e?.message ?? "Save failed");
@@ -6235,6 +6242,7 @@ function VehicleUnitsCard() {
     setBusy(true); setErr(null);
     try {
       await apiFetch("/api/admin/config/vehicle-units", { method: "PUT", body: JSON.stringify({ units: cleaned }) });
+      invalidateUnits();
       setSaved(true);
     } catch (e: any) {
       setErr(e?.message ?? "Save failed");

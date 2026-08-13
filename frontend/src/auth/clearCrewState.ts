@@ -15,6 +15,8 @@
  * - they reseed from server defaults on next render.
  */
 
+import { clearSharedFetchCache } from "../lib/sharedFetch";
+
 const KEY_PREFIXES = ["crew_", "mm_"] as const;
 const INDEXED_DB_NAME = "crew_app_db";
 
@@ -35,6 +37,10 @@ function wipeStorage(s: Storage | undefined): void {
 
 export function clearCrewState(): void {
   if (typeof window === "undefined") return;
+  // In-memory coalesced reads too. They are shared config rather than personal
+  // data, but a wipe that leaves the previous session's answers sitting in
+  // module memory is the kind of thing that is only ever discovered as a bug.
+  clearSharedFetchCache();
   wipeStorage(window.localStorage);
   wipeStorage(window.sessionStorage);
   // Fire-and-forget - onsuccess/onerror are no-ops. If the DB doesn't exist

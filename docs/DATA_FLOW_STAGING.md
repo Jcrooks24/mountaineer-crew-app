@@ -1018,6 +1018,40 @@ the service worker precache, so they download in the background after first
 paint and a crew member navigating with no signal still gets the screen.
 `verify_server_restart.mjs` asserts the precache contains each lazy chunk.
 
+## Duplicate config reads are coalesced
+
+Same endpoints, same payloads, fewer requests. No storage or queue change.
+
+A production log showed one job screen fetching five resources TWICE each,
+because two components mounted and each asked independently. `lib/sharedFetch.ts`
+adds two mechanisms:
+
+| Resource | Key | Treatment |
+|---|---|---|
+| `/api/config/vehicle-units` | `config:vehicle-units` | coalesce + 60s reuse |
+| `/api/job-types` | `config:job-types` | coalesce + 60s reuse |
+| `/api/config/job-checklist` | `config:job-checklist` | coalesce + 60s reuse |
+| `/api/job-setup/{uuid}` | `job-setup:{uuid}` | **coalesce only, no reuse window** |
+
+**The job header gets no reuse window on purpose.** It is a record crew actively
+edit, and a stale read could show someone their own save undone. Sharing an
+in-flight request carries no such risk: every caller gets exactly the answer it
+would have got anyway, one request later instead of three.
+
+A rejection is never remembered, so a failed read - most likely the backend
+mid-recycle - cannot poison the next attempt. Admin save paths call the matching
+`invalidate*()` so an edit is visible at once rather than up to a minute later,
+and `clearCrewState` clears the whole in-memory cache on a user switch.
+
+## Backend boot: googleapiclient is no longer imported at module scope
+
+`drive_upload.py` imported `googleapiclient.discovery` at module level, and it is
+pulled in by `app.routers.photos`, so ~300 ms (measured in isolation, fresh
+process) was paid on EVERY uvicorn boot - and the worker recycles every 1000
+requests by design, with the service down for each one. Every other Google
+integration already deferred this import; this module was the exception. Moved
+inside the two functions that build a client. No behaviour change.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified

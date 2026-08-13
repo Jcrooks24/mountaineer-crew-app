@@ -7,6 +7,7 @@
  * payload capacity (GVWR - dry weight). Admin edits the list in Settings.
  */
 import { apiFetch } from "../api/client";
+import { coalesce, invalidate } from "./sharedFetch";
 
 export type VehicleUnit = {
   name: string;
@@ -42,15 +43,30 @@ function setCache(units: VehicleUnit[]): void {
 
 /** Fetch the latest fleet and update the cache. Resolves to the cached list on
  * failure so a caller always gets something usable. */
-export async function refreshUnits(): Promise<VehicleUnit[]> {
-  try {
-    const r = await apiFetch<{ units: VehicleUnit[] }>("/api/config/vehicle-units");
-    const units = Array.isArray(r?.units) ? r.units : [];
-    setCache(units);
-    return units;
-  } catch {
-    return getUnitsCached();
-  }
+export async function refreshUnits(opts: { force?: boolean } = {}): Promise<VehicleUnit[]> {
+  // Nine components call this, several of them while the same screen mounts, so
+  // the fleet list was being fetched repeatedly for data that changes about
+  // monthly. Coalesced, with a short reuse window; `force` for the admin path
+  // that has just edited the fleet and must see its own change.
+  return coalesce(
+    "config:vehicle-units",
+    async () => {
+      try {
+        const r = await apiFetch<{ units: VehicleUnit[] }>("/api/config/vehicle-units");
+        const units = Array.isArray(r?.units) ? r.units : [];
+        setCache(units);
+        return units;
+      } catch {
+        return getUnitsCached();
+      }
+    },
+    { ttlMs: 60_000, force: opts.force },
+  );
+}
+
+/** Call after saving a fleet change so the next read goes to the network. */
+export function invalidateUnits(): void {
+  invalidate("config:vehicle-units");
 }
 
 /** Find a unit by its name / number (case-insensitive, trimmed). */

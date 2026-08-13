@@ -10,6 +10,7 @@
 import { persistJson, StorageFullError } from "./persistQueue";
 import { apiFetch } from "../api/client";
 import { isPermanentRejection, failureMark, CLEARED_FAILURE, type MaybeFailed } from "./queueFailure";
+import { coalesce, invalidate } from "./sharedFetch";
 
 export type ChecklistItem = {
   key: string;
@@ -40,18 +41,32 @@ export function cachedItems(): ChecklistItem[] {
   }
 }
 
-export async function loadChecklistItems(): Promise<ChecklistItem[]> {
-  try {
-    const r = await apiFetch<{ items: ChecklistItem[] }>("/api/config/job-checklist");
-    const items = Array.isArray(r.items) ? r.items : [];
-    // The item LIST is a re-derivable cache (it comes back from the server on
-    // the next load), so a failed write here is not data loss - unlike the queue
-    // below.
-    persistJson(ITEMS_KEY, items);
-    return items;
-  } catch {
-    return cachedItems();
-  }
+export async function loadChecklistItems(opts: { force?: boolean } = {}): Promise<ChecklistItem[]> {
+  // The checklist TEMPLATE (not the per-job ticks below). Read by every job
+  // screen on mount and changed by admin occasionally, so it is the same shape
+  // as the other config reads: coalesce concurrent callers, reuse briefly.
+  return coalesce(
+    "config:job-checklist",
+    async () => {
+      try {
+        const r = await apiFetch<{ items: ChecklistItem[] }>("/api/config/job-checklist");
+        const items = Array.isArray(r.items) ? r.items : [];
+        // The item LIST is a re-derivable cache (it comes back from the server on
+        // the next load), so a failed write here is not data loss - unlike the queue
+        // below.
+        persistJson(ITEMS_KEY, items);
+        return items;
+      } catch {
+        return cachedItems();
+      }
+    },
+    { ttlMs: 60_000, force: opts.force },
+  );
+}
+
+/** Call after an admin edits the checklist template. */
+export function invalidateChecklistItems(): void {
+  invalidate("config:job-checklist");
 }
 
 // ── Per-job status ───────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../api/client";
 import { JOB_TYPE_TAGS } from "./jobTypes";
+import { coalesce, invalidate } from "./sharedFetch";
 
 const CACHE_KEY = "crew_job_types_v1";
 
@@ -23,15 +24,29 @@ export function cachedJobTypes(): string[] {
   return [...JOB_TYPE_TAGS];
 }
 
-export async function fetchJobTypes(): Promise<string[]> {
-  const rows = await apiFetch<JobTypeRow[]>("/api/job-types");
-  const names = rows.map((r) => r.name);
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(names));
-  } catch {
-    /* quota - noop */
-  }
-  return names;
+export async function fetchJobTypes(opts: { force?: boolean } = {}): Promise<string[]> {
+  // Admin-configurable, but edited a few times a year and read on every job
+  // screen that mounts. Coalesced with a short reuse window; `force` for the
+  // admin screen that just changed the list.
+  return coalesce(
+    "config:job-types",
+    async () => {
+      const rows = await apiFetch<JobTypeRow[]>("/api/job-types");
+      const names = rows.map((r) => r.name);
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(names));
+      } catch {
+        /* quota - noop */
+      }
+      return names;
+    },
+    { ttlMs: 60_000, force: opts.force },
+  );
+}
+
+/** Call after an admin edits the job-type list. */
+export function invalidateJobTypes(): void {
+  invalidate("config:job-types");
 }
 
 // Returns the current job-type tags (cache-first, refreshed from the server).

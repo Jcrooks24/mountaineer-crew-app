@@ -3,8 +3,16 @@ import re
 import threading
 from typing import Any, BinaryIO, Optional
 
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+# NOT imported at module scope, deliberately. googleapiclient.discovery costs
+# ~180 ms to import and this module is pulled in by app.routers.photos, so that
+# cost was paid on EVERY uvicorn boot - and the worker is recycled every 1000
+# requests by design, so it is paid over and over while the service is down and
+# crews are waiting. It also adds its import surface to a 512 MB worker with a
+# history of OOM kills.
+#
+# Every other Google integration in this codebase already defers it (see the
+# note in core/google_cal_oauth.py); this module was the one that did not.
+# Imported inside the two functions that build a client instead.
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -54,6 +62,7 @@ def _get_drive_service(db=None) -> Any:
     if cached is not None and cached_version == _drive_svc_version:
         return cached
     # Use certifi-backed http to avoid SSL errors on Render
+    from googleapiclient.discovery import build
     authorized_http = _build_authorized_http(_get_creds(db))
     svc = build("drive", "v3", http=authorized_http, cache_discovery=False)
     _drive_svc_threadlocal.svc = svc
@@ -184,6 +193,7 @@ def upload_photo_to_drive(
     print(f"[drive] uploading as '{drive_filename}' into folder '{folder_label}'")
 
     file_obj.seek(0)
+    from googleapiclient.http import MediaIoBaseUpload
     media = MediaIoBaseUpload(
         file_obj,
         mimetype=mime_type,
@@ -274,6 +284,7 @@ def upload_reimbursement_photo_to_drive(
     print(f"[drive] uploading reimbursement '{drive_filename}'")
 
     file_obj.seek(0)
+    from googleapiclient.http import MediaIoBaseUpload
     media = MediaIoBaseUpload(
         file_obj,
         mimetype=mime_type,
@@ -361,6 +372,7 @@ def upload_file_to_drive(
     safe_filename = _safe(filename)[:160] or "document"
 
     file_obj.seek(0)
+    from googleapiclient.http import MediaIoBaseUpload
     media = MediaIoBaseUpload(
         file_obj,
         mimetype=mime_type,
@@ -560,6 +572,7 @@ def upload_dq_file_to_drive(
     safe_filename = prefix + (_safe(filename)[:160] or "document")
 
     file_obj.seek(0)
+    from googleapiclient.http import MediaIoBaseUpload
     media = MediaIoBaseUpload(
         file_obj,
         mimetype=mime_type,
@@ -596,7 +609,8 @@ def upload_dq_file_to_drive(
     }
 
 
-def _pdf_media(file_obj: BinaryIO) -> MediaIoBaseUpload:
+def _pdf_media(file_obj: BinaryIO) -> Any:
+    from googleapiclient.http import MediaIoBaseUpload
     file_obj.seek(0)
     return MediaIoBaseUpload(
         file_obj,
