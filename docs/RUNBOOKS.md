@@ -181,11 +181,16 @@ Symptoms: the office says a job is missing. The crew swear they logged it.
    [Google access is broken](#google-access-is-broken). Once access returns, the
    auto-reconciler backfills everything on its own: events and BOLs every 5
    minutes, and all other syncs (materials, reports, RODS, reimbursements, ...)
-   every ~20 minutes via the backfill diff (ADR 0031). A record missing from the
-   sheet lands within one cycle without a re-save. App Health WARNs while the
-   Sheet is out of sync. To clear a large backlog faster, use Admin, Advanced
-   Settings, Sync & Accuracy, Sheet Backfill to re-send on demand (100 per sync
-   per click). If a sync's records will not re-send at all, that row shows the
+   every ~20 minutes via the backfill diff (ADR 0031). A handful of missing
+   records land within a cycle or two without a re-save; the sweep re-drives 15
+   records a cycle and skips entirely while the previous batch is still draining,
+   so a backlog of hundreds takes hours rather than minutes. That pacing is
+   deliberate - re-driving is read-heavy and the sweep used to spend the whole
+   60/minute quota and starve live crew syncs (see the "will not drain at all"
+   note below). App Health WARNs while the Sheet is out of sync. To clear a large
+   backlog faster, use Admin, Advanced Settings, Sync & Accuracy, Sheet Backfill
+   to re-send on demand (100 per sync per click), which is a deliberate act with
+   a human watching it. If a sync's records will not re-send at all, that row shows the
    export's `last_error` - fix that record's data rather than re-sending again.
 
 ---
@@ -218,6 +223,24 @@ Job; emails jacob@ on any FAIL - see CREDENTIALS) and can be run by hand any tim
   /api/admin/system-check/sheet-backfill`). If they will not drain, fix the record
   data behind `last_error`. This is the check that matters most before a DB is
   retired/migrated - the Sheet is the long-term copy.
+
+  **If a backlog will not drain at all, read this before digging.** The
+  auto-reconcile sweep used to ignore the very cooldown it set, so it queued a
+  fresh 100-record batch (~400 reads against a 60/minute quota) every 20 minutes
+  on top of one still draining. The pool lived in 429 backoff, the exports
+  failed, the records stayed missing, and the next sweep re-drove the same ones.
+  The storm was manufacturing the backlog it was trying to clear, and an admin
+  pressing Backfill got a 429 from a door the background loop had shut. Fixed
+  2026-08-13: the sweep now skips while a batch is draining and takes 15 records
+  a cycle. Symptoms were `POST .../sheet-backfill-all -> 429` next to a repeating
+  `[auto-reconcile] generic: N re-driven ..., N still missing`.
+
+  **That log line also lied.** The count after "still missing" was the backlog
+  measured BEFORE the sweep, so whenever the budget covered the backlog it
+  printed the same number twice on every cycle, including cycles where every
+  record landed. It now reads `backlog before sweep N`, and prints the export
+  pool's last failures underneath so a stalled backlog names its own cause
+  instead of needing a Render log grep for `[sheets] background export failed`.
 - **WARN - missing columns** = usually staging columns not yet promoted to prod;
   harmless, clears when the next promotion adds them.
 - **WARN - blank residue rows** = `cleanup_sheet.py --step blankrows` (after a

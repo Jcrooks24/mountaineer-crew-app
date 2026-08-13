@@ -836,10 +836,36 @@ web worker. Worth confirming the Drive columns are the intended destination and 
 `image_bytes` path is transitional, before the feed has enough history to make the
 migration painful.
 
+## Auto-reconcile sweep: cadence unchanged, throughput deliberately cut
+
+The generic self-heal (`reconcile_all_missing`, every 4th 5-minute cycle) still
+runs every ~20 minutes. Two things about its **rate** changed 2026-08-13, and both
+matter to anyone reasoning about when a stranded record reaches the Sheet:
+
+| | Before | After |
+|---|---|---|
+| Records re-driven per sweep | 100 (~400 Sheets reads) | 15 (~60 reads) |
+| Behaviour while a batch is draining | ran anyway, and re-audited | skips, no audit |
+| Time for a stranded record to land | "within one cycle" | one or two cycles; a backlog of hundreds takes hours |
+
+The old numbers were not a faster version of the same thing, they were a failure
+loop. 100 re-exports is roughly seven minutes of the entire project's 60/minute
+read quota, spent unattended, on top of a batch still draining - so the export
+pool sat in 429 backoff, the exports it was retrying failed, and the next sweep
+re-drove the same records. The backlog never shrank and live crew exports queued
+behind it. The cooldown that would have prevented this existed, but only the two
+manual admin endpoints checked it; the sweep set it and ignored it.
+
+Guarded by `backend/scripts/verify_reconcile_throttle.py` (bare python, no deps).
+
+Nothing about the payloads, keys, tabs or endpoints changed - this is purely how
+fast the existing self-heal is allowed to consume shared quota.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified
-against" stamp is accounted for in "Reconciliation 7fe20a4 -> 7f41611" above.
+against" stamp is accounted for in "Reconciliation 7fe20a4 -> 7f41611" above, and
+the auto-reconcile rate change immediately above.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.

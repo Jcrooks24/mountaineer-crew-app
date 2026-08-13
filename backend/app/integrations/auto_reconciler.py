@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
 
 # One lease row per background job. A second sweep would use its own name.
 _LEASE_NAME = "auto_reconcile"
@@ -213,14 +212,26 @@ def _run_once() -> None:
         if _cycle_count % GENERIC_RECONCILE_EVERY_N_CYCLES == 0:
             from app.integrations.sheet_backfill import reconcile_all_missing
             gen = reconcile_all_missing(db)
-            if gen.get("queued", 0) or gen.get("remaining_missing", 0) or not gen.get("ok", True):
+            backlog = gen.get("backlog")
+            if gen.get("queued", 0) or backlog or not gen.get("ok", True):
+                # "backlog before this sweep", not "still missing after it".
+                # Nothing here can know whether the exports landed - they are
+                # fire-and-forget into the pool, and the answer arrives with the
+                # NEXT audit. The old wording claimed otherwise and read as a
+                # standing failure even on cycles that worked.
                 msg = (
                     f"[auto-reconcile] generic: {gen.get('queued', 0)} re-driven "
                     f"{gen.get('per_sync') or {}}, "
-                    f"{gen.get('remaining_missing', 0)} still missing"
+                    f"backlog before sweep {backlog if backlog is not None else 'n/a'}"
                 )
+                if gen.get("skipped_reason"):
+                    msg += f", skipped: {gen['skipped_reason']}"
                 if gen.get("error"):
                     msg += f", error={gen['error']}"
+                # The reason a backlog is not draining, printed where the person
+                # wondering about it is already looking.
+                for f in (gen.get("failures") or [])[:3]:
+                    msg += f"\n    last failure: {f.get('fn')}: {f.get('error')}"
                 print(msg)
     finally:
         # Release before closing so the next cycle can start at once rather than

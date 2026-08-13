@@ -33,7 +33,7 @@ import os
 import threading
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -760,11 +760,24 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
 
 
 # Total records re-driven across ALL syncs in one auto-reconcile cycle.
-# Deliberately well under the manual tool's per-sync cap: this runs unattended on
-# a schedule and must never flood the 2-worker export pool and starve live crew
-# syncs. A large backlog drains over successive cycles (and the office can clear
-# the bulk on demand with the manual backfill tool at 100/sync/request).
-RECONCILE_MAX_PER_CYCLE = 100
+#
+# This was 100, which was NOT "well under the manual tool's cap" as the comment
+# here used to claim - it was exactly equal to it, and it made the sweep the
+# single largest consumer of a 60-read/minute quota. At ~4 reads per re-export,
+# 100 records is ~400 reads, nearly SEVEN MINUTES of the entire project's read
+# budget, spent by a background loop with nobody watching.
+#
+# That turned the self-heal into a self-sustaining failure (2026-08-13): the
+# sweep queued 100 exports, the pool went into 429 backoff, the exports failed,
+# the records stayed missing, and the next sweep re-drove the same records. The
+# storm was manufacturing the very backlog it was trying to drain, and it
+# starved live crew exports at the same time.
+#
+# 15 records is ~60 reads, about one minute of quota per 20-minute sweep, which
+# leaves the pool free for live traffic and still drains a backlog of a few
+# hundred within a day. A backlog bigger than that is an incident to look at,
+# not something a background loop should try to brute-force.
+RECONCILE_MAX_PER_CYCLE = 15
 
 
 def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE) -> Dict[str, Any]:
@@ -783,24 +796,41 @@ def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE)
     as a persistent failure in the Sheet-record health check (its `last_error`),
     so the churn is bounded and surfaced, not silent.
 
-    Returns {ok, queued, per_sync, remaining_missing}. Never raises - the caller
+    Returns {ok, queued, per_sync, backlog}. Never raises - the caller
     is a background loop that must not die."""
+    # RESPECT THE THROTTLE THIS FUNCTION SETS. Until 2026-08-13 the cooldown was
+    # enforced only on the two manual admin endpoints, while this unattended
+    # sweep - the one that runs every 20 minutes forever - both ignored it and
+    # pushed its deadline forward. So the loop queued batch after batch into a
+    # pool that was still draining the last one, and the admin pressing Backfill
+    # got a 429 from a door the background loop had shut. Skipping a sweep costs
+    # 20 minutes; not skipping costs the read quota everything else needs.
+    waiting = backfill_cooldown_remaining()
+    if waiting > 0:
+        return {"ok": True, "queued": 0, "per_sync": {}, "backlog": None,
+                "skipped_reason": f"previous batch still draining ({waiting}s)"}
     try:
         audit = audit_sheet_backfill(db)
     except Exception as e:  # noqa: BLE001 - never take down the reconcile loop
-        return {"ok": False, "error": str(e), "queued": 0, "per_sync": {}, "remaining_missing": 0}
+        return {"ok": False, "error": str(e), "queued": 0, "per_sync": {}, "backlog": None}
     if not audit.get("connected"):
         return {"ok": False, "error": audit.get("error") or "sheets not connected",
-                "queued": 0, "per_sync": {}, "remaining_missing": 0}
+                "queued": 0, "per_sync": {}, "backlog": None}
 
     budget = max(0, int(max_total))
     total_queued = 0
     per_sync: Dict[str, int] = {}
-    remaining_missing = 0
+    # The backlog measured BEFORE this sweep re-drove anything. It is not a
+    # result, and the old name (`remaining_missing`) said otherwise: when the
+    # budget covered the whole backlog the log read "40 re-driven, 40 still
+    # missing" on every single cycle, including cycles where all 40 landed
+    # perfectly. That line was read as proof the backfill was broken. Whether a
+    # record actually landed is only knowable on the NEXT audit.
+    backlog = 0
     for row in audit["results"]:
         if row.get("auto") or row.get("error"):
             continue
-        remaining_missing += int(row.get("missing_count", 0) or 0)
+        backlog += int(row.get("missing_count", 0) or 0)
         if budget <= 0:
             continue
         ids = [m["id"] for m in row.get("missing", [])][:budget]
@@ -817,8 +847,13 @@ def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE)
             total_queued += q
             budget -= q
     note_backfill_queued(total_queued)
+    # Carry the export pool's recent failures out with the result. When a
+    # backlog is not shrinking, the reason is almost always sitting in this ring
+    # (quota 429, a widened grid, a revoked token) and the operator's only route
+    # to it used to be grepping Render logs for a line nobody knew to look for.
+    from app.integrations.sheets_export import recent_export_failures
     return {"ok": True, "queued": total_queued, "per_sync": per_sync,
-            "remaining_missing": remaining_missing}
+            "backlog": backlog, "failures": recent_export_failures()[:5]}
 
 
 def reexport_missing(db: Session, key: str, ids: Optional[List[str]] = None) -> Dict[str, Any]:
