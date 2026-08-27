@@ -96,6 +96,14 @@ _bol_export_in_flight: Set[str] = set()
 _bol_export_rerun: Set[str] = set()
 _bol_export_lock = threading.Lock()
 
+# Same coalescing for the Bills "Materials" line, keyed by job_uuid. Every
+# materials POST and DELETE rebuilds it, and an offline queue draining a job's
+# materials fires several in a burst - the exact shape schedule_incident_export
+# describes. See schedule_job_materials_bills_rebuild.
+_bills_rebuild_in_flight: Set[str] = set()
+_bills_rebuild_rerun: Set[str] = set()
+_bills_rebuild_lock = threading.Lock()
+
 # Serialize note-cell updates per event_id so rapid edits on the same event
 # (or client retries) can't stack multiple in-memory googleapiclient instances
 # in the pool queue. Bounded so the dict can't grow forever as new event_ids
@@ -1970,6 +1978,72 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
 
     _api(_append)
     return 1
+
+
+def _bills_rebuild_worker(job_uuid: str) -> None:
+    from app.db.session import SessionLocal
+    while True:
+        db = SessionLocal()
+        try:
+            rebuild_job_materials_total_in_bills(db, job_uuid)
+            record_sheet_sync(db, "rebuild_job_materials_total_in_bills", True)
+        except Exception as exc:  # noqa: BLE001 - mirrors run_export_in_background
+            # Same message prefix and the same failure-ring call as
+            # run_export_in_background, because this path no longer goes through
+            # it: RUNBOOKS greps for this string, and the ring is how the 37
+            # stale-index failures were seen at all.
+            print(f"[sheets] background export failed (rebuild_job_materials_total_in_bills): {exc}")
+            note_export_failure("rebuild_job_materials_total_in_bills", str(exc))
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            record_sheet_sync(db, "rebuild_job_materials_total_in_bills", False, str(exc))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        with _bills_rebuild_lock:
+            if job_uuid in _bills_rebuild_rerun:
+                _bills_rebuild_rerun.discard(job_uuid)
+                continue
+            _bills_rebuild_in_flight.discard(job_uuid)
+            return
+
+
+def schedule_job_materials_bills_rebuild(job_uuid: str) -> None:
+    """Coalesce repeated Bills rebuilds for the same job into one in-flight
+    worker with at most one pending rerun.
+
+    **Use this instead of firing rebuild_job_materials_total_in_bills directly.**
+    The rebuild is replace-style (delete every Materials marker row for this
+    job, then append one), and every materials POST and DELETE triggers one. A
+    crew member's offline queue draining four materials submissions for one job
+    fires four rebuilds at once; on two pool workers they interleave as
+    A.delete, B.delete (finds nothing), A.append, B.append, and the job ends up
+    with TWO Materials lines - a doubled materials charge on the invoice, in the
+    one export whose output is money. This is the same defect
+    `schedule_incident_export` exists to prevent, on the same two workers.
+
+    The tab lock in `_delete_rows_matching` cannot close this: it makes the
+    read-and-delete atomic, but the append that follows is a separate call and
+    the gap between them is where the second worker gets in. Coalescing collapses
+    the burst into one write of the final state instead, which is also cheaper -
+    four rebuilds of the same job were always four writes of the same total.
+
+    Every run recomputes the total from Postgres, so a rerun cannot write a
+    stale figure; the last write always reflects every submission that had
+    landed by the time it ran."""
+    if not job_uuid:
+        return
+    with _bills_rebuild_lock:
+        if job_uuid in _bills_rebuild_in_flight:
+            _bills_rebuild_rerun.add(job_uuid)
+            return
+        _bills_rebuild_in_flight.add(job_uuid)
+    _EXPORT_POOL.submit(_bills_rebuild_worker, job_uuid)
 
 
 # ── DVIRs ────────────────────────────────────────────────────────────────────

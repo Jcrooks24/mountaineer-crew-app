@@ -13,8 +13,8 @@ from app.db.models.materials import MaterialsSubmission
 from app.integrations.sheets_export import (
     delete_materials_from_sheets,
     export_materials_to_sheets,
-    rebuild_job_materials_total_in_bills,
     run_export_in_background,
+    schedule_job_materials_bills_rebuild,
 )
 from app.core.deps import get_current_user
 from app.db.models.user import User
@@ -120,7 +120,9 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
     # Bills worksheet: ONE aggregate row per job representing the running
     # materials total, refreshed on every add. Re-summed from the DB so the
     # value is always correct regardless of what order POSTs/DELETES land in.
-    run_export_in_background(rebuild_job_materials_total_in_bills, payload.job_uuid)
+    # Scheduled, not fired directly: a draining offline queue sends several of
+    # these for one job at once and they would race into two Materials lines.
+    schedule_job_materials_bills_rebuild(payload.job_uuid)
     print(
         f"[materials] queued sheet export submission_id={payload.id} "
         f"job_uuid={payload.job_uuid} inserted={inserted} items={len(payload.items)}"
@@ -208,11 +210,11 @@ def delete_material(
     # Mirror the removal to the Materials sheet (drops the row(s) for this
     # submission), then refresh the Bills aggregate so its "Materials" total
     # reflects the new sum. delete_materials_from_sheets is a no-op when the
-    # sheet has no matching rows; rebuild_job_materials_total_in_bills is a
-    # no-op when no job_uuid is known.
+    # sheet has no matching rows; the rebuild is skipped when no job_uuid is
+    # known, and coalesced per job when one is.
     run_export_in_background(delete_materials_from_sheets, submission_id)
     if job_uuid:
-        run_export_in_background(rebuild_job_materials_total_in_bills, job_uuid)
+        schedule_job_materials_bills_rebuild(job_uuid)
     print(
         f"[materials] queued sheet delete submission_id={submission_id} "
         f"job_uuid={job_uuid} db_row_deleted={deleted}"

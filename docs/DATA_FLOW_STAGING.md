@@ -1100,9 +1100,46 @@ materials exports, which recomputes those Bills lines.
 
 **Adherence caveat.** The retry covers writers outside this process (cron,
 backfill in another worker, an admin editing the sheet by hand); the lock covers
-the two pool threads. Neither makes the delete atomic with the append that
-follows it, and that gap is unchanged and still acceptable: an append does not
-move existing row indices.
+the two pool threads. Neither makes the delete atomic with the **append** that
+follows it.
+
+That remaining gap is harmless for row indices - an append does not move
+existing rows - but it is **not** harmless for duplicates, which the first
+version of this entry glossed over and a `/vet` caught. Two rebuilds of the same
+job interleave as A.delete, B.delete (finds nothing), A.append, B.append, and
+the job ends up with two Materials lines. The fix for that is coalescing, below,
+not the lock.
+
+## The Bills materials rebuild is coalesced per job (2026-08-27)
+
+**Class B/C.** A trigger change, not a field change.
+
+| Change | Path | Adherence |
+|---|---|---|
+| `schedule_job_materials_bills_rebuild(job_uuid)` replaces `run_export_in_background(rebuild_job_materials_total_in_bills, ...)` | `POST /api/materials` (`materials.py`), `DELETE /api/materials/{id}`, and the backfill's `_re_materials` | read |
+
+Same in-flight + rerun shape as `schedule_incident_export`, keyed by `job_uuid`:
+one worker per job, at most one pending rerun, and every run recomputes the
+total from Postgres so a rerun cannot write a stale figure.
+
+**Why it is needed.** The rebuild is replace-style and fires on every materials
+POST and DELETE. A crew member's offline queue draining four materials
+submissions for one job fires four rebuilds into a two-worker pool, and they
+race into two Materials lines - a doubled materials charge, in the one export
+whose output is money. The same defect and the same remedy as incidents, which
+already carried this note in `schedule_incident_export`'s docstring; the Bills
+rebuild simply never got one.
+
+It is also cheaper: a job with eight submissions in a backfill now costs one
+rebuild instead of eight writes of the same total.
+
+**Failure handling is preserved deliberately.** The worker keeps
+`note_export_failure` and the `[sheets] background export failed (...)` message
+that `run_export_in_background` emits, because this path no longer goes through
+it - the failure ring is how the 37 stale-index failures were seen at all, and
+RUNBOOKS greps for that string. A raising rebuild still releases its in-flight
+slot, or that job's Bills line would never rebuild again for the life of the
+worker.
 
 # Not yet documented
 

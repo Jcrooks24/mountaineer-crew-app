@@ -154,6 +154,14 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
 
   // Deferred by a beat so the button's pressed state is visible before the card
   // changes under the thumb.
+  //
+  // Deliberately not cleaned up on unmount, which a teardown audit will flag.
+  // It is a single 120 ms timeout, not an interval, and the two ways it can
+  // land late are both already handled: React 18 makes a setState on an
+  // unmounted component a no-op, and if the answer changed in those 120 ms and
+  // SHORTENED the step list (tap Yes, then No), `idx` clamps to the last real
+  // step rather than blanking the card. A ref and an effect to cancel it would
+  // be ceremony around a case that already resolves correctly.
   const advance = () => setTimeout(() => setAt((a) => a + 1), 120);
 
   /** Answering a question advances. Changing an ALREADY answered question does

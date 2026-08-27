@@ -307,8 +307,8 @@ def _re_materials(db: Session, ref: Any) -> None:
     from app.db.models.materials import MaterialsSubmission
     from app.integrations.sheets_export import (
         export_materials_to_sheets,
-        rebuild_job_materials_total_in_bills,
         run_export_in_background,
+        schedule_job_materials_bills_rebuild,
     )
     row = db.query(MaterialsSubmission).filter(
         MaterialsSubmission.submission_id == ref
@@ -326,7 +326,11 @@ def _re_materials(db: Session, ref: Any) -> None:
         "items": json.loads(row.items_json or "[]"),
         "total": row.total,
     })
-    run_export_in_background(rebuild_job_materials_total_in_bills, row.job_uuid)
+    # Scheduled, not fired directly. A backfill re-drives many submissions, and
+    # several of them routinely belong to the SAME job - firing one rebuild each
+    # is the burst that races into duplicate Materials lines. Coalescing also
+    # means a job with eight submissions costs one rebuild here, not eight.
+    schedule_job_materials_bills_rebuild(row.job_uuid)
 
 
 def _re_job_report(db: Session, ref: Any) -> None:

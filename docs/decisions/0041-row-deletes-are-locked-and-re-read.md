@@ -64,6 +64,24 @@ to replay would reproduce the bug inside the fix.
 After the retry budget it raises. A delete that cannot be made to land is a real
 failure and belongs in the failure ring, not swallowed.
 
+### What the lock does NOT cover
+
+The lock makes the read-and-delete atomic. It does not extend to the **append**
+that a replace-style export runs afterwards, so two exports for the same entity
+still interleave as A.delete, B.delete (finds nothing), A.append, B.append and
+leave a duplicate row.
+
+That is a real defect and it is fixed separately, by coalescing the burst per
+key (`schedule_incident_export`, and as of this ADR
+`schedule_job_materials_bills_rebuild`), not by widening this lock. Widening it
+would mean holding a tab lock across two network round-trips on the hot path,
+and it would need to be reentrant because the deleter takes the same lock.
+Coalescing is cheaper and it removes the redundant work as well as the race:
+four rebuilds of one job were always four writes of the same total.
+
+**So the rule is: a new replace-style export needs BOTH.** The lock keeps its
+indices valid; a scheduler keeps its bursts from racing.
+
 ## Consequences
 
 - Deletes on a busy tab now wait for each other. This is intended. The cost is

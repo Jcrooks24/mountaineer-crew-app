@@ -1,14 +1,18 @@
-"""Offline check for the replace-style row deleter. `python scripts/test_row_delete_race.py`
+"""Offline checks for the two concurrency hazards in the replace-style exports.
+`python scripts/test_row_delete_race.py`
 
-WHY THIS EXISTS. `_delete_rows_matching` handles a race that only shows up under
-concurrency against a live spreadsheet, which means it cannot be exercised by
-`sheets_smoke_test.py` (that one hits real Sheets, serially, and would pass with
-the bug fully present). It failed 37 times in one day in production and the only
-evidence was a 400 in an in-memory failure ring.
+WHY THIS EXISTS. Both hazards need two writers hitting one tab at the same
+moment, which `sheets_smoke_test.py` cannot produce - it hits real Sheets,
+serially, and passes with either bug fully present.
 
-This drives the deleter against a fake Sheets service whose grid can shrink at a
-chosen moment, so the race is reproducible rather than incidental. No network, no
-credentials, no database.
+1. `_delete_rows_matching` - row indices going stale between the read and the
+   delete. Failed 37 times in one day in production, and the only evidence was
+   a 400 in an in-memory failure ring.
+2. `schedule_job_materials_bills_rebuild` - a burst of rebuilds for one job
+   racing into two Materials lines on the Bills tab, which is a doubled
+   materials charge on an invoice.
+
+Both run against fakes: no network, no credentials, no database.
 """
 
 import os
@@ -168,6 +172,76 @@ check("only one row actually went", svc.column, ["id", "b"])
 svc = FakeSheets(["id", "r1", "r2", "r3", "r4"])
 se._delete_rows_matching(svc, "sid", "T", 7, lambda: [1, 3])
 check("bottom-up ordering removes the intended rows", svc.column, ["id", "r2", "r4"])
+
+
+# ── Coalescing the Bills rebuild ─────────────────────────────────────────────
+# The delete and the append are two calls, and the tab lock only covers the
+# first. Coalescing is what keeps a second worker out of the gap between them.
+
+import threading  # noqa: E402
+
+runs = []
+runs_lock = threading.Lock()
+started = threading.Event()
+release = threading.Event()
+
+
+def fake_rebuild(db, job_uuid):
+    with runs_lock:
+        runs.append(job_uuid)
+    started.set()
+    # Hold the first worker open so the burst arrives while it is still running,
+    # which is the only window in which coalescing can do anything.
+    release.wait(timeout=5)
+
+
+se.rebuild_job_materials_total_in_bills = fake_rebuild
+se.record_sheet_sync = lambda *a, **k: None
+
+JOB = "3f8c1e22-0000-4a11-9b77-0f1e2d3c4b5a"
+
+# Four rapid rebuilds for one job, the shape a draining offline queue produces.
+for _ in range(4):
+    se.schedule_job_materials_bills_rebuild(JOB)
+started.wait(timeout=5)
+release.set()
+
+# Wait for the in-flight worker (plus its single rerun) to finish.
+for _ in range(100):
+    with se._bills_rebuild_lock:
+        idle = JOB not in se._bills_rebuild_in_flight
+    if idle:
+        break
+    threading.Event().wait(0.05)
+
+check("a burst of 4 rebuilds collapses to 2 runs (one + one rerun)", len(runs), 2)
+check("and every run was for the right job", set(runs), {JOB})
+with se._bills_rebuild_lock:
+    check("the in-flight set is left clean", JOB in se._bills_rebuild_in_flight, False)
+    check("the rerun set is left clean", JOB in se._bills_rebuild_rerun, False)
+
+check("an empty job_uuid schedules nothing",
+      se.schedule_job_materials_bills_rebuild("") is None, True)
+
+# A failing rebuild must still clear its in-flight entry, or that job's Bills
+# line is never rebuilt again for the life of the worker.
+def boom(db, job_uuid):
+    raise RuntimeError("sheets exploded")
+
+
+se.rebuild_job_materials_total_in_bills = boom
+se.note_export_failure = lambda *a, **k: None
+OTHER = "9a1b2c3d-1111-4e55-8f99-aabbccddeeff"
+se.schedule_job_materials_bills_rebuild(OTHER)
+for _ in range(100):
+    with se._bills_rebuild_lock:
+        idle = OTHER not in se._bills_rebuild_in_flight
+    if idle:
+        break
+    threading.Event().wait(0.05)
+with se._bills_rebuild_lock:
+    check("a raising rebuild still releases its in-flight slot",
+          OTHER in se._bills_rebuild_in_flight, False)
 
 print("\nAll checks passed." if failures == 0 else f"\n{failures} check(s) FAILED.")
 sys.exit(0 if failures == 0 else 1)
