@@ -26,6 +26,11 @@
  * come through marked "(updated)". Admin-only fields (resolved, est_cost,
  * notes) are excluded from the hash, so working a claim in the sheet never
  * re-emails it.
+ *
+ * The log tabs are not all the same width, so the hash column is located by
+ * looking at the values, not by index or header. See findHashColumn_ - reading
+ * it from a fixed column is what made this digest re-send its whole history
+ * every night.
  */
 
 const SHEET_ID = "1KDWNudFSc8tlqV7lzq-M235swkgq7jWg_63ilrw_9hk";
@@ -103,45 +108,21 @@ function runNightlyDigest_(dryRun) {
 
   const stamp = Utilities.formatDate(new Date(), TZ, "yyyy-MM-dd HH:mm:ss");
 
-  if (feedback.length > 0) {
-    const log = getOrCreateSheet_(ss, FEEDBACK_LOG_TAB, [
-      "job_uuid", "job_name", "submitted_by", "sent_at", "feedback_hash",
-    ]);
-    const rows = feedback.map(function (c) {
-      return [c.uuid, c.jobName, c.submittedBy, stamp, c.hash];
-    });
-    log.getRange(log.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
-  }
+  appendLog_(ss, FEEDBACK_LOG_TAB,
+    ["job_uuid", "job_name", "submitted_by", "sent_at", "feedback_hash"],
+    feedback.map(function (c) { return [c.uuid, c.jobName, c.submittedBy, stamp, c.hash]; }));
 
-  if (incidents.length > 0) {
-    const log = getOrCreateSheet_(ss, INCIDENT_LOG_TAB, [
-      "incident_uuid", "claim_number", "job_name", "sent_at", "content_hash",
-    ]);
-    const rows = incidents.map(function (c) {
-      return [c.uuid, c.claimNumber, c.jobName, stamp, c.hash];
-    });
-    log.getRange(log.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
-  }
+  appendLog_(ss, INCIDENT_LOG_TAB,
+    ["incident_uuid", "claim_number", "job_name", "sent_at", "content_hash"],
+    incidents.map(function (c) { return [c.uuid, c.claimNumber, c.jobName, stamp, c.hash]; }));
 
-  if (bugs.length > 0) {
-    const log = getOrCreateSheet_(ss, BUG_LOG_TAB, [
-      "bug_uuid", "submitted_by", "sent_at", "content_hash",
-    ]);
-    const rows = bugs.map(function (c) {
-      return [c.uuid, c.submittedBy, stamp, c.hash];
-    });
-    log.getRange(log.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
-  }
+  appendLog_(ss, BUG_LOG_TAB,
+    ["bug_uuid", "submitted_by", "sent_at", "content_hash"],
+    bugs.map(function (c) { return [c.uuid, c.submittedBy, stamp, c.hash]; }));
 
-  if (features.length > 0) {
-    const log = getOrCreateSheet_(ss, FEATURE_LOG_TAB, [
-      "request_uuid", "submitted_by", "sent_at", "content_hash",
-    ]);
-    const rows = features.map(function (c) {
-      return [c.uuid, c.submittedBy, stamp, c.hash];
-    });
-    log.getRange(log.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
-  }
+  appendLog_(ss, FEATURE_LOG_TAB,
+    ["request_uuid", "submitted_by", "sent_at", "content_hash"],
+    features.map(function (c) { return [c.uuid, c.submittedBy, stamp, c.hash]; }));
 
   // Persist the log writes before this execution ends, so the next run reads
   // them back and does not resend what we just sent.
@@ -171,9 +152,16 @@ function collectFeedback_(ss) {
     if (!fb) continue;
 
     const uuid = String(row["job_uuid"] || "").trim();
+    // No uuid means no dedupe key: every blank-uuid row would share one entry in
+    // the log and suppress the others. The other three collectors already skip
+    // these; a JobReports row with no job_uuid is broken data, not feedback.
+    if (!uuid) {
+      Logger.log("Skipping feedback row " + (i + 2) + ": no job_uuid");
+      continue;
+    }
+
     const hash = hashString_(fb);
-    const prev = sent[uuid];
-    if (prev === hash) continue;
+    if (alreadySent_(sent, uuid, hash)) continue;
 
     out.push({
       uuid: uuid,
@@ -182,7 +170,7 @@ function collectFeedback_(ss) {
       updatedAt: row["updated_at"] || "",
       feedback: fb,
       hash: hash,
-      isUpdate: !!prev,
+      isUpdate: wasLogged_(sent, uuid),
     });
   }
   return out;
@@ -213,9 +201,14 @@ function collectIncidents_(ss) {
     // (resolved, est_cost, notes) must not trigger a re-send. Photos ARE in the
     // hash on purpose: they are usually attached after the incident is filed,
     // and an incident that reaches you with no photos is half a report.
-    const hash = hashString_([severity, description, photos.join("|")].join(" "));
-    const prev = sent[uuid];
-    if (prev === hash) continue;
+    //
+    // The NUL separator below is written as an escape on purpose. It used to be
+    // a raw NUL byte sitting in this file, which made git treat the whole script
+    // as binary and show no diff for any change to it - bad for a file that only
+    // ships by being read and hand-pasted. It is the same character, so every
+    // hash already in IncidentEmailLog still matches and nothing re-sends.
+    const hash = hashString_([severity, description, photos.join("|")].join("\u0000"));
+    if (alreadySent_(sent, uuid, hash)) continue;
 
     out.push({
       uuid: uuid,
@@ -228,7 +221,7 @@ function collectIncidents_(ss) {
       description: description,
       photos: photos,
       hash: hash,
-      isUpdate: !!prev,
+      isUpdate: wasLogged_(sent, uuid),
     });
   }
   return out;
@@ -255,8 +248,7 @@ function collectBugs_(ss) {
     // Hash the crew-authored content so a report is emailed once, and again only
     // if its text or screenshots change (e.g. a screenshot finished uploading).
     const hash = hashString_([description, shots.join("|")].join(" "));
-    const prev = sent[uuid];
-    if (prev === hash) continue;
+    if (alreadySent_(sent, uuid, hash)) continue;
 
     out.push({
       uuid: uuid,
@@ -265,7 +257,7 @@ function collectBugs_(ss) {
       description: description,
       screenshots: shots,
       hash: hash,
-      isUpdate: !!prev,
+      isUpdate: wasLogged_(sent, uuid),
     });
   }
   return out;
@@ -292,8 +284,7 @@ function collectFeatureRequests_(ss) {
     // Hash the crew-authored content so a request is emailed once, and again only
     // if its text or images change.
     const hash = hashString_([title, description, shots.join("|")].join(" "));
-    const prev = sent[uuid];
-    if (prev === hash) continue;
+    if (alreadySent_(sent, uuid, hash)) continue;
 
     out.push({
       uuid: uuid,
@@ -302,7 +293,7 @@ function collectFeatureRequests_(ss) {
       description: description,
       screenshots: shots,
       hash: hash,
-      isUpdate: !!prev,
+      isUpdate: wasLogged_(sent, uuid),
     });
   }
   return out;
@@ -502,22 +493,85 @@ function readTab_(ss, tabName, wanted) {
   });
 }
 
+/**
+ * Find the column holding the content hash, by looking at the values rather
+ * than at a fixed index or at the header row.
+ *
+ * WHY NOT A FIXED INDEX. It was column 5. That is right for the two five-column
+ * logs (feedback, incidents) and wrong for the four-column bug and
+ * feature-request logs, where column 5 holds nothing. Every lookup came back
+ * empty, no stored hash could ever match, and the nightly digest re-sent every
+ * bug report and every feature request ever filed, every night, forever. That
+ * is the "the digest contains everything to date" report.
+ *
+ * WHY NOT THE HEADER ROW. These tabs are created once and never migrated:
+ * getOrCreateSheet_ writes headers only when it makes the tab. A tab written by
+ * an older generation of this script can carry a header row that no longer
+ * describes the columns beneath it, so trusting the header would relocate this
+ * bug rather than remove it.
+ *
+ * The hashes are 40-character lowercase hex from hashString_. Nothing else in
+ * these logs (uuids are 36 with dashes, sent_at is a timestamp, the rest are
+ * names) can be mistaken for one, so the data identifies its own column.
+ */
+function findHashColumn_(block) {
+  const SHA1 = /^[0-9a-f]{40}$/;
+  // Newest rows first: those are the ones the current script wrote.
+  for (let r = block.length - 1; r >= 1; r--) {
+    for (let c = 1; c < block[r].length; c++) {
+      if (SHA1.test(String(block[r][c] || "").trim())) return c;
+    }
+  }
+  return -1;
+}
+
 /** uuid -> hash of what we last sent for it. Last write wins. */
 function readSentMap_(ss, tabName) {
   const log = ss.getSheetByName(tabName);
   if (!log) return {};
   const lastRow = log.getLastRow();
-  if (lastRow < 2) return {};
+  const lastCol = log.getLastColumn();
+  if (lastRow < 2 || lastCol < 2) return {};
 
   // One read for the whole block so the uuid and hash indices cannot drift.
-  const block = log.getRange(2, 1, lastRow - 1, 5).getValues();
+  const block = log.getRange(1, 1, lastRow, lastCol).getValues();
+  const hashAt = findHashColumn_(block);
+  if (hashAt < 0) {
+    Logger.log(tabName + ": no hash column found, falling back to uuid-only dedupe");
+  }
+
   const map = {};
-  for (let r = 0; r < block.length; r++) {
+  for (let r = 1; r < block.length; r++) {
     const uuid = String(block[r][0] || "").trim();
-    const hash = String(block[r][4] || "").trim();
-    if (uuid) map[uuid] = hash;
+    if (!uuid) continue;
+    map[uuid] = hashAt < 0 ? "" : String(block[r][hashAt] || "").trim();
   }
   return map;
+}
+
+/** True when this uuid has been in a digest before, whatever it said then. */
+function wasLogged_(sent, uuid) {
+  return Object.prototype.hasOwnProperty.call(sent, uuid);
+}
+
+/** True when this exact content has already gone out for this uuid. */
+function alreadySent_(sent, uuid, hash) {
+  if (!wasLogged_(sent, uuid)) return false;
+  // "" means the row is logged but its hash could not be read. Presence alone
+  // counts as sent: missing one edit beats re-sending the whole history every
+  // night, which is the failure this dedupe exists to prevent.
+  return sent[uuid] === "" || sent[uuid] === hash;
+}
+
+/**
+ * Append what we just sent to a log tab. The write width comes from the rows
+ * themselves, so the header list and the write can no longer disagree about how
+ * wide the tab is - that disagreement is what broke the dedupe once already.
+ */
+function appendLog_(ss, tabName, headers, rows) {
+  if (rows.length === 0) return;
+  const log = getOrCreateSheet_(ss, tabName, headers);
+  log.getRange(log.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
 }
 
 function getOrCreateSheet_(ss, tabName, headers) {

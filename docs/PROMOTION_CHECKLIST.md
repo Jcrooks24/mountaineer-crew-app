@@ -109,10 +109,22 @@ The gate lists files changed between `main` and `staging`. For each:
 - [ ] Confirmed the trigger still exists and is on the right schedule
 - [ ] Ran it once by hand and checked the execution log
 
-> Currently outstanding: **nothing.** `apps_script/nightly_crew_email.gs` was
-> pasted into the Sheet's script editor after the v1.8 promotion, confirmed with
-> the owner 2026-08-11. The gate reports no Apps Script changes on this
-> promotion. Re-check the trigger schedule if the nightly digest goes quiet.
+> **Currently outstanding: `apps_script/nightly_crew_email.gs` (changed
+> 2026-08-27).** The dedupe read the content hash from a fixed column 5, which
+> does not exist in the four-column `BugEmailLog` / `FeatureRequestEmailLog`, so
+> the digest re-sent every bug report and feature request ever filed, every
+> night. **Until this is pasted in, that keeps happening** - the fix is in the
+> repo, and the repo is not what runs.
+>
+> Paste it into the **prod** Sheet's script editor, then run
+> `dryRunNightlyCrewEmail()` and read View > Logs. A correct dry run is short:
+> only genuinely new items. If it still lists the whole history, the paste did
+> not take. `node apps_script/nightly_crew_email.test.js` checks the same logic
+> offline and needs no Sheet access.
+>
+> The previous paste (after the v1.8 promotion, confirmed with the owner
+> 2026-08-11) is what the trigger is still running. Re-check the trigger schedule
+> if the nightly digest goes quiet.
 
 ## 5. Postmark / OAuth manual configuration
 

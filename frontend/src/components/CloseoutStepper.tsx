@@ -49,6 +49,7 @@ import {
   causeForBucket,
   causesFor,
   causesInDirection,
+  closeoutSteps,
   setCauseForBucket,
 } from "../lib/closeout";
 
@@ -71,18 +72,6 @@ type Props = {
    *  its slot is worth rendering. */
   showScope?: boolean;
 };
-
-/** The steps that apply given the answers so far. Recomputed on every change,
- *  because answering "No" at step 1 or 3 genuinely removes later steps rather
- *  than skipping past them - a progress dot for a question that will never be
- *  asked is a lie about how much is left. */
-function stepsFor(v: CloseoutValue): string[] {
-  const steps = ["ran"];
-  if (!v.variance_direction || v.variance_direction === "as_quoted") return steps;
-  steps.push("direction", "identified");
-  if (v.variance_cause_identified !== true) return steps;
-  return [...steps, ...CAUSE_BUCKETS.map((b) => `cause:${b.bucket}`), "note"];
-}
 
 function Dots({ total, at }: { total: number; at: number }) {
   return (
@@ -139,7 +128,14 @@ function YesNoRow({
 }
 
 export default function CloseoutStepper({ value, onChange, scopeSlot, showScope }: Props) {
-  const steps = useMemo(() => stepsFor(value), [value]);
+  // "Yes, it differed" before a direction is chosen. Local for the same reason
+  // as `pending` below: the stored vocabulary is null / as_quoted / more / less,
+  // and there is no value in it for "differed, direction unknown". Writing one
+  // would put a half-answer in the Sheet; not holding it at all is the bug this
+  // replaced, where tapping Yes wrote null over null and the card sat there
+  // looking like the button was dead (reported from the field, 2026-08-18).
+  const [differed, setDiffered] = useState(false);
+  const steps = useMemo(() => closeoutSteps(value, differed), [value, differed]);
   const [at, setAt] = useState(0);
   // Which bucket the crew has said "Yes" to but not yet picked a cause for.
   // Local, not stored: "Yes, but I have not chosen from the list" is a UI moment
@@ -156,11 +152,15 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
 
   const go = (n: number) => setAt(Math.max(0, Math.min(n, steps.length - 1)));
 
+  // Deferred by a beat so the button's pressed state is visible before the card
+  // changes under the thumb.
+  const advance = () => setTimeout(() => setAt((a) => a + 1), 120);
+
   /** Answering a question advances. Changing an ALREADY answered question does
    *  not, so a crew member correcting a mis-tap is not thrown forward again. */
   const answer = (patch: Partial<CloseoutValue>, wasAnswered: boolean) => {
     onChange(patch);
-    if (!wasAnswered) setTimeout(() => setAt((a) => a + 1), 120);
+    if (!wasAnswered) advance();
   };
 
   const bucketStep = step.startsWith("cause:")
@@ -170,7 +170,8 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
   return (
     <div
       style={{
-        border: "1px solid var(--border)", borderRadius: 12, padding: 14,
+        border: "1px solid var(--border)", borderRadius: 12,
+        padding: "var(--space-card)",
         background: "var(--surface, transparent)",
       }}
     >
@@ -188,20 +189,26 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
           </div>
           <YesNoRow
             value={
-              value.variance_direction == null ? null
-                : value.variance_direction !== "as_quoted"
+              value.variance_direction === "as_quoted" ? false
+                : differed || dir != null ? true
+                : null
             }
             yesLabel="Yes, it differed"
             noLabel="No, as quoted"
-            onYes={() =>
-              answer(
-                // Keep an existing direction if they are re-confirming Yes;
-                // only clear it when coming back from "as quoted".
-                { variance_direction: dir ?? null },
-                value.variance_direction != null && value.variance_direction !== "as_quoted",
-              )
-            }
-            onNo={() =>
+            onYes={() => {
+              const wasAnswered = differed || dir != null;
+              // Yes lives only in local state - it is not a storable answer on
+              // its own, and step 2 is what turns it into "more" or "less".
+              setDiffered(true);
+              // Coming back from "as quoted", the stored No has to be retracted
+              // or the next step would open on top of a contradicting answer.
+              if (value.variance_direction === "as_quoted") {
+                onChange({ variance_direction: null });
+              }
+              if (!wasAnswered) advance();
+            }}
+            onNo={() => {
+              setDiffered(false);
               onChange({
                 variance_direction: "as_quoted",
                 // Answering No retracts everything downstream. Leaving a stale
@@ -210,8 +217,8 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
                 variance_cause_identified: null,
                 variance_causes: [],
                 variance_note: "",
-              })
-            }
+              });
+            }}
           />
           {value.variance_direction === "as_quoted" && (
             <div className="small" style={{ color: "var(--muted)", marginTop: 12 }}>

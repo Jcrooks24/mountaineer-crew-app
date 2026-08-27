@@ -115,14 +115,17 @@ _MAX_EVENT_LOCKS = 4096
 
 
 def _bounded_lock(
-    locks: Dict[str, threading.Lock], event_id: str
+    locks: Dict[Any, threading.Lock], key: Any, cap: int = _MAX_EVENT_LOCKS
 ) -> threading.Lock:
-    lock = locks.get(event_id)
+    """A lock per `key`, in a dict that cannot grow without bound. `cap` differs
+    by caller: event locks are keyed by event_id and need thousands, tab locks
+    are keyed by worksheet and need dozens."""
+    lock = locks.get(key)
     if lock is None:
         # Prune the oldest unheld lock(s) until we're back under the cap.
         # We only evict locks we can acquire non-blocking, so a lock in
         # active use is never yanked out from under its holder.
-        while len(locks) >= _MAX_EVENT_LOCKS:
+        while len(locks) >= cap:
             evicted = False
             for k in list(locks.keys()):
                 candidate = locks[k]
@@ -136,7 +139,7 @@ def _bounded_lock(
                 # exceed the cap temporarily rather than block forever.
                 break
         lock = threading.Lock()
-        locks[event_id] = lock
+        locks[key] = lock
     return lock
 
 
@@ -148,6 +151,107 @@ def _lock_for_event_note(event_id: str) -> threading.Lock:
 def _lock_for_event_timestamp(event_id: str) -> threading.Lock:
     with _event_timestamp_locks_guard:
         return _bounded_lock(_event_timestamp_locks, event_id)
+
+
+# ── Deleting rows by grid index ──────────────────────────────────────────────
+# Every replace-style export does the same three things: read a key column, work
+# out which row indices match, delete them bottom-up. The gap between the read
+# and the delete is the problem. The export pool runs two threads, and the
+# backfill and the nightly cron are writers again, so another delete on the same
+# tab can land inside that gap. When it does, the grid is shorter than the
+# indices we just computed and Sheets rejects the WHOLE batch:
+#
+#   Invalid requests[0].deleteDimension: Cannot delete a row that doesn't exist.
+#   Tried to delete row index 1372 but there are only 1372 rows.
+#
+# `_api` does not classify that 400 as transient, correctly - re-issuing the same
+# stale indices would fail identically. So the export died there. In
+# `rebuild_job_materials_total_in_bills` the delete runs BEFORE the append, which
+# is why a lost race did not merely skip a cleanup: the Bills row was never
+# written at all. 37 of these in a day, with Bills short 33 records on the same
+# night's integrity check.
+#
+# Two defences, because not every writer is in this process:
+#   1. A per-(spreadsheet, tab) lock held across the read AND the delete. This
+#      closes the window between the two export threads, which is where nearly
+#      all of it comes from.
+#   2. One re-read-and-retry when Sheets rejects the batch for exactly this
+#      reason. Re-reading is the only correct response to "your indices are
+#      stale", and it is what makes a cross-process race self-heal.
+_row_delete_locks: Dict[Any, threading.Lock] = {}
+_row_delete_locks_guard = threading.Lock()
+
+# Worksheets, not records. The sheet has ~45 tabs; this is sized for growth, not
+# for volume, and the dict is pruned the same way the event locks are.
+_MAX_TAB_LOCKS = 256
+
+
+def _lock_for_tab(spreadsheet_id: str, tab: str) -> threading.Lock:
+    with _row_delete_locks_guard:
+        return _bounded_lock(_row_delete_locks, (spreadsheet_id, tab), _MAX_TAB_LOCKS)
+
+
+def _is_stale_row_index_error(exc: Exception) -> bool:
+    """True for the Sheets 400 meaning "the grid shrank under you". Matched on
+    the message because the API returns no distinguishing code for it."""
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    try:
+        if status is not None and int(status) != 400:
+            return False
+    except (TypeError, ValueError):
+        return False
+    # The apostrophe in "doesn't" comes back HTML-escaped in some responses, so
+    # match up to it rather than through it.
+    return "delete a row that doesn" in str(exc).lower()
+
+
+def _delete_rows_matching(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    sheet_numeric_id: int,
+    find_indices: Callable[[], List[int]],
+    attempts: int = 3,
+) -> int:
+    """Delete the rows `find_indices` selects, bottom-up, holding the tab lock
+    across both the read and the write.
+
+    `find_indices` returns 0-based grid row indices and is re-invoked on retry -
+    stale indices are the failure being handled, so replaying the same ones
+    would only reproduce it. It must therefore do its own reading, not close
+    over values read earlier."""
+    with _lock_for_tab(spreadsheet_id, tab):
+        for attempt in range(attempts):
+            # Bottom-up, so an earlier delete in the batch cannot shift a later
+            # index. De-duplicated, because deleting the same index twice removes
+            # two different rows.
+            indices = sorted(set(find_indices()), reverse=True)
+            if not indices:
+                return 0
+            requests = [
+                {"deleteDimension": {"range": {
+                    "sheetId": sheet_numeric_id,
+                    "dimension": "ROWS",
+                    "startIndex": idx,
+                    "endIndex": idx + 1,
+                }}}
+                for idx in indices
+            ]
+            try:
+                _api(lambda: svc.spreadsheets().batchUpdate(
+                    spreadsheetId=spreadsheet_id, body={"requests": requests},
+                ).execute())
+                return len(indices)
+            except Exception as exc:  # noqa: BLE001 - re-raised unless it is the race
+                if attempt >= attempts - 1 or not _is_stale_row_index_error(exc):
+                    raise
+                print(
+                    f"[sheets] {tab}: row indices went stale mid-delete, "
+                    f"re-reading (attempt {attempt + 1}/{attempts}): {exc}"
+                )
+    return 0
 
 
 # ── Recent export failures ───────────────────────────────────────────────────
@@ -1017,23 +1121,20 @@ def delete_event_from_sheets(db: Session, event_id: str) -> int:
     if "event_id" not in headers_row:
         return 0
     col_letter = _col_letter(headers_row.index("event_id"))
-    col = _api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}",
-    ).execute())
-    col_values = col.get("values") or []
-    target_indices = [i for i, row in enumerate(col_values) if i > 0 and (row[0] if row else "") == event_id]
-    if not target_indices:
-        return 0
-    requests = [
-        {"deleteDimension": {"range": {
-            "sheetId": sheet_numeric_id, "dimension": "ROWS", "startIndex": idx, "endIndex": idx + 1,
-        }}}
-        for idx in sorted(target_indices, reverse=True)
-    ]
-    _api(lambda: svc.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id, body={"requests": requests},
-    ).execute())
-    return len(target_indices)
+
+    def _find() -> List[int]:
+        col = _api(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}",
+        ).execute())
+        col_values = col.get("values") or []
+        return [
+            i for i, row in enumerate(col_values)
+            if i > 0 and (row[0] if row else "") == event_id
+        ]
+
+    return _delete_rows_matching(
+        svc, spreadsheet_id, tab, sheet_numeric_id, _find
+    )
 
 
 def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str) -> int:
@@ -1129,35 +1230,24 @@ def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
     col_letter = _col_letter(headers_row.index("submission_id"))
 
     # Pull just that column to find matching row indices
-    col = _api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=f"{tab}!{col_letter}:{col_letter}",
-    ).execute())
-    col_values = col.get("values") or []
-
-    target_indices: List[int] = []  # 0-based row indices suitable for deleteDimension
-    for i, row in enumerate(col_values):
-        if i == 0:
-            continue  # header row
-        value = row[0] if row else ""
-        if value == submission_id:
-            target_indices.append(i)
-
-    if target_indices:
-        # Delete bottom-up so earlier deletes don't shift later indices.
-        requests = [
-            {"deleteDimension": {"range": {
-                "sheetId": sheet_numeric_id,
-                "dimension": "ROWS",
-                "startIndex": idx,
-                "endIndex": idx + 1,
-            }}}
-            for idx in sorted(target_indices, reverse=True)
-        ]
-        _api(lambda: svc.spreadsheets().batchUpdate(
+    def _find() -> List[int]:
+        col = _api(lambda: svc.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            body={"requests": requests},
+            range=f"{tab}!{col_letter}:{col_letter}",
         ).execute())
+        col_values = col.get("values") or []
+        found: List[int] = []  # 0-based row indices suitable for deleteDimension
+        for i, row in enumerate(col_values):
+            if i == 0:
+                continue  # header row
+            value = row[0] if row else ""
+            if value == submission_id:
+                found.append(i)
+        return found
+
+    deleted = _delete_rows_matching(
+        svc, spreadsheet_id, tab, sheet_numeric_id, _find
+    )
 
     # Always clear dedupe entries so a re-add with the same ids would re-export.
     db.execute(
@@ -1166,7 +1256,7 @@ def delete_materials_from_sheets(db: Session, submission_id: str) -> int:
     )
     db.commit()
 
-    return len(target_indices)
+    return deleted
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2188,31 +2278,19 @@ def _delete_sheet_rows_by_value(
         return 0
     col_letter = _col_letter(headers_row.index(col_name))
 
-    col = _api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
-    ).execute())
-    col_values = col.get("values") or []
+    def _find() -> List[int]:
+        col = _api(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
+        ).execute())
+        col_values = col.get("values") or []
+        return [
+            i for i, row in enumerate(col_values)
+            if i > 0 and (row[0] if row else "") == target_value
+        ]
 
-    target_indices = [
-        i for i, row in enumerate(col_values)
-        if i > 0 and (row[0] if row else "") == target_value
-    ]
-    if not target_indices:
-        return 0
-
-    requests = [
-        {"deleteDimension": {"range": {
-            "sheetId": sheet_numeric_id,
-            "dimension": "ROWS",
-            "startIndex": idx,
-            "endIndex": idx + 1,
-        }}}
-        for idx in sorted(target_indices, reverse=True)
-    ]
-    _api(lambda: svc.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id, body={"requests": requests}
-    ).execute())
-    return len(target_indices)
+    return _delete_rows_matching(
+        svc, spreadsheet_id, tab, sheet_numeric_id, _find
+    )
 
 
 def _delete_bol_stale_rows(
@@ -2243,36 +2321,26 @@ def _delete_bol_stale_rows(
     id_idx = headers_row.index(id_col)
     ts_idx = headers_row.index(ts_col)
     lo, hi = min(id_idx, ts_idx), max(id_idx, ts_idx)
-    res = _api(lambda: svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id, range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}"
-    ).execute())
-    values = res.get("values") or []
     id_at, ts_at = id_idx - lo, ts_idx - lo
 
-    stale: List[int] = []
-    for i, row in enumerate(values):
-        if i == 0:
-            continue  # header
-        rid = row[id_at] if len(row) > id_at else ""
-        rts = row[ts_at] if len(row) > ts_at else ""
-        if rid == id_val and rts != keep_ts:
-            stale.append(i)
-    if not stale:
-        return 0
+    def _find() -> List[int]:
+        res = _api(lambda: svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}"
+        ).execute())
+        values = res.get("values") or []
+        stale: List[int] = []
+        for i, row in enumerate(values):
+            if i == 0:
+                continue  # header
+            rid = row[id_at] if len(row) > id_at else ""
+            rts = row[ts_at] if len(row) > ts_at else ""
+            if rid == id_val and rts != keep_ts:
+                stale.append(i)
+        return stale
 
-    requests = [
-        {"deleteDimension": {"range": {
-            "sheetId": sheet_numeric_id,
-            "dimension": "ROWS",
-            "startIndex": idx,
-            "endIndex": idx + 1,
-        }}}
-        for idx in sorted(stale, reverse=True)
-    ]
-    _api(lambda: svc.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id, body={"requests": requests}
-    ).execute())
-    return len(stale)
+    return _delete_rows_matching(
+        svc, spreadsheet_id, tab, sheet_numeric_id, _find
+    )
 
 
 def _delete_estimate_sheet_rows(
@@ -3586,52 +3654,36 @@ def export_availability_window_to_sheets(db: Session, entry: Dict[str, Any]) -> 
         # delete; reading just their span (A:B in practice) is ~13x lighter and the
         # absolute row indices are unchanged, so the delete stays correct.
         lo, hi = min(user_col, win_col), max(user_col, win_col)
-        result = _api(
-            lambda: svc.spreadsheets()
-            .values()
-            .get(
-                spreadsheetId=spreadsheet_id,
-                range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}",
-            )
-            .execute()
-        )
-        values = result.get("values", []) or []
         u_at, w_at = user_col - lo, win_col - lo
-        rows_to_delete: List[int] = []
-        for idx, existing_row in enumerate(values):
-            if idx == 0:
-                continue  # header row
-            if (
-                len(existing_row) > max(u_at, w_at)
-                and existing_row[u_at] == user_name
-                and existing_row[w_at] == window_start
-            ):
-                rows_to_delete.append(idx)
-        if rows_to_delete:
-            sheet_numeric_id = _sheet_numeric_id(svc, spreadsheet_id, tab)
-            if sheet_numeric_id is not None:
-                # Delete bottom-up so earlier indexes don't shift mid-batch.
-                requests = [
-                    {
-                        "deleteDimension": {
-                            "range": {
-                                "sheetId": sheet_numeric_id,
-                                "dimension": "ROWS",
-                                "startIndex": i,
-                                "endIndex": i + 1,
-                            }
-                        }
-                    }
-                    for i in sorted(rows_to_delete, reverse=True)
-                ]
-                _api(
-                    lambda: svc.spreadsheets()
-                    .batchUpdate(
-                        spreadsheetId=spreadsheet_id,
-                        body={"requests": requests},
-                    )
-                    .execute()
+
+        def _find() -> List[int]:
+            result = _api(
+                lambda: svc.spreadsheets()
+                .values()
+                .get(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"{tab}!{_col_letter(lo)}:{_col_letter(hi)}",
                 )
+                .execute()
+            )
+            values = result.get("values", []) or []
+            rows_to_delete: List[int] = []
+            for idx, existing_row in enumerate(values):
+                if idx == 0:
+                    continue  # header row
+                if (
+                    len(existing_row) > max(u_at, w_at)
+                    and existing_row[u_at] == user_name
+                    and existing_row[w_at] == window_start
+                ):
+                    rows_to_delete.append(idx)
+            return rows_to_delete
+
+        sheet_numeric_id = _sheet_numeric_id(svc, spreadsheet_id, tab)
+        if sheet_numeric_id is not None:
+            _delete_rows_matching(
+                svc, spreadsheet_id, tab, sheet_numeric_id, _find
+            )
 
     rows_out = [_build_row(row, actual_headers)]
 

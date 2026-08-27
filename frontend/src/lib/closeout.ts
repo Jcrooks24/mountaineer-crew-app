@@ -322,3 +322,35 @@ export function inferDirection(causes: string[]): "more" | "less" | null {
   }
   return null;
 }
+
+/** Which close-out steps apply given the answers so far.
+ *
+ *  Recomputed on every change, because answering "No" at step 1 or 3 genuinely
+ *  removes later steps rather than skipping past them - a progress dot for a
+ *  question that will never be asked is a lie about how much is left.
+ *
+ *  `saidDiffered` is the crew having tapped "Yes, it differed" WITHOUT having
+ *  chosen a direction yet. It has to be a separate argument because there is no
+ *  stored value for that state: `variance_direction` is null (unanswered),
+ *  "as_quoted", "more" or "less", and inventing a fifth would put a half-answer
+ *  in the Sheet. Without it, tapping Yes produced a one-step list and step 2 was
+ *  unreachable, so the whole close-out was dead below question 1 (reported from
+ *  the field 2026-08-18: "did not allow me to click yes it differed").
+ *
+ *  Lives here rather than in CloseoutStepper.tsx so it can be exercised
+ *  directly by verify_closeout.mjs. The version inside the component was only
+ *  ever checked by grepping its source, which is how a regex kept passing over
+ *  a flow no crew member could complete. */
+export function closeoutSteps(
+  value: { variance_direction: string | null; variance_cause_identified: boolean | null },
+  saidDiffered: boolean,
+): string[] {
+  const steps = ["ran"];
+  const differed =
+    saidDiffered ||
+    (!!value.variance_direction && value.variance_direction !== "as_quoted");
+  if (!differed) return steps;
+  steps.push("direction", "identified");
+  if (value.variance_cause_identified !== true) return steps;
+  return [...steps, ...CAUSE_BUCKETS.map((b) => `cause:${b.bucket}`), "note"];
+}

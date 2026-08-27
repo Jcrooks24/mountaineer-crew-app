@@ -215,6 +215,15 @@ Job; emails jacob@ on any FAIL - see CREDENTIALS) and can be run by hand any tim
   for the specific Reimbursements cascade).
 - **FAIL - duplicate `<key>`** = the replace-style delete stopped matching. Run
   the cleanup tool's `dedupe` step.
+
+  **Check the export failures first, because a delete that RAISED looks the
+  same from the sheet.** Admin -> Sync & Accuracy shows the recent-failures
+  ring. `Cannot delete a row that doesn't exist. Tried to delete row index N
+  but there are only N rows` is the read/delete race described under **Prevent**
+  below: two writers on one tab, the second one's row indices already stale by
+  the time its batch lands. Which symptom it produces depends only on the order
+  the export happens to use - a delete-then-append export loses the record, a
+  write-then-delete-stale export (BOLs) keeps a duplicate.
 - **FAIL - junk tab** = an env-var-named tab exists. `cleanup_sheet.py --step tabs`.
 - **FAIL - completeness: N server record(s) MISSING from the sheet** = a sync is
   stuck; those Postgres records never reached the Sheet (the message names the tab
@@ -272,6 +281,19 @@ correction, so resolve those 3 by hand), `officehours`, `protect`.
 new tab (warning-only); `_delete_sheet_rows_by_value` raises instead of silently
 no-opping when its dedupe key column is gone. Existing tabs were row-1 protected
 by hand on 2026-08-05.
+
+Every index-based row delete also goes through `_delete_rows_matching`
+(2026-08-27), which holds a per-(spreadsheet, tab) lock across the read AND the
+delete, and re-reads once if Sheets rejects the batch as stale. Before it, the
+gap between "read the key column" and "delete these row indices" was open to the
+other export thread, the backfill, and the cron: 37 failures in one day, all
+`rebuild_job_materials_total_in_bills`, each one leaving a job's Bills materials
+total frozen at its previous value. See
+[ADR 0041](decisions/0041-row-deletes-are-locked-and-re-read.md).
+
+`python backend/scripts/test_row_delete_race.py` reproduces the race against a
+fake grid and needs no credentials. Run it if you touch that path - a live smoke
+test cannot catch this, it only shows up under two concurrent writers.
 
 ---
 
@@ -360,6 +382,40 @@ whatever is pasted into the Sheet's script editor (Extensions > Apps Script).
 
 Data impact: none. Nothing is deleted, and an email that fails to send stays unlogged
 and is retried the next night.
+
+### The digest arrived, but it contains everything ever filed
+
+The opposite symptom, and it is the dedupe failing, not the collection. Fixed
+2026-08-27, but the shape is worth keeping because it will recur if these log
+tabs ever change width again.
+
+`readSentMap_` read the content hash from a **fixed column 5**. That is right for
+`FeedbackEmailLog` and `IncidentEmailLog`, which are five columns wide, and wrong
+for `BugEmailLog` and `FeatureRequestEmailLog`, which are four. Every lookup on
+those two came back empty, no stored hash could ever match, and every bug report
+and feature request ever filed went out again every night. It now finds the hash
+column **by value** (40-char hex), so a log tab of any width works. See
+`findHashColumn_`.
+
+1. **Check the log tab is actually being written.** If `BugEmailLog` has no new
+   rows after a send, the write half is broken, not the read half.
+2. **Check the widths agree.** The header list in `appendLog_`'s caller and the
+   real tab must describe the same columns. A tab is created once and never
+   migrated, so a tab made by an older version of the script can carry a header
+   row that no longer matches the data under it. This is why the hash column is
+   found by value and not by header name.
+3. **`no hash column found, falling back to uuid-only dedupe`** in the logs means
+   step 2 failed and the script is degrading safely: nothing already logged
+   re-sends, but an *edit* to an existing item will not reach you.
+
+Data impact: none, but it is not harmless. A digest that cries wolf every night
+stops being read, which is how a real incident gets missed.
+
+**This file does not deploy itself.** After changing `nightly_crew_email.gs`,
+paste it into the Sheet's Apps Script editor or nothing changes. Verify with
+`dryRunNightlyCrewEmail()`: the dry run reads the real log tabs, so if the dedupe
+is right the output is short. `node apps_script/nightly_crew_email.test.js` checks
+the dedupe logic offline, before the paste.
 
 ---
 

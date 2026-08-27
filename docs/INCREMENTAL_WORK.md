@@ -49,7 +49,8 @@ where things stand.
 `14` that happens to be a font size, an icon width, or a one-off inset is not
 card padding. Matching on the number alone is how this turns into a regression.
 
-**Progress:** not started. Rough upper bound is ~516 candidate sites across the
+**Progress:** 1 converted (`CloseoutStepper.tsx` card padding, 2026-08-27, while
+open for the step-1 fix). Rough upper bound is ~515 candidate sites across the
 frontend, and a large share of those will be false matches per the caveat above.
 
 ## 2. Dead `var(--on-brand, #fff)` fallbacks

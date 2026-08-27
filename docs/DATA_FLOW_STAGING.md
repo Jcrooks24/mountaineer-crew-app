@@ -974,10 +974,27 @@ No new endpoint, no new queue, no new env var. The offline draft shape gains the
 two fields and tolerates their absence, so a device holding a pre-deploy draft
 restores it without losing the rest.
 
-Guarded by `frontend/scripts/verify_closeout.mjs` (47 assertions), which includes
-a frontend-to-backend vocabulary comparison - an offered cause the server would
+Guarded by `frontend/scripts/verify_closeout.mjs`, which includes a
+frontend-to-backend vocabulary comparison - an offered cause the server would
 reject is a 422 on save, and the two lists live in different languages in
 different files.
+
+**Correction, 2026-08-27.** The `[x]` on `variance_direction` above traced the
+write path and the export row builder, and both were right. The flow into them
+was not: tapping "Yes, it differed" wrote `variance_direction: null` over a value
+that was already null, so the answer never changed, the step list stayed one long,
+and question 2 could not be reached. Between the 08-13 deploy and 08-27 **no crew
+member could record a variance direction, a cause, or a close-out note at all** -
+only "No, as quoted" was reachable, which is also what the sheet will show for
+that window. Reported from the field on 2026-08-18.
+
+The state has no stored representation on purpose (null / as_quoted / more / less
+is the whole vocabulary, and "differed, direction unknown" is a half-answer that
+does not belong in the Sheet), so it is held in component state and passed to
+`closeoutSteps`. That function moved from the component into `lib/closeout.ts`
+for one reason: the stepper's assertions were regexes over the component's
+source, and a regex can confirm a line exists but not that a crew member can
+reach the next question. They now run the step logic.
 
 ## App speed: restart handling and route code splitting
 
@@ -1052,11 +1069,46 @@ requests by design, with the service down for each one. Every other Google
 integration already deferred this import; this module was the exception. Moved
 inside the two functions that build a client. No behaviour change.
 
+---
+
+## Row deletes are serialized per tab and re-read on a stale index (2026-08-27)
+
+**Class B/C.** No new field and no new domain: a change to how every
+replace-style export performs the delete half of its write. [ADR 0041](decisions/0041-row-deletes-are-locked-and-re-read.md).
+
+| Change | Path | Adherence |
+|---|---|---|
+| `_delete_rows_matching` wraps every index-based row delete | `_delete_sheet_rows_by_value`, `_delete_bol_stale_rows`, `delete_event_from_sheets`, `delete_materials_from_sheets`, `export_availability_window_to_sheets` | read |
+| Per-(spreadsheet, tab) lock held across the key-column read AND the `deleteDimension` batch | same five | read |
+| One re-read-and-retry on the "Cannot delete a row that doesn't exist" 400 | same five | read |
+
+**What changed in the exchange.** Nothing about *what* is written, or when it is
+triggered. What changed is that the read and the delete are now one critical
+section per tab instead of two independent calls, so a second writer cannot
+invalidate the row indices between them.
+
+**Why it belongs in this ledger.** The failure it removes was a silent
+*write* failure, not a queue or trigger failure. `rebuild_job_materials_total_in_bills`
+deletes the job's old Bills "Materials" line and then appends the new total.
+Sheets rejects a `deleteDimension` batch atomically, so a lost race deleted
+nothing and appended nothing, and the job kept its **previous** materials total
+with no gap in the sheet to notice. 37 occurrences in one day on 2026-08-27.
+
+**Re-drive after deploy.** The fix stops new occurrences; it does not refresh the
+totals already frozen. Admin -> Sync & Accuracy -> Sheet Backfill re-drives the
+materials exports, which recomputes those Bills lines.
+
+**Adherence caveat.** The retry covers writers outside this process (cron,
+backfill in another worker, an admin editing the sheet by hand); the lock covers
+the two pool threads. Neither makes the delete atomic with the append that
+follows it, and that gap is unchanged and still acceptable: an append does not
+move existing row indices.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified
-against" stamp is accounted for in "Reconciliation 7fe20a4 -> 7f41611" above, and
-the auto-reconcile rate change immediately above.
+against" stamp is accounted for in "Reconciliation 7fe20a4 -> 7f41611" above, the
+auto-reconcile rate change, and the row-delete serialization immediately above.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.

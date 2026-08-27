@@ -34,6 +34,7 @@ const mod = await import(
 const {
   VARIANCE_CAUSES, CAUSE_BUCKETS, causesFor, causeForBucket,
   setCauseForBucket, causesInDirection, inferDirection, closeoutLabel,
+  closeoutSteps,
 } = mod;
 
 console.log("Every bucket is answerable in both directions:");
@@ -143,14 +144,58 @@ check("and only shows for the site bucket",
   /bucketStep\.bucket === "site" && chosen && scopeSlot/.test(stepper));
 
 console.log("\nThe stepper cannot strand the crew:");
+// These run closeoutSteps for real rather than grepping the component. The
+// grep-only versions of these checks passed for two weeks while the close-out
+// was unusable below question 1: a regex can confirm a line exists, it cannot
+// confirm the crew can get to the next question. See the field report of
+// 2026-08-18, "did not allow me to click yes it differed".
+const unanswered = { variance_direction: null, variance_cause_identified: null };
+
+check("an untouched close-out asks one question",
+  JSON.stringify(closeoutSteps(unanswered, false)) === JSON.stringify(["ran"]));
+
+// THE REGRESSION. "Yes, it differed" is not a storable answer on its own, so it
+// arrives as the second argument. If it does not open step 2, the crew has said
+// the job differed and has nowhere to say how, which is indistinguishable from
+// a dead button.
+const afterYes = closeoutSteps(unanswered, true);
+check("'Yes, it differed' opens the direction question",
+  afterYes[1] === "direction", afterYes.join(" > "));
+check("and the flow does not run past 'can you identify a cause'",
+  afterYes.length === 3 && afterYes[2] === "identified", afterYes.join(" > "));
+
 check("answering No at step 1 ends the flow",
-  /if \(!v\.variance_direction \|\| v\.variance_direction === "as_quoted"\) return steps;/.test(stepper));
+  JSON.stringify(closeoutSteps(
+    { variance_direction: "as_quoted", variance_cause_identified: null }, false,
+  )) === JSON.stringify(["ran"]));
+
+// Re-opening a saved report must land on the same flow the crew left, without
+// the local "said differed" flag, which does not survive a reload.
+for (const dir of ["more", "less"]) {
+  const reopened = closeoutSteps({ variance_direction: dir, variance_cause_identified: null }, false);
+  check(`a saved '${dir}' report reopens past step 1`,
+    reopened.length === 3 && reopened[1] === "direction", reopened.join(" > "));
+}
+
 check("answering 'cannot say' ends the flow",
-  /if \(v\.variance_cause_identified !== true\) return steps;/.test(stepper));
+  closeoutSteps({ variance_direction: "more", variance_cause_identified: false }, false).length === 3);
+const full = closeoutSteps({ variance_direction: "more", variance_cause_identified: true }, false);
+check("naming a cause opens one step per bucket, plus the note",
+  full.length === 3 + CAUSE_BUCKETS.length + 1 && full[full.length - 1] === "note",
+  full.join(" > "));
+for (const { bucket } of CAUSE_BUCKETS) {
+  check(`the '${bucket}' question is reachable`, full.includes(`cause:${bucket}`));
+}
+
 check("the step index is clamped, never out of range",
   /Math\.min\(at, steps\.length - 1\)/.test(stepper));
 check("answering No retracts downstream answers",
   /variance_causes: \[\],/.test(stepper));
+check("answering No also clears the local 'it differed' flag",
+  /setDiffered\(false\);/.test(stepper),
+  "otherwise 'No, as quoted' leaves the later steps on screen");
+check("re-confirming Yes retracts a stored 'as quoted'",
+  /variance_direction === "as_quoted"\)\s*\{\s*onChange\(\{ variance_direction: null \}\)/.test(stepper));
 check("inputs are 16px so iOS does not zoom", /fontSize: 16/.test(stepper));
 check("tap targets are at least 44px", /minHeight: 44/.test(stepper));
 
