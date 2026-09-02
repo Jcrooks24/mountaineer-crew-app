@@ -27,10 +27,15 @@ export default function RodsRecorder({
   events = [],
   onLogEvent,
   actionsSlot,
+  weightSlot,
 }: {
   events?: MinEvent[];
   onLogEvent?: (type: string, note?: string | null) => void;
   actionsSlot?: ReactNode;
+  /** The Weight control. Rendered in its own subsection at the bottom (see
+   *  there) so it reaches a drive day, which is when the truck is usually
+   *  weighed. */
+  weightSlot?: ReactNode;
 }) {
   const { user } = useAuth();
   const me = user?.name || user?.email || "";
@@ -164,6 +169,19 @@ export default function RodsRecorder({
       <div className="row wrap" style={{ gap: 8 }}>
         <button type="button" className="btnPrimary" onClick={addNote} style={{ background: "transparent", color: "var(--text)", borderColor: "var(--border)" }}>+ Note</button>
       </div>
+
+      {/* Scale weight. Its own subsection rather than part of the labor Actions
+          slot above: a certified weight is a scale reading, not labor, and the
+          day it is most often taken is a DRIVE day - the truck is loaded one
+          evening and weighed the next morning before pulling out. It used to
+          render only where the labor Actions rendered, so on a pure drive day
+          there was nowhere to record it at all (bug 4ead0d74). */}
+      {weightSlot && (
+        <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
+          <div className="microLabel" style={{ marginBottom: 10 }}>Scale weight</div>
+          {weightSlot}
+        </div>
+      )}
     </div>
   );
 }

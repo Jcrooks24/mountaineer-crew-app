@@ -2554,9 +2554,20 @@ export default function App() {
                 </button>
               </div>
             ) : null;
+            // Weight travels with the RODS tile on any drive day, in its own
+            // subsection. A truck is commonly loaded one evening and weighed the
+            // next morning before the drive, and that morning is a DRIVE day
+            // with no labor on it - which used to mean no Weight button existed
+            // anywhere on screen (bug 4ead0d74).
+            const rodsWeightSlot = (
+              <>
+                <div className="row wrap">{weightButton}</div>
+                {weightEntry}
+              </>
+            );
             // Drive-only LD day: the RODS duty logger replaces the Actions tile.
             if (longDistance && ldDriving && ldLabor.length === 0) {
-              return <RodsRecorder events={mergedLog} onLogEvent={recordEvent} />;
+              return <RodsRecorder events={mergedLog} onLogEvent={recordEvent} weightSlot={rodsWeightSlot} />;
             }
             // Mixed LD day (driving + labor): RODS + Actions as two labeled
             // subsections in one flow, sharing a single Note button (RODS's).
@@ -2570,10 +2581,13 @@ export default function App() {
                       <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
                         Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is recorded by the RODS above.
                       </div>
-                      <div className="row wrap">{coreActions}{weightButton}</div>
-                      {weightEntry}
+                      <div className="row wrap">{coreActions}</div>
                     </>
                   }
+                  // Weight moves out of the labor row and into its own
+                  // subsection, so it sits in the same place on a mixed day as it
+                  // does on a drive-only day. It is a scale reading either way.
+                  weightSlot={rodsWeightSlot}
                 />
               );
             }

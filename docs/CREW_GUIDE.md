@@ -265,7 +265,7 @@ Every time displayed in the app is Mountain time (Bozeman, MT), regardless of wh
 ### 5.6 Offline Timeline
 Timeline events log fully offline. They queue locally and sync when signal returns. The local log retains approximately 14 days of history, capped at 2,000 entries. The Google Sheet is the authoritative long-term record.
 ### 5.7 Long-Distance Day Plan
-On interstate jobs, the Timeline opens with a prompt to mark what today's activities are: any combination of Packing, Loading, Unloading, Unpacking, Internal rearrange, and Driving. This plan decides which tools the Timeline shows: selecting Driving swaps the usual Start/Arrive/Depart/Finish buttons for the RODS duty-status recorder (Section 3.2), and selecting Loading or Unloading adds the Inventory tab that feeds the job's Digital Bill of Lading (Section 3.3).
+On interstate jobs, the Timeline opens with a prompt to mark what today's activities are: any combination of Packing, Loading, Unloading, Unpacking, Internal rearrange, and Driving. This plan decides which tools the Timeline shows: selecting Driving swaps the usual Start/Arrive/Depart/Finish buttons for the RODS duty-status recorder (Section 3.2), and selecting Loading or Unloading adds the Inventory tab that feeds the job's Digital Bill of Lading (Section 3.3). **Weight is always available**, in a "Scale weight" section at the bottom of the RODS recorder on a drive day and in the Actions row otherwise, so a truck loaded one evening can be weighed the next morning before pulling out and still be logged against the job.
 ## 6. MATERIALS
 Log all materials used on a job. Materials feed directly into the Bill as line items.
 ### 6.1 Adding Materials
