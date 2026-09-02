@@ -496,6 +496,11 @@ class ChecklistItemIn(BaseModel):
     label: str
     auto_key: str = ""
     ld_only: bool = False
+    # Hide this item on a job whose header lists no vehicle unit. A pre-trip DVIR
+    # or a swept-out truck is not an outstanding task on a job that never had a
+    # truck. Defaults False so an older admin client that does not send the field
+    # cannot silently switch items off.
+    requires_truck: bool = False
     job_types: List[str] = []
 
 

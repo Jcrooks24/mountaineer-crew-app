@@ -335,6 +335,36 @@ signed RODS ticks the item.
 **Deviation:** `drainChecklistChecks` **deletes** a permanently-rejected tick rather
 than marking it failed and keeping it. See Deviations below.
 
+**Template gains `requires_truck` (2026-09-02).** A checklist item can now be
+limited to jobs that have a truck, alongside the existing `ld_only` and
+`job_types` limits.
+
+| Field | Adheres | Note |
+|---|---|---|
+| `requires_truck` | **read** | On the template item, not on a tick. Carried by `GET /api/config/job-checklist` and `PUT /api/admin/config/job-checklist`, stored in the `job_checklist_items` SystemConfig row, cached in `crew_job_checklist_items_v1` |
+
+Nothing is queued, exported, or per-job: the flag lives on the template and is
+applied at render time in `JobChecklistCard`, against `vehicle_unit_names` from
+the job's setup header (which the card already loads).
+
+Three properties worth holding onto, because each is a way this could have gone
+wrong quietly:
+
+- **No back-fill.** `normalize_items` defaults an absent field to `False` and does
+  not seed it by key from `default_items()`. An existing install's list belongs to
+  the admin; deciding on their behalf that their "Pre-trip DVIR submitted" is
+  truck-only would change what crews see with nobody asking. `default_items()`
+  seeds five (both DVIRs, trucks swept, DOT markings, weighed) for a FRESH
+  install only. **The admin has to tick the boxes on the existing install.**
+- **Unknown counts as having a truck.** The card starts `hasTruck` true and only
+  clears it once a header has actually been read and lists no unit. No header yet,
+  or a header unreachable offline, must not read as "no truck" - a DVIR silently
+  vanishing from the checklist is a worse failure than one showing when it need
+  not.
+- **Both directions are compatible.** A phone holding a template cached by the
+  older build has no `requires_truck` on any item, which reads as false and shows
+  everything.
+
 ## Bug reports
 
 **Class A.**

@@ -6054,8 +6054,9 @@ function PayrollRatesCard() {
 }
 
 // Job checklist config (C3.1): admin-editable checklist items, each manual or
-// bound to an AUTO signal, optionally limited to long-distance and/or job types.
-type ChecklistItem = { key?: string; label: string; auto_key: string; ld_only: boolean; job_types: string[] };
+// bound to an AUTO signal, optionally limited to long-distance, to a truck being
+// on the job, and/or to job types.
+type ChecklistItem = { key?: string; label: string; auto_key: string; ld_only: boolean; requires_truck?: boolean; job_types: string[] };
 
 function JobChecklistCard() {
   const jobTypes = useJobTypes();
@@ -6077,7 +6078,7 @@ function JobChecklistCard() {
     setSaved(false);
   };
   const remove = (i: number) => { setItems((prev) => prev.filter((_, j) => j !== i)); setSaved(false); };
-  const add = () => { setItems((prev) => [...prev, { label: "", auto_key: "", ld_only: false, job_types: [] }]); setSaved(false); };
+  const add = () => { setItems((prev) => [...prev, { label: "", auto_key: "", ld_only: false, requires_truck: false, job_types: [] }]); setSaved(false); };
   const move = (i: number, dir: -1 | 1) => {
     setItems((prev) => {
       const j = i + dir;
@@ -6116,8 +6117,11 @@ function JobChecklistCard() {
       <div className="small" style={{ color: "var(--muted)", marginBottom: 12 }}>
         The checklist shown on a job. An item is either manual (the crew tick it)
         or auto (it ticks itself when the app sees the thing happen). Limit an
-        item to long-distance jobs and/or specific job types. Leave job types
-        empty for every job.
+        item to long-distance jobs, to jobs with a truck, and/or to specific job
+        types. Leave job types empty for every job. "Only if a truck is on the
+        job" reads the vehicle units on the job's setup header, so an item like a
+        pre-trip DVIR stops appearing as an outstanding task on a labor-only job
+        that never had a truck.
       </div>
       {!loaded ? (
         <div className="small" style={{ color: "var(--muted)" }}>Loading…</div>
@@ -6150,6 +6154,18 @@ function JobChecklistCard() {
                 <label className="row" style={{ gap: 6, alignItems: "center" }}>
                   <input type="checkbox" checked={it.ld_only} onChange={(e) => update(i, { ld_only: e.target.checked })} />
                   <span className="small">Long-distance only</span>
+                </label>
+                <label
+                  className="row"
+                  style={{ gap: 6, alignItems: "center" }}
+                  title="Hide this item on a job whose setup lists no vehicle unit"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!it.requires_truck}
+                    onChange={(e) => update(i, { requires_truck: e.target.checked })}
+                  />
+                  <span className="small">Only if a truck is on the job</span>
                 </label>
                 <button type="button" onClick={() => remove(i)} style={{ fontSize: 12, color: "var(--danger)", marginLeft: "auto" }}>Remove</button>
               </div>

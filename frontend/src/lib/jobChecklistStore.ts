@@ -17,6 +17,11 @@ export type ChecklistItem = {
   label: string;
   auto_key: string;
   ld_only: boolean;
+  /** Only applies to a job whose header lists a vehicle unit. Optional so a
+   *  cached list written by an older build still parses; absent reads as false,
+   *  which shows the item, and showing an item that does not apply is the safe
+   *  direction to be wrong in. */
+  requires_truck?: boolean;
   job_types: string[];
 };
 

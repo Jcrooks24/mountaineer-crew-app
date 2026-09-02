@@ -41,6 +41,12 @@ export default function JobChecklistCard({
   );
   const [isLD, setIsLD] = useState(longDistance);
   const [tags, setTags] = useState<string[]>([]);
+  // Does this job have a truck on it? Starts TRUE and only goes false once a
+  // header has actually been read and lists no vehicle unit. "No header yet" and
+  // "header unreachable offline" must not read as "no truck", or a DVIR would
+  // quietly vanish from the checklist on every job the crew opened before the
+  // office filled the header in.
+  const [hasTruck, setHasTruck] = useState(true);
   const [open, setOpen] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -63,6 +69,7 @@ export default function JobChecklistCard({
     if (header) {
       setIsLD(!!header.is_long_distance);
       setTags(header.job_type_tags || []);
+      setHasTruck((header.vehicle_unit_names || []).length > 0);
     }
   }, [jobUuid]);
 
@@ -73,9 +80,10 @@ export default function JobChecklistCard({
       items.filter(
         (it) =>
           (!it.ld_only || isLD) &&
+          (!it.requires_truck || hasTruck) &&
           (it.job_types.length === 0 || it.job_types.some((t) => tags.includes(t))),
       ),
-    [items, isLD, tags],
+    [items, isLD, tags, hasTruck],
   );
 
   const isChecked = (it: ChecklistItem): boolean =>
