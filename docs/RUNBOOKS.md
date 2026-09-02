@@ -458,7 +458,70 @@ as the BOL is signed at origin. See [ADR 0022](decisions/0022-signed-bol-is-retr
    blank field falls back to the built-in default (see `backend/app/core/company.py`
    / `frontend/src/lib/companyInfo.ts`).
 
+6. **"The signed copy could not be produced on this device (...)".** The message
+   names the real reason, so read it before doing anything else
+   ([ADR 0020](decisions/0020-bol-durability-and-honest-failures.md)). A
+   `WinAnsi cannot encode "x" (0x....)` names a character the PDF font cannot
+   draw: the app transliterates these before drawing
+   ([ADR 0042](decisions/0042-pdf-text-is-transliterated-and-a-failed-copy-is-not-a-failed-signature.md)),
+   so seeing one at all means a character reached pdf-lib by some path that skips
+   `wrap()`. Add it to `TRANSLITERATE` in `frontend/src/lib/winAnsi.ts` and find
+   the path. **The signature is already recorded when this appears - the crew
+   must not sign again.**
+
 Data impact: none. Retrieval is read-only; email sends a copy and changes nothing.
+
+---
+
+## A BOL is marked delivered but was only signed at origin
+
+Symptoms: the Jobs tab shows both "BOL signed at origin" and "BOL signed at
+destination" ticked on a load that has not been delivered; the BOL is missing
+from "Continue an open BOL" and only "start a new BOL" reaches it.
+
+Both follow from one field: `digital_bols.status = 'delivered'`. The Jobs-tab
+checklist reads it for the destination tick, and `listOpenBols` filters
+`delivered` out of the chooser.
+
+The cause was a crew member being told "Could not complete signing ... try
+again" by a failure that happened AFTER the origin signature was captured. The
+button had already advanced to the destination phase, so the retry signed
+delivery. Fixed 2026-09-02 (ADR 0042): the copy no longer fails as the
+signature, and the destination press is confirm-gated. **The already-wrong rows
+are not fixed by that, and the app cannot walk a status back.**
+
+1. Confirm it is wrong before touching it. `dest_shipper_sig` / `dest_carrier_sig`
+   hold real signature PNGs either way - a second signature WAS captured, just
+   not at a destination. Ask the crew whether the shipment was delivered.
+2. Correct it in the prod (or staging) database:
+
+   ```sql
+   -- inspect first
+   SELECT bol_id, job_name, job_date, status, origin_signed_at, dest_signed_at
+   FROM digital_bols WHERE bol_id = '<bol_id>';
+
+   UPDATE digital_bols
+      SET status = 'origin_signed',
+          dest_shipper_sig = NULL,
+          dest_carrier_sig = NULL,
+          dest_signed_at = NULL,
+          walkthrough_notes = NULL,
+          final_charges = NULL,
+          updated_at = now()
+    WHERE bol_id = '<bol_id>';
+   ```
+
+   The `bol_id` is shown on the BOL card in the app and in the Sheet's BOL tab.
+3. The crew device still holds a local draft at `delivered`. Have them open the
+   BOL once while online - `loadForJobWithInfo` adopts the server row as the
+   source of truth - or, if the draft is newer and wins, have them sign out and
+   back in on that device.
+4. Re-export the row so the Sheet matches: any save from the app re-fires
+   `schedule_bol_export`, or use the reconciler in App Health.
+
+Data impact: destructive on purpose. The destination signature blobs are
+deleted, because leaving them would leave the record claiming a delivery that
+did not happen. Copy the row out first if there is any doubt.
 
 ---
 
@@ -1098,6 +1161,22 @@ it fires in exactly this case and names the section to fill.
    the new scan cost here.
 
 ### Recently fixed (kept briefly so you do not re-report them)
+
+- Signed BOL could not be viewed, emailed, or uploaded to Drive; some BOLs went
+  to `delivered` after only an origin signing. Fixed 2026-09-02 (staging,
+  [ADR 0042](decisions/0042-pdf-text-is-transliterated-and-a-failed-copy-is-not-a-failed-signature.md)).
+  All four symptoms of bug `a8c1da24` were one cause: pdf-lib's WinAnsi standard
+  font **throws** on a character it cannot encode, and a BOL that inherits the
+  volume estimator's `≈ 320 cu ft` note (ADR 0026) hit that on every build. The
+  crew saw "Could not complete signing ... try again", signed again, and the
+  button had already advanced to the destination phase.
+
+  Worth knowing for the shape, not the character: a failure AFTER the durable
+  write was reported as a failure OF the durable write, and the retry it invited
+  did something different from what it had just done. Check for that pattern
+  wherever one button carries two phases. Rows already stuck at `delivered` need
+  the SQL in "A BOL is marked delivered but was only signed at origin" above; the
+  app cannot walk a status back.
 
 - Nightly sheet-integrity cron OOM. Fixed 2026-08-12, **confirmed by a completed
   prod run at 336Mi peak against a 512Mi limit**. Two earlier attempts missed it

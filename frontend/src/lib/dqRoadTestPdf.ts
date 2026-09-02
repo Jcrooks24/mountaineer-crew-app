@@ -8,6 +8,7 @@
  */
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
 import { getCompanyInfoCached } from "./companyInfo";
+import { toWinAnsi } from "./winAnsi";
 
 // The operations a driver is evaluated on (391.31(b)).
 export const ROAD_TEST_OPERATIONS: string[] = [
@@ -51,9 +52,14 @@ const PH = 792;
 const MARGIN = 54;
 const MAXW = PW - MARGIN * 2;
 
-function wrap(str: string, font: PDFFont, size: number, maxW: number): string[] {
+// Every drawn string funnels through here, so this is where the WinAnsi guard
+// belongs: a pdf-lib standard font THROWS on a character it cannot encode and
+// takes the whole document with it. The examiner's free-text remarks are the
+// exposure. Same fix as bolPdf - see ADR 0042.
+function wrap(raw: string, font: PDFFont, size: number, maxW: number): string[] {
+  const str = toWinAnsi(raw || "");
   const out: string[] = [];
-  for (const para of (str || "").split("\n")) {
+  for (const para of str.split("\n")) {
     let line = "";
     for (const word of para.split(/\s+/)) {
       const test = line ? `${line} ${word}` : word;

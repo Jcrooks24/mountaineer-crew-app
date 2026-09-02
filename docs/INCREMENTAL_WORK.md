@@ -120,7 +120,8 @@ things**, and only some queues do the second.
 | `jobSetupStore` | **no** - `failedJobSetups` / `retryFailedJobSetup` / `discardFailedJobSetup` exist, nothing renders them |
 | `bugReportStore` | **no** - `failedBugReportInputs` / retry / discard exist, unrendered |
 | `featureRequestStore` | **no** - same |
-| `rodsStore`, `ldDayStore`, `bolStore` | **no** - noted as the open follow-up in ADR 0013 since 2026-07-15 |
+| `bolStore` | yes - the "This BOL could not be sent" banner at the top of `BillOfLadingForm`, with Retry/Discard. Corrected 2026-09-02: this row said **no**, but the banner has been there since ADR 0013 landed. A `pdf` op that cannot build the document now reaches it too (ADR 0042) |
+| `rodsStore`, `ldDayStore` | **no** - noted as the open follow-up in ADR 0013 since 2026-07-15 |
 
 For the unrendered ones, a crew member's refused work is preserved and
 **invisible**. That is strictly better than destroyed and is not a regression,
@@ -136,7 +137,8 @@ opens a panel to find is still silent.
 `jobSetupStore` is the one to do first: a job header is the most valuable of
 the three unrendered ones.
 
-**Progress:** 6 stores unrendered as of 2026-08-11 (3 of them long-standing).
+**Progress:** 5 stores unrendered as of 2026-09-02 (`bolStore` was miscounted;
+see its row).
 
 ## 7. Hardcoded colors, and promoting the lint rule to `error`
 
@@ -155,7 +157,7 @@ When you are in one of these files, convert what you can:
 | `lib/rodsStore.ts` | 4 |
 | `App.tsx` | 2 |
 | `components/SignaturePad.tsx` | 2 |
-| `components/BillOfLadingForm.tsx` | 1 |
+| `components/BillOfLadingForm.tsx` | 0 - cleared 2026-09-02. The one literal was a genuine exception (white ink on a hardcoded `rgba(0,0,0,0.55)` photo scrim) and now carries a disable with a reason at the site |
 | `pages/ReportBug.tsx` | 1 |
 | `pages/RequestFeature.tsx` | 1 |
 

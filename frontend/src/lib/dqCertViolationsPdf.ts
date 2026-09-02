@@ -7,6 +7,7 @@
  */
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
 import { getCompanyInfoCached } from "./companyInfo";
+import { toWinAnsi } from "./winAnsi";
 
 export type Violation = {
   date: string;      // YYYY-MM-DD (conviction date)
@@ -35,9 +36,14 @@ const CERT_LIST =
 const CERT_NONE =
   "I certify that I have not been convicted of, or forfeited bond or collateral on account of, any violation (other than a parking violation) required to be listed during the past 12 months.";
 
-function wrap(str: string, font: PDFFont, size: number, maxW: number): string[] {
+// Every drawn string funnels through here, so this is where the WinAnsi guard
+// belongs: a pdf-lib standard font THROWS on a character it cannot encode and
+// takes the whole document with it. Driver-typed offences and locations are the
+// exposure. Same fix as bolPdf - see ADR 0042.
+function wrap(raw: string, font: PDFFont, size: number, maxW: number): string[] {
+  const str = toWinAnsi(raw || "");
   const out: string[] = [];
-  for (const para of (str || "").split("\n")) {
+  for (const para of str.split("\n")) {
     let line = "";
     for (const word of para.split(/\s+/)) {
       const test = line ? `${line} ${word}` : word;

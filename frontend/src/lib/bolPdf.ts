@@ -17,6 +17,7 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import type { BOLDraft } from "./bolStore";
 import { getCompanyInfoCached } from "./companyInfo";
+import { toWinAnsi } from "./winAnsi";
 
 // Page geometry (US Letter).
 const PW = 612;
@@ -63,7 +64,16 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
     }
   };
 
-  const wrap = (str: string, f: PDFFont, size: number, maxW: number): string[] => {
+  // EVERY string bound for pdf-lib goes through toWinAnsi first. The standard
+  // fonts throw on an unencodable character rather than substituting one, and a
+  // throw here aborts the whole document: no on-device copy for the shipper, no
+  // upload to Drive. Crew-entered item names/notes (and inventory notes seeded
+  // from the volume estimator, which used U+2248) are the realistic source. The
+  // sanitize lives inside `wrap` so it also governs the width measurement that
+  // decides the line breaks - measuring one string and drawing another would
+  // wrap in the wrong places. See ADR 0042.
+  const wrap = (raw: string, f: PDFFont, size: number, maxW: number): string[] => {
+    const str = toWinAnsi(raw);
     const out: string[] = [];
     for (const para of str.split("\n")) {
       const words = para.split(/\s+/).filter(Boolean);
@@ -174,7 +184,7 @@ export async function generateBolPdf(draft: BOLDraft): Promise<Blob> {
     for (const it of draft.items) {
       const photoCount = it.photos.filter((p) => p.drive_url).length;
       const line = `#${it.item_no}  ${it.name}`;
-      const right = `x${it.qty}`;
+      const right = toWinAnsi(`x${it.qty}`);
       ensure(12);
       page.drawText(wrap(line, font, 8.5, MAXW - 90)[0], { x: MARGIN, y: y - 8.5, size: 8.5, font, color: rgb(0.1, 0.1, 0.12) });
       page.drawText(right, { x: PW - MARGIN - 70, y: y - 8.5, size: 8.5, font: bold, color: rgb(0.1, 0.1, 0.12) });

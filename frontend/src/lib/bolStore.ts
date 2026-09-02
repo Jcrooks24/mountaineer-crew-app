@@ -25,7 +25,7 @@
  */
 
 import { apiFetch, ApiError } from "../api/client";
-import { CLEARED_FAILURE, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
+import { CLEARED_FAILURE, describeApiError, failureMark, isPermanentRejection, type MaybeFailed } from "./queueFailure";
 import { getToken } from "../auth/token";
 import { addPhoto, updatePhoto, listPhotosForJob } from "./photoStore";
 import { slotToBlob, toQueuedPhoto } from "./queuedPhoto";
@@ -39,6 +39,22 @@ export class BolStorageFullError extends Error {
   constructor() {
     super("This device's storage is full, so the signed BOL could not be saved. Free up space and sign again.");
     this.name = "BolStorageFullError";
+  }
+}
+
+/** The signed PDF could not be BUILT on this device, as distinct from built and
+ * not uploaded. This is deterministic: the same draft rebuilt on the next drain
+ * fails identically, so the transient backoff is not a retry, it is a loop that
+ * never ends and never says anything (the queue's pdf op carries no failed_at,
+ * so no banner). That is exactly how a font-encoding defect kept every affected
+ * BOL out of Drive without a word (ADR 0042). Classified as a permanent failure
+ * so the crew sees it. Safe to mark: pdf is the LAST op in a BOL's sequence, so
+ * failing it holds nothing behind it. */
+export class BolPdfBuildError extends Error {
+  constructor(cause: unknown) {
+    const reason = cause instanceof Error && cause.message.trim() ? cause.message.trim() : "unknown error";
+    super(`The signed BOL PDF could not be built on this device: ${reason}`);
+    this.name = "BolPdfBuildError";
   }
 }
 
@@ -745,6 +761,11 @@ type QueueOp = (
 // stop hammering a down Drive/DB. 2s, 4s, 8s ... capped at 2 min.
 const RETRY_BASE_MS = 2000;
 const RETRY_CAP_MS = 120000;
+// How many ONLINE failures a `pdf` op takes before it stops being treated as a
+// blip and is surfaced to the crew. At this backoff that is roughly ten minutes
+// of connectivity, which is far longer than any Drive hiccup and far shorter
+// than "never". See the branch in syncQueue for why only pdf ops get a cap.
+const PDF_MAX_TRANSIENT_ATTEMPTS = 8;
 function backoffMs(attempts: number): number {
   return Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1));
 }
@@ -894,9 +915,18 @@ export function failedBolOps(): QueueOp[] {
 }
 
 /** Clear the failed mark on every op for this BOL so the next drain retries the
- * whole submit->sign->pdf sequence in order. */
+ * whole submit->sign->pdf sequence in order.
+ *
+ * Also resets the transient backoff (`attempts` / `retry_at`). A person pressing
+ * Retry means "try it now": leaving a `retry_at` up to two minutes in the future
+ * made the button do nothing observable, and leaving `attempts` at the cap meant
+ * one more failure re-raised the banner instantly with no real window. */
 export function retryFailedBol(bolId: string): Promise<number> {
-  saveQueue(loadQueue().map((o) => (o.bol_id === bolId ? { ...o, ...CLEARED_FAILURE } : o)));
+  saveQueue(
+    loadQueue().map((o) =>
+      o.bol_id === bolId ? { ...o, ...CLEARED_FAILURE, attempts: undefined, retry_at: undefined } : o,
+    ),
+  );
   return syncQueue();
 }
 
@@ -1024,23 +1054,59 @@ export async function syncQueue(): Promise<number> {
           const d = loadDraft(op.job_uuid);
           if (!d || d.bol_id !== op.bol_id) { synced++; continue; }
           const { generateBolPdf } = await import("./bolPdf");
-          const blob = await generateBolPdf(d);
+          let blob: Blob;
+          try {
+            blob = await generateBolPdf(d);
+          } catch (e) {
+            // Distinguish "could not build it" from "could not send it". Only
+            // the second is worth retrying - see BolPdfBuildError.
+            throw new BolPdfBuildError(e);
+          }
           await uploadBolPdfBlob(op.bol_id, blob);
           drainedPdf.push({ bol_id: op.bol_id, job_uuid: op.job_uuid });
         }
         synced++;
       } catch (e) {
-        if (isPermanentRejection(e)) {
+        if (e instanceof BolPdfBuildError) {
+          // Not a server rejection, so failureMark (which reads an ApiError)
+          // does not apply - but the handling is the same: keep the op, mark it,
+          // show it. failed_status 0 means "never reached the server".
+          remaining.push({
+            ...op,
+            failed_at: new Date().toISOString(),
+            failed_status: 0,
+            failed_reason: e.message,
+          });
+        } else if (isPermanentRejection(e)) {
           remaining.push({ ...op, ...failureMark(e) });
         } else {
           // Transient: keep it, but back off so a persistently-down Drive/DB is
           // not re-hit on every mount/online/save (bug 6).
           const attempts = (op.attempts || 0) + 1;
-          remaining.push({
-            ...op,
-            attempts,
-            retry_at: new Date(nowMs + backoffMs(attempts)).toISOString(),
-          });
+          if (op.op === "pdf" && attempts >= PDF_MAX_TRANSIENT_ATTEMPTS) {
+            // A pdf op that has failed this many times while ONLINE is not
+            // waiting out a blip - the Drive folder id is wrong, the creds
+            // expired, something structural. Retrying it forever is the silent
+            // half of the same defect the build error above fixes: the BOL never
+            // reaches Drive and nobody is told. Surface it. Only pdf ops get
+            // this: it is the last op in the sequence, so marking it holds no
+            // sibling behind it, and it is the one op whose whole purpose is a
+            // third-party upload. Kept, not deleted (ADR 0013) - Retry clears
+            // the mark and starts the count again.
+            remaining.push({
+              ...op,
+              attempts,
+              failed_at: new Date().toISOString(),
+              failed_status: 0,
+              failed_reason: `The signed BOL could not be uploaded after ${attempts} tries: ${describeApiError(e)}`,
+            });
+          } else {
+            remaining.push({
+              ...op,
+              attempts,
+              retry_at: new Date(nowMs + backoffMs(attempts)).toISOString(),
+            });
+          }
         }
         // Either way this op did not land, so hold the rest of the sequence for
         // this BOL until the next pass.

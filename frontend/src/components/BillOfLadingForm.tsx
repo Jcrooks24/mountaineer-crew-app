@@ -72,6 +72,15 @@ async function deliverPdfToClient(blob: Blob, filename: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/** The reason an on-device PDF build failed, in words that reach the crew and
+ * come back in a bug report. pdf-lib's font errors ("WinAnsi cannot encode ...")
+ * are terse but they NAME the problem, which is worth more in a driveway than a
+ * polished sentence that names nothing. */
+function pdfFailureReason(e: unknown): string {
+  const msg = e instanceof Error ? e.message.trim() : "";
+  return msg || "unknown error";
+}
+
 // Carrier block is admin-configurable (Admin > Settings > Company information),
 // read from the offline-safe cache. Federal law requires it on the BOL (§375.505(b)(1)).
 
@@ -695,8 +704,12 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       const { generateBolPdf } = await import("../lib/bolPdf");
       const blob = await generateBolPdf(draft);
       await deliverPdfToClient(blob, pdfFilename(draft));
-    } catch {
-      setEmailErr("Could not open the BOL. Try again.");
+    } catch (e) {
+      // Say WHY (ADR 0020). The generic "Could not open the BOL. Try again."
+      // this replaced is what let a font-encoding defect (ADR 0042) sit in the
+      // field: the crew retried, it failed identically, and the message carried
+      // nothing anyone could act on or report.
+      setEmailErr(`Could not produce the BOL on this device (${pdfFailureReason(e)}).`);
     } finally {
       setViewBusy(false);
     }
@@ -793,34 +806,59 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
       const updated = applySignature({ ...draft, crew_rep: crewRep }, input);
       setDraft(updated);
 
-      // Generate the PDF on-device and hand the client a dated copy (works offline).
-      const { generateBolPdf } = await import("../lib/bolPdf");
-      const blob = await generateBolPdf(updated);
-      await deliverPdfToClient(blob, pdfFilename(updated));
-
       // Reset pads + printed name + consent for any subsequent session.
       shipperSigRef.current?.clear();
       carrierSigRef.current?.clear();
       setShipperName("");
       setConsent(false);
 
+      // Generate the PDF on-device and hand the client a dated copy (works
+      // offline). Deliberately in its OWN try: by this line the signature is
+      // captured, persisted, and queued, so the signing SUCCEEDED - a failure
+      // producing the paper copy is a separate, recoverable problem and must
+      // not be reported as one.
+      //
+      // It used to share the outer catch, which said "Could not complete
+      // signing. Your data is saved - try again." A crew member who did try
+      // again was no longer signing origin: the button had already advanced to
+      // the destination phase, so the second signature marked the BOL
+      // DELIVERED on a truck that had only been loaded, and a delivered BOL
+      // drops out of the open-BOL chooser. That is the whole of bug
+      // a8c1da24. See ADR 0042.
+      let copyErr = "";
+      try {
+        const { generateBolPdf } = await import("../lib/bolPdf");
+        const blob = await generateBolPdf(updated);
+        await deliverPdfToClient(blob, pdfFilename(updated));
+      } catch (e) {
+        copyErr =
+          `The signed copy could not be produced on this device (${pdfFailureReason(e)}). ` +
+          `The signature IS recorded - do not sign again. Use "View / download signed BOL" to retry the copy.`;
+      }
+
       // Push to the server (or leave queued if offline).
       const synced = await syncQueue();
       refreshFailed(); // surface a rejected sign/pdf op now, not on remount (bug 6)
-      setSavedNote(
-        synced > 0 && pendingSubmitCount() === 0
-          ? `${phase === "origin" ? "Origin" : "Delivery"} signing complete - copy delivered and synced.`
-          : `${phase === "origin" ? "Origin" : "Delivery"} signing saved - copy delivered; will sync when back online.`,
-      );
+      const label = phase === "origin" ? "Origin" : "Delivery";
+      if (copyErr) {
+        setSignErr(copyErr);
+        setSavedNote(`${label} signing is recorded and saved. Do not sign again.`);
+      } else {
+        setSavedNote(
+          synced > 0 && pendingSubmitCount() === 0
+            ? `${label} signing complete - copy delivered and synced.`
+            : `${label} signing saved - copy delivered; will sync when back online.`,
+        );
+      }
       window.setTimeout(() => setSavedNote(null), 5000);
     } catch (e) {
-      // A storage-full error means the signature was NOT saved - do not tell the
-      // crew "your data is saved" (bug 5). Every other failure happens after the
-      // draft + queue ops are persisted, so retry is safe there.
+      // Reaching here means applySignature itself failed, so the signature was
+      // NOT saved - storage-full is the realistic cause (bug 5). This is the one
+      // case where "try again" is the correct instruction.
       setSignErr(
         e instanceof BolStorageFullError
           ? e.message
-          : "Could not complete signing. Your data is saved - try again.",
+          : "Could not save the signature, so nothing was recorded. Try again.",
       );
     } finally {
       setSignBusy(false);
@@ -1496,7 +1534,23 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
             <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 10 }}>{signErr}</div>
           )}
 
-          <button className="btnPrimary" disabled={signBusy} onClick={() => signSession(draft.status === "origin_signed" ? "destination" : "origin")}>
+          {/* The destination press is confirm-gated. This one button changes
+              meaning the instant origin is signed, and "delivered" is a one-way
+              door: it closes the BOL and drops it out of the open-BOL chooser
+              with no way back in the app. A crew member who pressed it again
+              after a failure message signed the delivery leg of a truck that
+              had only loaded (bug a8c1da24, ADR 0042). Origin stays one tap. */}
+          <button
+            className="btnPrimary"
+            disabled={signBusy}
+            onClick={() => {
+              if (draft.status !== "origin_signed") return void signSession("origin");
+              const ok = window.confirm(
+                "Sign at DELIVERY?\n\nThis closes the Bill of Lading as delivered. Only do this once the shipment has been unloaded at the destination.",
+              );
+              if (ok) void signSession("destination");
+            }}
+          >
             {signBusy
               ? "Signing…"
               : draft.status === "origin_signed"
@@ -1572,6 +1626,10 @@ const uploadingBadge: React.CSSProperties = {
   fontSize: 9,
   textAlign: "center",
   background: "rgba(0,0,0,0.55)",
+  // Ink on a fixed scrim, not on a theme surface: this label sits on the literal
+  // rgba(0,0,0,0.55) above, over a photo thumbnail, so it is white in every theme
+  // by construction. A token here would track the theme and go invisible on dark.
+  // eslint-disable-next-line no-restricted-syntax -- white on a literal black scrim
   color: "#fff",
   borderRadius: 4,
   padding: "1px 0",

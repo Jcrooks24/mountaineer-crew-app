@@ -1141,11 +1141,59 @@ RUNBOOKS greps for that string. A raising rebuild still releases its in-flight
 slot, or that job's Bills line would never rebuild again for the life of the
 worker.
 
+## A BOL `pdf` op that cannot be BUILT is a permanent failure (2026-09-02)
+
+**Class B/C.** A drain-classification change. No new fields, no new endpoints, no
+change to any payload: `POST /api/bol/{bol_id}/pdf` and the Drive folder it
+writes to are untouched.
+
+| Change | Path | Adherence |
+|---|---|---|
+| `generateBolPdf` throwing is re-raised as `BolPdfBuildError` and marked failed, instead of falling into the transient backoff | `lib/bolStore.ts::syncQueue`, the `op === "pdf"` branch | read |
+| A `pdf` op that keeps failing transiently is marked failed after 8 online attempts (`PDF_MAX_TRANSIENT_ATTEMPTS`, roughly ten minutes of connectivity) | `lib/bolStore.ts::syncQueue`, transient branch | read |
+| An explicit Retry now clears `attempts` / `retry_at` as well as the failure mark | `lib/bolStore.ts::retryFailedBol` | read |
+| Every string drawn into a PDF is transliterated to WinAnsi first | `lib/winAnsi.ts` (new), called from `wrap()` in `bolPdf`, `dqCertViolationsPdf`, `dqEmploymentAppPdf`, `dqRoadTestPdf` | read |
+
+**Why it is a data-flow fact and not just an error message.** The `pdf` op is the
+last step of the BOL sequence and the only writer of `digital_bols.signed_pdf_url`
+/ `signed_pdf_drive_id`. It regenerates the PDF from the local draft on each
+drain, so a failure IN THE GENERATION is deterministic: the transient path
+retried it every couple of minutes forever, and because a `pdf` op carries no
+`failed_at`, nothing surfaced. **The observable effect was a signed BOL that
+never appeared in Drive, with no error anywhere** - the exact silent-failure
+shape the queue rules exist to prevent (ADR 0013, ADR 0020).
+
+Upload failures stay transient, because a 502 from Drive IS worth retrying - but
+only up to a point. A wrong `DRIVE_BOL_FOLDER_ID` or an expired credential
+produces the same 502 forever, and the old behaviour was to retry it every two
+minutes for the life of the install without ever saying so. Eight online attempts
+now ends in the same failed mark, carrying the server's own reason. This is the
+only op in the app with an attempt cap, deliberately: `pdf` is last in its
+sequence (so marking it holds no sibling behind it), and it is the only op whose
+entire purpose is a third-party upload. Do not generalize the cap to `submit` or
+`sign` - those carry signatures and a marked `submit` blocks the two ops behind
+it.
+
+Nothing is deleted in either case (ADR 0013). A human Retry clears the mark and
+now also resets the counters, so it genuinely tries again rather than waiting out
+a backoff that was already up to two minutes long.
+
+The transliteration changes the BYTES WRITTEN to Drive for any BOL whose item
+names or notes contain non-WinAnsi characters: `≈ 320 cu ft` prints as
+`~ 320 cu ft`. Postgres and the Sheet still hold the original text - only the
+generated PDF is transliterated. See
+[ADR 0042](decisions/0042-pdf-text-is-transliterated-and-a-failed-copy-is-not-a-failed-signature.md).
+
+**Not fixed by this change:** rows already sitting at `status = 'delivered'` from
+the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
+RUNBOOKS.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified
 against" stamp is accounted for in "Reconciliation 7fe20a4 -> 7f41611" above, the
-auto-reconcile rate change, and the row-delete serialization immediately above.
+auto-reconcile rate change, the row-delete serialization, and the BOL `pdf`-op
+classification immediately above.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.

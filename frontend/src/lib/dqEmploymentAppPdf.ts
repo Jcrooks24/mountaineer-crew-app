@@ -7,6 +7,7 @@
  */
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
 import { getCompanyInfoCached } from "./companyInfo";
+import { toWinAnsi } from "./winAnsi";
 
 export type AddressRow = { address: string; from: string; to: string };
 export type EmployerRow = {
@@ -46,9 +47,14 @@ const MAXW = PW - MARGIN * 2;
 const CERT =
   "This certifies that this application was completed by me, and that all entries on it and information in it are true and complete to the best of my knowledge. I authorize the motor carrier to make investigations and inquiries into my employment, driving, safety-performance, and criminal-history record as may be necessary.";
 
-function wrap(str: string, font: PDFFont, size: number, maxW: number): string[] {
+// Every drawn string funnels through here, so this is where the WinAnsi guard
+// belongs: a pdf-lib standard font THROWS on a character it cannot encode and
+// takes the whole document with it. Applicant-typed employers, addresses and
+// explanations are the exposure. Same fix as bolPdf - see ADR 0042.
+function wrap(raw: string, font: PDFFont, size: number, maxW: number): string[] {
+  const str = toWinAnsi(raw || "");
   const out: string[] = [];
-  for (const para of (str || "").split("\n")) {
+  for (const para of str.split("\n")) {
     let line = "";
     for (const word of para.split(/\s+/)) {
       const test = line ? `${line} ${word}` : word;
