@@ -1,8 +1,8 @@
 ---
-description: Run the crew app's debugging & pre-promotion vetting protocol against a target
+description: Run the crew app's pre-promotion vetting protocol against a target
 ---
 
-Run the Debugging & Vetting Protocol defined in `docs/VETTING_PROTOCOL.md` against:
+Run the Vetting Protocol defined in `docs/VETTING_PROTOCOL.md` against:
 
 **$ARGUMENTS**
 

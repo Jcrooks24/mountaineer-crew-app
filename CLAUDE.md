@@ -16,6 +16,7 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md) | Every account, env var, and API. What breaks without each. **No secret values, ever.** |
 | [docs/decisions/](docs/decisions/) | Why things are the way they are. **Read before "fixing" something that looks wrong.** |
 | [docs/business/](docs/business/) | The company this app serves: who does what, the SOP, the tools audit, the M1 merger assessment. **Read before deciding whether a feature should exist.** |
+| [docs/DEBUGGING_PROTOCOL.md](docs/DEBUGGING_PROTOCOL.md) | **Mandatory for any debugging work** (`/debug`). How to go from "something is wrong" to a proven cause: pin the environment and build, reproduce, triage blast radius, then **hypothesis + falsifier before any fix**. |
 | [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md) | The pre-promotion test protocol (`/vet`). **Start at STEP 0**, which is not diff-derived. |
 | [docs/VET_POSTMORTEM_2026-08.md](docs/VET_POSTMORTEM_2026-08.md) | Why STEP 0 exists: every defect that reached crews since the v1.8 merge, and what the protocol was structurally blind to. Read before deciding a check is unnecessary. |
 | [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) | Admin-facing guide: what admin can do in the app. Keep accurate against `Admin.tsx` / `admin.py`. |
@@ -38,6 +39,12 @@ A change is not done when the code works. It is done when the next person can st
 7. **Edited a frontend file?** → check [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) and apply any items that match **the files you already touched**. A few per commit, noted in the commit message. Do not go hunting in other files, and do not let it become the point of the commit. Skip anything not obviously safe.
 
 Run **`/handoff`** at the end of a working session to sweep all of this. Run **`/vet`** before promoting to `main`.
+
+## Debugging rule
+
+**Any debugging work follows [docs/DEBUGGING_PROTOCOL.md](docs/DEBUGGING_PROTOCOL.md)** (`/debug`). It is not optional and it is not only for hard bugs. Its load-bearing step is STEP 5: for any behavioral, data, or performance defect, write the hypothesis, write the observation that would **disprove** it, and take that observation **before** writing a fix. Shipping a fix for an unmeasured hypothesis is how the same bug gets fixed three times, which has already happened here.
+
+Use [docs/RUNBOOKS.md](docs/RUNBOOKS.md) first when the broken thing is one that has broken before, and `/vet` afterwards, before the fix reaches `main`.
 
 ## Branch rule
 

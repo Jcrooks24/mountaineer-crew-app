@@ -9,6 +9,11 @@ work queues on the device and syncs when you fix things. **You almost never need
 to panic-fix during a workday, and you should never tell crews to stop working.**
 The two exceptions that do lose data are noted where they apply.
 
+**If nothing here matches the symptom**, the failure is new and you are debugging,
+not following a checklist. Switch to
+[DEBUGGING_PROTOCOL.md](DEBUGGING_PROTOCOL.md) (`/debug`), which is mandatory for
+that work, and come back here at its STEP 10 to write up whatever you learned.
+
 ---
 
 ## Triage: what is actually broken?

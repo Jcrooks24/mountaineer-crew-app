@@ -1,8 +1,13 @@
-# Mountaineer Crew App - Debugging & Vetting Protocol
+# Mountaineer Crew App - Vetting Protocol
 
-Reusable protocol for debugging and pre-promotion vetting. Hand it to an agent
+Reusable protocol for pre-promotion vetting. Hand it to an agent
 (or run `/vet`) to check the app against its core behaviors before a
 `staging -> main` promotion. Built around the project's actual architecture.
+
+**This doc verifies a change you already have.** Diagnosing a defect whose cause
+is not yet known is a different job with its own mandatory protocol:
+[DEBUGGING_PROTOCOL.md](DEBUGGING_PROTOCOL.md) (`/debug`). A debugging session
+ends by handing its fix to this doc.
 
 ## How to run this
 
