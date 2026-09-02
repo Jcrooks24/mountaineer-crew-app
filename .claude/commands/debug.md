@@ -40,6 +40,29 @@ for debugging work on this project. Do not skip to a fix. In particular:
 - **STEP 10:** close the loop in the same commit (DATA_FLOW_STAGING, RUNBOOKS /
   Known defects, ADR, CREDENTIALS).
 
+**If more than one bug was handed over, use Batch mode** (its own section in the
+protocol) and do not start fixing:
+
+1. **Explore the whole list first, fixing nothing**, including the trivial items.
+   Carry each through STEP 1-7 and record symptom, environment, reproduced,
+   blast radius, cause (file:line, or hypothesis + falsifier + result), proposed
+   fix, risk, and links to other items. Then report the batch-level findings:
+   shared causes, ordering conflicts, items that are not bugs, items that cannot
+   be verified from here, and a recommended order.
+2. **Propose and stop.** Present the table (`# | Bug | Cause | Proposed fix |
+   Blast radius | Risk | Notes`), one row per item including proposed skips, and
+   **wait for per-item approval.** Silence is not approval; approval of one row
+   is not approval of the table; a note on a row means re-propose that row. The
+   only exception is active data loss, which is reported immediately and stopped
+   before the rest of the batch is explored.
+3. **Fix one at a time in the approved order, and keep a checkbox progress list
+   posted in the session, re-posted as each item changes state:** `[ ]` not
+   started, `[~]` in progress, `[x]` done with its proof named, `[!]` blocked
+   with the reason, `[-]` skipped. Each item still gets its own STEP 8 and STEP
+   9. Commit per item, not per batch. A mid-batch surprise (new bug, wrong
+   cause, fix bigger than proposed) marks the item `[!]` and comes back to the
+   user rather than being absorbed. Re-run the earlier reproductions at the end.
+
 End with the protocol's report block (SYMPTOM / ENVIRONMENT / REPRODUCED / BLAST
 RADIUS / HYPOTHESIS / FALSIFIER / RESULT / CAUSE / FIX / PROOF / UNVERIFIED / DOCS),
 with honest blanks if the investigation is unfinished.

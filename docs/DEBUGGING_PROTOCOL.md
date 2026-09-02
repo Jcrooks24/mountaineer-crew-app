@@ -17,6 +17,11 @@ Three docs cover three different jobs. Opening the wrong one wastes a session.
 Debugging usually ends by handing off to the other two: a fix gets vetted, and a
 new failure mode gets a runbook entry.
 
+**Handed more than one bug at once?** Read [Batch mode](#batch-mode---when-you-are-handed-a-list-of-bugs)
+before STEP 1. The flow changes: explore the whole list first, propose a fix for
+every item, wait for approval, then fix one at a time with a live progress list
+on screen.
+
 ---
 
 ## Rule zero: the non-negotiables
@@ -289,6 +294,109 @@ A fix is not done when the symptom is gone. Per the Definition of done in
 
 ---
 
+## Batch mode - when you are handed a list of bugs
+
+Applies whenever more than one defect arrives at once: a list from the field, a
+vet's findings table, a session's worth of notes. Three or more is a batch. Two
+is a judgment call, and the cost of treating two as a batch is low.
+
+Every step above still applies to every item. Batch mode wraps them in three
+phases, and **the phases do not overlap.**
+
+### Phase A - Explore the entire batch before fixing anything
+
+Work every item to a proposed fix. **Fix nothing yet, including the trivial ones.**
+
+Fixing while still reading hides the shape of the batch. Items share a cause more
+often than their symptoms suggest, one fix routinely reshapes or masks another
+item's symptom, and an item you would have dropped after reading item 7 has
+already been paid for by the time you get there.
+
+Carry each item through STEP 1 to STEP 7 and record:
+
+- **id and short name**
+- **symptom** as reported, in the reporter's words
+- **environment and build** it came from
+- **reproduced:** yes (how) / no (what was tried)
+- **blast radius:** data at risk, crew self-recovery, already a Known defect, already ADR'd
+- **cause** with file:line, or the hypothesis + falsifier + result if it is not yet proven
+- **proposed fix**, one or two sentences, naming the layer it lands in
+- **risk and cost:** what else touches that code
+- **links to other items:** same cause, conflicts with, must come after
+
+Then step back and report on the batch as a whole, which is the part that only
+exists because you explored it all first:
+
+- **Shared causes.** Items that collapse into one fix. Say so rather than fixing
+  the same thing three times.
+- **Conflicts and ordering.** Item B's fix changes item A's surface, or A has to
+  land first for B to be testable.
+- **Items that are not bugs.** Already ADR'd, working as designed, an existing
+  Known defect, or an environment and configuration problem rather than a code one.
+- **Items that cannot be verified from here.** Needs a real device, production
+  data, or the user to look at something.
+- **A recommended order:** data loss first, then whatever other items depend on,
+  then the rest.
+
+### Phase B - Propose, then stop
+
+Present the batch as a table and wait. Nothing is fixed in this phase.
+
+| # | Bug | Cause | Proposed fix | Blast radius | Risk | Notes |
+
+Rules:
+
+- One row per item, **including items you propose to skip**, with the reason.
+- **Approval is per item, not per table.** Approving item 3 approves item 3.
+- **Silence is not approval.** Neither is approval of a different row, nor a
+  general "looks good" aimed at the batch.
+- A note on a row can change the fix. Re-propose that row rather than proceeding
+  from your own version of it.
+- If only a subset is approved, the rest stay in the progress list marked skipped.
+  They are never silently dropped.
+
+**One exception, and only this one: active data loss does not wait for approval.**
+If Phase A finds crew data being lost right now, say so immediately, in its own
+message, before the rest of the batch is explored. Stop the loss, then continue.
+
+### Phase C - Fix sequentially, with the progress list on screen
+
+One item at a time, in the approved order. **Post the progress list in the session
+and re-post it as each item changes state**, so the state of the batch is always
+visible and never has to be reconstructed by scrolling back.
+
+```
+Batch: field reports 2026-09-02   (3 of 7 done, 1 blocked)
+
+- [x] 1. BOL total wrong on multi-day jobs   fixed, proof: replay test now returns one row
+- [x] 2. Materials sync silently drops photo  fixed, proof: [drive] log shows upload, Sheet row matches
+- [x] 3. Availability month edit off by one   fixed, proof: failing unit test now passes
+- [~] 4. Draft lost on reload                 IN PROGRESS
+- [ ] 5. Job list slow on older phones
+- [!] 6. Reset email not arriving             BLOCKED: need to know which address it was sent from
+- [-] 7. Rename the Timeline tab              SKIPPED at your request
+```
+
+`[ ]` not started, `[~]` in progress, `[x]` done and proven, `[!]` blocked with
+the reason, `[-]` skipped and on whose say so.
+
+Rules for the run:
+
+- **Each item still gets STEP 8 and STEP 9 on its own.** Batch approval is not
+  batch verification, and "the build is still clean" is not proof that item 4 works.
+- **A finished line names its proof**, not just "done".
+- **Commit per item**, or per group of items that share one cause, so a bad fix
+  can be reverted alone. Never one commit at the end of a batch.
+- **A surprise stops the batch, it does not get absorbed into it.** A new bug, a
+  cause that turns out to be wrong, or a fix that is bigger than what was
+  proposed: mark the item `[!]`, re-post the list, and come back to the user.
+  An approved fix does not authorize the larger fix it turned into.
+- **Re-run the earlier items' reproductions at the end.** Fix 6 can undo fix 2,
+  and a batch checked only item by item has never been tested as a whole.
+- Close with STEP 10 for the batch, then the report block per item, condensed.
+
+---
+
 ## Failure classes with extra obligations
 
 If the bug is in one of these, the general steps above are not sufficient.
@@ -323,6 +431,14 @@ Each of these has cost this project real time or real data.
 - Widening a fix into a refactor.
 - Driving the user's Chrome to check a page.
 - Bulk-repairing Sheet or DB rows without explicit approval.
+- Starting to fix batch items while the batch is still being explored.
+- Treating a presented batch table as approved, or one row's approval as the
+  batch's.
+- Running a batch silently and reporting only at the end, instead of keeping the
+  progress list on screen.
+- Absorbing a mid-batch surprise into an approved fix rather than stopping and
+  re-proposing.
+- One commit for a whole batch.
 
 ---
 

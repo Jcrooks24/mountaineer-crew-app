@@ -44,6 +44,8 @@ Run **`/handoff`** at the end of a working session to sweep all of this. Run **`
 
 **Any debugging work follows [docs/DEBUGGING_PROTOCOL.md](docs/DEBUGGING_PROTOCOL.md)** (`/debug`). It is not optional and it is not only for hard bugs. Its load-bearing step is STEP 5: for any behavioral, data, or performance defect, write the hypothesis, write the observation that would **disprove** it, and take that observation **before** writing a fix. Shipping a fix for an unmeasured hypothesis is how the same bug gets fixed three times, which has already happened here.
 
+**A list of bugs is not fixed as it is read.** More than one defect at once goes through Batch mode in that doc: explore the whole list first fixing nothing, propose a fix for every item and **wait for per-item approval**, then fix sequentially with a checkbox progress list kept on screen and re-posted as each item changes state. Active data loss is the one thing reported and stopped without waiting.
+
 Use [docs/RUNBOOKS.md](docs/RUNBOOKS.md) first when the broken thing is one that has broken before, and `/vet` afterwards, before the fix reaches `main`.
 
 ## Branch rule
