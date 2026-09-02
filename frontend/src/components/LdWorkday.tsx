@@ -14,13 +14,21 @@ import { hydrateDay, setLdDay } from "../lib/ldDayStore";
  * is the presentational prompt.
  */
 
-export type LdActivity = "packing" | "loading" | "unloading" | "unpacking" | "driving";
-export const LD_ACTIVITIES: LdActivity[] = ["packing", "loading", "unloading", "unpacking", "driving"];
+// `rearranging` covers an internal rearrange: the crew move items around inside
+// one home (commonly for a renovation) and nothing is loaded or driven anywhere.
+// Added 2026-09-02 from the field - the list had no honest option for that day,
+// so crews were ticking "Loading" for a job with no truck involved, which put a
+// wrong activity on the day and (on interstate jobs) offered the BOL packing
+// inventory for a shipment that does not exist. It is a LABOR activity like the
+// rest, so `laborSelected` picks it up and the Actions buttons render.
+export type LdActivity = "packing" | "loading" | "unloading" | "unpacking" | "rearranging" | "driving";
+export const LD_ACTIVITIES: LdActivity[] = ["packing", "loading", "unloading", "unpacking", "rearranging", "driving"];
 const LABEL: Record<LdActivity, string> = {
   packing: "Packing",
   loading: "Loading",
   unloading: "Unloading",
   unpacking: "Unpacking",
+  rearranging: "Internal rearrange",
   driving: "Driving",
 };
 

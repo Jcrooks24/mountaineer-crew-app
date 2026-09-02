@@ -417,7 +417,8 @@ export default function App() {
   }, [longDistance, tab]);
 
   // Long-distance day plan - drives whether the timeline shows the labor Actions
-  // buttons (packing/loading/unloading/unpacking) or the RODS recorder (driving).
+  // buttons (packing/loading/unloading/unpacking/rearranging) or the RODS
+  // recorder (driving).
   const {
     plan: ldPlan,
     driving: ldDriving,
@@ -2598,9 +2599,10 @@ export default function App() {
               <div className="card" data-component="TimelineActionsTile">
                 <div className="microLabel" style={{ marginBottom: 8 }}>Actions</div>
                 <div className="small" style={{ color: "var(--muted)" }}>
-                  Pick what you're doing today (packing, loading, unloading, unpacking, or driving)
-                  in the job setup above to start logging. Labor shows the Actions buttons; driving
-                  brings up the RODS recorder.
+                  Pick what you're doing today (packing, loading, unloading, unpacking,
+                  an internal rearrange, or driving) in the job setup above to start
+                  logging. Labor shows the Actions buttons; driving brings up the RODS
+                  recorder.
                 </div>
               </div>
             );

@@ -28,6 +28,9 @@ import { FORM_OF_PAYMENT_OPTIONS, ESTIMATE_TYPE_OPTIONS, VALUATION_OPTIONS } fro
 const TRIP_TASK_TAGS = new Set([
   "local", "long-distance", "long distance", "longdistance",
   "packing", "unpacking", "loading", "unloading", "driving",
+  // The activity picker's own label for an internal rearrange, plus the spellings
+  // an admin is likely to type if they add it as a job type too.
+  "rearranging", "rearrange", "internal rearrange", "internal-rearrange",
 ]);
 
 type Meta = {
@@ -417,10 +420,11 @@ export default function JobSetupPanel({
           </div>
 
           {/* Job type. Trip (Local/Long-distance) and the day's tasks
-              (Packing/Unpacking/Loading/Unloading/Driving) are captured by the
-              toggle + "What are you doing today?" above, so they're filtered out
-              here to avoid logging the same thing twice - this list is the move
-              TYPE (Commercial, Delivery, Storage, Labor-only, ...). */}
+              (Packing/Unpacking/Loading/Unloading/Internal rearrange/Driving) are
+              captured by the toggle + "What are you doing today?" above, so
+              they're filtered out here to avoid logging the same thing twice -
+              this list is the move TYPE (Commercial, Delivery, Storage,
+              Labor-only, ...). */}
           <div className="col" style={{ gap: 6 }}>
             <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Job type</span>
             <div className="row wrap" style={{ gap: 8 }}>

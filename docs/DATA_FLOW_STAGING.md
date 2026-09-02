@@ -1188,6 +1188,31 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## The day plan gains an "internal rearrange" activity (2026-09-02)
+
+**Class D, client only.** No endpoint, no queue, no new field. What changes is
+the vocabulary of an existing persisted value.
+
+| Change | Path | Adherence |
+|---|---|---|
+| `crew_ld_plan_v1:<date>.activities` may now contain `"rearranging"` | `components/LdWorkday.tsx` (`LD_ACTIVITIES`) | read |
+
+Nothing about the exchange moves. Only `driving` is sent anywhere - `useLdPlan`
+derives `drive_day` from it and writes that through `setLdDay` - and
+`rearranging` is a LABOR activity, so it lands in `laborSelected` and gates the
+Actions buttons exactly like packing or unloading. It deliberately does **not**
+open the BOL Inventory tab: that gate is `ldLabor.includes("loading")`
+(`App.tsx`), and an internal rearrange has no shipment to declare.
+
+Both directions are compatible with a device holding the other build's plan.
+`LdPlanTile` renders from the fixed `LD_ACTIVITIES` list rather than from the
+stored array, so an older build reading a plan that contains `rearranging` keeps
+the value, counts it as labor, and simply shows no chip for it.
+
+Reported from the field 2026-09-01: with no honest option for a day spent moving
+items inside one home, crews were ticking **Loading**, which recorded a wrong
+activity and offered a BOL inventory for a shipment that does not exist.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified
