@@ -37,6 +37,14 @@ class OffJobEntry(Base):
     # Free-text detail when pay_structure == "other".
     pay_other_note = Column(String, nullable=True)
 
+    # Who in the OFFICE entered this, when it was not the person it belongs to.
+    # `submitted_by` stays the employee so payroll attributes the hours to them;
+    # this is the audit trail for an entry somebody else recorded. NULL means the
+    # entry was logged by its own owner, which is every crew-logged row.
+    # Used by admin-recorded PTO (app/core/pto.py).
+    recorded_by_id = Column(Integer, nullable=True)
+    recorded_by_name = Column(String, nullable=True)
+
     # Required "what you did".
     notes = Column(Text, nullable=False, default="")
 

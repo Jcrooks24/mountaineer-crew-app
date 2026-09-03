@@ -144,6 +144,39 @@ print("\nA missing or malformed date is refused, not guessed:")
 check("no date is refused", check_pto_allowed(db, eligible, None, 4) is not None)
 check("a junk date is refused", check_pto_allowed(db, eligible, "not-a-date", 4) is not None)
 
+print("\nPTO IS OFFICE-ONLY: crew must not see it or log it")
+# Direction, 2026-09-03: PTO appears nowhere crew-facing. These are the surfaces
+# that would leak it, and a leak is silent in every one - a crew member would see
+# hours they did not log, or could grant themselves paid time off. Asserted
+# against the source because they are query filters and route decorators, which
+# calling the functions from here would not exercise.
+_backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+oj_src = open(os.path.join(_backend, "app", "routers", "off_job.py"), encoding="utf-8").read()
+hours_src = open(os.path.join(_backend, "app", "routers", "hours.py"), encoding="utf-8").read()
+
+check("the crew's allowed pay structures exclude PTO",
+      'CREW_PAY_STRUCTURES = {"regular", "non_billable", "other"}' in oj_src)
+check("the crew POST refuses PTO with a 403 rather than downgrading it",
+      "status_code=403" in oj_src and "PTO is recorded by the office" in oj_src,
+      "coercing it to regular would record paid time off as worked time")
+check("the crew's own off-job list filters PTO out",
+      "OffJobEntry.pay_structure != PTO_PAY_STRUCTURE" in oj_src)
+check("BOTH crew Worked Hours queries filter PTO out",
+      hours_src.count("OffJobEntry.pay_structure != PTO_PAY_STRUCTURE") == 2,
+      str(hours_src.count("OffJobEntry.pay_structure != PTO_PAY_STRUCTURE")))
+check("there is no crew-facing balance endpoint",
+      '@router.get("/pto-balance")' not in oj_src)
+check("the balance endpoint is admin-only",
+      '@admin_router.get("/pto-balance/{user_id}")' in oj_src)
+check("recording PTO is admin-only", '@admin_router.post("/pto"' in oj_src)
+check("an admin-recorded entry keeps the EMPLOYEE as submitted_by",
+      "e.submitted_by_id = user.id" in oj_src,
+      "payroll attributes hours by submitted_by, so this must be the employee")
+check("and records who in the office entered it",
+      "e.recorded_by_id = current_user.id" in oj_src)
+check("re-using a non-PTO entry uuid cannot convert it into PTO",
+      "cannot be turned into one" in oj_src)
+
 print()
 if FAILURES:
     print("FAILURES: " + ", ".join(FAILURES))

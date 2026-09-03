@@ -39,6 +39,7 @@ from app.core.time_utils import (
 )
 from app.db.models.event import Event
 from app.db.models.job_report import JobReport
+from app.core.pto import PTO_PAY_STRUCTURE
 from app.db.models.off_job_entry import OffJobEntry
 from app.db.models.office_hours import OfficeHoursEntry
 from app.db.models.user import User
@@ -249,6 +250,9 @@ def worked_history(
         db.query(OffJobEntry)
         .filter(
             OffJobEntry.submitted_by_id == current_user.id,
+            # PTO is office-only and is not shown to the crew member it belongs
+            # to (user direction, 2026-09-03). It reaches payroll directly.
+            OffJobEntry.pay_structure != PTO_PAY_STRUCTURE,
             or_(
                 OffJobEntry.work_date >= window_start.isoformat(),
                 and_(
@@ -474,6 +478,8 @@ def daily_hours(
         db.query(OffJobEntry)
         .filter(
             OffJobEntry.submitted_by_id == my_id,
+            # Office-only; see the note on the other off-job query above.
+            OffJobEntry.pay_structure != PTO_PAY_STRUCTURE,
             or_(
                 OffJobEntry.work_date >= start_d.isoformat(),
                 and_(OffJobEntry.work_date.is_(None), OffJobEntry.created_at >= start_utc),

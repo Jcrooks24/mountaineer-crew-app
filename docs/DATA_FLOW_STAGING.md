@@ -1218,19 +1218,27 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
-## PTO is logged as an off-job pay structure (2026-09-03, BACKEND ONLY)
+## PTO is recorded by the office, never by the crew (2026-09-03, BACKEND ONLY)
 
-Request 1a50fa5b. **No UI yet** - the crew cannot pick PTO and the office cannot
-set an allowance. Rules, storage and enforcement only.
+Request 1a50fa5b. **No UI yet** - the office has no screen to record PTO or set
+an allowance. Rules, storage and enforcement only.
+
+**PTO IS OFFICE-ONLY** (user direction, 2026-09-03). It appears nowhere
+crew-facing: crew cannot log it, cannot see their balance, and do not see PTO the
+office recorded for them on their own off-job list or in Worked Hours. It is
+stored as an off-job entry purely because that is where payroll picks it up.
 
 | Path | Where | Status |
 |---|---|---|
 | `users.pto_hours_annual` (Float, default 0, 0 = not eligible) | migration `l2n4p6k8m0o2`, `db/models/user.py` | [x] |
 | Eligibility / cap / remaining, derived from entries | `core/pto.py` | [x] |
-| `pay_structure = "pto"` accepted, and REFUSED when ineligible or over cap | `routers/off_job.py` | [x] |
-| `GET /api/off-job/pto-balance` for the crew screen | `routers/off_job.py` | [x] |
+| Crew POST refuses `pto` with 403; `CREW_PAY_STRUCTURES` excludes it | `routers/off_job.py` | [x] |
+| `POST /api/admin/off-job/pto` records PTO against an employee (admin) | `routers/off_job.py` | [x] |
+| `GET /api/admin/off-job/pto-balance/{user_id}` (admin) | `routers/off_job.py` | [x] |
+| PTO filtered out of the crew's off-job list and BOTH Worked Hours queries | `routers/off_job.py`, `routers/hours.py` | [x] |
+| `off_job_entries.recorded_by_id` / `recorded_by_name` | migration `m3o5q7l9n1p3` | [x] |
 | Payroll: its own `pto` bucket, in `totals.pto_hours` and per day | `routers/payroll.py` | [x] |
-| Off Job screen: PTO option + remaining balance | not built | [ ] |
+| Admin screen: record PTO against an employee, see their balance | not built | [ ] |
 | Admin roster: set someone's annual PTO hours | not built | [ ] |
 
 **Calendar year, no roll-over, and PTO never reaches overtime** (both confirmed).
@@ -1246,9 +1254,17 @@ would drift silently.
 allowance of zero and "not eligible" are one fact, and two ways to say it would
 eventually disagree.
 
-**The cap is enforced server-side, not just in the UI.** The offline queue posts
-whatever it was holding, possibly days later, so a client that was out of date
-about somebody's balance must not be able to overspend it.
+**The cap is enforced server-side, not just in the UI.** An admin working from a
+stale screen must not be able to overspend somebody's year.
+
+**`submitted_by` stays the EMPLOYEE** on an admin-recorded entry, because payroll
+attributes hours by it. `recorded_by` is the new audit trail for who in the
+office entered it - for paid time drawn from an allowance, "who granted this" is
+the question somebody will ask.
+
+**A crew POST of `pto` is refused with 403, not silently coerced** to "regular".
+A quiet downgrade would record paid time off as worked time, which is worse than
+an error.
 
 **Editing an entry is judged on the change.** The queue re-submits the same
 `entry_uuid` to edit, so the entry's own prior hours are excluded from the "used"

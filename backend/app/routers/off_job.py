@@ -25,10 +25,18 @@ from app.integrations.sheets_export import export_off_job_to_sheets, run_export_
 router = APIRouter(prefix="/api/off-job-hours", tags=["off-job-hours"])
 admin_router = APIRouter(prefix="/api/admin/off-job-hours", tags=["off-job-hours"])
 
-# "pto" is paid time off. It is a pay structure rather than a separate feature
-# because that is how the crew already think about an off-job day: they log the
-# hours and say how they are paid. It is the only one with a cap (app/core/pto.py).
-PAY_STRUCTURES = {"regular", "non_billable", "other", PTO_PAY_STRUCTURE}
+# What a CREW MEMBER may log for themselves.
+CREW_PAY_STRUCTURES = {"regular", "non_billable", "other"}
+
+# PTO is stored as an off-job pay structure because that is where it has to land
+# for payroll to pick it up, but it is OFFICE-ONLY in every other respect (user
+# direction, 2026-09-03): crew never log it, never see it on their own off-job
+# list, and never see it in Worked Hours. The office records it against somebody.
+#
+# So this set is what the STORAGE accepts, and CREW_PAY_STRUCTURES is what the
+# crew endpoint accepts. They are deliberately different, and the difference is
+# enforced at the endpoint rather than by hoping the UI never offers the option.
+PAY_STRUCTURES = CREW_PAY_STRUCTURES | {PTO_PAY_STRUCTURE}
 
 
 class OffJobIn(BaseModel):
@@ -76,6 +84,20 @@ def _export(e: OffJobEntry) -> None:
     run_export_in_background(export_off_job_to_sheets, _to_out(e).model_dump())
 
 
+class PtoRecordIn(BaseModel):
+    """Office-recorded paid time off for one employee.
+
+    `entry_uuid` is the idempotency key, minted by the admin client, so a retry
+    or a double-tap cannot create a second entry - and re-sending it EDITS the
+    entry rather than adding to it, which is why the cap check excludes it.
+    """
+    entry_uuid: str
+    user_id: int
+    work_date: str
+    hours: float
+    notes: str = ""
+
+
 @router.post("", response_model=OffJobOut, status_code=201)
 def create_off_job(
     body: OffJobIn,
@@ -89,24 +111,15 @@ def create_off_job(
     if body.hours is None or body.hours <= 0:
         raise HTTPException(status_code=400, detail="Enter hours worked")
 
-    pay = body.pay_structure if body.pay_structure in PAY_STRUCTURES else "regular"
-
-    # PTO spends a finite allowance, so it is the one entry the app refuses.
-    # Checked here rather than only in the UI: the offline queue posts whatever
-    # it was holding, possibly days later, and a client that was out of date
-    # about somebody's balance must not be able to overspend it.
-    #
-    # The entry's own uuid is excluded from the "used" figure so that EDITING an
-    # existing PTO entry is judged on the change, not on the old value plus the
-    # new one - otherwise lowering 8 hours to 4 would be refused for exceeding a
-    # cap the 8 had already filled.
-    if pay == PTO_PAY_STRUCTURE:
-        why = check_pto_allowed(
-            db, current_user, (body.work_date or "").strip() or None,
-            float(body.hours), exclude_entry_uuid=body.entry_uuid.strip(),
+    # PTO is not something a crew member can log for themselves. Refused loudly
+    # rather than quietly coerced to "regular": a silent downgrade would record
+    # paid time off as worked time, which is a worse outcome than an error.
+    if body.pay_structure == PTO_PAY_STRUCTURE:
+        raise HTTPException(
+            status_code=403,
+            detail="PTO is recorded by the office, not logged here.",
         )
-        if why:
-            raise HTTPException(status_code=400, detail=why)
+    pay = body.pay_structure if body.pay_structure in CREW_PAY_STRUCTURES else "regular"
 
     # Idempotent: the offline queue retries with the same uuid. Update in place.
     e = db.query(OffJobEntry).filter(OffJobEntry.entry_uuid == body.entry_uuid).first()
@@ -132,22 +145,6 @@ def create_off_job(
     return _to_out(e)
 
 
-@router.get("/pto-balance")
-def my_pto_balance(
-    year: Optional[int] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """This crew member's PTO position for a calendar year (default: this one).
-
-    Drives the Off Job screen: whether to offer PTO at all, and how much is left.
-    The server checks the same thing again on submit - this is so the crew member
-    is told before they type, not so the rule lives on the client.
-    """
-    from datetime import date as _date
-    return pto_balance(db, current_user, year or _date.today().year)
-
-
 @router.get("", response_model=List[OffJobOut])
 def list_my_off_job(
     db: Session = Depends(get_db),
@@ -155,12 +152,104 @@ def list_my_off_job(
 ):
     rows = (
         db.query(OffJobEntry)
-        .filter(OffJobEntry.submitted_by_id == current_user.id)
+        .filter(
+            OffJobEntry.submitted_by_id == current_user.id,
+            # PTO the office recorded against this person is deliberately hidden
+            # from them here. It is stored as an off-job entry so payroll picks
+            # it up; it is not part of what the crew member logged.
+            OffJobEntry.pay_structure != PTO_PAY_STRUCTURE,
+        )
         .order_by(OffJobEntry.created_at.desc())
         .limit(100)
         .all()
     )
     return [_to_out(r) for r in rows]
+
+
+@admin_router.get("/pto-balance/{user_id}")
+def admin_pto_balance(
+    user_id: int,
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """One employee's PTO position for a calendar year (default: this one).
+
+    Admin-only, like everything else about PTO. The crew have no endpoint for
+    this: they are not shown their balance because they are not the ones logging
+    it (user direction, 2026-09-03).
+    """
+    from datetime import date as _date
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="No such employee on the roster.")
+    return pto_balance(db, user, year or _date.today().year)
+
+
+@admin_router.post("/pto", response_model=OffJobOut, status_code=201)
+def admin_record_pto(
+    body: PtoRecordIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Record PTO against an employee. Office-only.
+
+    Stored as an off-job entry with `pay_structure = "pto"`, which is what makes
+    payroll pick it up - it lands in the `pto` bucket and stays out of overtime.
+    It does NOT appear on the employee's own off-job list or in their Worked
+    Hours.
+
+    The cap is checked here for the same reason the crew path used to check it:
+    PTO spends a finite allowance, and an admin working from a stale screen
+    should not be able to overspend somebody's year. `entry_uuid` is excluded
+    from the used figure so editing an entry is judged on the change rather than
+    on the old value plus the new.
+    """
+    user = db.query(User).filter(User.id == body.user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="No such employee on the roster.")
+    if body.hours is None or body.hours <= 0:
+        raise HTTPException(status_code=400, detail="Enter the PTO hours.")
+
+    work_date = (body.work_date or "").strip() or None
+    why = check_pto_allowed(
+        db, user, work_date, float(body.hours),
+        exclude_entry_uuid=body.entry_uuid.strip(),
+    )
+    if why:
+        raise HTTPException(status_code=400, detail=why)
+
+    e = db.query(OffJobEntry).filter(OffJobEntry.entry_uuid == body.entry_uuid).first()
+    now = datetime.now(timezone.utc)
+    if e is None:
+        e = OffJobEntry(entry_uuid=body.entry_uuid.strip(), created_at=now)
+        db.add(e)
+    elif (e.pay_structure or "") != PTO_PAY_STRUCTURE:
+        # Refuse to convert somebody's logged work into PTO by re-using its uuid.
+        raise HTTPException(
+            status_code=409,
+            detail="That entry is not a PTO entry and cannot be turned into one.",
+        )
+
+    # submitted_by is WHOSE PTO it is, so payroll attributes it to them.
+    # recorded_by is who in the office entered it, which is the audit trail.
+    e.submitted_by_id = user.id
+    e.submitted_by_name = user.name or user.email
+    e.recorded_by_id = current_user.id
+    e.recorded_by_name = current_user.name or current_user.email
+    e.work_date = work_date
+    e.start_time = None
+    e.end_time = None
+    e.hours = float(body.hours)
+    e.pay_structure = PTO_PAY_STRUCTURE
+    e.pay_other_note = None
+    e.notes = (body.notes or "").strip() or "Paid time off"
+    e.updated_at = now
+
+    db.commit()
+    db.refresh(e)
+    _export(e)
+    return _to_out(e)
 
 
 @admin_router.get("", response_model=List[OffJobOut])
