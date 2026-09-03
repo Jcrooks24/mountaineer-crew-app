@@ -330,7 +330,7 @@ def _re_materials(db: Session, ref: Any) -> None:
     # several of them routinely belong to the SAME job - firing one rebuild each
     # is the burst that races into duplicate Materials lines. Coalescing also
     # means a job with eight submissions costs one rebuild here, not eight.
-    schedule_job_materials_bills_rebuild(row.job_uuid)
+    schedule_job_materials_bills_rebuild(row.job_uuid, db)
 
 
 def _re_job_report(db: Session, ref: Any) -> None:

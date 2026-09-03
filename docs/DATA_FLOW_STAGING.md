@@ -1218,6 +1218,35 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Bills materials rebuild: write strategy and reconciler coverage (2026-09-03)
+
+Found by `/vet`, not from the field. No payload field changes; what changes is
+the **write strategy** of one export and the **reconciler coverage** behind it.
+See [ADR 0043](decisions/0043-the-bills-materials-line-is-appended-before-stale-rows-are-dropped.md).
+
+| Path | Where | Status |
+|---|---|---|
+| `rebuild_job_materials_total_in_bills` write strategy: was delete-then-append, now **append-then-delete-stale** (`keep_last=True` spares the bottom-most match) | `integrations/sheets_export.py` | [x] |
+| `schedule_job_materials_bills_rebuild(job_uuid, db)` writes a durable pending marker before the work is attempted | `integrations/sheets_export.py`; callers in `routers/materials.py` (POST + DELETE) and `integrations/sheet_backfill.py` | [x] |
+| Marker row: `sheet_generic_exports (kind='bills_materials_pending', export_key=<job_uuid>)`, cleared only on a successful rebuild | existing table, created by `ensure_sheet_exports_tables` - **no migration** | [x] |
+| `reconcile_job_materials_bills(db, max_jobs=25)` drains leftover markers on the auto-reconciler's FAST (5 min) cycle | `integrations/auto_reconciler.py` | [x] |
+
+**Why the ordering flipped.** The delete ran first, so a worker recycle between
+the delete and the append left the job with no materials charge on the Bills tab
+at all - silent under-billing on the one export whose output is money. Appending
+first turns that same crash into a duplicate line, which is visible, flagged by
+`sheet_integrity_check.py`, and cleaned up by the next rebuild.
+
+**Why the marker exists.** The coalescer's in-flight and rerun sets are process
+memory, and Render recycles this process every 1000 requests by design. A rerun
+registered just before a recycle was lost, and a rebuild that raised was given up
+on; nothing re-drove either. The marker is in Postgres and the reconciler holds a
+DB lease, so it survives the recycle that lost the work.
+
+**No new env var, no new tab, no schema change.** Staging/prod isolation is
+unchanged: the rebuild still resolves its tab from `SHEETS_BILLS_TAB`.
+
+
 ## The day plan gains an "internal rearrange" activity (2026-09-02)
 
 **Class D, client only.** No endpoint, no queue, no new field. What changes is

@@ -1939,12 +1939,13 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
 
     svc = _get_sheets_svc(db)
     actual_headers = _ensure_tab(svc, spreadsheet_id, tab, BILL_HEADERS)
-    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", marker)
 
     if total <= 0:
         # No materials left for this job - leave the Bills sheet without a
         # zero-value "Materials" row. Itemized history still lives in the
-        # Materials sheet for audit.
+        # Materials sheet for audit. Nothing is being written, so there is no
+        # row to spare and the delete is unconditional.
+        _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "submission_id", marker)
         return 0
 
     entered_by, entered_on = _entry_status_for(db, job_uuid)
@@ -1976,17 +1977,124 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
             body={"values": sheet_rows},
         ).execute()
 
+    # APPEND FIRST, then drop the older Materials lines for this job.
+    #
+    # This used to delete and then append, and the gap between the two is a
+    # window in which this job's materials charge does not exist on the sheet at
+    # all. That gap is not hypothetical: Render recycles the worker every 1000
+    # requests by design and has OOM history, so "the process dies between these
+    # two calls" is guaranteed to happen eventually - and it lands on the one
+    # export whose output is money. Delete-first turns a crash into a silently
+    # missing charge; append-first turns the same crash into a duplicate line,
+    # which is visible on the Bills tab, flagged by sheet_integrity_check, and
+    # cleaned up by the very next rebuild of this job (keep_last spares only the
+    # newest row). A recoverable duplicate beats an invisible hole.
     _api(_append)
+    _delete_sheet_rows_by_value(
+        svc, spreadsheet_id, tab, "submission_id", marker, keep_last=True,
+    )
     return 1
+
+
+# --- Durable "this job still owes a Bills rebuild" marker -------------------
+# The coalescer below keeps its in-flight and pending-rerun sets in PROCESS
+# MEMORY, and Render recycles this process every 1000 requests by design. A
+# rerun registered a moment before a recycle is simply gone, and so is a rebuild
+# that threw. Nothing then re-drives it: the Bills materials line keeps whatever
+# total it had until the next materials POST or DELETE for that job happens to
+# schedule another one. On the one export whose output is money, "it corrects
+# itself the next time somebody edits materials" is not a recovery path.
+#
+# So the intent is written to Postgres before the work is attempted and cleared
+# only once it has actually succeeded. `sheet_generic_exports` already exists for
+# exactly this shape of (kind, key) bookkeeping and is created by
+# ensure_sheet_exports_tables at boot, so this needs no migration.
+# `reconcile_job_materials_bills` (drained by the auto-reconciler, which holds a
+# DB lease and therefore survives the recycle) picks up whatever is left.
+_BILLS_PENDING_KIND = "bills_materials_pending"
+
+
+def _mark_bills_rebuild_pending(db: Session, job_uuid: str) -> None:
+    """Record that `job_uuid` owes a Bills materials rebuild. Idempotent."""
+    try:
+        db.execute(
+            text(
+                "INSERT INTO sheet_generic_exports(kind, export_key) VALUES (:kind, :key) "
+                "ON CONFLICT (kind, export_key) DO NOTHING"
+            ),
+            {"kind": _BILLS_PENDING_KIND, "key": job_uuid},
+        )
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        # Best-effort: losing the marker costs the recycle-safety net, not the
+        # rebuild itself (already scheduled). Never fail a materials write over
+        # bookkeeping.
+        print(f"[sheets] could not mark Bills rebuild pending for {job_uuid}: {exc}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _clear_bills_rebuild_pending(db: Session, job_uuid: str) -> None:
+    """Drop the marker once the rebuild has actually landed."""
+    db.execute(
+        text("DELETE FROM sheet_generic_exports WHERE kind = :kind AND export_key = :key"),
+        {"kind": _BILLS_PENDING_KIND, "key": job_uuid},
+    )
+    db.commit()
+
+
+def reconcile_job_materials_bills(db: Session, max_jobs: int = 100) -> Dict[str, Any]:
+    """Re-drive the Bills materials rebuild for every job still carrying a
+    pending marker: a rebuild that threw, or one whose worker died before it ran
+    (a recycle, an OOM kill).
+
+    Cheap enough for the fast reconciler cycle - one indexed read that returns
+    nothing at all in steady state. Bounded by `max_jobs` so a large backlog is
+    drained across cycles instead of flooding the two-thread export pool.
+
+    Re-driving needs no drift detection and is safe: the rebuild recomputes the
+    total from Postgres, and since it now appends before deleting stale rows a
+    redundant run converges on the same single row.
+
+    KNOWN LIMIT: this recovers work that was RECORDED and then lost. A rebuild
+    whose marker write itself failed is not covered, and neither is a Bills row
+    damaged by something other than a dropped rebuild - that is what
+    sheet_integrity_check.py is for."""
+    started = time.monotonic()
+    out: Dict[str, Any] = {"pending": 0, "queued": 0, "ok": True}
+    try:
+        rows = db.execute(
+            text(
+                "SELECT export_key FROM sheet_generic_exports WHERE kind = :kind "
+                "ORDER BY exported_at LIMIT :n"
+            ),
+            {"kind": _BILLS_PENDING_KIND, "n": max_jobs},
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        out["ok"] = False
+        out["error"] = str(exc)
+        return out
+    out["pending"] = len(rows)
+    for (job_uuid,) in rows:
+        if not job_uuid:
+            continue
+        schedule_job_materials_bills_rebuild(job_uuid)
+        out["queued"] += 1
+    out["duration_ms"] = int((time.monotonic() - started) * 1000)
+    return out
 
 
 def _bills_rebuild_worker(job_uuid: str) -> None:
     from app.db.session import SessionLocal
     while True:
         db = SessionLocal()
+        ok = False
         try:
             rebuild_job_materials_total_in_bills(db, job_uuid)
             record_sheet_sync(db, "rebuild_job_materials_total_in_bills", True)
+            ok = True
         except Exception as exc:  # noqa: BLE001 - mirrors run_export_in_background
             # Same message prefix and the same failure-ring call as
             # run_export_in_background, because this path no longer goes through
@@ -1999,21 +2107,46 @@ def _bills_rebuild_worker(job_uuid: str) -> None:
             except Exception:
                 pass
             record_sheet_sync(db, "rebuild_job_materials_total_in_bills", False, str(exc))
+
+        # Decide whether to loop, and clear the durable marker, while the session
+        # is still open. The marker is cleared INSIDE the coalescer lock on
+        # purpose: released first, a schedule() arriving in the gap would insert a
+        # fresh marker that this DELETE then removes, leaving pending work with no
+        # record of it. One indexed delete under a lock that is otherwise held for
+        # three set operations is the cheaper side of that trade.
+        #
+        # A FAILED run deliberately leaves the marker in place, so the reconciler
+        # retries it. Before this, a rebuild that threw was simply given up on.
+        again = False
+        try:
+            with _bills_rebuild_lock:
+                if job_uuid in _bills_rebuild_rerun:
+                    _bills_rebuild_rerun.discard(job_uuid)
+                    again = True
+                else:
+                    _bills_rebuild_in_flight.discard(job_uuid)
+                    if ok:
+                        try:
+                            _clear_bills_rebuild_pending(db, job_uuid)
+                        except Exception as exc:  # noqa: BLE001
+                            # Marker survives, so the reconciler re-drives a
+                            # rebuild that actually succeeded. Redundant, not wrong.
+                            print(
+                                f"[sheets] could not clear Bills rebuild marker for "
+                                f"{job_uuid}: {exc}"
+                            )
         finally:
             try:
                 db.close()
             except Exception:
                 pass
-
-        with _bills_rebuild_lock:
-            if job_uuid in _bills_rebuild_rerun:
-                _bills_rebuild_rerun.discard(job_uuid)
-                continue
-            _bills_rebuild_in_flight.discard(job_uuid)
+        if not again:
             return
 
 
-def schedule_job_materials_bills_rebuild(job_uuid: str) -> None:
+def schedule_job_materials_bills_rebuild(
+    job_uuid: str, db: Optional[Session] = None,
+) -> None:
     """Coalesce repeated Bills rebuilds for the same job into one in-flight
     worker with at most one pending rerun.
 
@@ -2035,9 +2168,18 @@ def schedule_job_materials_bills_rebuild(job_uuid: str) -> None:
 
     Every run recomputes the total from Postgres, so a rerun cannot write a
     stale figure; the last write always reflects every submission that had
-    landed by the time it ran."""
+    landed by the time it ran.
+
+    `db`, when passed, is used only to record the durable pending marker that
+    makes this survive a worker recycle (see _BILLS_PENDING_KIND). Callers on a
+    request path pass their own session; the reconciler does not, because the
+    marker it is draining is already there."""
     if not job_uuid:
         return
+    # Marker FIRST, so a recycle between here and the rebuild landing is
+    # recoverable. Idempotent, and its own failure never blocks the rebuild.
+    if db is not None:
+        _mark_bills_rebuild_pending(db, job_uuid)
     with _bills_rebuild_lock:
         if job_uuid in _bills_rebuild_in_flight:
             _bills_rebuild_rerun.add(job_uuid)
@@ -2316,11 +2458,21 @@ def _delete_sheet_rows_by_value(
     tab: str,
     col_name: str,
     target_value: str,
+    keep_last: bool = False,
 ) -> int:
     """Delete every row in `tab` where the `col_name` cell equals
     `target_value`. Used by replace-style exports (estimates, job reports)
     to guarantee exactly one row per logical entity regardless of how
     many times it's saved.
+
+    `keep_last=True` spares the LAST matching row (the greatest grid index) and
+    deletes only the ones above it. That is what turns a replace-style export
+    from delete-then-append into append-then-delete-stale, which is the ordering
+    a crash can survive: a worker that dies mid-sequence leaves a visible
+    duplicate that the next run cleans up, instead of a hole where the row used
+    to be. Sheets appends at the bottom, so the row just written is the greatest
+    index; the selection is re-read on every retry, so a concurrent append
+    cannot make this spare the wrong one.
 
     Returns the number of rows deleted. No-op if the tab doesn't exist
     yet, the column isn't present, or no rows match."""
@@ -2357,10 +2509,17 @@ def _delete_sheet_rows_by_value(
             spreadsheetId=spreadsheet_id, range=f"{tab}!{col_letter}:{col_letter}"
         ).execute())
         col_values = col.get("values") or []
-        return [
+        matches = [
             i for i, row in enumerate(col_values)
             if i > 0 and (row[0] if row else "") == target_value
         ]
+        if keep_last and matches:
+            # Spare the bottom-most match: it is the row this export just
+            # appended. Computed here rather than by the caller because _find is
+            # re-invoked on a stale-index retry, and the row to spare has to be
+            # re-derived from the grid as it is NOW, not as it was.
+            matches.pop()
+        return matches
 
     return _delete_rows_matching(
         svc, spreadsheet_id, tab, sheet_numeric_id, _find

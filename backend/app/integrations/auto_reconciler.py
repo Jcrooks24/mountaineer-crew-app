@@ -196,10 +196,17 @@ def _release_lease(db) -> None:
             pass
 
 
+# Bills materials rebuilds re-driven per cycle. Each one costs a few Sheets
+# calls on a two-thread pool, so a backlog drains across cycles rather than
+# swamping the pool that the live exports also share.
+BILLS_MAX_PER_CYCLE = 25
+
+
 def _run_once() -> None:
     from app.db.session import SessionLocal
     from app.integrations.sheets_reconcile import reconcile_events
     from app.integrations.bol_reconcile import reconcile_bols
+    from app.integrations.sheets_export import reconcile_job_materials_bills
 
     db = SessionLocal()
     try:
@@ -228,6 +235,22 @@ def _run_once() -> None:
                 f"{bol_result.get('errors', 0)} errors, "
                 f"{bol_result.get('duration_ms', 0)} ms"
             )
+
+        # Bills materials rebuilds that were recorded and then lost - a worker
+        # recycled or OOM-killed between scheduling one and running it, or a
+        # rebuild that threw. Runs on the FAST cycle, not the slow generic one:
+        # it is a single indexed read that returns nothing in steady state, and
+        # it is the money export, so a stale total should not sit for 20 minutes
+        # when it can sit for 5.
+        mat = reconcile_job_materials_bills(db, max_jobs=BILLS_MAX_PER_CYCLE)
+        if mat.get("queued", 0) > 0 or not mat.get("ok", True):
+            msg = (
+                f"[auto-reconcile] bills materials: {mat.get('queued', 0)} re-driven "
+                f"of {mat.get('pending', 0)} pending"
+            )
+            if mat.get("error"):
+                msg += f", error={mat['error']}"
+            print(msg)
 
         # Generic self-heal for the remaining 17 syncs, on a slower cadence.
         # Runs inside the same lease, so only one worker sweeps. The claim below

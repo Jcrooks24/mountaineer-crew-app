@@ -122,7 +122,7 @@ def submit_materials(payload: MaterialsSubmissionIn, db: Session = Depends(get_d
     # value is always correct regardless of what order POSTs/DELETES land in.
     # Scheduled, not fired directly: a draining offline queue sends several of
     # these for one job at once and they would race into two Materials lines.
-    schedule_job_materials_bills_rebuild(payload.job_uuid)
+    schedule_job_materials_bills_rebuild(payload.job_uuid, db)
     print(
         f"[materials] queued sheet export submission_id={payload.id} "
         f"job_uuid={payload.job_uuid} inserted={inserted} items={len(payload.items)}"
@@ -214,7 +214,7 @@ def delete_material(
     # known, and coalesced per job when one is.
     run_export_in_background(delete_materials_from_sheets, submission_id)
     if job_uuid:
-        schedule_job_materials_bills_rebuild(job_uuid)
+        schedule_job_materials_bills_rebuild(job_uuid, db)
     print(
         f"[materials] queued sheet delete submission_id={submission_id} "
         f"job_uuid={job_uuid} db_row_deleted={deleted}"
