@@ -57,12 +57,20 @@ export default function JobChecklistCard({
     () => failedChecksForJob(jobUuid),
   );
 
-  const refresh = useCallback(async () => {
+  // `refresh` awaits three requests and then writes six pieces of state. Without
+  // a liveness check, switching jobs while one is in flight lets the OLD job's
+  // response land after the new job's and paint the wrong job's checklist. That
+  // was survivable when the payload was only items and tick state; it stopped
+  // being survivable when `hasTruck` was added, because a stale header reading
+  // "no vehicle unit" HIDES the DVIRs on a job that does have a truck, and an
+  // item a crew never sees is an item they never do.
+  const refresh = useCallback(async (alive: () => boolean = () => true) => {
     const [its, st, header] = await Promise.all([
       loadChecklistItems(),
       loadChecklistStatus(jobUuid),
       loadJobSetup(jobUuid).catch(() => null),
     ]);
+    if (!alive()) return;
     setItems(its);
     setStatus(st);
     setFailed(failedChecksForJob(jobUuid));
@@ -73,7 +81,11 @@ export default function JobChecklistCard({
     }
   }, [jobUuid]);
 
-  useEffect(() => { refresh(); }, [refresh, refreshKey]);
+  useEffect(() => {
+    let live = true;
+    refresh(() => live);
+    return () => { live = false; };
+  }, [refresh, refreshKey]);
 
   const applicable = useMemo(
     () =>
