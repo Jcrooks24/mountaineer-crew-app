@@ -553,10 +553,15 @@ def _mark_reimbursements_paid(
     """Stamp every claim this period actually paid, and return how many.
 
     WHAT COUNTS AS PAID. The same rows payroll counted: everything in the window
-    except what an admin explicitly declined. That includes claims still sitting
-    at "submitted", because payroll pays unless declined - a claim nobody got
-    round to reviewing was still money that went out, and recording it as unpaid
-    would be false.
+    except what an admin explicitly declined.
+
+    In practice that is the approved ones, because finalize now BLOCKS on any
+    unreviewed claim in the period, so "paid but nobody looked at it" cannot
+    happen. The rule is still written as "not declined" rather than "approved":
+    it has to agree with what `_reimbursements` actually summed, and that is
+    pay-unless-declined. Narrowing this to `status == "approved"` would make the
+    ledger disagree with the payment the day anything reaches here in another
+    state.
 
     IDEMPOTENT. Only rows with no `paid_at` are touched, so re-finalizing a
     period (which the admin does whenever one more correction turns up) does not
@@ -1587,17 +1592,37 @@ def finalize_period(
             ),
         )
 
-    # Un-reviewed reimbursements WARN, they do not block. Payroll pays anything
-    # not explicitly declined, so an unreviewed claim is already being paid -
-    # blocking here would stop payroll over money that is going out either way.
-    # But finishing a period without anyone having looked at the claims is worth
-    # saying out loud, so it comes back in the response.
-    summary_for_warn = _build_summary(db, s, e)
+    # Un-reviewed reimbursements BLOCK (changed 2026-09-03, at the user's
+    # direction). This used to warn and let the finalize through, on the argument
+    # that payroll pays anything not declined, so an unreviewed claim was already
+    # being paid and blocking would stop payroll over money going out either way.
+    #
+    # That argument was right about the money and wrong about the outcome. It
+    # left a real state - "paid, and nobody ever looked at it" - which then had to
+    # be represented everywhere downstream: in the finalize response, in the paid
+    # stamp, and in the admin's head. Requiring the review before the run deletes
+    # the state instead of describing it. An unreviewed claim can no longer be
+    # paid, so nothing after this point has to reason about one.
+    #
+    # Blocks BEFORE anything is mutated, like the job review gate above.
+    summary_for_gate = _build_summary(db, s, e)
     unreviewed = [
         {"name": emp["name"], "count": emp.get("reimbursements_unreviewed", 0)}
-        for emp in summary_for_warn["employees"]
+        for emp in summary_for_gate["employees"]
         if emp.get("reimbursements_unreviewed", 0)
     ]
+    if unreviewed:
+        total = sum(u["count"] for u in unreviewed)
+        who = ", ".join(f"{u['name']} ({u['count']})" for u in unreviewed)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{total} reimbursement claim(s) in this period have not been "
+                f"reviewed yet: {who}. Approve or decline each one on the payroll "
+                "screen before finalizing - payroll pays anything not declined, "
+                "so finalizing now would pay them unreviewed."
+            ),
+        )
 
     # The mailer falls back to printing to stdout when Postmark is unconfigured
     # (that fallback is what lets the backend boot without secrets). It does NOT
@@ -1700,8 +1725,9 @@ def finalize_period(
         "sent": sent,
         "suppressed": suppressed,
         "failed": failed,
-        # Advisory only. See the note where this is built: these claims are being
-        # paid, so this is "nobody looked", not "something is wrong".
+        # Always empty on a successful finalize now: an unreviewed claim raises
+        # 409 above. Kept in the response so a client reading this field does not
+        # break, and so the shape still says what the gate is about.
         "reimbursements_unreviewed": unreviewed,
         # How many claims this run marked paid. Zero on a re-finalize, because
         # the stamp is idempotent.

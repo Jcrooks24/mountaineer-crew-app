@@ -1235,9 +1235,23 @@ and when, and would make a paid-but-never-reviewed claim indistinguishable from
 an approved one. The existing approve/decline flow is untouched.
 
 **What counts as paid** is exactly what payroll counted: everything in the window
-except an explicit decline, INCLUDING claims still sitting at "submitted".
-Payroll pays unless declined, so an unreviewed claim was still money that went
-out, and recording it as unpaid would be false.
+except an explicit decline. In practice that is the approved ones, because
+**finalize now BLOCKS on any unreviewed claim** (2026-09-03, at the user's
+direction), so "paid but nobody looked at it" cannot happen.
+
+That gate replaced a warning. The old argument was that payroll pays anything not
+declined, so an unreviewed claim was already being paid and blocking would stop
+payroll over money going out either way. Right about the money, wrong about the
+outcome: it left a real state ("paid, and nobody ever looked") that then had to be
+represented in the finalize response, in the paid stamp, and in the admin's head.
+Requiring the review deletes the state instead of describing it.
+
+The stamp's rule is still written as "not declined" rather than "approved", so it
+agrees with what `_reimbursements` actually summed. Narrowing it would make the
+ledger disagree with the payment the day anything reaches it in another state.
+
+The payroll screen disables Finalize and names who has outstanding claims, so the
+block is visible before the button is pressed rather than only as a 409 after.
 
 **Idempotent.** Only rows with a null `paid_at` are touched, so re-finalizing a
 period stamps nothing new and a claim paid on an earlier run keeps that run's

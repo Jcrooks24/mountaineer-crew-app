@@ -311,6 +311,16 @@ export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: strin
 
   const pending = data?.pending_correction_count ?? 0;
   const jobsPending = data?.jobs_pending_review ?? [];
+  // Claims nobody has approved or declined yet. Payroll pays anything not
+  // declined, so finalizing with these outstanding pays them unreviewed - the
+  // server refuses (409) and the button is disabled here so the admin finds out
+  // before pressing it rather than after.
+  const reimbPending = (data?.employees ?? []).reduce(
+    (n, e) => n + (e.reimbursements_unreviewed || 0), 0,
+  );
+  const reimbPendingWho = (data?.employees ?? [])
+    .filter((e) => (e.reimbursements_unreviewed || 0) > 0)
+    .map((e) => `${e.name} (${e.reimbursements_unreviewed})`);
 
   return (
     <div className="col" style={{ gap: 14 }}>
@@ -533,7 +543,15 @@ export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: strin
               Job Summary. Finalize is blocked until then (see the list above).
             </div>
           )}
-          <button type="button" onClick={finalize} disabled={finalizing || pending === 0 || jobsPending.length > 0}>
+          {reimbPending > 0 && (
+            <div className="small" style={{ color: "var(--danger)", marginBottom: 10, fontWeight: 600 }}>
+              {reimbPending} reimbursement claim(s) have not been reviewed:{" "}
+              {reimbPendingWho.join(", ")}. Approve or decline each one on the
+              employee rows above. Finalize is blocked until then, because payroll
+              pays anything not declined and would pay these unreviewed.
+            </div>
+          )}
+          <button type="button" onClick={finalize} disabled={finalizing || pending === 0 || jobsPending.length > 0 || reimbPending > 0}>
             {finalizing ? "Sending..." : `Finalize and notify (${pending})`}
           </button>
 
