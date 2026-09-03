@@ -589,6 +589,22 @@ durability bugs shipped the first time.
 
 ## Known defects
 
+### A bucket answered "No" on the close-out does not survive a remount
+
+**Open as of 2026-09-03.** The three cause questions store only a cause key, so
+"the crew said No to this bucket" and "the crew never answered this bucket"
+write exactly the same empty string. The Yes/No pressed state is therefore held
+in local component state (`bucketNo` in `CloseoutStepper.tsx`), and re-opening
+the report shows an explicitly-answered No as unanswered.
+
+The stored data is not wrong, and nothing is lost: no cause is no cause either
+way. What is lost is the office's ability to tell a crew who considered the
+question and said no from one who skipped it. Fixing it properly means a stored
+field per bucket, which is a schema, a payload, a Sheet column and a backend
+allow-list, and was not worth it for the reported symptom (the buttons not being
+correctable, which is fixed).
+
+
 ### A default checklist item can never be restored once the list is saved
 
 **Open as of 2026-09-03. Left as-is at the user's direction: staging only, and

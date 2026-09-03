@@ -199,5 +199,51 @@ check("re-confirming Yes retracts a stored 'as quoted'",
 check("inputs are 16px so iOS does not zoom", /fontSize: 16/.test(stepper));
 check("tap targets are at least 44px", /minHeight: 44/.test(stepper));
 
+// ── Every question must be correctable (field report, 2026-09-03) ───────────
+// "The buttons are stubborn: you cannot hit Yes then correct yourself to No."
+//
+// The three cause questions were the one place that could not be taken back.
+// Their pressed state was `chosen ? true : null`, which is never false, so the
+// No button could not light up and tapping it on a bucket with no cause yet
+// changed nothing on screen. This evaluates the REAL expression out of the
+// source rather than asserting on a string, so it fails if that ternary comes
+// back.
+console.log("\nEvery question is correctable (Yes -> No):");
+
+const bucketValue = stepper.match(
+  /<YesNoRow\s*\n\s*value=\{(chosen[^}]*?)\}/,
+);
+check("found the bucket question's pressed-state expression", !!bucketValue);
+
+if (bucketValue) {
+  const expr = bucketValue[1].replace(/bucketStep\.bucket/g, '"b"');
+  let f = null;
+  try {
+    f = new Function("chosen", "bucketNo", `return (${expr});`);
+  } catch (e) {
+    check("the expression evaluates", false, String(e));
+  }
+  if (f) {
+    check("a chosen cause reads as Yes", f("client_not_ready", {}) === true);
+    // The regression this guards: `chosen ? true : null` is never false.
+    check("an explicit No reads as No, not as unanswered", f("", { b: true }) === false);
+    check("untouched still reads as unanswered", f("", {}) === null);
+  }
+}
+
+// Switching Yes -> No has to close the dropdown that Yes opened, or the select
+// sits there under an unpressed Yes and the correction looks ignored.
+// Scope to the BUCKET row. `onNo` appears on several YesNoRows and the first
+// one in the file belongs to the "did it run differently" question, so an
+// unscoped match tests the wrong handler and passes for the wrong reason.
+const bucketRow = bucketValue ? stepper.slice(stepper.indexOf(bucketValue[0])) : "";
+const bucketOnNo = bucketRow.match(/onNo=\{\(\) => \{([\s\S]*?)\n\s*\}\}/);
+check("answering No to a bucket closes its dropdown",
+  !!bucketOnNo && /setPending\(/.test(bucketOnNo[1]));
+check("answering No to a bucket records the No",
+  !!bucketOnNo && /setBucketNo\(/.test(bucketOnNo[1]));
+check("answering Yes to a bucket retracts a previous No",
+  /setBucketNo\(\(m\) => \(\{ \.\.\.m, \[bucketStep\.bucket\]: false \}\)\)/.test(stepper));
+
 console.log("\n" + (fails.length ? `${fails.length} FAILED: ${fails.join(", ")}` : "ALL PASS"));
 process.exit(fails.length ? 1 : 0);

@@ -142,6 +142,24 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
   // between two taps, not a fact about the job. Storing it would put a
   // half-answer in the Sheet.
   const [pending, setPending] = useState<CauseBucket | null>(null);
+  // Buckets the crew has actively answered "No" to.
+  //
+  // WHY THIS HAS TO EXIST. The only stored fact for a bucket is its cause key,
+  // so "no cause here" and "never answered" are the same empty string. That made
+  // the three cause questions the one place in the stepper that could not be
+  // corrected: `value` was computed as `chosen ? true : null` and so was NEVER
+  // false, meaning the No button could not light up, and tapping No on a bucket
+  // with no cause yet changed nothing on screen at all. Reported from the field
+  // as the buttons being "stubborn" - a crew member could tap Yes and then not
+  // take it back. It is the same dead-button shape as the 2026-08-18 report
+  // handled by `differed` above, in the row that one missed.
+  //
+  // Local, like `pending`, because there is no field for it: a bucket answered
+  // No stores exactly what an unanswered bucket stores. That means a No does not
+  // survive a remount, which is the honest limit of the current model and is
+  // recorded in Known defects rather than papered over by writing a half-answer
+  // to the Sheet.
+  const [bucketNo, setBucketNo] = useState<Record<string, boolean>>({});
   // Clamp rather than reset: answering "No" at step 1 shortens the list, and an
   // index past the end would blank the card.
   const idx = Math.min(at, steps.length - 1);
@@ -300,16 +318,24 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
             return (
               <>
                 <YesNoRow
-                  value={chosen ? true : null}
-                  onYes={() => { /* reveals the dropdown below; no state yet */
-                    if (!chosen) onChange({ variance_causes: value.variance_causes });
+                  value={chosen ? true : bucketNo[bucketStep.bucket] ? false : null}
+                  onYes={() => { /* reveals the dropdown below; no cause yet */
+                    // Retract a previous No, or the row would show neither
+                    // button pressed while its dropdown was open.
+                    setBucketNo((m) => ({ ...m, [bucketStep.bucket]: false }));
                     setPending(bucketStep.bucket);
                   }}
-                  onNo={() =>
+                  onNo={() => {
+                    // Close the dropdown this bucket may have opened. Without
+                    // this, switching Yes -> No left the "What was it?" select
+                    // sitting there under an unpressed Yes, which is what made
+                    // the correction look like it had not registered.
+                    setPending((b) => (b === bucketStep.bucket ? null : b));
+                    setBucketNo((m) => ({ ...m, [bucketStep.bucket]: true }));
                     onChange({
                       variance_causes: setCauseForBucket(value.variance_causes, bucketStep.bucket, ""),
-                    })
-                  }
+                    });
+                  }}
                 />
                 {(chosen || pending === bucketStep.bucket) && (
                   <div style={{ marginTop: 12 }}>
