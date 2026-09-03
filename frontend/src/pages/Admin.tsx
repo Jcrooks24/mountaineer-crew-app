@@ -5549,6 +5549,40 @@ function HelpTextCard() {
         { key: "futureAbsenceNotePlaceholder",   label: "Future absence note placeholder" },
       ],
     },
+    {
+      // These are the tap-a-title help texts on the job setup form. Blanking one
+      // removes the "?" from that field rather than opening an empty box, which
+      // is the intended way to switch a field's help off.
+      page: "Job setup (tap the field title)",
+      fields: [
+        { key: "setupLdToggleHelp",           label: "Local or long-distance?" },
+        { key: "setupCrewHelp",               label: "Crew" },
+        { key: "setupVehicleUnitsHelp",       label: "Vehicle unit(s)" },
+        { key: "setupJobTypeHelp",            label: "Job type" },
+        { key: "setupOriginHelp",             label: "Origin" },
+        { key: "setupStopHelp",               label: "Stop (intermediate)" },
+        { key: "setupDestinationHelp",        label: "Destination" },
+        { key: "setupNotesHelp",              label: "Notes" },
+      ],
+    },
+    {
+      page: "Job setup - Bill of Lading details",
+      fields: [
+        { key: "bolShipperNameHelp",          label: "Shipper (customer) name" },
+        { key: "bolShipperPhoneHelp",         label: "Shipper phone" },
+        { key: "bolShipperAddressHelp",       label: "Shipper address" },
+        { key: "bolAgreedPickupHelp",         label: "Agreed pickup" },
+        { key: "bolAgreedDeliveryHelp",       label: "Agreed delivery" },
+        { key: "bolFormOfPaymentHelp",        label: "Form of payment" },
+        { key: "bolCodNotifyHelp",            label: "COD - notify" },
+        { key: "bolCodMaxHelp",               label: "COD - max amount" },
+        { key: "bolEstimateTypeHelp",         label: "Estimate type" },
+        { key: "bolValuationHelp",            label: "Valuation" },
+        { key: "bolAdditionalCarriersHelp",   label: "Additional carriers" },
+        { key: "bolThirdPartyInsuranceHelp",  label: "Third-party insurance" },
+        { key: "bolAccessorialServicesHelp",  label: "Accessorial services" },
+      ],
+    },
   ];
 
   return (

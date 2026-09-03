@@ -589,6 +589,50 @@ durability bugs shipped the first time.
 
 ## Known defects
 
+### A default checklist item can never be restored once the list is saved
+
+**Open as of 2026-09-03. Left as-is at the user's direction: staging only, and
+production's checklist is configured correctly.**
+
+`default_items()` in `backend/app/core/job_checklists.py` seeds a FRESH install
+only. `routers/config.py` returns the stored `SystemConfig` row whenever one
+exists and never merges new or missing defaults into it, and the only writer is
+the admin PUT. So the first time anybody presses Save on Admin > Job checklist,
+that list freezes: any item not on screen at that instant is gone permanently,
+and **the Admin UI offers no way to get a default back** short of retyping the
+label and re-picking the auto-key by hand.
+
+This surfaced as "BOL signing, RODS and PODS are not default checklist items for
+LD jobs" on staging. All four items (`bol_origin`, `bol_dest`, `rods`, `pods`)
+have been in `default_items()` since the first commit of that file (`7791c0e`)
+and no code path drops them: `normalize_items` falls an unknown `auto_key` back
+to manual rather than discarding the item, every key is in `AUTO_SIGNALS`, and
+the device cache is only read when the fetch fails. **It was not confirmed
+against the staging config** before the item was closed, so treat the frozen-row
+explanation as very likely rather than proven.
+
+It matters beyond that one report: the same property is why `requires_truck`
+(`f9e5ac1`) has to be ticked by hand on every existing install, and it will
+repeat for every default added from here. The fix, if this ever bites
+production, is a non-destructive "Restore missing default items" action in Admin
+that merges absent defaults by key.
+
+### The checklist cannot express "only on a drive day"
+
+**Open as of 2026-09-03. Left as-is at the user's direction.**
+
+Checklist items can be limited to long-distance jobs (`ld_only`), to jobs with a
+truck (`requires_truck`), and to job types. There is **no drive-day axis**, so
+"RODS completed (1 per drive-day per driver)" and "PODS completed (1 per driver
+per trip)" show on every long-distance job or none. Reported as "RODS for drive
+days" not appearing; the scoping it implies has never existed.
+
+Adding it would follow the `requires_truck` shape exactly: a `drive_day_only`
+flag on the template, an admin toggle, a field on both config endpoints, and one
+more clause in `JobChecklistCard`'s filter, read from the day plan's `driving`
+activity rather than from the job header.
+
+
 ### `main` has been three weeks behind `staging`, and one of those commits matters
 
 **Open as of 2026-09-02.** `origin/main` is at `d952d64`, dated 2026-08-13.

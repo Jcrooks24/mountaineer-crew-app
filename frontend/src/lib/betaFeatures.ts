@@ -39,6 +39,9 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   // prompt every interstate crew answers daily is a new thing to notice, and the
   // tag is how they are told to look. Graduates at the next APP_VERSION bump.
   "internalRearrange",
+  // Tap-a-field-title help on the job setup form (2026-09-03). A new interaction
+  // is worth nothing if nobody discovers it, and the "?" alone is easy to miss.
+  "setupFieldHelp",
 ]);
 
 export function isBeta(feature: string): boolean {

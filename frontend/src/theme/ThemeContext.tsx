@@ -321,6 +321,31 @@ export interface HelpTexts {
   jobTypeHint: string;           // Job Report - job type tag picker
   truckFullnessHint: string;     // Job Report - truck fullness readings
   overageHint: string;           // Job Report - overage conversation prompt
+  // Job setup + Bill of Lading details, shown through <FieldHelp> (tap the field
+  // title, three seconds, then it closes itself). Added 2026-09-03 after field
+  // feedback that the interstate workflow is confusing. An empty string removes
+  // the "?" from that field rather than opening an empty box.
+  setupLdToggleHelp: string;
+  setupCrewHelp: string;
+  setupVehicleUnitsHelp: string;
+  setupJobTypeHelp: string;
+  setupOriginHelp: string;
+  setupStopHelp: string;
+  setupDestinationHelp: string;
+  bolShipperNameHelp: string;
+  bolShipperPhoneHelp: string;
+  bolShipperAddressHelp: string;
+  bolAgreedPickupHelp: string;
+  bolAgreedDeliveryHelp: string;
+  bolFormOfPaymentHelp: string;
+  bolCodNotifyHelp: string;
+  bolCodMaxHelp: string;
+  bolEstimateTypeHelp: string;
+  bolValuationHelp: string;
+  bolAdditionalCarriersHelp: string;
+  bolThirdPartyInsuranceHelp: string;
+  bolAccessorialServicesHelp: string;
+  setupNotesHelp: string;
 }
 
 export const DEFAULT_HELP_TEXTS: HelpTexts = {
@@ -341,6 +366,35 @@ export const DEFAULT_HELP_TEXTS: HelpTexts = {
   jobTypeHint: "Tag the kind of work on this job (select all that apply). This decides which skills you rate below.",
   truckFullnessHint: "Add one reading per LOAD - vertical and horizontal fill against the interior 25% marks. A truck that ran twice gets two readings, since each trip is filled differently.",
   overageHint: "Actual inventory ran over the estimate. Note what the extra items were and whether you discussed the overage with the customer.",
+
+  // ─── Job setup + Bill of Lading details ──────────────────────────────────
+  // Added 2026-09-03 after field feedback that the interstate workflow is
+  // confusing. These render through <FieldHelp>: hidden until the crew taps the
+  // field title, then shown for three seconds. Several of these fields print
+  // onto a signed Bill of Lading and are governed by 16 CFR 375.505, so the
+  // wording is deliberately about what the field MEANS, not how to type in it.
+  // Blank any of them here to remove the "?" from that field entirely.
+  setupLdToggleHelp: "Long-distance turns on the interstate tools: the day plan, the RODS duty recorder, per-diem, and the Bill of Lading. The job header owns this setting and the Timeline follows it.",
+  setupCrewHelp: "Everyone working this job. This list decides who can log hours against it and who appears on the job report.",
+  setupVehicleUnitsHelp: "Which truck or trailer is on this job. Leave it empty on a labor-only job: checklist items that only make sense with a truck, like the DVIRs, then hide themselves.",
+  setupJobTypeHelp: "The kind of work on this job. It decides which skills get rated on the job report and which checklist items apply. It is not the same as today's activities.",
+  setupOriginHelp: "Where the shipment loads. On an interstate job this is the pickup address printed on the Bill of Lading and confirmed by the customer at signing.",
+  setupStopHelp: "An intermediate stop between origin and destination. Add one per extra pickup or drop.",
+  setupDestinationHelp: "Where the shipment unloads. On an interstate job this is the delivery address printed on the Bill of Lading and confirmed at signing.",
+  bolShipperNameHelp: "The customer whose goods are being moved, spelled as it should appear on the Bill of Lading. This is the person who signs at origin.",
+  bolShipperPhoneHelp: "Best number for the shipper during the move. It prints on the Bill of Lading so a driver can reach them en route.",
+  bolShipperAddressHelp: "The shipper's own address, only when it is different from the pickup address. Leave it blank when they are the same.",
+  bolAgreedPickupHelp: "The date or window you promised the customer for loading. Enter it as agreed, for example \"Sept 8\" or \"Sept 8-9\".",
+  bolAgreedDeliveryHelp: "The delivery date or window the customer agreed to. On an interstate move this is the promised spread, not an estimate you are making now.",
+  bolFormOfPaymentHelp: "How the customer is paying. Choosing Collect on delivery (COD) adds the two COD fields underneath.",
+  bolCodNotifyHelp: "Who to notify when payment is collected at delivery. Only appears when the form of payment is COD.",
+  bolCodMaxHelp: "The most that may be collected at delivery. Only appears when the form of payment is COD.",
+  bolEstimateTypeHelp: "Binding fixes the price at the estimate. Non-binding means the final charge follows actual weight and services. This prints on the Bill of Lading, so it has to match what the customer signed.",
+  bolValuationHelp: "The liability level the customer chose. Full Value Protection covers replacement value and may cost extra. Released Value is free but caps recovery at 60 cents per pound per article, and is a written waiver. Record what they actually agreed to.",
+  bolAdditionalCarriersHelp: "Any other motor carrier taking part in this shipment, with name and DOT number when known. Leave it as None for a move we run end to end.",
+  bolThirdPartyInsuranceHelp: "Insurance the customer bought from somebody other than us. Leave it as N/A when there is none.",
+  bolAccessorialServicesHelp: "Extra services beyond loading and hauling: stairs, long carry, shuttle, piano, packing. List what was agreed so it can be billed.",
+  setupNotesHelp: "Anything the crew should know before they start. Visible on the job; it does not print on the Bill of Lading.",
 };
 
 // ─── Settings shape ───────────────────────────────────────────────────────────

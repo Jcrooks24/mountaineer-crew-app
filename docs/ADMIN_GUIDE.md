@@ -255,7 +255,11 @@ per-device setup). Contains:
 The **DQ Files** admin tab is a per-driver board of who is missing which required documents; open a driver to upload or replace any document. Drivers see their own DQ file in Profile, upload the ones they own, and get a reminder on the hub when they owe a required document. (In-app fillable forms are coming; for now a document is a scan or filled PDF uploaded to the driver's Drive folder, most-recent-per-type.)
 - **Crew Skills (registry):** define each skill, mark it core (rated on every job) or job-specific, choose which job types it applies to, and keep a per-employee skill matrix
 - **Furniture Catalogue:** import and export the shared catalogue as CSV, with item dimensions and custom fields. One catalogue feeds the Estimator, actual inventory, and the BOL item pickers
-- **Help Text:** labels and hints shown on the crew timeline and other fields
+- **Help Text:** labels and hints shown on the crew timeline and other fields. Two groups
+  ("Job setup" and "Job setup - Bill of Lading details") are the tap-a-field-title help
+  added 2026-09-03: the crew tap a title marked with a "?" and the text shows for about
+  three seconds. **Blanking one of those removes the "?" from that field entirely**, which
+  is how you switch a field's help off rather than leaving an empty box.
 
 #### Theme & Appearance
 

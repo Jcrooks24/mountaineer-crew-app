@@ -8,6 +8,9 @@
  * is C1.3); this is where the office fills it in.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { FieldHelp } from "./FieldHelp";
+import { BetaTag } from "./BetaTag";
+import { useTheme } from "../theme/ThemeContext";
 import { apiFetch, ApiError } from "../api/client";
 import RosterPicker from "./RosterPicker";
 import { useJobTypes } from "../lib/jobTypesStore";
@@ -66,6 +69,9 @@ export default function JobSetupPanel({
   /** Storage-full message from useLdPlan, surfaced on the tile. */
   ldStorageErr?: string | null;
 }) {
+  // Field help: hidden until the crew taps a field title, then three seconds.
+  // Admin-editable in Admin > Help text, so wording changes need no redeploy.
+  const ht = useTheme().settings.helpTexts;
   const jobTypes = useJobTypes();
   const [units, setUnits] = useState<VehicleUnit[]>(() => getUnitsCached());
 
@@ -239,7 +245,7 @@ export default function JobSetupPanel({
   // Local / long-distance segmented toggle, used inside the setup form.
   const ldToggle = (
     <div className="col" style={{ gap: 6 }}>
-      <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Local or long-distance?</span>
+      <FieldHelp label="Local or long-distance?" help={ht.setupLdToggleHelp} bold />
       <div
         className="row"
         role="group"
@@ -317,10 +323,16 @@ export default function JobSetupPanel({
       ) : (
         <div className="col" style={{ gap: 14 }}>
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <div className="microLabel" style={{ marginBottom: 0 }}>Set up job</div>
+            <div>
+              <div className="microLabel" style={{ marginBottom: 0 }}>Set up job</div>
+              <BetaTag feature="setupFieldHelp" style={{ marginTop: 2 }} />
+            </div>
             {existing && (
               <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>Cancel</button>
             )}
+          </div>
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Tap any field title with a <span aria-hidden="true">?</span> for a short explanation.
           </div>
 
           {/* Local / long-distance */}
@@ -328,7 +340,7 @@ export default function JobSetupPanel({
 
           {/* Crew */}
           <div className="col" style={{ gap: 6 }}>
-            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Crew</span>
+            <FieldHelp label="Crew" help={ht.setupCrewHelp} bold />
             {suggested.length > 0 ? (
               <span className="small" style={{ color: "var(--muted)" }}>
                 Suggested from the calendar invitees (matched by email). Tick to confirm, or add more below.
@@ -395,7 +407,7 @@ export default function JobSetupPanel({
 
           {/* Vehicle units */}
           <div className="col" style={{ gap: 6 }}>
-            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Vehicle unit(s)</span>
+            <FieldHelp label="Vehicle unit(s)" help={ht.setupVehicleUnitsHelp} bold />
             <div className="row wrap" style={{ gap: 8 }}>
               {units.length === 0 && <span className="small" style={{ color: "var(--muted)" }}>No units configured.</span>}
               {units.map((u) => {
@@ -426,7 +438,7 @@ export default function JobSetupPanel({
               this list is the move TYPE (Commercial, Delivery, Storage,
               Labor-only, ...). */}
           <div className="col" style={{ gap: 6 }}>
-            <span className="small" style={{ color: "var(--muted)", fontWeight: 700 }}>Job type</span>
+            <FieldHelp label="Job type" help={ht.setupJobTypeHelp} bold />
             <div className="row wrap" style={{ gap: 8 }}>
               {jobTypes.filter((t) => !TRIP_TASK_TAGS.has(t.trim().toLowerCase())).length === 0 && (
                 <span className="small" style={{ color: "var(--muted)" }}>No job types configured.</span>
@@ -455,13 +467,13 @@ export default function JobSetupPanel({
           {/* Addresses */}
           <div className="col" style={{ gap: 6 }}>
             <label className="col" style={{ gap: 2 }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Origin</span>
+              <FieldHelp label="Origin" help={ht.setupOriginHelp} />
               <input value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="Pickup address (blank OK)" />
             </label>
             {stops.map((s, i) => (
               <div key={i} className="row" style={{ gap: 6, alignItems: "flex-end" }}>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Stop {i + 1}</span>
+                  <FieldHelp label={`Stop ${i + 1}`} help={ht.setupStopHelp} />
                   <input value={s} onChange={(e) => setStops((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))} />
                 </label>
                 <button type="button" onClick={() => setStops((prev) => prev.filter((_, j) => j !== i))} style={{ fontSize: 12, color: "var(--danger)" }}>Remove</button>
@@ -469,7 +481,7 @@ export default function JobSetupPanel({
             ))}
             <button type="button" onClick={() => setStops((prev) => [...prev, ""])} style={{ fontSize: 12, alignSelf: "flex-start" }}>+ Add stop</button>
             <label className="col" style={{ gap: 2 }}>
-              <span className="small" style={{ color: "var(--muted)" }}>Destination</span>
+              <FieldHelp label="Destination" help={ht.setupDestinationHelp} />
               <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Delivery address (blank OK)" />
             </label>
           </div>
@@ -483,39 +495,39 @@ export default function JobSetupPanel({
                 Fill once; the crew's Bill of Lading for this job starts prefilled with these.
               </span>
               <label className="col" style={{ gap: 2 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Shipper (customer) name</span>
+                <FieldHelp label="Shipper (customer) name" help={ht.bolShipperNameHelp} />
                 <input value={bolHeader.shipper_name || ""} onChange={(e) => setBolField("shipper_name", e.target.value)} />
               </label>
               <div className="row" style={{ gap: 6 }}>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Shipper phone</span>
+                  <FieldHelp label="Shipper phone" help={ht.bolShipperPhoneHelp} />
                   <input value={bolHeader.shipper_phone || ""} onChange={(e) => setBolField("shipper_phone", e.target.value)} />
                 </label>
               </div>
               <label className="col" style={{ gap: 2 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Shipper address</span>
+                <FieldHelp label="Shipper address" help={ht.bolShipperAddressHelp} />
                 <input value={bolHeader.shipper_address || ""} onChange={(e) => setBolField("shipper_address", e.target.value)} placeholder="If different from pickup" />
               </label>
               <div className="row" style={{ gap: 6 }}>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Agreed pickup</span>
+                  <FieldHelp label="Agreed pickup" help={ht.bolAgreedPickupHelp} />
                   <input value={bolHeader.agreed_pickup || ""} onChange={(e) => setBolField("agreed_pickup", e.target.value)} placeholder="Date or window" />
                 </label>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Agreed delivery</span>
+                  <FieldHelp label="Agreed delivery" help={ht.bolAgreedDeliveryHelp} />
                   <input value={bolHeader.agreed_delivery || ""} onChange={(e) => setBolField("agreed_delivery", e.target.value)} placeholder="Date or window" />
                 </label>
               </div>
               <div className="row" style={{ gap: 6 }}>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Form of payment</span>
+                  <FieldHelp label="Form of payment" help={ht.bolFormOfPaymentHelp} />
                   <select value={bolHeader.form_of_payment || ""} onChange={(e) => setBolField("form_of_payment", e.target.value)}>
                     <option value="">Not set</option>
                     {FORM_OF_PAYMENT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <span className="small" style={{ color: "var(--muted)" }}>Estimate type</span>
+                  <FieldHelp label="Estimate type" help={ht.bolEstimateTypeHelp} />
                   <select value={bolHeader.estimate_type || ""} onChange={(e) => setBolField("estimate_type", e.target.value)}>
                     <option value="">Not set</option>
                     {ESTIMATE_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -525,32 +537,32 @@ export default function JobSetupPanel({
               {bolHeader.form_of_payment === "cod" && (
                 <div className="row" style={{ gap: 6 }}>
                   <label className="col" style={{ gap: 2, flex: 1 }}>
-                    <span className="small" style={{ color: "var(--muted)" }}>COD - notify</span>
+                    <FieldHelp label="COD - notify" help={ht.bolCodNotifyHelp} />
                     <input value={bolHeader.cod_notify || ""} onChange={(e) => setBolField("cod_notify", e.target.value)} />
                   </label>
                   <label className="col" style={{ gap: 2, flex: 1 }}>
-                    <span className="small" style={{ color: "var(--muted)" }}>COD - max amount</span>
+                    <FieldHelp label="COD - max amount" help={ht.bolCodMaxHelp} />
                     <input value={bolHeader.cod_max || ""} onChange={(e) => setBolField("cod_max", e.target.value)} />
                   </label>
                 </div>
               )}
               <label className="col" style={{ gap: 2 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Valuation</span>
+                <FieldHelp label="Valuation" help={ht.bolValuationHelp} />
                 <select value={bolHeader.valuation || ""} onChange={(e) => setBolField("valuation", e.target.value)}>
                   <option value="">Not set</option>
                   {VALUATION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </label>
               <label className="col" style={{ gap: 2 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Additional carriers</span>
+                <FieldHelp label="Additional carriers" help={ht.bolAdditionalCarriersHelp} />
                 <input value={bolHeader.additional_carriers || ""} onChange={(e) => setBolField("additional_carriers", e.target.value)} placeholder="None" />
               </label>
               <label className="col" style={{ gap: 2 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Third-party insurance</span>
+                <FieldHelp label="Third-party insurance" help={ht.bolThirdPartyInsuranceHelp} />
                 <input value={bolHeader.third_party_insurance || ""} onChange={(e) => setBolField("third_party_insurance", e.target.value)} placeholder="N/A" />
               </label>
               <label className="col" style={{ gap: 2 }}>
-                <span className="small" style={{ color: "var(--muted)" }}>Accessorial services</span>
+                <FieldHelp label="Accessorial services" help={ht.bolAccessorialServicesHelp} />
                 <input value={bolHeader.accessorial_services || ""} onChange={(e) => setBolField("accessorial_services", e.target.value)} placeholder="None" />
               </label>
             </div>
@@ -558,7 +570,7 @@ export default function JobSetupPanel({
 
           {/* Notes */}
           <label className="col" style={{ gap: 2 }}>
-            <span className="small" style={{ color: "var(--muted)" }}>Notes</span>
+            <FieldHelp label="Notes" help={ht.setupNotesHelp} />
             <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: "100%", resize: "vertical" }} />
           </label>
 

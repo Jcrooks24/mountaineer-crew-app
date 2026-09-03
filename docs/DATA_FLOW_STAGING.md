@@ -1218,6 +1218,31 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Job setup gains tap-to-reveal field help (2026-09-03)
+
+From field feedback that the interstate workflow is confusing. 21 new keys on an
+EXISTING synced payload (`helpTexts` in the theme settings), so the flow class
+does not change - only the field list does.
+
+| Path | Where | Status |
+|---|---|---|
+| 21 new `helpTexts` keys (`setup*Help`, `bol*Help`) on the theme-settings payload | `theme/ThemeContext.tsx` (`HelpTexts`, `DEFAULT_HELP_TEXTS`) | [x] |
+| Rendered by `<FieldHelp>`: hidden, tap the field title, visible 3s, self-closing | `components/FieldHelp.tsx`, used in `components/JobSetupPanel.tsx` | [x] |
+| Admin-editable, so wording changes need no redeploy | `pages/Admin.tsx` (`HelpTextCard` groups) | [x] |
+
+Theme settings already sync device -> server and merge `DEFAULT_HELP_TEXTS` under
+whatever is stored (`ThemeContext.tsx:411` and `:608`), so a device or a server
+record written by an older build simply gains the new keys at their defaults.
+No endpoint, no queue, no Sheet export, and no env var changes.
+
+Blanking a key in Admin removes the "?" from that field entirely rather than
+opening an empty box, which is the intended way to switch one off.
+
+Regression-guarded by `frontend/scripts/verify_field_help.mjs`: the type, the
+defaults, the rendered field and the Admin editor are four separate hardcoded
+lists that nothing links, and tsc only catches one of those pairings.
+
+
 ## BOL queue: a failed `pdf` no longer holds the rest of its BOL (2026-09-03)
 
 Found by `/vet` (F3). No payload change; the **drain order** changes.
