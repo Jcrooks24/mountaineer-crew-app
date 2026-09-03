@@ -1218,6 +1218,40 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Tips are paid out through payroll (2026-09-03, BACKEND ONLY)
+
+Request f8e008cb. Money. **The admin UI is not built yet** - the endpoints exist
+and payroll reads them, but nothing on screen enters a tip.
+
+| Path | Where | Status |
+|---|---|---|
+| `employee_tips` table | migration `k1m3o5j7l9n1`, `db/models/employee_tip.py` | [x] |
+| `POST/GET/DELETE /api/admin/payroll/tips` | `routers/payroll.py`, `schemas/payroll.py` (`TipCreate`) | [x] |
+| `_tips()` windows on `tip_date` and totals per employee | `routers/payroll.py` | [x] |
+| `totals.tips_amount` + `tip_items` on the payroll summary | `routers/payroll.py` | [x] |
+| Admin UI: entry on Job Summary and on the payroll screen | not built | [ ] |
+
+**The design point.** Tips arrive late, so `tip_date` (the payout date, defaulting
+to today in Mountain time) decides the pay period, NOT the job's date. A tip
+recorded today for an August job is paid on the current run instead of landing in
+a period that has already been finalized. `job_uuid` is reference only and is
+deliberately not a foreign key: a tip is money owed and must survive the job row
+changing.
+
+**Tips are flat dollars, never hours.** They sit in `totals` beside
+`per_diem_amount` and `reimbursement_amount`, never enter the hours buckets, and
+are explicitly absent from the OT calculation (confirmed by the user). They are
+not quarter-rounded - rounding a dollar figure to the quarter hour would be
+nonsense.
+
+**No split rule.** The office types who gets what. A tip is a gift with somebody's
+judgement attached, and an allocation formula would put the app's opinion where
+the office's belongs.
+
+An employee whose ONLY entry in a period is a tip still gets a payroll row, or
+the money would be invisible.
+
+
 ## Finalizing payroll marks the reimbursements it paid (2026-09-03)
 
 Request b59434c2 item 2.

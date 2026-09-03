@@ -77,6 +77,7 @@ from app.db.models.payroll_correction import (
     CORRECTION_SOURCES,
     PayrollCorrection,
 )
+from app.db.models.employee_tip import EmployeeTip
 from app.db.models.reimbursement import Reimbursement
 from app.db.models.user import User
 from app.schemas.payroll import (
@@ -84,6 +85,7 @@ from app.schemas.payroll import (
     PayrollCorrectionUpsert,
     PayrollFinalizeRequest,
     ReimbursementDecision,
+    TipCreate,
     ReportWaiverRequest,
 )
 
@@ -547,6 +549,44 @@ def _round_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def _tips(
+    db: Session, start: date, end: date, roster: Dict[int, User]
+) -> Dict[int, Dict[str, Any]]:
+    """Tips owed in this period, per employee.
+
+    Windowed on `tip_date`, which is the payout date rather than the job's date:
+    a tip that arrives two weeks after the move is paid on the run it was
+    recorded for, not added to a period that has already been finalized. See the
+    EmployeeTip docstring.
+
+    Money, not hours. Tips never enter the hours buckets, never reach the OT
+    calculation, and are not rounded - they are a flat amount somebody typed in,
+    and quarter-rounding a dollar figure would be nonsense.
+    """
+    rows = (
+        db.query(EmployeeTip)
+        .filter(EmployeeTip.tip_date >= start.isoformat(),
+                EmployeeTip.tip_date <= end.isoformat())
+        .all()
+    )
+    out: Dict[int, Dict[str, Any]] = defaultdict(lambda: {"amount": 0.0, "items": []})
+    for t in rows:
+        if t.user_id is None or t.user_id not in roster:
+            continue
+        amt = float(t.amount or 0)
+        out[t.user_id]["amount"] += amt
+        out[t.user_id]["items"].append({
+            "uuid": t.tip_uuid,
+            "date": t.tip_date,
+            "amount": round(amt, 2),
+            "job_uuid": t.job_uuid,
+            "job_name": t.job_name or "",
+            "note": t.note or "",
+            "entered_by": t.created_by_name or "",
+        })
+    return out
+
+
 def _mark_reimbursements_paid(
     db: Session, start: date, end: date, roster: Dict[int, User]
 ) -> int:
@@ -694,6 +734,7 @@ def _payroll_rates(db: Session) -> Dict[str, float]:
 def _employee_summary(
     user: User, rows: List[Dict[str, Any]], start: date, end: date,
     reimb: Dict[str, Any], rates: Dict[str, float],
+    tips: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     days: Dict[date, Dict[str, float]] = defaultdict(
         lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0}
@@ -754,6 +795,9 @@ def _employee_summary(
             "per_diem_nights": nights,
             "per_diem_amount": per_diem_amount,
             "reimbursement_amount": round(reimb.get("amount", 0.0), 2),
+            # Flat dollars, never hours: tips do not touch the buckets above and
+            # are deliberately absent from the OT calculation.
+            "tips_amount": round((tips or {}).get("amount", 0.0), 2),
             "mileage_miles": miles,
             "mileage_amount": mileage_amount,
         },
@@ -789,6 +833,7 @@ def _employee_summary(
             key=lambda x: (x["date"], x["source"], x["source_label"]),
         ),
         "reimbursement_items": reimb.get("items", []),
+        "tip_items": (tips or {}).get("items", []),
         # How many of this person's claims nobody has approved or declined yet.
         # They ARE being paid (pay-unless-declined), so this is a nag, not a
         # blocker - it exists so "nobody looked" is visible instead of silent.
@@ -908,6 +953,7 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     if payroll_rounds(start):
         rows = _round_rows(rows)
     reimb = _reimbursements(db, start, end, roster)
+    tips = _tips(db, start, end, roster)
     rates = _payroll_rates(db)
 
     by_user: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
@@ -915,15 +961,20 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
         by_user[r["user_id"]].append(r)
 
     employees = [
-        _employee_summary(roster[uid], urows, start, end, reimb.get(uid, {}), rates)
+        _employee_summary(roster[uid], urows, start, end, reimb.get(uid, {}), rates,
+                          tips.get(uid, {}))
         for uid, urows in by_user.items()
         if uid in roster
     ]
-    # Anybody with reimbursements but no hours still needs a row: they are owed
-    # money and would otherwise be invisible on the page.
-    for uid, r in reimb.items():
+    # Anybody owed money but with no hours still needs a row, or they are
+    # invisible on the page. That now includes somebody whose only entry this
+    # period is a tip - a late tip for a job in an earlier period is exactly
+    # that case, and it is the whole reason tips are dated by payout.
+    for uid in set(list(reimb.keys()) + list(tips.keys())):
         if uid not in by_user and uid in roster:
-            employees.append(_employee_summary(roster[uid], [], start, end, r, rates))
+            employees.append(_employee_summary(
+                roster[uid], [], start, end, reimb.get(uid, {}), rates, tips.get(uid, {}),
+            ))
 
     # By LAST name. Sorting on the full string put everyone in first-name order,
     # which is not how anyone looks a person up on a payroll run. Mirrors the
@@ -1733,6 +1784,137 @@ def finalize_period(
         # the stamp is idempotent.
         "reimbursements_paid": reimbursements_paid,
     }
+
+
+# ── Tips ─────────────────────────────────────────────────────────────────────
+
+
+@router.post("/tips")
+def create_tip(
+    body: TipCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Record a tip owed to one employee.
+
+    Entered either from the admin Job Summary (with a job attached) or straight
+    from the payroll screen (without one). Flat dollars, typed in: there is no
+    split rule and nothing is derived from hours.
+
+    The tip lands in whichever period contains `tip_date`, which defaults to
+    today. A tip for a job that ran last month is therefore paid on the CURRENT
+    run rather than being added to a period that has already been finalized -
+    which is the situation that prompted this ("tips sometimes come in long after
+    the crew has completed a job").
+    """
+    user = db.query(User).filter(User.id == body.user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="No such employee on the roster.")
+
+    # Positive, and sane, are enforced by TipCreate's validator.
+    amount = round(float(body.amount), 2)
+
+    if body.tip_date:
+        d = _parse_date_str(body.tip_date)
+        if d is None:
+            raise HTTPException(status_code=400, detail="tip_date must be YYYY-MM-DD.")
+    else:
+        # Today in Mountain time, not UTC. A tip entered at 6pm Mountain is
+        # entered "today" from the office's point of view; UTC would already be
+        # tomorrow and could drop it into the next pay period.
+        d = utc_naive_to_mountain_date(datetime.now(timezone.utc).replace(tzinfo=None))
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    tip = EmployeeTip(
+        tip_uuid=str(uuid.uuid4()),
+        job_uuid=(body.job_uuid or None),
+        job_name=(body.job_name or None),
+        user_id=user.id,
+        user_name=user.name or user.email,
+        tip_date=d.isoformat(),
+        amount=amount,
+        note=(body.note or "").strip(),
+        created_by_id=current_user.id,
+        created_by_name=current_user.name or current_user.email,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(tip)
+    db.commit()
+    return {
+        "ok": True,
+        "tip": {
+            "uuid": tip.tip_uuid,
+            "user_id": tip.user_id,
+            "user_name": tip.user_name,
+            "date": tip.tip_date,
+            "amount": amount,
+            "job_uuid": tip.job_uuid,
+            "job_name": tip.job_name or "",
+            "note": tip.note,
+        },
+    }
+
+
+@router.get("/tips")
+def list_tips(
+    job_uuid: Optional[str] = None,
+    period_start: Optional[str] = None,
+    period_end: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Tips for one job, or for one period. At least one filter is required so
+    this cannot become an unbounded table scan as tips accumulate."""
+    if not job_uuid and not (period_start and period_end):
+        raise HTTPException(
+            status_code=400,
+            detail="Pass job_uuid, or period_start and period_end.",
+        )
+    q = db.query(EmployeeTip)
+    if job_uuid:
+        q = q.filter(EmployeeTip.job_uuid == job_uuid)
+    if period_start and period_end:
+        s_, e_ = _parse_period(period_start, period_end)
+        q = q.filter(EmployeeTip.tip_date >= s_.isoformat(),
+                     EmployeeTip.tip_date <= e_.isoformat())
+    return {
+        "tips": [
+            {
+                "uuid": t.tip_uuid,
+                "user_id": t.user_id,
+                "user_name": t.user_name,
+                "date": t.tip_date,
+                "amount": round(float(t.amount or 0), 2),
+                "job_uuid": t.job_uuid,
+                "job_name": t.job_name or "",
+                "note": t.note or "",
+                "entered_by": t.created_by_name or "",
+            }
+            for t in q.order_by(EmployeeTip.tip_date.desc()).limit(500).all()
+        ],
+    }
+
+
+@router.delete("/tips/{tip_uuid}", status_code=204)
+def delete_tip(
+    tip_uuid: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Remove a tip entered by mistake.
+
+    A hard delete, unlike a payroll correction, which is kept because it is an
+    admin's note about a disagreement. A mistyped tip is not a decision anybody
+    needs the history of, and leaving a wrong dollar figure visible on a payroll
+    screen is worse than losing the fact that somebody fat-fingered it.
+    """
+    tip = db.query(EmployeeTip).filter(EmployeeTip.tip_uuid == tip_uuid).first()
+    if tip is None:
+        raise HTTPException(status_code=404, detail="No such tip.")
+    db.delete(tip)
+    db.commit()
+    return None
 
 
 # ── Reimbursement approve / decline ──────────────────────────────────────────

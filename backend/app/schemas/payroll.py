@@ -146,3 +146,38 @@ class ReportWaiverRequest(BaseModel):
         if len(v) > 500:
             raise ValueError("reason too long")
         return v
+
+
+class TipCreate(BaseModel):
+    """One tip owed to one employee. Flat dollars, typed in by an admin.
+
+    `tip_date` is the PAYOUT date and decides which pay period the tip lands in.
+    It is not derived from the job: tips arrive late, and dating one by its job
+    would drop it into a period that has already been finalized. Omitted means
+    today (in Mountain time, resolved by the router).
+    """
+    user_id: int
+    amount: float
+    tip_date: Optional[str] = None
+    job_uuid: Optional[str] = None
+    job_name: Optional[str] = None
+    note: str = ""
+
+    @field_validator("amount")
+    @classmethod
+    def amount_positive(cls, v: float) -> float:
+        # A zero tip records nothing, and a negative one is a deduction wearing
+        # a tip's clothes. Payroll corrections are the tool for taking money off.
+        if v is None or float(v) <= 0:
+            raise ValueError("a tip must be a positive dollar amount")
+        if float(v) > 10000:
+            raise ValueError("tip looks like a typo (over $10,000)")
+        return round(float(v), 2)
+
+    @field_validator("note")
+    @classmethod
+    def note_length(cls, v: str) -> str:
+        v = (v or "").strip()
+        if len(v) > 500:
+            raise ValueError("note too long")
+        return v
