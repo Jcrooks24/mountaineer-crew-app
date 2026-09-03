@@ -1218,10 +1218,9 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
-## Tips are paid out through payroll (2026-09-03, BACKEND ONLY)
+## Tips are paid out through payroll (2026-09-03)
 
-Request f8e008cb. Money. **The admin UI is not built yet** - the endpoints exist
-and payroll reads them, but nothing on screen enters a tip.
+Request f8e008cb. Money.
 
 | Path | Where | Status |
 |---|---|---|
@@ -1229,7 +1228,8 @@ and payroll reads them, but nothing on screen enters a tip.
 | `POST/GET/DELETE /api/admin/payroll/tips` | `routers/payroll.py`, `schemas/payroll.py` (`TipCreate`) | [x] |
 | `_tips()` windows on `tip_date` and totals per employee | `routers/payroll.py` | [x] |
 | `totals.tips_amount` + `tip_items` on the payroll summary | `routers/payroll.py` | [x] |
-| Admin UI: entry on Job Summary and on the payroll screen | not built | [ ] |
+| Payroll screen: per-employee tip entry, list and remove | `components/PayrollTool.tsx` (`TipsSection`) | [x] |
+| Admin Job Summary: per-job tip entry, list and remove | `pages/Admin.tsx` (`JobTipsCard`) | [x] |
 
 **The design point.** Tips arrive late, so `tip_date` (the payout date, defaulting
 to today in Mountain time) decides the pay period, NOT the job's date. A tip
@@ -1250,6 +1250,11 @@ the office's belongs.
 
 An employee whose ONLY entry in a period is a tip still gets a payroll row, or
 the money would be invisible.
+
+**NEITHER SCREEN SENDS `tip_date`.** Both rely on the server defaulting it to
+today, and that is load-bearing: the Job Summary has the job's date right there,
+and passing it would drop the tip into a period that has almost certainly been
+finalized. `frontend/scripts/verify_tips_ui.mjs` asserts both clients omit it.
 
 
 ## Finalizing payroll marks the reimbursements it paid (2026-09-03)

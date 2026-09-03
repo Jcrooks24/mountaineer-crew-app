@@ -8117,6 +8117,161 @@ function BillCorrectionEditor({
   );
 }
 
+/**
+ * Tips paid to this job's crew.
+ *
+ * Tips arrive late - a customer rings the office days or weeks after the move -
+ * which is why this lives on the Job Summary rather than on the crew's report:
+ * by the time one comes in, the job is finished and the crew have gone home
+ * (request f8e008cb).
+ *
+ * A tip added here is dated TODAY, not the job's date, so it pays on the current
+ * payroll run. Dating it by the job would drop it into a period that has very
+ * likely been finalized already, where it would be missed. The job is still
+ * recorded on the tip, so the office can see what it was for.
+ *
+ * Flat dollars per person, typed in. There is no split rule: the office decides
+ * who gets what.
+ */
+function JobTipsCard({
+  jobUuid, jobName, crew,
+}: {
+  jobUuid: string;
+  jobName: string;
+  crew: Array<{ user_id: number; name: string }>;
+}) {
+  const [tips, setTips] = useState<Array<{
+    uuid: string; user_name: string; date: string; amount: number; note: string; entered_by: string;
+  }>>([]);
+  const [userId, setUserId] = useState<string>("");
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await apiFetch<{ tips: typeof tips }>(
+        `/api/admin/payroll/tips?job_uuid=${encodeURIComponent(jobUuid)}`,
+      );
+      setTips(r.tips || []);
+    } catch {
+      // A tips list that will not load must not take the whole Job Summary with
+      // it. The rest of this page is the reason somebody opened it.
+      setTips([]);
+    }
+  }, [jobUuid]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function add() {
+    const value = Number(amount);
+    if (!userId) { setErr("Choose who the tip is for."); return; }
+    if (!Number.isFinite(value) || value <= 0) { setErr("Enter a dollar amount greater than zero."); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/payroll/tips", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: Number(userId), amount: value, note: note.trim(),
+          job_uuid: jobUuid, job_name: jobName,
+        }),
+      });
+      setAmount(""); setNote("");
+      await load();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not add the tip.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(uuid: string) {
+    setBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/admin/payroll/tips/${encodeURIComponent(uuid)}`, { method: "DELETE" });
+      await load();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not remove the tip.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const total = tips.reduce((n, t) => n + (t.amount || 0), 0);
+
+  return (
+    <div className="card" id="js-tips" style={{ scrollMarginTop: 64 }}>
+      <div className="microLabel" style={{ marginBottom: 10 }}>
+        Tips
+        {total > 0 && (
+          <span className="small" style={{ color: "var(--muted)", marginLeft: 8 }}>
+            ${total.toFixed(2)}
+          </span>
+        )}
+      </div>
+      {tips.length > 0 ? (
+        <div className="col" style={{ gap: 5, marginBottom: 10 }}>
+          {tips.map((t) => (
+            <div key={t.uuid} className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="small">
+                {t.user_name} - ${t.amount.toFixed(2)} - paid {t.date}
+                {t.note ? ` - ${t.note}` : ""}
+                {t.entered_by ? ` (${t.entered_by})` : ""}
+              </span>
+              <button type="button" disabled={busy} onClick={() => remove(t.uuid)}
+                      style={{ fontSize: 12, color: "var(--danger)" }}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          No tips recorded for this job.
+        </div>
+      )}
+
+      {crew.length === 0 ? (
+        <div className="small" style={{ color: "var(--muted)" }}>
+          Nobody on this job's report has a roster match yet, so there is nobody
+          to pay a tip to. Add a tip from the payroll screen instead.
+        </div>
+      ) : (
+        <>
+          <div className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <select value={userId} onChange={(e) => setUserId(e.target.value)}
+                    aria-label="Who the tip is for" style={{ fontSize: 13, minWidth: 130 }}>
+              <option value="">Who...</option>
+              {crew.map((c) => (
+                <option key={c.user_id} value={String(c.user_id)}>{c.name}</option>
+              ))}
+            </select>
+            <span className="small" style={{ color: "var(--muted)" }}>$</span>
+            <input value={amount} onChange={(e) => setAmount(e.target.value)}
+                   inputMode="decimal" placeholder="0.00" aria-label="Tip amount"
+                   style={{ width: 80, fontSize: 13 }} />
+            <input value={note} onChange={(e) => setNote(e.target.value)}
+                   placeholder="Note (optional)" aria-label="Tip note"
+                   style={{ flex: "1 1 140px", minWidth: 0, fontSize: 13 }} />
+            <button type="button" onClick={add} disabled={busy || !amount.trim() || !userId}
+                    style={{ fontSize: 12 }}>
+              {busy ? "Saving..." : "Add tip"}
+            </button>
+          </div>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 6 }}>
+            Paid on the CURRENT payroll period, not the one this job fell in -
+            tips usually arrive after that period has been finalized. One flat
+            amount per person; there is no automatic split.
+          </div>
+        </>
+      )}
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 6 }}>{err}</div>}
+    </div>
+  );
+}
+
 function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null; onOpened?: () => void }) {
   // Used only to keep `entered_by` populated in the request below. See the note
   // there: dropping the field outright is not safe across a deploy skew.
@@ -8673,6 +8828,14 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
               </div>
             )}
           </div>
+
+          <JobTipsCard
+            jobUuid={summary.job_uuid}
+            jobName={summary.job_name}
+            crew={(summary.job_report?.employee_hours ?? [])
+              .filter((e) => typeof e.user_id === "number")
+              .map((e) => ({ user_id: e.user_id as number, name: e.name }))}
+          />
 
           <div className="card" id="js-hours" style={{ scrollMarginTop: 64 }}>
             {(() => {

@@ -80,6 +80,16 @@ type ReimbItem = {
   approver: string;
 };
 
+type TipItem = {
+  uuid: string;
+  date: string;
+  amount: number;
+  job_uuid: string | null;
+  job_name: string;
+  note: string;
+  entered_by: string;
+};
+
 type Employee = {
   user_id: number;
   name: string;
@@ -90,6 +100,7 @@ type Employee = {
   lines: LineRow[];
   reimbursement_items: ReimbItem[];
   reimbursements_unreviewed: number;
+  tip_items: TipItem[];
   correction_count: number;
 };
 
@@ -875,6 +886,120 @@ function EmployeeDetail({
           </div>
         </div>
       )}
+
+      <TipsSection emp={emp} onChanged={onChanged} />
+    </div>
+  );
+}
+
+// ── Tips ────────────────────────────────────────────────────────────────────
+
+/**
+ * Tips owed to one employee this period, and the box to add one.
+ *
+ * Flat dollars, typed in. There is no split rule and nothing is derived from
+ * hours: the office decides who gets what (request f8e008cb).
+ *
+ * A tip is dated by when it is PAID, not by the job it came from, because tips
+ * arrive late - a customer rings two weeks after the move. Adding one here dates
+ * it today, so it pays on the run being looked at rather than landing in a
+ * period that has already been finalized. A tip for a specific job is added from
+ * that job's Admin Job Summary instead, which carries the job through.
+ */
+function TipsSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }) {
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const tips = emp.tip_items ?? [];
+  const total = tips.reduce((n, t) => n + (t.amount || 0), 0);
+
+  async function add() {
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value <= 0) {
+      setErr("Enter a dollar amount greater than zero.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/payroll/tips", {
+        method: "POST",
+        body: JSON.stringify({ user_id: emp.user_id, amount: value, note: note.trim() }),
+      });
+      setAmount("");
+      setNote("");
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not add the tip.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(uuid: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/payroll/tips/${encodeURIComponent(uuid)}`, { method: "DELETE" });
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not remove the tip.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>
+        Tips{total > 0 ? ` - $${total.toFixed(2)}` : ""}
+      </div>
+      {tips.length > 0 && (
+        <div className="col" style={{ gap: 5, marginBottom: 8 }}>
+          {tips.map((t) => (
+            <div key={t.uuid} className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="small">
+                {shortDate(t.date)} - ${t.amount.toFixed(2)}
+                {t.job_name ? ` - ${t.job_name}` : ""}
+                {t.note ? ` - ${t.note}` : ""}
+                {t.entered_by ? ` (${t.entered_by})` : ""}
+              </span>
+              <button type="button" disabled={busy} onClick={() => remove(t.uuid)}
+                      style={{ fontSize: 12, color: "var(--danger)" }}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span className="small" style={{ color: "var(--muted)" }}>$</span>
+        <input
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          inputMode="decimal"
+          placeholder="0.00"
+          aria-label={`Tip amount for ${emp.name}`}
+          style={{ width: 80, fontSize: 13 }}
+        />
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Note (optional)"
+          aria-label={`Tip note for ${emp.name}`}
+          style={{ flex: "1 1 140px", minWidth: 0, fontSize: 13 }}
+        />
+        <button type="button" onClick={add} disabled={busy || !amount.trim()} style={{ fontSize: 12 }}>
+          {busy ? "Saving..." : "Add tip"}
+        </button>
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
+        Dated today, so it pays on this period. For a tip that came in for a
+        specific job, add it from that job's Job Summary instead.
+      </div>
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 4 }}>{err}</div>}
     </div>
   );
 }
