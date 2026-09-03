@@ -35,6 +35,10 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   "workedHours",
   "closeout",
   "bulletin",
+  // The day plan gained "Internal rearrange" (2026-09-02). A new option on a
+  // prompt every interstate crew answers daily is a new thing to notice, and the
+  // tag is how they are told to look. Graduates at the next APP_VERSION bump.
+  "internalRearrange",
 ]);
 
 export function isBeta(feature: string): boolean {

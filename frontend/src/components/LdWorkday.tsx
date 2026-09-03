@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { hydrateDay, setLdDay } from "../lib/ldDayStore";
+import { BetaTag } from "./BetaTag";
 
 /**
  * Long-distance day plan. The crew picks what today is (packing / loading /
@@ -119,6 +120,7 @@ export function LdPlanTile({
   return (
     <>
       <div data-component="LdPlanTile" style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>What are you doing today?</div>
+      <BetaTag feature="internalRearrange" style={{ marginTop: 0, marginBottom: 4 }} />
       <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
         Pick everything that applies. The timeline tools match your selection.
       </div>
