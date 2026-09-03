@@ -3,7 +3,7 @@ User model for authentication.
 Minimal fields for now + minimal RBAC stub.
 """
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Text
 from app.db.session import Base
 
 
@@ -41,3 +41,10 @@ class User(Base):
     # on the admin monthly availability view. NOT NULL with empty default so
     # the read path doesn't need to handle Optional[str].
     scheduling_notes = Column(Text, nullable=False, server_default="", default="")
+
+    # Annual PTO allowance in hours, set by hand on the roster. Varies per person;
+    # there is no accrual formula. ZERO MEANS NOT ELIGIBLE - deliberately the same
+    # fact as "has no allowance", because a separate boolean beside the number
+    # would be two ways to say one thing and would eventually disagree with it.
+    # Per CALENDAR year, no roll-over. See app/core/pto.py.
+    pto_hours_annual = Column(Float, nullable=False, server_default="0", default=0)

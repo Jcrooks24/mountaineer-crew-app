@@ -1218,6 +1218,44 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## PTO is logged as an off-job pay structure (2026-09-03, BACKEND ONLY)
+
+Request 1a50fa5b. **No UI yet** - the crew cannot pick PTO and the office cannot
+set an allowance. Rules, storage and enforcement only.
+
+| Path | Where | Status |
+|---|---|---|
+| `users.pto_hours_annual` (Float, default 0, 0 = not eligible) | migration `l2n4p6k8m0o2`, `db/models/user.py` | [x] |
+| Eligibility / cap / remaining, derived from entries | `core/pto.py` | [x] |
+| `pay_structure = "pto"` accepted, and REFUSED when ineligible or over cap | `routers/off_job.py` | [x] |
+| `GET /api/off-job/pto-balance` for the crew screen | `routers/off_job.py` | [x] |
+| Payroll: its own `pto` bucket, in `totals.pto_hours` and per day | `routers/payroll.py` | [x] |
+| Off Job screen: PTO option + remaining balance | not built | [ ] |
+| Admin roster: set someone's annual PTO hours | not built | [ ] |
+
+**Calendar year, no roll-over, and PTO never reaches overtime** (both confirmed).
+OT sums only the `billable` bucket, so giving PTO its own bucket is what keeps it
+out - paid time off is not worked time, and letting it push somebody past forty
+would pay overtime for hours nobody worked.
+
+**The balance is derived, never stored.** A stored running total is a second
+source of truth that drifts the first time an entry is edited or deleted, and it
+would drift silently.
+
+**Zero means not eligible.** There is deliberately no separate boolean: an
+allowance of zero and "not eligible" are one fact, and two ways to say it would
+eventually disagree.
+
+**The cap is enforced server-side, not just in the UI.** The offline queue posts
+whatever it was holding, possibly days later, so a client that was out of date
+about somebody's balance must not be able to overspend it.
+
+**Editing an entry is judged on the change.** The queue re-submits the same
+`entry_uuid` to edit, so the entry's own prior hours are excluded from the "used"
+figure - otherwise lowering 8 hours to 4 is refused for exceeding a cap the 8 had
+already filled.
+
+
 ## Tips are paid out through payroll (2026-09-03)
 
 Request f8e008cb. Money.

@@ -60,6 +60,7 @@ from app.core.deps import get_db, require_admin
 from app.core.mailer import send_email
 from app.core.name_sort import surname_key
 from app.core.hours_rounding import payroll_rounds, round_billable_quarter
+from app.core.pto import PTO_PAY_STRUCTURE
 from app.core.payroll_period import set_last_finalized_period
 from app.core.time_utils import (
     MOUNTAIN_TZ,
@@ -350,7 +351,16 @@ def _off_job_hours(
         if d is None or not (start <= d <= end):
             continue
         ps = (e.pay_structure or "regular").lower()
-        bucket = {"regular": "billable", "non_billable": "non_billable"}.get(ps, "other")
+        # PTO gets its own bucket rather than falling into "other". It has to be
+        # separable on the payroll screen (it draws down an allowance somebody is
+        # tracking), and it must never reach the OT calculation, which only ever
+        # sums "billable" - paid time off is not worked time, and letting it push
+        # somebody past forty would pay overtime for hours nobody worked.
+        bucket = {
+            "regular": "billable",
+            "non_billable": "non_billable",
+            PTO_PAY_STRUCTURE: "pto",
+        }.get(ps, "other")
         detail = (e.pay_other_note or "").strip() if bucket == "other" else ""
         rows.append(
             _row(uid, roster[uid].name or e.submitted_by_name or "", d, bucket,
@@ -737,7 +747,7 @@ def _employee_summary(
     tips: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     days: Dict[date, Dict[str, float]] = defaultdict(
-        lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0}
+        lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0, "pto": 0.0}
     )
     weeks: Dict[date, float] = defaultdict(float)
     per_diem = 0.0
@@ -773,6 +783,9 @@ def _employee_summary(
 
     non_billable = sum(v["non_billable"] for v in days.values())
     other = sum(v["other"] for v in days.values())
+    # Paid time off. Summed like the others but never fed to the OT calculation
+    # above, which reads only the "billable" bucket.
+    pto = sum(v["pto"] for v in days.values())
 
     # Standardized reimbursement rates turn the crew-logged counts into dollars
     # (ADR 0033). A rate of 0 (unset) leaves the amount at 0, and the page shows
@@ -791,7 +804,9 @@ def _employee_summary(
             "ot_hours": round(ot, 2),
             "non_billable_hours": round(non_billable, 2),
             "other_hours": round(other, 2),
-            "total_hours": round(regular + ot + non_billable + other, 2),
+            # Paid, and deliberately outside the OT calculation above.
+            "pto_hours": round(pto, 2),
+            "total_hours": round(regular + ot + non_billable + other + pto, 2),
             "per_diem_nights": nights,
             "per_diem_amount": per_diem_amount,
             "reimbursement_amount": round(reimb.get("amount", 0.0), 2),
@@ -808,6 +823,7 @@ def _employee_summary(
                 "billable_hours": round(v["billable"], 2),
                 "non_billable_hours": round(v["non_billable"], 2),
                 "other_hours": round(v["other"], 2),
+                "pto_hours": round(v["pto"], 2),
             }
             for d, v in sorted(days.items())
         ],

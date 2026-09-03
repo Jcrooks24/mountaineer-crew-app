@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.pto import PTO_PAY_STRUCTURE, check_pto_allowed, pto_balance
 from app.core.deps import get_current_user, get_db, require_admin
 from app.db.models.off_job_entry import OffJobEntry
 from app.db.models.user import User
@@ -24,7 +25,10 @@ from app.integrations.sheets_export import export_off_job_to_sheets, run_export_
 router = APIRouter(prefix="/api/off-job-hours", tags=["off-job-hours"])
 admin_router = APIRouter(prefix="/api/admin/off-job-hours", tags=["off-job-hours"])
 
-PAY_STRUCTURES = {"regular", "non_billable", "other"}
+# "pto" is paid time off. It is a pay structure rather than a separate feature
+# because that is how the crew already think about an off-job day: they log the
+# hours and say how they are paid. It is the only one with a cap (app/core/pto.py).
+PAY_STRUCTURES = {"regular", "non_billable", "other", PTO_PAY_STRUCTURE}
 
 
 class OffJobIn(BaseModel):
@@ -87,6 +91,23 @@ def create_off_job(
 
     pay = body.pay_structure if body.pay_structure in PAY_STRUCTURES else "regular"
 
+    # PTO spends a finite allowance, so it is the one entry the app refuses.
+    # Checked here rather than only in the UI: the offline queue posts whatever
+    # it was holding, possibly days later, and a client that was out of date
+    # about somebody's balance must not be able to overspend it.
+    #
+    # The entry's own uuid is excluded from the "used" figure so that EDITING an
+    # existing PTO entry is judged on the change, not on the old value plus the
+    # new one - otherwise lowering 8 hours to 4 would be refused for exceeding a
+    # cap the 8 had already filled.
+    if pay == PTO_PAY_STRUCTURE:
+        why = check_pto_allowed(
+            db, current_user, (body.work_date or "").strip() or None,
+            float(body.hours), exclude_entry_uuid=body.entry_uuid.strip(),
+        )
+        if why:
+            raise HTTPException(status_code=400, detail=why)
+
     # Idempotent: the offline queue retries with the same uuid. Update in place.
     e = db.query(OffJobEntry).filter(OffJobEntry.entry_uuid == body.entry_uuid).first()
     now = datetime.now(timezone.utc)
@@ -109,6 +130,22 @@ def create_off_job(
     db.refresh(e)
     _export(e)
     return _to_out(e)
+
+
+@router.get("/pto-balance")
+def my_pto_balance(
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """This crew member's PTO position for a calendar year (default: this one).
+
+    Drives the Off Job screen: whether to offer PTO at all, and how much is left.
+    The server checks the same thing again on submit - this is so the crew member
+    is told before they type, not so the rule lives on the client.
+    """
+    from datetime import date as _date
+    return pto_balance(db, current_user, year or _date.today().year)
 
 
 @router.get("", response_model=List[OffJobOut])
