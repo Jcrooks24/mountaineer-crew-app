@@ -2088,7 +2088,20 @@ def reconcile_job_materials_bills(db: Session, max_jobs: int = 100) -> Dict[str,
 
 def _bills_rebuild_worker(job_uuid: str) -> None:
     from app.db.session import SessionLocal
+    global _inflight_seq
     while True:
+        # Register in the same in-flight map run_export_in_background uses. This
+        # path does not go through that helper, so without this the Bills rebuild
+        # is invisible to the export-pool readout (`_export_pool_stats`) that the
+        # Sheet Backfill panel shows and that the vetting protocol names as the
+        # instrument for diagnosing a wedged pool. The pool has two threads and
+        # this task holds one across several Sheets calls, so a rebuild stuck on
+        # a slow Google response is exactly the thing that readout exists to
+        # show - and it was the one task the readout could not see.
+        with _inflight_lock:
+            _inflight_seq += 1
+            key = f"rebuild_job_materials_total_in_bills#{_inflight_seq}"
+            _inflight[key] = time.monotonic()
         db = SessionLocal()
         ok = False
         try:
@@ -2107,6 +2120,9 @@ def _bills_rebuild_worker(job_uuid: str) -> None:
             except Exception:
                 pass
             record_sheet_sync(db, "rebuild_job_materials_total_in_bills", False, str(exc))
+
+        with _inflight_lock:
+            _inflight.pop(key, None)
 
         # Decide whether to loop, and clear the durable marker, while the session
         # is still open. The marker is cleared INSIDE the coalescer lock on
