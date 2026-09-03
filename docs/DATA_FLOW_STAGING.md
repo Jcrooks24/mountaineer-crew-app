@@ -1243,13 +1243,27 @@ no Sheet column. The qty written is different, that is all. Bills already saved
 with a wrong 1h are repaired when the bill is next opened, because a line the
 admin has not edited in that session tracks the longest shift.
 
-**Deliberately session-scoped.** The "admin edited it" flag is a ref, not a
-stored field. A stored flag would have had to be back-filled onto every bill
-already carrying a wrong 1h, and absent-means-not-edited would have healed them
-anyway - with the extra cost of a schema change. The trade is recorded here: an
-admin who deliberately sets a truck to 1h on a job whose longest shift is longer
-will see it re-sized when the bill is re-opened in a new session. That is the
-case the bill-totals warning already flags as a suspected under-bill.
+**The override is PERSISTED**, as `qtyLocked` on the line item. Typing hours into
+a truck line sets it; the line then keeps that number through a reload and
+through later changes to the hours. Crews as well as admin can override - there
+is no role gate on the bill lines.
+
+A first pass held this in a component ref, which was wrong: the override snapped
+back to the computed value the moment anybody re-opened the bill. It has to be
+stored. It needs no backend change - `BillUpsert.items` is
+`List[Dict[str, Any]]` stored as JSON, so the flag round-trips - and no
+migration.
+
+`qtyLocked` absent means "not overridden", which is what every bill written
+before this carries, so bills stuck at a wrong 1h re-size themselves on open
+rather than needing to be found by hand.
+
+**There is a way back.** An overridden truck line shows "Hours set by hand" and a
+"Use crew hours" control that clears the flag. Without it, one hand-typed number
+detaches the line from the crew's hours permanently, and hours get corrected all
+the time - a break logged late, an end time fixed the next morning. The truck
+would sit at the old figure with nothing admitting it had stopped tracking,
+which is the same silent-wrong-number shape as the 1h bug itself.
 
 
 ## Close-out: `variance_cause_identified` becomes derived (2026-09-03)

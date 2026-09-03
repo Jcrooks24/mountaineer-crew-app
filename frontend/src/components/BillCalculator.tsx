@@ -37,6 +37,18 @@ type LineItem = {
   unit: Unit;
   discount: number;   // per-line % (0–100)
   source: "hours" | "materials" | "m1" | "charge" | "custom" | "tips" | "personal_vehicle" | "truck";
+  /** Someone typed this line's hours in by hand, so stop auto-sizing it.
+   *
+   *  Only meaningful on `truck` lines today. It is PERSISTED with the bill (the
+   *  API stores items as free-form JSON, so this needs no schema change) because
+   *  an override the crew set has to survive them closing the report - a
+   *  session-only flag meant the number snapped back to the computed one the
+   *  next time anybody opened the bill.
+   *
+   *  Absent means "not overridden", which is what every bill written before this
+   *  carries, so the bills currently stuck at a wrong 1h re-size themselves on
+   *  open instead of needing to be found and fixed by hand. */
+  qtyLocked?: boolean;
 };
 
 type Bill = {
@@ -207,11 +219,6 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const [bill, setBill] = useState<Bill>({ items: [], globalDiscount: 0, notes: "" });
   const [loaded, setLoaded] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
-  // Truck lines the admin has edited by hand in THIS session. Deliberately not
-  // persisted: the point is to stop the auto-fill fighting a live edit, not to
-  // freeze a value forever, and a stored flag would have had to be back-filled
-  // onto every bill that already carries a wrong 1h.
-  const truckEditedRef = useRef<Set<string>>(new Set());
   const addMenuRef = useRef<HTMLDivElement>(null);
 
   // Materials (live-shared per job, offline-capable via materialsStore)
@@ -483,17 +490,19 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       for (let i = 1; i <= truckCount; i++) {
         const label = `Truck #${i} (per hour)`;
         const existing = prev.items.find((it) => it.source === "truck" && it.label === label);
-        // An admin edit wins. Everything else tracks the longest shift, which
-        // also repairs the bills already sitting at a frozen 1h.
-        const adminEdited = existing ? truckEditedRef.current.has(existing.id) : false;
+        // A hand-typed override wins, for good. Everything else tracks the
+        // longest shift, which is also what repairs the bills already sitting at
+        // a frozen 1h: they carry no lock, so they re-size on open.
+        const overridden = existing?.qtyLocked === true;
         desired.push({
           id: existing?.id ?? uuid(),
           label,
-          qty: adminEdited ? existing!.qty : longest,
+          qty: overridden ? existing!.qty : longest,
           rate: existing ? existing.rate : 90,
           unit: "hr",
           discount: existing?.discount ?? 0,
           source: "truck",
+          ...(overridden ? { qtyLocked: true } : {}),
         });
       }
       const otherItems = prev.items.filter((it) => it.source !== "truck");
@@ -564,13 +573,21 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // ── Mutations ────────────────────────────────────────────────────────────────
 
   function updateItem(id: string, patch: Partial<LineItem>) {
-    // A truck line the admin has typed into stops following the crew's hours.
-    // Without this, the auto-fill below would argue with them on every render.
-    if (patch.qty !== undefined || patch.rate !== undefined) {
-      const it = bill.items.find((x) => x.id === id);
-      if (it?.source === "truck") truckEditedRef.current.add(id);
-    }
-    setBill((prev) => ({ ...prev, items: prev.items.map((it) => it.id === id ? { ...it, ...patch } : it) }));
+    setBill((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => {
+        if (it.id !== id) return it;
+        const next = { ...it, ...patch };
+        // Typing hours into a truck line is an override: it stops following the
+        // crew's longest shift and stays where it was put, through a reload and
+        // through a later change to the hours. `qtyLocked` is only set here, by
+        // a person editing the field - never by the auto-fill.
+        if (it.source === "truck" && patch.qty !== undefined && patch.qtyLocked === undefined) {
+          next.qtyLocked = true;
+        }
+        return next;
+      }),
+    }));
   }
 
   function removeItem(id: string) {
@@ -1060,6 +1077,28 @@ function LineItemRow({ item, onChange, onRemove }: {
             onChange={(discount) => onChange({ discount })} style={{ ...numInputStyle, width: 64 }} />
         </label>
       </div>
+      {/* The way back out of an override.
+          Without this, typing a number into a truck line silently detaches it
+          from the crew's hours FOREVER. Hours get corrected all the time - a
+          break logged late, somebody's end time fixed the next morning - and the
+          truck would sit at the old figure with nothing on screen admitting it
+          had stopped tracking. That is the same silent-wrong-number shape as the
+          1h bug this line already had once. */}
+      {item.source === "truck" && item.qtyLocked && (
+        <div className="small" style={{ color: "var(--muted)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span>Hours set by hand. This line no longer follows the crew's longest shift.</span>
+          <button
+            type="button"
+            onClick={() => onChange({ qtyLocked: false })}
+            style={{
+              background: "none", border: "none", padding: 0, font: "inherit",
+              color: "var(--brand)", textDecoration: "underline", cursor: "pointer",
+            }}
+          >
+            Use crew hours
+          </button>
+        </div>
+      )}
     </div>
   );
 }

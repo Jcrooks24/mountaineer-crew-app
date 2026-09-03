@@ -97,14 +97,39 @@ check("and bails out when nothing billable is logged yet",
 check("the absence is explained rather than silent",
   /no hours logged yet/.test(calc));
 
-console.log("\nIt follows the hours until an admin edits it:");
-check("a non-edited line takes the longest shift",
-  /qty: adminEdited \? existing!\.qty : longest,/.test(calc));
-check("an admin edit is remembered and wins",
-  /truckEditedRef\.current\.add\(id\)/.test(calc)
-  && /truckEditedRef\.current\.has\(existing\.id\)/.test(calc));
-check("only qty/rate edits count as an edit, not a re-render",
-  /patch\.qty !== undefined \|\| patch\.rate !== undefined/.test(calc));
+console.log("\nA hand-typed override sticks, and survives a reload:");
+// The crew must be able to override the computed hours. The first version of
+// this fix held that in a component ref, so the number snapped back to the
+// computed one the moment anybody re-opened the bill.
+check("the override flag lives on the line item, not in component state",
+  /qtyLocked\?: boolean;/.test(calc) && !/truckEditedRef/.test(calc),
+  "a session-scoped flag does not survive a reload");
+check("typing hours into a truck line sets the flag",
+  /it\.source === "truck" && patch\.qty !== undefined && patch\.qtyLocked === undefined/.test(calc));
+check("a line with no override takes the longest shift",
+  /qty: overridden \? existing!\.qty : longest,/.test(calc));
+check("an overridden line keeps its number and carries the flag forward",
+  /\.\.\.\(overridden \? \{ qtyLocked: true \} : \{\}\)/.test(calc));
+check("there is a way back to the computed value",
+  /onChange\(\{ qtyLocked: false \}\)/.test(calc),
+  "otherwise an override silently detaches from hours corrected later");
+check("and the row says so rather than going quiet",
+  /no longer follows the crew's longest shift/.test(calc));
+
+// The API stores items as free-form JSON (List[Dict[str, Any]]), so the flag
+// round-trips with no backend change. Prove the shape survives that.
+const overridden = JSON.parse(JSON.stringify({
+  id: "t1", label: "Truck #1 (per hour)", qty: 3, rate: 90, unit: "hr",
+  discount: 0, source: "truck", qtyLocked: true,
+}));
+check("the flag survives a JSON round trip to the API and back",
+  overridden.qtyLocked === true && overridden.qty === 3);
+const legacy = JSON.parse(JSON.stringify({
+  id: "t0", label: "Truck #1 (per hour)", qty: 1, rate: 90, unit: "hr",
+  discount: 0, source: "truck",
+}));
+check("a bill saved before this reads as NOT overridden, so it re-sizes",
+  legacy.qtyLocked === undefined);
 
 console.log("\nOne definition of the rule, not two:");
 const dupes = (calc.match(/non_billable \? max : Math\.max/g) || []).length
