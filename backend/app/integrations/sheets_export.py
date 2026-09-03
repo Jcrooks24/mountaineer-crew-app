@@ -1940,6 +1940,28 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
     svc = _get_sheets_svc(db)
     actual_headers = _ensure_tab(svc, spreadsheet_id, tab, BILL_HEADERS)
 
+    # FAIL BEFORE APPENDING if the dedupe column is gone.
+    #
+    # Appending before the stale delete is what makes a crash survivable, but it
+    # also means a delete that fails DETERMINISTICALLY leaves the appended row
+    # behind and the reconciler re-drives the whole thing minutes later - append,
+    # fail, append, fail. That is how the Reimbursements tab accumulated 189
+    # duplicate rows and a $17,088 over-count: the dedupe delete no-oped and the
+    # caller appended anyway, every single time.
+    #
+    # The realistic cause of a permanent delete failure is exactly that one - row
+    # 1 renamed or overwritten, which _delete_sheet_rows_by_value raises
+    # SheetHeaderError for. Checking it HERE costs nothing (the header was just
+    # read) and converts an unbounded pile-up into a clean, loud, zero-write
+    # failure that records RED on the sync.
+    if actual_headers and "submission_id" not in actual_headers:
+        raise SheetHeaderError(
+            f"{tab!r}: dedupe key column 'submission_id' is missing from a populated "
+            f"header row {actual_headers!r}. Refusing to append a Materials line that "
+            f"could not later be de-duplicated; fix the header before this tab "
+            f"exports again."
+        )
+
     if total <= 0:
         # No materials left for this job - leave the Bills sheet without a
         # zero-value "Materials" row. Itemized history still lives in the

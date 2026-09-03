@@ -73,6 +73,28 @@ migration.
   I/O while holding one. The lock is otherwise held for three set operations; the
   race it closes is the whole point.
 
+## The guard that append-first makes necessary
+
+Appending first has a cost the delete-first ordering did not have: a delete that
+fails **deterministically** leaves the appended row behind, and the reconciler
+re-drives the whole rebuild minutes later. Append, fail, append, fail. That is
+precisely how the Reimbursements tab reached 189 duplicate rows and a $17,088
+over-count in the 2026-08-05 audit - the dedupe delete no-oped and the caller
+appended anyway, every time.
+
+The realistic cause of a permanent delete failure is a header row that was
+renamed or overwritten, which `_delete_sheet_rows_by_value` already raises
+`SheetHeaderError` for. `rebuild_job_materials_total_in_bills` therefore checks
+for the `submission_id` column **before it appends anything**, using the headers
+`_ensure_tab` just returned, so the check costs no extra API call. A corrupted
+header now fails loud and writes nothing, instead of piling up a row every five
+minutes.
+
+The residual case - a delete failing for some non-header reason - still
+accumulates one row per reconciler cycle while it lasts, and self-heals on the
+next success because `keep_last` keeps exactly one. `sheet_integrity_check.py`
+flags the duplicates in the meantime.
+
 ## Known limit
 
 This recovers work that was *recorded* and then lost. A rebuild whose marker
