@@ -1218,6 +1218,42 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Finalizing payroll marks the reimbursements it paid (2026-09-03)
+
+Request b59434c2 item 2.
+
+| Path | Where | Status |
+|---|---|---|
+| `reimbursements.paid_at` / `paid_period_start` / `paid_period_end` | migration `j0l2n4i6k8m0`, `db/models/reimbursement.py` | [x] |
+| Stamped on payroll finalize, in the same transaction as the correction emails | `routers/payroll.py` (`_mark_reimbursements_paid`) | [x] |
+| Returned on the payroll summary's reimbursement items as `paid_at` + `paid_period` | `routers/payroll.py` | [x] |
+| Finalize response carries `reimbursements_paid` (a count) | `routers/payroll.py` | [x] |
+
+**A separate stamp, not a `status = "paid"` value.** Approval and payment are two
+different facts about one row; overwriting the status would lose who approved it
+and when, and would make a paid-but-never-reviewed claim indistinguishable from
+an approved one. The existing approve/decline flow is untouched.
+
+**What counts as paid** is exactly what payroll counted: everything in the window
+except an explicit decline, INCLUDING claims still sitting at "submitted".
+Payroll pays unless declined, so an unreviewed claim was still money that went
+out, and recording it as unpaid would be false.
+
+**Idempotent.** Only rows with a null `paid_at` are touched, so re-finalizing a
+period stamps nothing new and a claim paid on an earlier run keeps that run's
+dates instead of being re-attributed to whichever period is finalized next.
+
+**Not gated on the correction emails succeeding.** A correction that fails to
+send is retried by the next finalize because its `notified_at` stays null; a
+reimbursement is not a notification, it is money that has already moved, and
+leaving the ledger wrong to protect an email would be the wrong trade.
+
+**Migration is additive and nullable with no backfill.** NULL means "not paid
+through the app", which is the truth for every claim filed before this: earlier
+periods were settled by hand and nothing here can know what happened outside the
+app. Backfilling would be inventing a payment record.
+
+
 ## Payroll hours are quarter-rounded per contribution (2026-09-03)
 
 Request e2126bf1. A MONEY change: it changes what people are paid.

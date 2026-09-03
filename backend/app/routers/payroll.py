@@ -486,6 +486,14 @@ def _reimbursements(
             "status": status,
             "notes": r.approval_notes or "",
             "approver": r.approver_name or "",
+            # Payment is separate from approval: a claim can be approved and
+            # unpaid, or paid while never explicitly approved (payroll pays
+            # anything not declined).
+            "paid_at": r.paid_at.isoformat() if r.paid_at else None,
+            "paid_period": (
+                {"start": r.paid_period_start, "end": r.paid_period_end}
+                if r.paid_at else None
+            ),
         }
         if r.type == "mileage":
             if r.odometer_start is not None and r.odometer_end is not None:
@@ -537,6 +545,46 @@ def _round_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         out.append({**r, "hours": round_billable_quarter(float(r["hours"] or 0))})
     return out
+
+
+def _mark_reimbursements_paid(
+    db: Session, start: date, end: date, roster: Dict[int, User]
+) -> int:
+    """Stamp every claim this period actually paid, and return how many.
+
+    WHAT COUNTS AS PAID. The same rows payroll counted: everything in the window
+    except what an admin explicitly declined. That includes claims still sitting
+    at "submitted", because payroll pays unless declined - a claim nobody got
+    round to reviewing was still money that went out, and recording it as unpaid
+    would be false.
+
+    IDEMPOTENT. Only rows with no `paid_at` are touched, so re-finalizing a
+    period (which the admin does whenever one more correction turns up) does not
+    move the payment date of anything already stamped. It also means a claim paid
+    on an earlier run keeps that run's dates rather than being re-attributed to
+    this one.
+
+    Does NOT commit; finalize owns the transaction and commits once at the end,
+    so a failure part-way through leaves nothing stamped.
+    """
+    rows = db.query(Reimbursement).filter(Reimbursement.paid_at.is_(None)).all()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    marked = 0
+    for r in rows:
+        if r.user_id is None or r.user_id not in roster:
+            continue
+        d = _parse_date_str(r.expense_date) or (
+            utc_naive_to_mountain_date(r.created_at) if r.created_at else None
+        )
+        if d is None or not (start <= d <= end):
+            continue
+        if (r.status or "submitted").strip() == "rejected":
+            continue
+        r.paid_at = now
+        r.paid_period_start = start.isoformat()
+        r.paid_period_end = end.isoformat()
+        marked += 1
+    return marked
 
 
 def _dedupe_corrections(
@@ -1627,6 +1675,21 @@ def finalize_period(
     # Hours summary now runs from the day after this period's end.
     set_last_finalized_period(db, s, e)
 
+    # Every claim this run paid is stamped paid. Deliberately AFTER the email
+    # loop and inside the same transaction as the notified_at stamps, so the one
+    # commit below either records the whole finalize or none of it.
+    #
+    # Note this is not gated on the emails succeeding. A correction that failed to
+    # send is retried by the next finalize because its notified_at is still null;
+    # a reimbursement is not a notification, it is money that has already moved,
+    # and leaving it unstamped because somebody's mailbox bounced would make the
+    # ledger wrong to protect an email.
+    # The SAME roster payroll counted against, not a fresh query: _roster
+    # deliberately includes inactive users (somebody who left mid-period is still
+    # owed that period), and a narrower set here would leave their claims unpaid.
+    finalize_roster, _ = _roster(db)
+    reimbursements_paid = _mark_reimbursements_paid(db, s, e, finalize_roster)
+
     # Committed after the loop: only the corrections whose email actually went
     # out (or was deliberately suppressed) carry a notified_at, so a failure is
     # retried by the next finalize instead of being silently marked done.
@@ -1640,6 +1703,9 @@ def finalize_period(
         # Advisory only. See the note where this is built: these claims are being
         # paid, so this is "nobody looked", not "something is wrong".
         "reimbursements_unreviewed": unreviewed,
+        # How many claims this run marked paid. Zero on a re-finalize, because
+        # the stamp is idempotent.
+        "reimbursements_paid": reimbursements_paid,
     }
 
 

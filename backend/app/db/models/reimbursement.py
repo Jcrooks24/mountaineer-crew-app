@@ -93,5 +93,16 @@ class Reimbursement(Base):
     approved_at = Column(DateTime, nullable=True)
     approval_notes = Column(Text, nullable=True)
 
+    # PAYMENT, which is a different fact from approval. Stamped when a payroll
+    # period that included this claim is finalized. NULL means "not paid through
+    # the app" - true for everything filed before this existed, and for anything
+    # settled outside it. Kept separate from `status` so approving and paying
+    # cannot overwrite each other.
+    paid_at = Column(DateTime, nullable=True)
+    # Which payroll run paid it. "Paid" without "on which run" cannot be
+    # reconciled against anything.
+    paid_period_start = Column(String(10), nullable=True)
+    paid_period_end = Column(String(10), nullable=True)
+
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
