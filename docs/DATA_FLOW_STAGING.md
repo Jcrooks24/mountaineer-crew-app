@@ -1218,6 +1218,34 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Close-out: `variance_cause_identified` becomes derived (2026-09-03)
+
+From a review of the whole close-out section. No new field, no schema change,
+no endpoint change. What changes is HOW one existing field gets its value.
+
+| Path | Where | Status |
+|---|---|---|
+| `variance_cause_identified` was answered at its own step; it is now computed from the three cause answers (`deriveCauseIdentified`) | `lib/closeout.ts`, `components/CloseoutStepper.tsx` | [x] |
+| The `identified` step is gone from `closeoutSteps`; the flow is ran -> direction -> 3 causes -> note | `lib/closeout.ts` | [x] |
+| Re-opening a report reconstructs the three answers from what was stored (`bucketAnswersFrom`) | `components/CloseoutStepper.tsx` | [x] |
+| Flipping direction now recomputes the flag against the causes that survive the flip | `components/CloseoutStepper.tsx` | [x] |
+| Scope editor gated on `scope_added_on_site` / `scope_reduced_on_site` only | `components/CloseoutStepper.tsx` | [x] |
+
+**The defect this removes.** Answering "Yes I can identify the cause" and then No
+to all three questions stored `true` with an empty cause list, and the Sheet
+showed "Cause identified: Yes" next to a blank Reasons column. Nothing
+recomputed the flag once it was set.
+
+Storage, validation and the Sheet column are all unchanged: still a nullable
+boolean, still exported Yes / No / blank by `_yes_no_blank`, still accepted by
+`JobReportIn` as `Optional[bool]`. Old reports read back correctly, and a stored
+`false` reconstructs as three Nos. **No back-fill and no migration**: a report
+saved before this keeps whatever it recorded.
+
+See the 2026-09-03 addendum to
+[ADR 0040](decisions/0040-closeout-is-a-stepper-with-three-cause-buckets.md).
+
+
 ## Job setup gains tap-to-reveal field help (2026-09-03)
 
 From field feedback that the interstate workflow is confusing. 21 new keys on an

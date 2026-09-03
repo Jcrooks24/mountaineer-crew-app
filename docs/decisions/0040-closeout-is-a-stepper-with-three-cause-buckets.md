@@ -121,3 +121,48 @@ untouched old report fail on data the crew never entered and cannot see.
 - **Making the whole job report a wizard.** What was literally asked for, and
   deferred by choice: it is a rebuild of the app's biggest screen and every field
   crews use daily. Revisit once the close-out stepper has been used in the field.
+
+## Addendum, 2026-09-03: "can you identify a cause" is derived, not asked
+
+A review of the whole section found the step-3 gate doing more harm than good,
+and it is removed. The stepper is now: ran differently -> which way -> the three
+cause questions -> note.
+
+**Why it was wrong to ask.** It asked the crew to commit to "can you reasonably
+identify what caused it?" **before showing them a single option**, which nobody
+can answer honestly. And nothing ever recomputed it: answering Yes and then No to
+all three cause questions stored `variance_cause_identified = true` with an empty
+cause list, so the Sheet showed "Cause identified: Yes" beside a blank Reasons
+column. The office read a claim the data did not support, which is the exact
+failure the tri-state export was built to prevent.
+
+**Three Nos is "we cannot say."** The flag is now computed from the three answers
+(`deriveCauseIdentified` in `lib/closeout.ts`): any named cause is `true`, three
+Nos is `false`, anything in between is `null`. Same stored field, same tri-state
+column, and it can no longer contradict the answers it summarises.
+
+The honest-answer property this ADR argued for is kept, not dropped. A crew that
+cannot name a cause still has somewhere to go, and it is still stored and still
+distinguishable from an unfilled form. It is now reached by answering the
+questions rather than by predicting how they will be answered.
+
+Also in the same pass:
+
+- **The scope editor opens only under "Scope added on site" / "Scope reduced on
+  site"** (`isScopeCause`). It used to open under ANY site cause, so picking
+  "Client not ready" was answered with "was anything added or dropped?" - the
+  longest sub-form in the close-out, offered right after the crew said the
+  problem was something else.
+- **The three cause questions advance when answered**, like every other question.
+  They were the only ones that did not, which reads as a stuck button. The one
+  exception is a cause that opens the scope editor, which the crew would never
+  see if the card advanced out from under it.
+- **A Yes with no cause picked yet is held**, so the press is not lost when the
+  crew looks at another question. `pending` held only one bucket at a time, so a
+  Yes on a second question silently un-pressed the first.
+- **A cause question with no direction chosen** prompts back to the direction
+  question instead of rendering an empty card.
+
+**Do not re-add a "can you identify a cause" question.** If the answer is wanted
+earlier in the flow, derive it and display it; asking it twice is how the two
+answers start disagreeing, which is what this ADR's original half fixed.

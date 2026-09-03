@@ -589,20 +589,26 @@ durability bugs shipped the first time.
 
 ## Known defects
 
-### A bucket answered "No" on the close-out does not survive a remount
+### A PARTLY answered close-out does not fully survive a remount
 
-**Open as of 2026-09-03.** The three cause questions store only a cause key, so
-"the crew said No to this bucket" and "the crew never answered this bucket"
-write exactly the same empty string. The Yes/No pressed state is therefore held
-in local component state (`bucketNo` in `CloseoutStepper.tsx`), and re-opening
-the report shows an explicitly-answered No as unanswered.
+**Open as of 2026-09-03, narrowed the same day.** The three cause questions
+store only a cause key, so "the crew said No to this bucket" and "the crew never
+answered it" write the same empty string.
 
-The stored data is not wrong, and nothing is lost: no cause is no cause either
-way. What is lost is the office's ability to tell a crew who considered the
-question and said no from one who skipped it. Fixing it properly means a stored
-field per bucket, which is a schema, a payload, a Sheet column and a backend
-allow-list, and was not worth it for the reported symptom (the buttons not being
-correctable, which is fixed).
+Most of this is now reconstructed on open (`bucketAnswersFrom`): a stored cause
+comes back as that bucket's Yes, and a stored
+`variance_cause_identified === false` comes back as three Nos, which is the only
+way it can be false now that the flag is derived.
+
+**What is still lost** is a PARTIAL set: one or two buckets answered No while
+the rest are untouched derives `null`, which is indistinguishable from having
+answered nothing, so those Nos come back blank. The stored data is not wrong and
+no cause is lost; what the office cannot see is that the crew considered two of
+the three questions and said no before putting the phone down.
+
+Fixing it completely means a stored field per bucket - a schema, a payload, a
+Sheet column and a backend allow-list - which is not worth it for a
+half-completed form.
 
 
 ### A default checklist item can never be restored once the list is saved

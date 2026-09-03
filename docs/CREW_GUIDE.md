@@ -235,7 +235,7 @@ Billing method: invoice, cash, etc.
 Review candidate: Whether or not we should seek a review from the client. Yes, No, or N/A.
 Hours match: Confirm whether the timeline reflects actual hours billed and paid. If not, explain in the text field.
 Employee Hours: Per-person hours for everyone on the job, chosen from the roster. See Section 7.4 for the full editor.
-Close-out: three optional questions at the bottom of the report - why the job ran differently than quoted (in either direction, tick all that apply), whether the client was ready, and anything added or changed on site. See Section 7.9.
+Close-out: a short series of optional questions at the bottom of the report, asked one at a time - whether the job ran differently than quoted and which way, then whether site conditions, travel, or the crew and equipment contributed. See Section 7.9.
 Skill ratings: admins and designated Skill raters rate each mover on the skills a job actually called for. See Section 7.7.
 Wrap-up estimator: a projected finish time (your remaining work plus the drive back to the yard) you can pick as an End time, and a drive-time estimate for the trip home. See Section 7.8.
 Crew Feedback: Optional general feedback or job-specific feedback to send to the office.
@@ -322,15 +322,19 @@ Admins and anyone an admin designates as a Skill rater can rate each mover on th
 ### 7.8 Wrap-Up Estimator
 On the Job Report, tap to calculate a projected job wrap-up time: the drive time from where you are now back to the yard (plus a buffer) added to any billable work still left to do once you are there. You can pick the projected time as an employee's End time in the hours editor. A separate return-trip drive estimate gives the time home. If GPS or signal is unavailable, enter the drive minutes by hand; the estimate still works.
 ### 7.9 Close-out
-Three questions at the bottom of the Job Report. All of them are optional and none of them block Save - if you cannot answer one, skip it.
+A short series of questions at the bottom of the Job Report, asked one at a time. Every one is optional and none of them block Save: if you cannot answer one, skip it or leave the whole thing alone. Answering a question moves you to the next; Back and Next move between them at any point, and changing an earlier answer does not throw you forward again.
 
-Did the job run differently than quoted? Tick every reason that applied - you are not limited to one. The list is split into two halves. "Ran longer than quoted" covers underestimated volume, access or stairs, client not ready, crew size or skill, scope added on site, travel or traffic, and damage or repack. "Ran shorter than quoted" covers overestimated volume, easier access than expected, client further along than expected, scope reduced on site, and crew faster than expected. Use the second half. A job that beat its estimate is worth knowing about, and if nobody taps it the office cannot tell "we finished early" from "nobody filled this in". A note box appears once you pick anything, for what the list does not cover. Tap a chip again to clear it.
+**Did the job run differently than quoted?** If you answer "No, as quoted", that is the end of it. If you answer "Yes, it differed", you are asked which way, longer or shorter. Everything after this point is filtered by that answer, so a job that finished early is never offered "truck broke down" - it would be noise, and a mis-tapped cause reads to the office as a real signal.
 
-Was the client ready when you arrived? Fully, mostly, partly, or not ready. If you pick anything other than Fully ready, a second row appears asking what specifically was not ready - tick all that applied. Changing your answer back to Fully ready clears those ticks, so the two answers never contradict each other.
+**Then three questions about what contributed**, in order: on-site conditions and client preparedness, travel and conditions on the way, then the crew and the equipment. Each is Yes or No, and Yes opens a short list to pick ONE from. They are separate questions on purpose: the same lost hour means three different things depending on which of them caused it. A client who was not ready is an estimating problem, the canyon is nobody's problem, and a leaking lift gate is a maintenance ticket.
 
-Anything added or changed on site? Add one entry per change. Within an entry, tick every reason that fits it - one conversation on the driveway where the client dropped both the storage unit and the second stop is one change with two reasons, not two changes. Reasons are split into "Added / more work" and "Dropped / less work".
+Answer honestly on the crew and equipment one. It is the only route a truck problem has to the people who can fix it.
 
-Each entry has an Impact toggle: Added time or Saved time. It sets itself from the first reason you tick, and you can override it. Then enter roughly how many hours the change cost you or gave back - always a plain positive number, the toggle is what makes it add or subtract. The hours are a rough guess so the office can see which kinds of change actually move a day; they are not a bill and they do not feed the invoice. Add as many entries as you need.
+**If none of the three applied**, answer No to all three. That is recorded as "no identifiable cause", which is a real answer and a useful one. The office would far rather have it than a guess: a fabricated cause is worse than silence, because it looks like data. You are not required to name something.
+
+**Only if you say scope was added or reduced on site** does a scope editor open underneath, for one entry per change. Within an entry tick every reason that fits it - one conversation on the driveway where the client dropped both the storage unit and the second stop is one change with two reasons, not two changes. Each entry has an Impact toggle (Added time or Saved time) that sets itself from the first reason you tick and can be overridden, then roughly how many hours the change cost or gave back. Always a plain positive number; the toggle is what makes it add or subtract. The hours are a rough guess so the office can see which kinds of change actually move a day. They are not a bill and they do not feed the invoice.
+
+**Last, an optional note.** This is the only place specifics fit, and it is the most useful box on the form. "Lift gate hydraulics started leaking" is a maintenance ticket; "Equipment problem" on its own is not.
 
 None of this changes the bill. It exists so the office can tell why a job went the way it did without having to phone you the next morning.
 

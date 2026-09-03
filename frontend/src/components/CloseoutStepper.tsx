@@ -12,18 +12,24 @@
  *
  *   1  Did the job run differently than quoted?      -> No ends it
  *   2  Which way, longer or shorter?
- *   3  Can the cause reasonably be identified?       -> No ends it
- *   4  Site and client conditions?      Yes -> pick one  (+ scope changes)
- *   5  Travel and conditions?           Yes -> pick one
- *   6  Crew and equipment?              Yes -> pick one
- *   7  Anything to add (optional note)
+ *   3  Site and client conditions?      Yes -> pick one  (+ scope changes)
+ *   4  Travel and conditions?           Yes -> pick one
+ *   5  Crew and equipment?              Yes -> pick one
+ *   6  Anything to add (optional note)
  *
- * WHY STEP 3 EXISTS. Without it, a crew that genuinely cannot say why the day
- * ran long has only two moves: leave everything blank, or pick something that
- * sounds plausible. The first is indistinguishable from not filling the form in;
- * the second puts a fabricated cause into the office's data and is much worse
- * than silence. Step 3 gives "we do not know" somewhere honest to go, and it is
- * stored, so the office can tell the two apart.
+ * "CAN YOU IDENTIFY THE CAUSE?" IS DERIVED, NOT ASKED (2026-09-03). It used to
+ * be its own question in front of the three below. That is still a fact the
+ * office needs - a crew who genuinely cannot say why the day ran long must have
+ * somewhere honest to go, or they leave the form blank (indistinguishable from
+ * not filling it in) or invent a plausible cause (worse than silence). But
+ * asking it FIRST made the crew commit before they had seen a single option,
+ * and nothing recomputed it afterwards, so "Yes I can identify it" followed by
+ * No to all three questions stored `identified = true` with an empty cause list
+ * and the office read a claim the data did not support.
+ *
+ * Three Nos IS "we cannot say", so it is computed from the three answers
+ * instead (`deriveCauseIdentified`). Same stored field, same tri-state in the
+ * Sheet, and it can no longer contradict the answers it summarises.
  *
  * WHY THREE CAUSE QUESTIONS. Same delay, three different responses: a client who
  * was not ready is an estimating problem, the canyon is nobody's problem, and a
@@ -45,11 +51,14 @@ import { useMemo, useState } from "react";
 
 import {
   CAUSE_BUCKETS,
-  type CauseBucket,
+  type BucketAnswer,
+  bucketAnswersFrom,
   causeForBucket,
   causesFor,
   causesInDirection,
   closeoutSteps,
+  deriveCauseIdentified,
+  isScopeCause,
   setCauseForBucket,
 } from "../lib/closeout";
 
@@ -137,29 +146,19 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
   const [differed, setDiffered] = useState(false);
   const steps = useMemo(() => closeoutSteps(value, differed), [value, differed]);
   const [at, setAt] = useState(0);
-  // Which bucket the crew has said "Yes" to but not yet picked a cause for.
-  // Local, not stored: "Yes, but I have not chosen from the list" is a UI moment
-  // between two taps, not a fact about the job. Storing it would put a
-  // half-answer in the Sheet.
-  const [pending, setPending] = useState<CauseBucket | null>(null);
-  // Buckets the crew has actively answered "No" to.
+  // How the crew answered each of the three cause questions.
   //
-  // WHY THIS HAS TO EXIST. The only stored fact for a bucket is its cause key,
-  // so "no cause here" and "never answered" are the same empty string. That made
-  // the three cause questions the one place in the stepper that could not be
-  // corrected: `value` was computed as `chosen ? true : null` and so was NEVER
-  // false, meaning the No button could not light up, and tapping No on a bucket
-  // with no cause yet changed nothing on screen at all. Reported from the field
-  // as the buttons being "stubborn" - a crew member could tap Yes and then not
-  // take it back. It is the same dead-button shape as the 2026-08-18 report
-  // handled by `differed` above, in the row that one missed.
+  // ONE record rather than the previous `pending` (a single bucket the crew had
+  // said Yes to) plus `bucketNo`. `pending` held only one bucket at a time, so
+  // saying Yes to a second question silently un-pressed the first, and a Yes
+  // with no cause picked yet was never reflected in the buttons at all.
   //
-  // Local, like `pending`, because there is no field for it: a bucket answered
-  // No stores exactly what an unanswered bucket stores. That means a No does not
-  // survive a remount, which is the honest limit of the current model and is
-  // recorded in Known defects rather than papered over by writing a half-answer
-  // to the Sheet.
-  const [bucketNo, setBucketNo] = useState<Record<string, boolean>>({});
+  // Seeded from what was stored, so re-opening a report shows what the crew
+  // actually said: a stored cause is a Yes, and a stored `identified === false`
+  // means all three were answered No, which is now the only way it can be false.
+  const [bucketAnswers, setBucketAnswers] = useState<Record<string, BucketAnswer>>(
+    () => bucketAnswersFrom(value.variance_causes, value.variance_cause_identified),
+  );
   // Clamp rather than reset: answering "No" at step 1 shortens the list, and an
   // index past the end would blank the card.
   const idx = Math.min(at, steps.length - 1);
@@ -187,6 +186,26 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
   const answer = (patch: Partial<CloseoutValue>, wasAnswered: boolean) => {
     onChange(patch);
     if (!wasAnswered) advance();
+  };
+
+  /** Set longer/shorter, dropping causes that belong to the other direction so a
+   *  "truck broke down" cannot survive into a job that finished early and
+   *  quietly contradict it.
+   *
+   *  The derived flag is recomputed against what SURVIVES. Without that, flipping
+   *  direction could strip every cause and leave `identified` still saying Yes,
+   *  which is the same contradiction the derivation was introduced to remove -
+   *  reintroduced through a different door. */
+  const flipDirection = (next: "more" | "less") => {
+    const kept = causesInDirection(value.variance_causes, next);
+    answer(
+      {
+        variance_direction: next,
+        variance_causes: kept,
+        variance_cause_identified: deriveCauseIdentified(kept, bucketAnswers),
+      },
+      dir != null,
+    );
   };
 
   const bucketStep = step.startsWith("cause:")
@@ -235,6 +254,12 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
             }}
             onNo={() => {
               setDiffered(false);
+              // The three cause answers are retracted too. They are local state,
+              // so without this they survive a "No, as quoted" invisibly: the
+              // rows would come back pre-answered if the crew changed their mind,
+              // and the first bucket they then touched would derive "cannot say"
+              // from three answers they had not given this time round.
+              setBucketAnswers({});
               onChange({
                 variance_direction: "as_quoted",
                 // Answering No retracts everything downstream. Leaving a stale
@@ -261,48 +286,19 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
             value={dir == null ? null : dir === "more"}
             yesLabel="Ran longer"
             noLabel="Ran shorter"
-            onYes={() =>
-              answer(
-                // Flipping direction drops causes belonging to the other one, so
-                // a "truck broke down" cannot survive into a job that finished
-                // early and quietly contradict it.
-                { variance_direction: "more", variance_causes: causesInDirection(value.variance_causes, "more") },
-                dir != null,
-              )
-            }
-            onNo={() =>
-              answer(
-                { variance_direction: "less", variance_causes: causesInDirection(value.variance_causes, "less") },
-                dir != null,
-              )
-            }
+            onYes={() => flipDirection("more")}
+            onNo={() => flipDirection("less")}
           />
         </>
       )}
 
-      {step === "identified" && (
+      {bucketStep && !dir && (
         <>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>
-            Can you reasonably identify what caused it?
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{bucketStep.question}</div>
+          <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+            Go back one step and say whether the job ran longer or shorter first.
+            The causes offered here depend on which way it went.
           </div>
-          <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
-            If not, say so. A guess is worse than no answer, and "we cannot say"
-            is a real answer the office would rather have.
-          </div>
-          <YesNoRow
-            value={value.variance_cause_identified}
-            yesLabel="Yes"
-            noLabel="No, cannot say"
-            onYes={() => answer({ variance_cause_identified: true }, value.variance_cause_identified === true)}
-            onNo={() =>
-              onChange({ variance_cause_identified: false, variance_causes: [], variance_note: "" })
-            }
-          />
-          {value.variance_cause_identified === false && (
-            <div className="small" style={{ color: "var(--muted)", marginTop: 12 }}>
-              Recorded as no identifiable cause. Nothing else to answer.
-            </div>
-          )}
         </>
       )}
 
@@ -313,44 +309,60 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
             {bucketStep.hint}
           </div>
           {(() => {
-            const chosen = causeForBucket(value.variance_causes, bucketStep.bucket);
-            const options = causesFor(bucketStep.bucket, dir);
+            const bucket = bucketStep.bucket;
+            const chosen = causeForBucket(value.variance_causes, bucket);
+            const options = causesFor(bucket, dir);
+            const answered = bucketAnswers[bucket];
+
+            /** Record one bucket's answer and recompute the derived
+             *  "could the crew name a cause" flag from all three, so the summary
+             *  can never contradict the answers it summarises. */
+            const apply = (answer: BucketAnswer, causeKey: string | null) => {
+              const nextAnswers = { ...bucketAnswers, [bucket]: answer };
+              const nextCauses = causeKey === null
+                ? value.variance_causes
+                : setCauseForBucket(value.variance_causes, bucket, causeKey);
+              setBucketAnswers(nextAnswers);
+              onChange({
+                variance_causes: nextCauses,
+                variance_cause_identified: deriveCauseIdentified(nextCauses, nextAnswers),
+              });
+            };
+
             return (
               <>
                 <YesNoRow
-                  value={chosen ? true : bucketNo[bucketStep.bucket] ? false : null}
-                  onYes={() => { /* reveals the dropdown below; no cause yet */
-                    // Retract a previous No, or the row would show neither
-                    // button pressed while its dropdown was open.
-                    setBucketNo((m) => ({ ...m, [bucketStep.bucket]: false }));
-                    setPending(bucketStep.bucket);
-                  }}
+                  // A Yes with no cause picked yet still reads as Yes. It used to
+                  // read as unanswered, so the press vanished the moment the crew
+                  // looked at another question.
+                  value={chosen || answered === "yes" ? true : answered === "no" ? false : null}
+                  onYes={() => apply("yes", null)}
                   onNo={() => {
-                    // Close the dropdown this bucket may have opened. Without
-                    // this, switching Yes -> No left the "What was it?" select
-                    // sitting there under an unpressed Yes, which is what made
-                    // the correction look like it had not registered.
-                    setPending((b) => (b === bucketStep.bucket ? null : b));
-                    setBucketNo((m) => ({ ...m, [bucketStep.bucket]: true }));
-                    onChange({
-                      variance_causes: setCauseForBucket(value.variance_causes, bucketStep.bucket, ""),
-                    });
+                    apply("no", "");
+                    // Answering moves on, the same as every other question in the
+                    // stepper. The three cause questions used to be the only ones
+                    // that did not, which read as another stuck button.
+                    advance();
                   }}
                 />
-                {(chosen || pending === bucketStep.bucket) && (
+                {(chosen || answered === "yes") && (
                   <div style={{ marginTop: 12 }}>
                     <label className="small" style={{ color: "var(--muted)", display: "block", marginBottom: 6 }}>
                       What was it?
                     </label>
                     <select
                       value={chosen}
-                      onChange={(e) =>
-                        onChange({
-                          variance_causes: setCauseForBucket(
-                            value.variance_causes, bucketStep.bucket, e.target.value,
-                          ),
-                        })
-                      }
+                      onChange={(e) => {
+                        const key = e.target.value;
+                        apply("yes", key);
+                        // Picking a cause finishes this question, so move on -
+                        // UNLESS it opens the scope editor just below, which the
+                        // crew would never see if the card advanced out from
+                        // under it.
+                        if (key && !(showScope && bucket === "site" && isScopeCause(key))) {
+                          advance();
+                        }
+                      }}
                       // 16px or iOS zooms the whole page on focus.
                       style={{ width: "100%", minHeight: 44, fontSize: 16 }}
                     >
@@ -361,7 +373,10 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
                     </select>
                   </div>
                 )}
-                {showScope && bucketStep.bucket === "site" && chosen && scopeSlot}
+                {/* Only the two causes that actually mean the job CHANGED. It
+                    used to open under any site cause, so "Client not ready" was
+                    answered with "was anything added or dropped?". */}
+                {showScope && bucket === "site" && isScopeCause(chosen) && scopeSlot}
               </>
             );
           })()}
@@ -376,6 +391,13 @@ export default function CloseoutStepper({ value, onChange, scopeSlot, showScope 
             started leaking" is a maintenance ticket; "Equipment problem" on its
             own is not.
           </div>
+          {value.variance_cause_identified === false && (
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8, fontStyle: "italic" }}>
+              Recorded as no identifiable cause, since none of the three
+              questions applied. That is a real answer and the office would
+              rather have it than a guess. Anything you can add below still helps.
+            </div>
+          )}
           <textarea
             value={value.variance_note}
             onChange={(e) => onChange({ variance_note: e.target.value })}

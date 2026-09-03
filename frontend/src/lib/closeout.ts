@@ -271,6 +271,66 @@ export function causesFor(bucket: CauseBucket, direction: "more" | "less"): Opti
   return VARIANCE_CAUSES.filter((o) => o.bucket === bucket && o.group === direction);
 }
 
+/** The two site causes that mean "the job itself changed", as opposed to the
+ *  job being harder than quoted.
+ *
+ *  The scope editor used to open under ANY site cause, so picking "Client not
+ *  ready" immediately asked "was anything actually added or dropped?" - the
+ *  longest sub-form in the close-out, offered at the moment the crew had just
+ *  said the problem was something else. Only these two keys are about scope. */
+export const SCOPE_CAUSE_KEYS = new Set(["scope_added_on_site", "scope_reduced_on_site"]);
+
+export function isScopeCause(key: string): boolean {
+  return SCOPE_CAUSE_KEYS.has(key);
+}
+
+/** How the crew answered one cause question, before they pick from its list.
+ *  "yes" with no cause chosen yet is a real UI state and has to be held, or the
+ *  Yes press is silently lost when they navigate away. */
+export type BucketAnswer = "yes" | "no" | undefined;
+
+/** Whether the crew could name a cause, DERIVED from the three bucket answers
+ *  rather than asked as its own question.
+ *
+ *  It used to be asked first, at step 3, which had two problems. It asked the
+ *  crew to commit before they had seen a single option, which nobody can answer
+ *  honestly; and nothing ever recomputed it, so answering "Yes I can identify
+ *  it" and then No to all three buckets stored `identified = true` with an empty
+ *  cause list. The office read "Cause identified: Yes" beside a blank Reasons
+ *  column - a claim the data did not support.
+ *
+ *  Derived, the three answers cannot contradict the summary of themselves:
+ *    any cause chosen        -> true
+ *    all three answered No   -> false  ("we looked and cannot say", a real finding)
+ *    anything else           -> null   (not finished answering) */
+export function deriveCauseIdentified(
+  causes: string[],
+  answers: Record<string, BucketAnswer>,
+): boolean | null {
+  if (CAUSE_BUCKETS.some((b) => causeForBucket(causes, b.bucket))) return true;
+  if (CAUSE_BUCKETS.every((b) => answers[b.bucket] === "no")) return false;
+  return null;
+}
+
+/** Rebuild the per-bucket answers from what was stored, so re-opening a report
+ *  shows the crew what they actually said.
+ *
+ *  A stored `false` means every bucket was answered No - that is the only way it
+ *  can be false now - so all three are reconstructed. A stored cause means that
+ *  bucket was a Yes. A bucket answered No while others are still unanswered has
+ *  nowhere to be stored and comes back blank; see Known defects. */
+export function bucketAnswersFrom(
+  causes: string[],
+  identified: boolean | null,
+): Record<string, BucketAnswer> {
+  const out: Record<string, BucketAnswer> = {};
+  for (const b of CAUSE_BUCKETS) {
+    if (causeForBucket(causes, b.bucket)) out[b.bucket] = "yes";
+    else if (identified === false) out[b.bucket] = "no";
+  }
+  return out;
+}
+
 /** The cause currently chosen for one bucket, or "" if that question has not
  *  been answered yes. At most one per bucket: these are single-select
  *  dropdowns, so a second key for the same bucket means stale data from the old
@@ -350,7 +410,15 @@ export function closeoutSteps(
     saidDiffered ||
     (!!value.variance_direction && value.variance_direction !== "as_quoted");
   if (!differed) return steps;
-  steps.push("direction", "identified");
-  if (value.variance_cause_identified !== true) return steps;
+  steps.push("direction");
+  // The three cause questions follow the direction directly. There used to be a
+  // "can you reasonably identify what caused it?" gate here; it is now DERIVED
+  // from the three answers instead (see deriveCauseIdentified), because asking
+  // it up front made the crew commit before seeing any option, and because
+  // nothing recomputed it afterwards so it could end up asserting a cause that
+  // the three answers had since contradicted.
+  //
+  // `variance_cause_identified` is still read on the value for callers and for
+  // old reports; it no longer decides which steps exist.
   return [...steps, ...CAUSE_BUCKETS.map((b) => `cause:${b.bucket}`), "note"];
 }
