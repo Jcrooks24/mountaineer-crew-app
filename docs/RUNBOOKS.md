@@ -589,6 +589,90 @@ durability bugs shipped the first time.
 
 ## Known defects
 
+### `main` has been three weeks behind `staging`, and one of those commits matters
+
+**Open as of 2026-09-02.** `origin/main` is at `d952d64`, dated 2026-08-13.
+Everything merged to `staging` since then is unpromoted, and one commit in that
+set is not a refinement:
+
+`8d01c9f` (2026-08-27) fixes the dead close-out. Per the Correction note in
+[DATA_FLOW_STAGING.md](DATA_FLOW_STAGING.md), between the 08-13 deploy and that
+commit **no crew member could record a variance direction, a cause, or a
+close-out note at all** - only "No, as quoted" was reachable. That is still the
+case in production. Every job closed since 2026-08-13 has written "As quoted"
+into the Sheet whether or not it was true, and it is still accruing.
+
+Nothing is lost, but the office is reading an answer nobody gave. When this is
+promoted, the affected window is 2026-08-13 to whenever the promotion lands;
+those rows cannot be recovered, only annotated.
+
+**The general lesson, which is the reason this is written down:** a fix on
+`staging` has not fixed anything for a crew. Three of the nine field reports
+triaged on 2026-09-02 were already fixed in code, and the one still biting was
+the one that had not been promoted. Check `git log origin/main..origin/staging`
+before concluding that a reported bug is new.
+
+### Admin month view: horizontal scroll gets stuck
+
+**Open. Reported 2026-08-31 (`bba8c84a`), cause NOT known.**
+
+Symptom: the wholistic month view's horizontal scroll will not travel the full
+width of the table; the scroll thumb looks shorter than the content warrants.
+Clears on its own periodically, then returns.
+
+**One hypothesis has been taken and disproved**, so do not spend the session
+re-deriving it. The theory was that `width: 100vw` on the scroll container
+(`Admin.tsx`, the `card fullBleedClip` div) includes the page's vertical
+scrollbar, pushing the card's right edge and the end of its scrollbar track past
+the viewport. The user checked and reports that is not what is happening. Write
+the next hypothesis; do not fix this one.
+
+**A separate, provable defect was found while looking, and is also still open:**
+that same element carries the class `.fullBleedClip` (`index.css`,
+`overflow-x: clip`) AND an inline `overflow: auto`. Inline wins, so the clip
+never applies. The containment that both files describe in their comments - the
+thing that replaced `overflow-x: clip` on html/body after that broke the crew
+bottom nav - is not actually happening on this element. It cannot be fixed by
+just removing the inline overflow, because that is what makes the table scroll
+at all. It needs an outer clip wrapper and an inner scroller.
+
+### The app "would not load" for one crew member during a job
+
+**Open. Reported 2026-09-02 (`3a8473b2`), not reproduced, awaiting detail.**
+
+One crew member, one occasion, iOS, model unknown. The report mentions the
+device holding 2 MB and the app flagging that as enough to slow it down.
+
+**Treat the storage flag as a red herring until proven otherwise.**
+`HEAVY_LOCAL_STORAGE_BYTES` (`lib/storageReport.ts`) is 2 MiB of **localStorage
+alone**, and 2 MiB of localStorage genuinely is a lot against a 5-10 MB
+per-origin quota. The Profile card prints that number next to
+`navigator.storage.estimate()`, which covers IndexedDB and the ~2.4 MB
+precached bundle as well, so the two are easy to conflate. Either way the flag
+is about the app being SLOW, not about it failing to load.
+
+Before theorising, get from the reporter: blank white screen, app shell with
+nothing in it, spinner, or an error; whether force-closing and reopening cleared
+it or it needed a reload; and whether they had signal. Then check the worker
+recycle (see the Render Start Command section in `CLAUDE.md`) against the time
+of the report, because "the app hanging for no reason" is the documented way
+crews experience a recycle.
+
+### Archived employees in the month view: not reproduced
+
+**Checked 2026-09-02 (`62a91cfe`), left alone at the user's request.**
+
+The report was explicitly a suspicion ("Not formally confirmed in the app, but I
+suspect"). It does not reproduce by reading: `MonthScheduleView` builds its
+columns from `users.filter((u) => u.is_active)` and every render path uses that
+filtered list. There is also no "archive" concept anywhere in the repo - the
+roster action is Revoke/Restore on `is_active`.
+
+The likely explanation is a person who left and was never revoked. Before
+touching code, check whether the person in question shows Active or Disabled on
+the roster.
+
+
 ### The vetting protocol itself was reviewed 2026-08-13
 
 `docs/VET_POSTMORTEM_2026-08.md` reviews every defect that reached crews since
