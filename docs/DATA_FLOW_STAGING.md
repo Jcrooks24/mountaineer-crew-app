@@ -1227,7 +1227,7 @@ Request e2126bf1. A MONEY change: it changes what people are paid.
 | The rounding rule moves to a dependency-free module | `core/hours_rounding.py` (new) | [x] |
 | `sheets_export._round_billable_quarter` becomes an alias of it | `integrations/sheets_export.py` | [x] |
 | Every payroll contribution is quarter-rounded after corrections and before any sum | `routers/payroll.py` (`_round_rows`, called at the `_apply_corrections` seam) | [x] |
-| Applies only to periods STARTING on or after the cutover | `core/hours_rounding.py` (`PAYROLL_ROUNDING_EFFECTIVE_FROM = 2026-09-04`) | [x] |
+| Applies only to periods STARTING on or after the cutover | `core/hours_rounding.py` (`PAYROLL_ROUNDING_EFFECTIVE_FROM = 2026-09-10`) | [x] |
 
 **The defect.** Payroll summed raw hours and rounded the total to two decimal
 places; the Sheet and the job report quarter-rounded each entry. Two numbers for
@@ -1242,6 +1242,12 @@ the request asked for and what the job report already does.
 **Not retroactive**, at the user's direction: earlier periods were reconciled by
 hand and re-rounding them would restate what has already been paid. Gated on the
 period's START so a period is rounded or not as a whole, never half-and-half.
+
+The cutover is one week out from when this was written, chosen because the
+promotion date is not known. **It is a fixed date, so a promotion that slips past
+it turns the cutover into the past** and restates periods already paid. Section
+7b of [PROMOTION_CHECKLIST.md](PROMOTION_CHECKLIST.md) carries the step to
+re-check and bump it.
 
 **No schema, no migration, no new env var.** `per_diem_nights` rows are skipped:
 their "hours" is a count of nights, not a duration.

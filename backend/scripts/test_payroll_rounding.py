@@ -128,9 +128,20 @@ check("a period starting before the cutover does not round",
 check("a period starting on the cutover rounds",
       payroll_rounds(PAYROLL_ROUNDING_EFFECTIVE_FROM))
 check("a later period rounds", payroll_rounds(date(2026, 12, 1)))
-check("the cutover is in the future relative to the request date (2026-09-03)",
-      PAYROLL_ROUNDING_EFFECTIVE_FROM > date(2026, 9, 3),
-      str(PAYROLL_ROUNDING_EFFECTIVE_FROM))
+# Set a week out from the request date on purpose, so the first rounded period is
+# one nobody had started reconciling. This asserts the gap rather than the date,
+# so moving the cutover FORWARD (which the promotion checklist may require if the
+# merge slips) passes, and moving it backwards onto reconciled periods fails.
+check("the cutover is at least a week after the request date (2026-09-03)",
+      (PAYROLL_ROUNDING_EFFECTIVE_FROM - date(2026, 9, 3)).days >= 7,
+      f"{PAYROLL_ROUNDING_EFFECTIVE_FROM} is only "
+      f"{(PAYROLL_ROUNDING_EFFECTIVE_FROM - date(2026, 9, 3)).days} days out")
+# The guard against the real hazard: a fixed date plus an unknown promotion date.
+# This cannot fail in CI on the day it is written, so it is a REMINDER, not a
+# test - it prints rather than fails, and PROMOTION_CHECKLIST 7b is the real gate.
+if PAYROLL_ROUNDING_EFFECTIVE_FROM <= date.today():
+    print("  NOTE  the cutover is now in the PAST. Bump it before promoting, or "
+          "already-reconciled periods will be restated (PROMOTION_CHECKLIST 7b).")
 
 print("\n_round_rows does not mutate what it is given")
 src = [row(h(2, 5))]

@@ -167,6 +167,22 @@ Before merging, confirm nothing half-finished is riding along:
 
 ---
 
+## 7b. Dated cutovers baked into the code
+
+Constants that decide behaviour by a calendar date. They are written assuming a
+promotion soon after, and a promotion that slips turns them into a cutover in the
+PAST, which is the opposite of what they were for.
+
+- [ ] **`PAYROLL_ROUNDING_EFFECTIVE_FROM`** in `backend/app/core/hours_rounding.py`.
+      Payroll quarter-rounding applies to periods STARTING on or after this date.
+      It was set to 2026-09-10, one week out from when the change was written, so
+      the first rounded period would be one nobody had begun reconciling.
+      **If that date has passed, bump it** to the start of the next unreconciled
+      period before merging. Leaving it stale restates periods people have
+      already been paid for, the moment anyone re-opens them. Rounding is not
+      retroactive by explicit decision (2026-09-03), and this is the only thing
+      enforcing that.
+
 ## 8. In-app configuration, post-merge
 
 Config that lives in the database, not the code, and therefore does **not** come
