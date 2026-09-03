@@ -20,7 +20,7 @@ import {
   fetchAndCache,
   type LiveMaterial,
 } from "../lib/materialsStore";
-import { roundBillableQuarter, DEFAULT_LABOR_RATE, type EmployeeHoursEntry } from "../lib/employeeHours";
+import { roundBillableQuarter, longestBillableShift, DEFAULT_LABOR_RATE, type EmployeeHoursEntry } from "../lib/employeeHours";
 import BetaTag from "./BetaTag";
 import NumberField from "./NumberField";
 import { billLineSubtotal } from "../lib/billTotal";
@@ -207,6 +207,11 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   const [bill, setBill] = useState<Bill>({ items: [], globalDiscount: 0, notes: "" });
   const [loaded, setLoaded] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  // Truck lines the admin has edited by hand in THIS session. Deliberately not
+  // persisted: the point is to stop the auto-fill fighting a live edit, not to
+  // freeze a value forever, and a stored flag would have had to be back-filled
+  // onto every bill that already carries a wrong 1h.
+  const truckEditedRef = useRef<Set<string>>(new Set());
   const addMenuRef = useRef<HTMLDivElement>(null);
 
   // Materials (live-shared per job, offline-capable via materialsStore)
@@ -445,33 +450,46 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   }, [loaded, personalVehicleCount]);
 
   // ── Trucks billed per hour ($90/hr) ──
-  // Each truck recorded in the Report's Truck fullness section gets one "Truck
-  // (per hour)" line, so admin doesn't hand-add them. The hours default to the
-  // job's longest single shift (a truck runs at least the length of the longest
-  // crew member's day) as a starting point admin can adjust; a truck line the
-  // admin has already edited keeps its qty and rate on later renders, like the
-  // labor and vehicle lines.
+  // Each truck recorded in the Report's Truck fullness section gets one
+  // "Truck #N (per hour)" line, so admin does not hand-add them. Its hours are
+  // the job's LONGEST SINGLE BILLABLE SHIFT: a truck is on the job at least as
+  // long as the longest crew member's day.
+  //
+  // THE BUG THIS FIXES (admin, 2026-09-03: "trucks are autopopulating as 1 hr").
+  // The old version created the line whenever `truckCount` was known, computed
+  // `reduce(...) || 1` over the hours, and then preserved whatever it wrote
+  // because `existing` was truthy on every later render. Employee hours are
+  // entered at the END of a job and truck fullness during it, so at the moment
+  // the line was created the hours array was almost always EMPTY: reduce gave 0,
+  // `|| 1` made it 1, and the line then sat frozen at 1h. Not a race - the
+  // ordinary order of work. On a $90/hr line that is an invoice short by most of
+  // a truck.
+  //
+  // Two changes. The line is not created at all until there is a shift to size
+  // it from, and until the admin edits it, it FOLLOWS the longest shift instead
+  // of being seeded once and abandoned.
   useEffect(() => {
-    if (!loaded || truckCount === undefined) return;
-    // Longest billable shift, as the default truck-hours proxy.
-    const defaultTruckHours = (employeeHours ?? []).reduce(
-      (max, e) => (e.non_billable ? max : Math.max(max, roundBillableQuarter(e.hours || 0))),
-      0,
-    ) || 1;
+    if (!loaded || truckCount === undefined || employeeHours === undefined) return;
+    // Longest single billable shift. Non-billable rows are excluded, matching
+    // the labor lines.
+    const longest = longestBillableShift(employeeHours);
+    // No hours logged yet means nothing to size the truck from. Creating the
+    // line now is what produced the 1h; leaving it uncreated is honest, and the
+    // bill-totals warning below says so out loud rather than leaving a silent
+    // gap. Any line already on the bill is left exactly as it is.
+    if (longest <= 0) return;
     setBill((prev) => {
       const desired = [] as LineItem[];
       for (let i = 1; i <= truckCount; i++) {
         const label = `Truck #${i} (per hour)`;
         const existing = prev.items.find((it) => it.source === "truck" && it.label === label);
+        // An admin edit wins. Everything else tracks the longest shift, which
+        // also repairs the bills already sitting at a frozen 1h.
+        const adminEdited = existing ? truckEditedRef.current.has(existing.id) : false;
         desired.push({
           id: existing?.id ?? uuid(),
           label,
-          // Preserve an admin-edited value; only default on first creation. A
-          // line created before employee hours populate defaults to 1h and is
-          // then preserved (can stay frozen at 1h) - the bill-totals warning
-          // flags that as a suspected under-bill rather than silently changing
-          // an admin-visible value here.
-          qty: existing ? existing.qty : defaultTruckHours,
+          qty: adminEdited ? existing!.qty : longest,
           rate: existing ? existing.rate : 90,
           unit: "hr",
           discount: existing?.discount ?? 0,
@@ -483,16 +501,13 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       if (nextItems.length === prev.items.length) {
         const same = nextItems.every((n, i) => {
           const p = prev.items[i];
-          return p && p.id === n.id && p.label === n.label &&
-            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
-            p.discount === n.discount && p.source === n.source;
+          return p && p.id === n.id && p.label === n.label && p.qty === n.qty
+            && p.rate === n.rate && p.discount === n.discount && p.source === n.source;
         });
         if (same) return prev;
       }
       return { ...prev, items: nextItems };
     });
-    // employeeHours only feeds the DEFAULT for a new line; existing lines are
-    // preserved, so re-running when hours change won't stomp an admin edit.
   }, [loaded, truckCount, employeeHours]);
 
   // ── Materials: local cache + queue (offline-safe) ────────────────────────────
@@ -549,6 +564,12 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // ── Mutations ────────────────────────────────────────────────────────────────
 
   function updateItem(id: string, patch: Partial<LineItem>) {
+    // A truck line the admin has typed into stops following the crew's hours.
+    // Without this, the auto-fill below would argue with them on every render.
+    if (patch.qty !== undefined || patch.rate !== undefined) {
+      const it = bill.items.find((x) => x.id === id);
+      if (it?.source === "truck") truckEditedRef.current.add(id);
+    }
     setBill((prev) => ({ ...prev, items: prev.items.map((it) => it.id === id ? { ...it, ...patch } : it) }));
   }
 
@@ -678,10 +699,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     if (zeroLabor.length) {
       w.push(`${zeroLabor.length} labor line${zeroLabor.length > 1 ? "s" : ""} at 0 hours - was everyone's time logged?`);
     }
-    const longestShift = (employeeHours ?? []).reduce(
-      (m, e) => (e.non_billable ? m : Math.max(m, roundBillableQuarter(e.hours || 0))),
-      0,
-    );
+    const longestShift = longestBillableShift(employeeHours);
     const lowTruck = bill.items.filter((it) => it.source === "truck" && it.qty <= 1);
     if (lowTruck.length && longestShift > 1) {
       w.push(`${lowTruck.length} truck line${lowTruck.length > 1 ? "s" : ""} at 1h or less while a shift ran ${longestShift}h - check truck hours.`);
@@ -699,6 +717,16 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     // almost certainly involved a truck. Advisory like the others, not a block -
     // a genuinely truckless job is possible and the crew can ignore it.
     const hasTruckLine = bill.items.some((it) => it.source === "truck");
+    // Trucks recorded but nobody's hours logged yet. The truck line is
+    // deliberately NOT created in this state - there is nothing to size it from,
+    // and guessing is what produced a bill full of 1h trucks - so say so, or the
+    // absence looks like the old silent gap.
+    if (!hasTruckLine && longestShift <= 0 && (truckCount ?? 0) > 0) {
+      w.push(
+        `${truckCount} truck${(truckCount ?? 0) > 1 ? "s" : ""} recorded but no hours logged yet - ` +
+        `the truck line is added, at the longest shift, once employee hours are in.`,
+      );
+    }
     if (!hasTruckLine && longestShift > 0) {
       w.push(
         `No truck line - fill in Truck fullness on the Report tab and it will be added. ` +
@@ -706,7 +734,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       );
     }
     return w;
-  }, [bill.items, employeeHours]);
+  }, [bill.items, employeeHours, truckCount]);
 
   // ── Empty / loading states ────────────────────────────────────────────────────
 

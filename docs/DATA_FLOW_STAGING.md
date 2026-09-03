@@ -1218,6 +1218,40 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Truck lines on the bill are sized from the longest shift (2026-09-03)
+
+Admin report: "trucks are autopopulating as 1 hr". A truck line is $90/hr, so
+this is the money path.
+
+| Path | Where | Status |
+|---|---|---|
+| Truck line qty = `longestBillableShift(employee_hours)`, quarter-rounded, non-billable rows excluded | `lib/employeeHours.ts` (new export), `components/BillCalculator.tsx` | [x] |
+| The line is NOT created until at least one billable shift exists | `components/BillCalculator.tsx` | [x] |
+| The line follows the longest shift until the admin edits its qty or rate | `components/BillCalculator.tsx` (`truckEditedRef`, session-scoped) | [x] |
+| Bill-totals warning covers "trucks recorded, no hours yet" | `components/BillCalculator.tsx` | [x] |
+
+**Cause.** The effect created the line as soon as `truckCount` was known and
+sized it `reduce(...) || 1`, then preserved that value forever because `existing`
+was truthy on every later render. Employee hours are entered at the END of a job
+and truck fullness during it, so the hours array was normally EMPTY at creation:
+reduce gave 0, `|| 1` gave 1, and the line sat frozen at one hour. Not a race,
+the ordinary order of work. The labor effect already guarded
+`employeeHours === undefined`; the truck effect did not.
+
+**No stored shape changes.** No new field on the bill, no schema, no migration,
+no Sheet column. The qty written is different, that is all. Bills already saved
+with a wrong 1h are repaired when the bill is next opened, because a line the
+admin has not edited in that session tracks the longest shift.
+
+**Deliberately session-scoped.** The "admin edited it" flag is a ref, not a
+stored field. A stored flag would have had to be back-filled onto every bill
+already carrying a wrong 1h, and absent-means-not-edited would have healed them
+anyway - with the extra cost of a schema change. The trade is recorded here: an
+admin who deliberately sets a truck to 1h on a job whose longest shift is longer
+will see it re-sized when the bill is re-opened in a new session. That is the
+case the bill-totals warning already flags as a suspected under-bill.
+
+
 ## Close-out: `variance_cause_identified` becomes derived (2026-09-03)
 
 From a review of the whole close-out section. No new field, no schema change,

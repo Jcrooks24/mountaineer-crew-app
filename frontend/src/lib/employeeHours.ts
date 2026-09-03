@@ -46,6 +46,29 @@ export function roundBillableQuarter(hours: number): number {
   return roundedMin / 60;
 }
 
+/** The job's longest SINGLE billable shift, quarter-rounded.
+ *
+ *  This is what a truck on the job is billed for: a truck is present at least as
+ *  long as the longest crew member's day, and billing it per-truck-per-hour off
+ *  the longest shift is the rule the office uses. It is NOT the sum of everyone's
+ *  hours - four movers for six hours is a six hour truck, not twenty-four.
+ *
+ *  Non-billable rows are excluded, the same as they are for the labor lines.
+ *  Returns 0 when nobody has logged billable time yet, which callers must treat
+ *  as "cannot size this" rather than defaulting to something: defaulting to 1
+ *  is exactly how a fleet of 1-hour trucks reached the office (2026-09-03).
+ *
+ *  Lives here rather than inside BillCalculator so the bill effect and the
+ *  bill-totals warning cannot drift apart - they each had their own copy of this
+ *  reduce - and so it can be exercised directly by
+ *  frontend/scripts/verify_bill_truck_hours.mjs. */
+export function longestBillableShift(entries: EmployeeHoursEntry[] | undefined): number {
+  return (entries ?? []).reduce(
+    (max, e) => (e.non_billable ? max : Math.max(max, roundBillableQuarter(e.hours || 0))),
+    0,
+  );
+}
+
 // Default hourly labor rate used when man-hours are auto-populated into
 // the Invoice Builder. Editable on the line-item once created.
 export const DEFAULT_LABOR_RATE = 80;
