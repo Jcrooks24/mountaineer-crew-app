@@ -138,3 +138,26 @@ backoff of up to two minutes doing nothing observable.
 - BOLs already marked `delivered` by this bug are wrong records and the app
   cannot walk a status back. Correcting one is a database edit, listed in
   RUNBOOKS.
+
+## Addendum, 2026-09-03 (vet finding F3)
+
+This ADR's second half - "a failed copy is not a failed signature" - was only
+half implemented. A failed `pdf` op stopped being retried as though it were a
+transient upload, but it still **blocked every later op for the same BOL**.
+
+That matters because a long-distance BOL is signed twice, at origin and at
+destination, and each signing enqueues its own `submit+sign+pdf` triple. So the
+queue holds `[submit, sign(origin), pdf, submit, sign(dest), pdf]`, and `pdf` is
+the last op of its own triple, never of the BOL. A PDF that could not be built -
+exactly the font defect above, which is deterministic and so fails identically on
+every retry - held the **destination signature** unsent for the eight hundred
+miles between the two.
+
+`blocksSequence` in `bolStore.ts` now returns false for `pdf`. Nothing depends on
+a pdf op: it regenerates from the persisted draft at the moment it runs, so a
+later pdf writes current state regardless of whether an earlier one ran, and
+re-ordering two of them changes nothing. `submit` and `sign` still block, because
+signing a row the server never created is incoherent.
+
+**Do not make this uniform for tidiness.** The asymmetry is the point: one of
+these ops carries a signature and the others carry a rendering of it.

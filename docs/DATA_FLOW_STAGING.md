@@ -1218,6 +1218,27 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## BOL queue: a failed `pdf` no longer holds the rest of its BOL (2026-09-03)
+
+Found by `/vet` (F3). No payload change; the **drain order** changes.
+
+| Path | Where | Status |
+|---|---|---|
+| `syncQueue` blocking rule: an op that did not land holds later ops for the same `bol_id`, EXCEPT `pdf` (`blocksSequence`) | `lib/bolStore.ts` | [x] |
+| `PDF_MAX_TRANSIENT_ATTEMPTS` 8 -> 11 (the stated ~10 min window; the sum of backoffs at 8 was 246s, about four minutes) | `lib/bolStore.ts` | [x] |
+
+A long-distance BOL is signed twice and each signing enqueues its own
+`submit+sign+pdf` triple, so `pdf` is the last op of its triple but not of the
+BOL. A deterministic PDF build failure (ADR 0042's font defect) therefore held
+the DESTINATION SIGNATURE unsent behind it. Failed ops are still kept and still
+marked (ADR 0013); they just stop taking a signature hostage. `submit` and `sign`
+still block. See the addendum to
+[ADR 0042](decisions/0042-pdf-text-is-transliterated-and-a-failed-copy-is-not-a-failed-signature.md).
+
+Regression-guarded by `frontend/scripts/verify_bol_queue_blocking.mjs`, which
+drives the real `syncQueue` and asserts BOTH directions.
+
+
 ## Bills materials rebuild: write strategy and reconciler coverage (2026-09-03)
 
 Found by `/vet`, not from the field. No payload field changes; what changes is

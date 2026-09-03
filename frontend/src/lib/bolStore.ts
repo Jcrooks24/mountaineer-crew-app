@@ -48,8 +48,10 @@ export class BolStorageFullError extends Error {
  * never ends and never says anything (the queue's pdf op carries no failed_at,
  * so no banner). That is exactly how a font-encoding defect kept every affected
  * BOL out of Drive without a word (ADR 0042). Classified as a permanent failure
- * so the crew sees it. Safe to mark: pdf is the LAST op in a BOL's sequence, so
- * failing it holds nothing behind it. */
+ * so the crew sees it. Safe to mark because a failed pdf op holds nothing behind
+ * it - see blocksSequence, which is what makes that true. It was NOT true when
+ * this was written: pdf is the last op of its own triple, not of the BOL, and a
+ * second signing queues a second triple behind it. */
 export class BolPdfBuildError extends Error {
   constructor(cause: unknown) {
     const reason = cause instanceof Error && cause.message.trim() ? cause.message.trim() : "unknown error";
@@ -762,10 +764,19 @@ type QueueOp = (
 const RETRY_BASE_MS = 2000;
 const RETRY_CAP_MS = 120000;
 // How many ONLINE failures a `pdf` op takes before it stops being treated as a
-// blip and is surfaced to the crew. At this backoff that is roughly ten minutes
-// of connectivity, which is far longer than any Drive hiccup and far shorter
-// than "never". See the branch in syncQueue for why only pdf ops get a cap.
-const PDF_MAX_TRANSIENT_ATTEMPTS = 8;
+// blip and is surfaced to the crew. Only pdf ops get a cap - see the branch in
+// syncQueue.
+//
+// The window is the SUM of the backoffs before the Nth attempt, not N times the
+// cap, and at 8 that sum is 2+4+8+16+32+64+120 = 246s, about four minutes. The
+// comment here used to claim ten. Four minutes of failures is inside the range
+// an ordinary Drive outage or a token refresh can occupy, and a false "your
+// signed BOL could not be uploaded" on a one-copy document is expensive: it
+// teaches crews to ignore the banner that matters. 11 gives 246+120+120+120 =
+// 606s, almost exactly the ten minutes originally intended - long enough that
+// reaching it means something structural (wrong folder id, dead credentials),
+// short enough to be far from "never".
+const PDF_MAX_TRANSIENT_ATTEMPTS = 11;
 function backoffMs(attempts: number): number {
   return Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1));
 }
@@ -990,6 +1001,31 @@ export async function emailBolToClient(bolId: string, blob: Blob, toEmail: strin
   }
 }
 
+/** Does an op that did not land have to hold the rest of its BOL's queue?
+ *
+ * For `submit` and `sign`, yes: the ops are ordered submit->sign->pdf and each
+ * depends on the one before, so signing a row the server never created is
+ * incoherent.
+ *
+ * For `pdf`, NO, and this is the fix for a real trap. A BOL is signed TWICE on a
+ * long-distance job - once at origin, once at destination - and each signing
+ * enqueues its own submit+sign+pdf triple. So the queue holds
+ * [submit, sign(origin), pdf, submit, sign(dest), pdf], and `pdf` is only the
+ * last op of its own triple, never of the BOL. Blocking on it meant a PDF that
+ * could not be built or uploaded - a deterministic failure, such as the font
+ * defect in ADR 0042 - held the DESTINATION SIGNATURE behind it, unsent, for the
+ * eight hundred miles between the two. That is a customer signature with no
+ * second copy, stuck behind a cosmetic artifact.
+ *
+ * Nothing depends on a pdf op: it regenerates from the persisted draft at the
+ * moment it runs, so a later pdf writes the current state regardless of whether
+ * an earlier one ever ran, and re-ordering two of them changes nothing. The
+ * failed op is still KEPT and still marked (ADR 0013); it just stops taking the
+ * signatures hostage. */
+function blocksSequence(op: QueueOp): boolean {
+  return op.op !== "pdf";
+}
+
 // Guard against overlapping drains (online + mount can fire together).
 let syncing = false;
 
@@ -1026,11 +1062,18 @@ export async function syncQueue(): Promise<number> {
     const drainedPdf: Array<{ bol_id: string; job_uuid: string }> = [];
     const nowMs = Date.now();
     for (const op of q) {
-      if (op.failed_at) { remaining.push(op); blocked.add(op.bol_id); continue; }
+      if (op.failed_at) {
+        remaining.push(op);
+        // A failed `pdf` does NOT block: see blocksSequence.
+        if (blocksSequence(op)) blocked.add(op.bol_id);
+        continue;
+      }
       if (blocked.has(op.bol_id)) { remaining.push(op); continue; }
       // Transient backoff: not yet due for retry - keep it and hold its sequence.
       if (op.retry_at && Date.parse(op.retry_at) > nowMs) {
-        remaining.push(op); blocked.add(op.bol_id); continue;
+        remaining.push(op);
+        if (blocksSequence(op)) blocked.add(op.bol_id);
+        continue;
       }
       try {
         if (op.op === "submit") {
@@ -1108,9 +1151,9 @@ export async function syncQueue(): Promise<number> {
             });
           }
         }
-        // Either way this op did not land, so hold the rest of the sequence for
-        // this BOL until the next pass.
-        blocked.add(op.bol_id);
+        // This op did not land, so hold the rest of the sequence for this BOL
+        // until the next pass - unless it is a pdf, which nothing depends on.
+        if (blocksSequence(op)) blocked.add(op.bol_id);
       }
     }
     // Skip the write-back (and draft cleanup) if the session changed while we
