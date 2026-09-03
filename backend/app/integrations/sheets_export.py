@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.hours_rounding import round_billable_quarter
+
 from app.core.google_cal_oauth import (
     _build_authorized_http,
     _get_creds,
@@ -1637,22 +1639,10 @@ def _per_diem_total(report: Dict[str, Any]) -> Any:
     return 50 * max(1, n)
 
 
-def _round_billable_quarter(hours: float) -> float:
-    """Company rounding: ≥5 min into the current quarter rounds UP, else DOWN.
-
-    Examples:
-      8.07 (8:04) → 8.00
-      8.08 (8:05) → 8.25
-      8.31 (8:19) → 8.25
-      8.34 (8:20) → 8.50
-    """
-    if hours <= 0:
-        return 0.0
-    total_min = int(round(hours * 60))
-    quarters = total_min // 15
-    remainder = total_min - quarters * 15
-    rounded_min = (quarters + 1) * 15 if remainder >= 5 else quarters * 15
-    return rounded_min / 60.0
+# The rule itself now lives in app/core/hours_rounding.py so payroll can use it
+# without importing this module and its Google client dependencies. Kept under
+# the old private name because it is referenced throughout this file.
+_round_billable_quarter = round_billable_quarter
 
 
 def _format_employee_hours(entries: Optional[list]) -> str:

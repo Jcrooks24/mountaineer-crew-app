@@ -59,6 +59,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_db, require_admin
 from app.core.mailer import send_email
 from app.core.name_sort import surname_key
+from app.core.hours_rounding import payroll_rounds, round_billable_quarter
 from app.core.payroll_period import set_last_finalized_period
 from app.core.time_utils import (
     MOUNTAIN_TZ,
@@ -433,8 +434,15 @@ def _reimbursements(
     """Approved, personally-paid reimbursements owed in this period.
 
     Company-card expenses are excluded: they are an expense log, not money owed
-    back to anybody. Mileage carries no rate in this app, so miles are reported
-    and the dollar figure stays the admin's to compute.
+    back to anybody. That exclusion is the `payment_method == "personal"` test
+    below, and it was re-verified 2026-09-03 against a report asking whether
+    company-card purchases were leaking into payroll. They are not.
+
+    Mileage is counted by TYPE, not by payment method: a mileage claim is about
+    whose vehicle was used, not whose card. It is converted to dollars using the
+    configured rate (ADR 0033); an older version of this note said mileage
+    carried no rate and left the figure to the admin, which stopped being true
+    when the rates became configurable.
     """
     # PAY UNLESS DECLINED. Everything except what an admin explicitly rejected
     # counts toward the totals.
@@ -504,6 +512,31 @@ def _reimbursements(
 
 def _correction_target(r: Dict[str, Any]) -> Tuple[Any, ...]:
     return (r["user_id"], r["source"], r["source_key"], r["bucket"])
+
+
+def _round_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Quarter-round every contribution, BEFORE anything is summed.
+
+    Payroll used to sum raw hours and round the total to two decimal places,
+    while the Sheet quarter-rounded each entry. Two numbers for the same work,
+    and the one people were paid from was the unrounded one.
+
+    Rounding here - per contribution, after corrections, before every sum - is
+    what "round at the job level, then sum the rounded hours" means. It is not
+    the same as rounding the total: three 2.05h entries are 2.25 x 3 = 6.75
+    rounded first, and 6.15 -> 6.25 rounded last. The first is what the job
+    report and the Sheet already show a crew member for those same three jobs.
+
+    `per_diem_nights` rows are skipped. Their "hours" is a COUNT of nights, not
+    a duration, and rounding a count is meaningless even where it is harmless.
+    """
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if r["bucket"] == "per_diem_nights":
+            out.append(r)
+            continue
+        out.append({**r, "hours": round_billable_quarter(float(r["hours"] or 0))})
+    return out
 
 
 def _dedupe_corrections(
@@ -816,6 +849,11 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     )
     corrections = _dedupe_corrections(job_corrections + period_corrections)
     rows, _ = _apply_corrections(rows, corrections, roster)
+    # AFTER corrections, so an admin's corrected figure follows the same rule as
+    # everything else, and BEFORE any summing. Not retroactive: periods that
+    # start before the cutover keep the behaviour they were reconciled under.
+    if payroll_rounds(start):
+        rows = _round_rows(rows)
     reimb = _reimbursements(db, start, end, roster)
     rates = _payroll_rates(db)
 

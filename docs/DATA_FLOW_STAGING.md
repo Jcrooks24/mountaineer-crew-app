@@ -1218,6 +1218,35 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Payroll hours are quarter-rounded per contribution (2026-09-03)
+
+Request e2126bf1. A MONEY change: it changes what people are paid.
+
+| Path | Where | Status |
+|---|---|---|
+| The rounding rule moves to a dependency-free module | `core/hours_rounding.py` (new) | [x] |
+| `sheets_export._round_billable_quarter` becomes an alias of it | `integrations/sheets_export.py` | [x] |
+| Every payroll contribution is quarter-rounded after corrections and before any sum | `routers/payroll.py` (`_round_rows`, called at the `_apply_corrections` seam) | [x] |
+| Applies only to periods STARTING on or after the cutover | `core/hours_rounding.py` (`PAYROLL_ROUNDING_EFFECTIVE_FROM = 2026-09-04`) | [x] |
+
+**The defect.** Payroll summed raw hours and rounded the total to two decimal
+places; the Sheet and the job report quarter-rounded each entry. Two numbers for
+the same work, and people were paid from the unrounded one. A realistic week
+(8:05, 7:58, 8:20, 6:04, 9:12) pays 39.65 under the old rule and 40.00 under the
+new one, while the crew member's own job reports already showed them 40.00.
+
+**Round-then-sum is not sum-then-round.** Three 2h05m jobs are 6.75 rounded per
+job and 6.25 rounded at the end. Rounding happens per contribution, which is what
+the request asked for and what the job report already does.
+
+**Not retroactive**, at the user's direction: earlier periods were reconciled by
+hand and re-rounding them would restate what has already been paid. Gated on the
+period's START so a period is rounded or not as a whole, never half-and-half.
+
+**No schema, no migration, no new env var.** `per_diem_nights` rows are skipped:
+their "hours" is a count of nights, not a duration.
+
+
 ## Truck lines on the bill are sized from the longest shift (2026-09-03)
 
 Admin report: "trucks are autopopulating as 1 hr". A truck line is $90/hr, so
