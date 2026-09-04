@@ -1218,6 +1218,42 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Reimbursement / mileage ledger for the office (2026-09-03, BACKEND ONLY)
+
+Request b59434c2 item 3. **No UI yet** - the endpoints exist, nothing renders them.
+
+| Path | Where | Status |
+|---|---|---|
+| `reimbursements.qb_status` (pending / entered) + `qb_entered_at` / `qb_entered_by_name` | migration `n4p6r8m0o2q4` | [x] |
+| `GET /api/reimbursements/search` - admin-only, composable filters | `routers/reimbursement.py` | [x] |
+| `PATCH /api/reimbursements/{uuid}/qb-status` - reversible | `routers/reimbursement.py` | [x] |
+| `paid_at` / `paid_period_*` and the QB fields on `ReimbursementOut` | `routers/reimbursement.py` | [x] |
+| Admin module UI: search, filters, Drive links, QB toggle | not built | [ ] |
+
+**Receipts are LINKS, not downloads** (user direction). The payload already
+carries `receipt_photo_url`, `odometer_start_photo_url`, `odometer_end_photo_url`
+and `photos_drive_url`; the module opens Drive rather than pulling bytes through
+the app, which is also what keeps this off the memory path that has bitten before.
+
+**Search is a separate admin endpoint, not a flag on the crew list.** The crew
+endpoint defaults to the caller's own rows and already carries an `all_users`
+escape hatch; growing more admin filters onto it is the shape that eventually
+leaks somebody else's receipts. This one requires admin on its first line.
+
+**Payment and QuickBooks entry are separate facts.** A claim can be paid by a
+finalized payroll run and still pending entry - which is exactly the state the
+office needs to see, so both are returned.
+
+**Marking entered is reversible**, and the who/when stamp is cleared on the way
+back so it never describes a state the row is not in. A one-way flag turns a
+mis-click into a receipt that never gets entered, which is the failure the column
+exists to prevent.
+
+**Default `pending` for every existing row** is a claim about the future, not the
+past: nothing in the app knows what the office has already keyed in, and marking
+history as entered would be inventing a record.
+
+
 ## PTO is recorded by the office, never by the crew (2026-09-03)
 
 Request 1a50fa5b.

@@ -20,6 +20,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -62,6 +63,16 @@ class ReimbursementOut(BaseModel):
     approval_notes: Optional[str]
     created_at: datetime
     updated_at: datetime
+    # Payment (set when a payroll period that included this claim is finalized)
+    # and QuickBooks entry are two different facts, tracked separately: a claim
+    # can be paid and not yet keyed in, which is exactly the state the office
+    # needs to see.
+    paid_at: Optional[datetime] = None
+    paid_period_start: Optional[str] = None
+    paid_period_end: Optional[str] = None
+    qb_status: str = "pending"
+    qb_entered_at: Optional[datetime] = None
+    qb_entered_by_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -98,6 +109,12 @@ def _to_out(row: Reimbursement) -> ReimbursementOut:
         approval_notes=row.approval_notes,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        paid_at=row.paid_at,
+        paid_period_start=row.paid_period_start,
+        paid_period_end=row.paid_period_end,
+        qb_status=(row.qb_status or "pending"),
+        qb_entered_at=row.qb_entered_at,
+        qb_entered_by_name=row.qb_entered_by_name,
     )
 
 
@@ -369,6 +386,115 @@ def submit_expense(
         raise HTTPException(status_code=500, detail="Failed to save expense request")
 
     _queue_export(row)
+    return _to_out(row)
+
+
+QB_STATUSES = {"pending", "entered"}
+
+
+class QbStatusIn(BaseModel):
+    """Mark one claim as keyed into QuickBooks, or put it back."""
+    qb_status: str
+
+
+@router.get("/search", response_model=List[ReimbursementOut])
+def search_reimbursements(
+    user_id: Optional[int] = Query(default=None),
+    type: Optional[str] = Query(default=None, description="mileage | expense"),
+    status: Optional[str] = Query(default=None, description="submitted | approved | rejected"),
+    qb_status: Optional[str] = Query(default=None, description="pending | entered"),
+    payment_method: Optional[str] = Query(default=None, description="personal | company"),
+    date_from: Optional[str] = Query(default=None, description="YYYY-MM-DD, on expense_date"),
+    date_to: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None, description="matches vendor, category or notes"),
+    limit: int = Query(default=200, le=1000),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """The office's reimbursement and mileage ledger.
+
+    Admin-only, and separate from the crew-facing list endpoint rather than
+    bolted onto it with more flags: that one defaults to the caller's own rows
+    and grows an admin escape hatch, which is the shape that eventually leaks
+    somebody else's receipts. This one is admin from the first line.
+
+    Every filter is optional and they compose. `limit` is capped because this
+    table only grows.
+    """
+    query = db.query(Reimbursement)
+    if user_id is not None:
+        query = query.filter(Reimbursement.user_id == user_id)
+    if type:
+        query = query.filter(Reimbursement.type == type)
+    if status:
+        query = query.filter(Reimbursement.status == status)
+    if qb_status:
+        # Rows written before this column existed carry the server default, so
+        # there is no NULL case to handle.
+        query = query.filter(Reimbursement.qb_status == qb_status)
+    if payment_method:
+        query = query.filter(Reimbursement.payment_method == payment_method)
+    if date_from:
+        query = query.filter(Reimbursement.expense_date >= date_from)
+    if date_to:
+        query = query.filter(Reimbursement.expense_date <= date_to)
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                Reimbursement.vendor.ilike(like),
+                Reimbursement.category.ilike(like),
+                Reimbursement.notes.ilike(like),
+                Reimbursement.user_name.ilike(like),
+            )
+        )
+    rows = (
+        query.order_by(Reimbursement.expense_date.desc(), Reimbursement.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_to_out(r) for r in rows]
+
+
+@router.patch("/{reimbursement_uuid}/qb-status", response_model=ReimbursementOut)
+def set_qb_status(
+    reimbursement_uuid: str,
+    body: QbStatusIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Mark a claim entered in QuickBooks, or put it back to pending.
+
+    Reversible on purpose. The office marks these off by hand while working
+    through a list, and a one-way flag turns a mis-click into a receipt that
+    never gets entered - the exact failure this column exists to prevent.
+
+    Who and when are recorded on the way to "entered" and cleared on the way
+    back, so the stamp never describes a state the row is not in.
+    """
+    want = (body.qb_status or "").strip().lower()
+    if want not in QB_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"qb_status must be one of {sorted(QB_STATUSES)}",
+        )
+    row = (
+        db.query(Reimbursement)
+        .filter(Reimbursement.reimbursement_uuid == reimbursement_uuid)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such reimbursement.")
+
+    row.qb_status = want
+    if want == "entered":
+        row.qb_entered_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        row.qb_entered_by_name = current_user.name or current_user.email
+    else:
+        row.qb_entered_at = None
+        row.qb_entered_by_name = None
+    db.commit()
+    db.refresh(row)
     return _to_out(row)
 
 

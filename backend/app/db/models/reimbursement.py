@@ -104,5 +104,14 @@ class Reimbursement(Base):
     paid_period_start = Column(String(10), nullable=True)
     paid_period_end = Column(String(10), nullable=True)
 
+    # QUICKBOOKS. The office re-keys these by hand, and nothing recorded whether
+    # a claim had been entered yet - so the only guard against entering the same
+    # receipt twice was somebody's memory. Two states: "pending" and "entered".
+    # A declined claim never reaches QuickBooks at all, which `status` already
+    # says, so that is not a third value here.
+    qb_status = Column(String(16), nullable=False, server_default="pending", default="pending")
+    qb_entered_at = Column(DateTime, nullable=True)
+    qb_entered_by_name = Column(String, nullable=True)
+
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
