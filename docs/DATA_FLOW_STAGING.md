@@ -1218,9 +1218,9 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
-## Reimbursement / mileage ledger for the office (2026-09-03, BACKEND ONLY)
+## Reimbursement / mileage ledger for the office (2026-09-03)
 
-Request b59434c2 item 3. **No UI yet** - the endpoints exist, nothing renders them.
+Request b59434c2 item 3.
 
 | Path | Where | Status |
 |---|---|---|
@@ -1228,12 +1228,19 @@ Request b59434c2 item 3. **No UI yet** - the endpoints exist, nothing renders th
 | `GET /api/reimbursements/search` - admin-only, composable filters | `routers/reimbursement.py` | [x] |
 | `PATCH /api/reimbursements/{uuid}/qb-status` - reversible | `routers/reimbursement.py` | [x] |
 | `paid_at` / `paid_period_*` and the QB fields on `ReimbursementOut` | `routers/reimbursement.py` | [x] |
-| Admin module UI: search, filters, Drive links, QB toggle | not built | [ ] |
+| Admin module UI: search, filters, Drive links, QB toggle | `pages/Admin.tsx` (`ReimbursementsAdminTab`, its own nav tab) | [x] |
 
-**Receipts are LINKS, not downloads** (user direction). The payload already
-carries `receipt_photo_url`, `odometer_start_photo_url`, `odometer_end_photo_url`
-and `photos_drive_url`; the module opens Drive rather than pulling bytes through
-the app, which is also what keeps this off the memory path that has bitten before.
+**Receipts are LINKS, not downloads** (user direction). The module renders plain
+anchors with `target="_blank"` for `receipt_photo_url`,
+`odometer_start_photo_url`, `odometer_end_photo_url` and `photos_drive_url`. It
+never fetches image bytes, and there is no `download` attribute - which keeps
+photos off the memory path that has bitten this app before, and gains nothing
+that Drive does not already give. The copy tells the office to right-click to
+save one.
+
+**It opens on the working list**, not on everything: not-yet-entered, personally
+paid. Every filter widens to "any". A module that opens on 500 rows is one nobody
+works from.
 
 **Search is a separate admin endpoint, not a flag on the crew list.** The crew
 endpoint defaults to the caller's own rows and already carries an `all_users`

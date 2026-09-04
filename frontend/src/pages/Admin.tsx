@@ -93,7 +93,7 @@ type CalStatus = {
   error?: string;
 };
 
-type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents" | "payroll" | "dq";
+type Tab = "employees" | "map" | "settings" | "advanced" | "appearance" | "dvir" | "estimator" | "notes" | "summary" | "office" | "incidents" | "payroll" | "dq" | "reimbursements";
 
 const TAB_TITLES: Record<Tab, string> = {
   map: "Admin Dashboard",
@@ -109,6 +109,7 @@ const TAB_TITLES: Record<Tab, string> = {
   advanced: "Advanced Settings",
   appearance: "Theme & Appearance",
   incidents: "Incidents",
+  reimbursements: "Reimbursements",
 };
 
 const DESKTOP_MODE_KEY = "crew_admin_desktop_mode_v1";
@@ -222,6 +223,7 @@ export default function Admin() {
           {tab === "office" && <OfficeHoursPanel />}
           {tab === "payroll" && <PayrollTool onOpenJob={(u) => { setSummaryDeepLink(u); setTab("summary"); }} />}
           {tab === "dq" && <DqFilesTab />}
+          {tab === "reimbursements" && <ReimbursementsAdminTab />}
           {tab === "incidents" && <IncidentsAdminTab />}
           {tab === "settings" && (
             <SettingsTab
@@ -309,6 +311,7 @@ const ADMIN_TAB_ITEMS: { tab: Tab; label: string }[] = [
   { tab: "office", label: "Office Hours" },
   { tab: "payroll", label: "Payroll" },
   { tab: "dq", label: "DQ Files" },
+  { tab: "reimbursements", label: "Reimbursements" },
   { tab: "incidents", label: "Incidents" },
   { tab: "settings", label: "Settings" },
 ];
@@ -8355,6 +8358,236 @@ function PtoAllowance(
       </button>
       {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
     </span>
+  );
+}
+
+type AdminReimbursement = {
+  reimbursement_uuid: string;
+  user_name: string;
+  type: string;
+  expense_date: string | null;
+  job_name: string | null;
+  amount: number | null;
+  category: string | null;
+  vendor: string | null;
+  payment_method: string | null;
+  notes: string | null;
+  status: string;
+  odometer_start: number | null;
+  odometer_end: number | null;
+  receipt_photo_url: string | null;
+  odometer_start_photo_url: string | null;
+  odometer_end_photo_url: string | null;
+  photos_drive_url: string | null;
+  paid_at: string | null;
+  paid_period_start: string | null;
+  paid_period_end: string | null;
+  qb_status: string;
+  qb_entered_at: string | null;
+  qb_entered_by_name: string | null;
+};
+
+/**
+ * The office's reimbursement and mileage ledger.
+ *
+ * What it is for: the office re-keys these into QuickBooks by hand, and until
+ * now nothing recorded which ones had been done. The default view is therefore
+ * "personally-paid, not yet entered" - the working list - rather than
+ * everything, because a list that opens on 500 rows is a list nobody works from.
+ *
+ * RECEIPTS OPEN IN DRIVE, they are not downloaded through the app (user
+ * direction). Pulling image bytes through the browser to re-upload them into
+ * QuickBooks would be slower, would put a photo pile on the memory path that has
+ * caused trouble here before, and gains nothing: Drive is already where the file
+ * lives and where QuickBooks can be pointed at it.
+ */
+function ReimbursementsAdminTab() {
+  const [rows, setRows] = useState<AdminReimbursement[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // Defaults are the working list, not "everything".
+  const [qbStatus, setQbStatus] = useState("pending");
+  const [type, setType] = useState("");
+  const [payment, setPayment] = useState("personal");
+  const [status, setStatus] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [q, setQ] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const p = new URLSearchParams();
+      if (qbStatus) p.set("qb_status", qbStatus);
+      if (type) p.set("type", type);
+      if (payment) p.set("payment_method", payment);
+      if (status) p.set("status", status);
+      if (from) p.set("date_from", from);
+      if (to) p.set("date_to", to);
+      if (q.trim()) p.set("q", q.trim());
+      setRows(await apiFetch<AdminReimbursement[]>(`/api/reimbursements/search?${p.toString()}`));
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not load reimbursements.");
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [qbStatus, type, payment, status, from, to, q]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function setQb(row: AdminReimbursement, next: string) {
+    setBusy(row.reimbursement_uuid);
+    try {
+      const updated = await apiFetch<AdminReimbursement>(
+        `/api/reimbursements/${encodeURIComponent(row.reimbursement_uuid)}/qb-status`,
+        { method: "PATCH", body: JSON.stringify({ qb_status: next }) },
+      );
+      // Splice rather than reload: the row may no longer match the active
+      // filter, and yanking it out from under the cursor mid-list is worse than
+      // showing it with its new state until the next refresh.
+      setRows((prev) => prev.map((r) =>
+        r.reimbursement_uuid === updated.reimbursement_uuid ? updated : r));
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not update.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const total = rows.reduce((n, r) => n + (r.amount || 0), 0);
+  const miles = rows.reduce(
+    (n, r) => n + (r.odometer_start != null && r.odometer_end != null
+      ? Math.max(0, r.odometer_end - r.odometer_start) : 0), 0);
+
+  const link = (url: string | null, label: string) =>
+    url ? (
+      <a href={url} target="_blank" rel="noopener noreferrer"
+         className="small" style={{ color: "var(--brand)" }}>
+        {label}
+      </a>
+    ) : null;
+
+  return (
+    <div className="col" style={{ gap: 14 }}>
+      <div className="card">
+        <div className="microLabel" style={{ marginBottom: 10 }}>Reimbursements and mileage</div>
+        <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+          Opens on what still needs entering into QuickBooks. Receipts open in
+          Drive in a new tab - right-click to save one if you need the file.
+        </div>
+        <div className="row" style={{ gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={qbStatus} onChange={(e) => setQbStatus(e.target.value)}
+                  aria-label="QuickBooks status" style={{ fontSize: 13 }}>
+            <option value="pending">Pending QB entry</option>
+            <option value="entered">Entered in QB</option>
+            <option value="">Any QB status</option>
+          </select>
+          <select value={payment} onChange={(e) => setPayment(e.target.value)}
+                  aria-label="Payment method" style={{ fontSize: 13 }}>
+            <option value="personal">Personal card</option>
+            <option value="company">Company card</option>
+            <option value="">Any card</option>
+          </select>
+          <select value={type} onChange={(e) => setType(e.target.value)}
+                  aria-label="Type" style={{ fontSize: 13 }}>
+            <option value="">All types</option>
+            <option value="expense">Expenses</option>
+            <option value="mileage">Mileage</option>
+          </select>
+          <select value={status} onChange={(e) => setStatus(e.target.value)}
+                  aria-label="Review status" style={{ fontSize: 13 }}>
+            <option value="">Any review status</option>
+            <option value="submitted">Not reviewed</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Declined</option>
+          </select>
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+                 aria-label="From date" style={{ fontSize: 13 }} />
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+                 aria-label="To date" style={{ fontSize: 13 }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)}
+                 placeholder="Search name, vendor, notes" aria-label="Search"
+                 style={{ flex: "1 1 180px", minWidth: 0, fontSize: 13 }} />
+        </div>
+        <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+          {loading ? "Loading..." : `${rows.length} record${rows.length === 1 ? "" : "s"}`}
+          {total > 0 ? ` - $${total.toFixed(2)}` : ""}
+          {miles > 0 ? ` - ${miles} mi` : ""}
+        </div>
+        {err && <div className="small" style={{ color: "var(--danger)", marginTop: 6 }}>{err}</div>}
+      </div>
+
+      {!loading && rows.length === 0 && (
+        <div className="card">
+          <div className="small" style={{ color: "var(--muted)" }}>
+            Nothing matches those filters.
+          </div>
+        </div>
+      )}
+
+      {rows.map((r) => (
+        <div key={r.reimbursement_uuid} className="card"
+             style={{ opacity: r.status === "rejected" ? 0.6 : 1 }}>
+          <div className="row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <div className="col" style={{ gap: 2, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>
+                {r.user_name}
+                <span className="small" style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}>
+                  {r.expense_date || ""} - {r.type === "mileage" ? "Mileage" : "Expense"}
+                </span>
+              </div>
+              <div className="small" style={{ color: "var(--muted)" }}>
+                {r.type === "mileage"
+                  ? (r.odometer_start != null && r.odometer_end != null
+                      ? `${Math.max(0, r.odometer_end - r.odometer_start)} mi (${r.odometer_start} to ${r.odometer_end})`
+                      : "No odometer readings")
+                  : [r.vendor, r.category, r.amount != null ? `$${r.amount.toFixed(2)}` : null]
+                      .filter(Boolean).join(" - ")}
+                {r.payment_method === "company" ? " - company card" : ""}
+                {r.job_name ? ` - ${r.job_name}` : ""}
+              </div>
+              {r.notes && (
+                <div className="small" style={{ color: "var(--muted)" }}>{r.notes}</div>
+              )}
+              <div className="row" style={{ gap: 10, flexWrap: "wrap", marginTop: 2 }}>
+                {link(r.receipt_photo_url, "Receipt")}
+                {link(r.odometer_start_photo_url, "Odometer start")}
+                {link(r.odometer_end_photo_url, "Odometer end")}
+                {link(r.photos_drive_url, "Drive folder")}
+              </div>
+              <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                {r.status === "rejected" ? "Declined" : r.status === "approved" ? "Approved" : "Not reviewed"}
+                {r.paid_at
+                  ? ` - paid on the ${r.paid_period_start} to ${r.paid_period_end} run`
+                  : " - not yet paid"}
+                {r.qb_entered_by_name ? ` - entered by ${r.qb_entered_by_name}` : ""}
+              </div>
+            </div>
+            <div className="col" style={{ gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
+              <button
+                type="button"
+                disabled={busy === r.reimbursement_uuid}
+                onClick={() => setQb(r, r.qb_status === "entered" ? "pending" : "entered")}
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: r.qb_status === "entered" ? "var(--ok, var(--brand))" : "var(--text)",
+                }}
+                title="Toggle whether this has been keyed into QuickBooks. Reversible - a mis-click here would otherwise mean a receipt nobody enters."
+              >
+                {busy === r.reimbursement_uuid
+                  ? "..."
+                  : r.qb_status === "entered" ? "In QuickBooks ✓" : "Mark entered"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
