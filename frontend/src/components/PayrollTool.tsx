@@ -29,10 +29,13 @@ type Totals = {
   ot_hours: number;
   non_billable_hours: number;
   other_hours: number;
+  /** Paid time off. Its own bucket so it stays out of the OT calculation. */
+  pto_hours: number;
   total_hours: number;
   per_diem_nights: number;
   per_diem_amount: number;
   reimbursement_amount: number;
+  tips_amount: number;
   mileage_miles: number;
   mileage_amount: number;
 };
@@ -265,10 +268,13 @@ export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: strin
    *  a spreadsheet or lines up next to the QuickBooks entry grid. */
   const tsv = useMemo(() => {
     if (!data) return "";
+    // PTO and Tips are in here on purpose. This export is what gets pasted next
+    // to the QuickBooks grid, so a column missing from it is money or hours that
+    // silently do not get entered - which is worse than not having the feature.
     const head = [
-      "Employee", "Regular", "Overtime", "Non-billable", "Other",
+      "Employee", "Regular", "Overtime", "Non-billable", "Other", "PTO",
       "Total hrs", "Per-diem nights", "Per-diem $", "Reimbursement $",
-      "Mileage mi", "Mileage $",
+      "Mileage mi", "Mileage $", "Tips $",
     ].join("\t");
     const rows = data.employees.map((e) =>
       [
@@ -277,12 +283,14 @@ export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: strin
         e.totals.ot_hours,
         e.totals.non_billable_hours,
         e.totals.other_hours,
+        e.totals.pto_hours ?? 0,
         e.totals.total_hours,
         e.totals.per_diem_nights,
         e.totals.per_diem_amount.toFixed(2),
         e.totals.reimbursement_amount.toFixed(2),
         e.totals.mileage_miles,
         e.totals.mileage_amount.toFixed(2),
+        (e.totals.tips_amount ?? 0).toFixed(2),
       ].join("\t"),
     );
     return [head, ...rows].join("\n");
@@ -888,6 +896,121 @@ function EmployeeDetail({
       )}
 
       <TipsSection emp={emp} onChanged={onChanged} />
+      <PtoSection emp={emp} onChanged={onChanged} />
+    </div>
+  );
+}
+
+// ── PTO ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Record paid time off against this employee, and show what is left this year.
+ *
+ * OFFICE-ONLY. PTO appears nowhere crew-facing: they cannot log it, cannot see a
+ * balance, and do not see recorded PTO on their own off-job list or in Worked
+ * Hours (user direction, 2026-09-03). This panel is the only way it is entered.
+ *
+ * The allowance itself is set per person on the roster; zero there means not
+ * eligible, and this panel says so rather than offering a form that will be
+ * refused. The server checks the cap again on submit - this is so the office is
+ * told before they type, not so the rule lives on the client.
+ */
+function PtoSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }) {
+  const [bal, setBal] = useState<{
+    eligible: boolean; cap_hours: number; used_hours: number;
+    remaining_hours: number; year: number;
+  } | null>(null);
+  const [date, setDate] = useState("");
+  const [hours, setHours] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const loadBal = useCallback(async () => {
+    try {
+      setBal(await apiFetch(`/api/admin/off-job/pto-balance/${emp.user_id}`));
+    } catch {
+      // A balance that will not load must not take the payroll row with it.
+      setBal(null);
+    }
+  }, [emp.user_id]);
+
+  useEffect(() => { loadBal(); }, [loadBal]);
+
+  async function record() {
+    if (!date) { setErr("Pick the date the PTO is for."); return; }
+    const h = Number(hours);
+    if (!Number.isFinite(h) || h <= 0) { setErr("Enter the PTO hours."); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch("/api/admin/off-job/pto", {
+        method: "POST",
+        body: JSON.stringify({
+          // Minted here so a double-tap or a retry cannot record the same day
+          // twice. Re-sending the same uuid EDITS the entry.
+          entry_uuid: crypto.randomUUID(),
+          user_id: emp.user_id,
+          work_date: date,
+          hours: h,
+          notes: note.trim(),
+        }),
+      });
+      setHours(""); setNote("");
+      await loadBal();
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not record the PTO.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (bal && !bal.eligible) {
+    return (
+      <div style={{ marginTop: 12 }}>
+        <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 4 }}>
+          PTO
+        </div>
+        <div className="small" style={{ color: "var(--muted)" }}>
+          Not set up for PTO. Set an annual allowance on the roster to enable it.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 4 }}>
+        PTO
+        {bal && (
+          <span style={{ fontWeight: 400, marginLeft: 6 }}>
+            {bal.remaining_hours}h left of {bal.cap_hours}h for {bal.year}
+            {bal.used_hours > 0 ? ` (${bal.used_hours}h used)` : ""}
+          </span>
+        )}
+      </div>
+      <div className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+               aria-label={`PTO date for ${emp.name}`} style={{ fontSize: 13 }} />
+        <input value={hours} onChange={(e) => setHours(e.target.value)}
+               inputMode="decimal" placeholder="hrs"
+               aria-label={`PTO hours for ${emp.name}`} style={{ width: 60, fontSize: 13 }} />
+        <input value={note} onChange={(e) => setNote(e.target.value)}
+               placeholder="Note (optional)" aria-label={`PTO note for ${emp.name}`}
+               style={{ flex: "1 1 140px", minWidth: 0, fontSize: 13 }} />
+        <button type="button" onClick={record}
+                disabled={busy || !date || !hours.trim() || (bal ? bal.remaining_hours <= 0 : false)}
+                style={{ fontSize: 12 }}>
+          {busy ? "Saving..." : "Record PTO"}
+        </button>
+      </div>
+      {bal && bal.remaining_hours <= 0 && (
+        <div className="small" style={{ color: "var(--warn)", marginTop: 4 }}>
+          No PTO left for {bal.year}. Raise the allowance on the roster to record more.
+        </div>
+      )}
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 4 }}>{err}</div>}
     </div>
   );
 }

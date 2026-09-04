@@ -56,6 +56,9 @@ type AdminUser = {
   tag_ids: number[];
   alias_count: number;
   scheduling_notes: string;
+  /** Annual PTO allowance in hours. 0 means not eligible - there is no separate
+   *  flag. Admin-only: PTO appears nowhere crew-facing. */
+  pto_hours_annual: number;
 };
 
 type EmployeeTag = {
@@ -989,6 +992,12 @@ function EmployeesTab() {
                     >
                       {u.is_skill_rater ? "Skill rater ✓" : "Skill rater"}
                     </button>
+                    <PtoAllowance
+                      user={u}
+                      onUpdated={(updated) =>
+                        setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
+                      }
+                    />
                     <button
                       className="roster-btn"
                       onClick={() => setEditingUnlocksFor(u)}
@@ -8269,6 +8278,83 @@ function JobTipsCard({
       )}
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 6 }}>{err}</div>}
     </div>
+  );
+}
+
+/**
+ * One person's annual PTO allowance, in hours.
+ *
+ * Zero means not eligible. There is deliberately no separate "eligible" switch:
+ * an allowance of nothing and not being eligible are one fact, and two controls
+ * for it would eventually disagree (somebody flips the switch and leaves the
+ * number, or the reverse).
+ *
+ * Per CALENDAR year, no roll-over, and set by hand - there is no accrual rule.
+ * PTO itself is recorded by the office from the payroll screen; this is only the
+ * allowance it draws against. Crew see none of it.
+ */
+function PtoAllowance(
+  { user, onUpdated }: { user: AdminUser; onUpdated: (u: AdminUser) => void },
+) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(user.pto_hours_annual ?? 0));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    const hours = Number(value);
+    if (!Number.isFinite(hours) || hours < 0) {
+      setErr("Enter hours, or 0 for not eligible.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      // The PATCH returns the updated row; splice it in rather than re-fetching
+      // the whole roster, which is what every other control on this row does.
+      const updated = await apiFetch<AdminUser>(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ pto_hours_annual: hours }),
+      });
+      setEditing(false);
+      onUpdated(updated);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    const hrs = user.pto_hours_annual ?? 0;
+    return (
+      <button
+        className={`roster-btn ${hrs > 0 ? "ok" : ""}`}
+        onClick={() => { setValue(String(hrs)); setEditing(true); }}
+        title="Annual PTO allowance in hours, per calendar year. 0 means this person is not eligible for PTO. Recorded PTO is entered from the payroll screen."
+      >
+        {hrs > 0 ? `PTO ${hrs}h` : "PTO -"}
+      </button>
+    );
+  }
+
+  return (
+    <span className="row" style={{ gap: 4, alignItems: "center" }}>
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        inputMode="decimal"
+        aria-label={`Annual PTO hours for ${user.name || user.email}`}
+        style={{ width: 56, fontSize: 12 }}
+      />
+      <button className="roster-btn" disabled={busy} onClick={save}>
+        {busy ? "..." : "Save"}
+      </button>
+      <button className="roster-btn" disabled={busy} onClick={() => { setEditing(false); setErr(null); }}>
+        Cancel
+      </button>
+      {err && <span className="small" style={{ color: "var(--danger)" }}>{err}</span>}
+    </span>
   );
 }
 

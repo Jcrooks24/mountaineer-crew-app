@@ -70,6 +70,10 @@ class UserAdminResponse(BaseModel):
     # Free-form text the crew maintains on their availability page. Surfaced
     # as a hover tooltip on the admin Month schedule view's employee column.
     scheduling_notes: str = ""
+    # Annual PTO allowance in hours. ZERO MEANS NOT ELIGIBLE - there is no
+    # separate flag, deliberately (app/core/pto.py). Admin-only, like everything
+    # else about PTO: this is never sent to a crew-facing screen.
+    pto_hours_annual: float = 0
 
     class Config:
         from_attributes = True
@@ -81,6 +85,8 @@ class UpdateUserRequest(BaseModel):
     is_skill_rater: Optional[bool] = None
     name: Optional[str] = None
     phone: Optional[str] = None
+    # Hours per CALENDAR year. 0 removes eligibility.
+    pto_hours_annual: Optional[float] = None
 
 
 def _tag_ids_by_user(db: Session) -> Dict[int, List[int]]:
@@ -118,6 +124,7 @@ def _user_with_tags(
         tag_ids=tag_ids,
         alias_count=alias_count,
         scheduling_notes=user.scheduling_notes or "",
+        pto_hours_annual=float(user.pto_hours_annual or 0),
     )
 
 
@@ -173,6 +180,21 @@ def update_user(
         user.name = payload.name.strip() or None
     if payload.phone is not None:
         user.phone = payload.phone.strip() or None
+    if payload.pto_hours_annual is not None:
+        # Clamped, not rejected: a negative allowance is meaningless and the
+        # useful reading of one is "none". The upper bound is a typo guard -
+        # 2000 hours is most of a working year.
+        hours = float(payload.pto_hours_annual)
+        if hours < 0 or hours > 2000:
+            raise HTTPException(
+                status_code=400,
+                detail="Annual PTO hours must be between 0 and 2000.",
+            )
+        # LOWERING this below what somebody has already taken is allowed on
+        # purpose. It is a real correction (an allowance set wrong in January,
+        # found in June), and app/core/pto.py clamps the remainder at zero rather
+        # than inventing a debt the app has no way to collect.
+        user.pto_hours_annual = hours
 
     db.commit()
     db.refresh(user)

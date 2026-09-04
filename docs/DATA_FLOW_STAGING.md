@@ -1218,10 +1218,9 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
-## PTO is recorded by the office, never by the crew (2026-09-03, BACKEND ONLY)
+## PTO is recorded by the office, never by the crew (2026-09-03)
 
-Request 1a50fa5b. **No UI yet** - the office has no screen to record PTO or set
-an allowance. Rules, storage and enforcement only.
+Request 1a50fa5b.
 
 **PTO IS OFFICE-ONLY** (user direction, 2026-09-03). It appears nowhere
 crew-facing: crew cannot log it, cannot see their balance, and do not see PTO the
@@ -1238,8 +1237,9 @@ stored as an off-job entry purely because that is where payroll picks it up.
 | PTO filtered out of the crew's off-job list and BOTH Worked Hours queries | `routers/off_job.py`, `routers/hours.py` | [x] |
 | `off_job_entries.recorded_by_id` / `recorded_by_name` | migration `m3o5q7l9n1p3` | [x] |
 | Payroll: its own `pto` bucket, in `totals.pto_hours` and per day | `routers/payroll.py` | [x] |
-| Admin screen: record PTO against an employee, see their balance | not built | [ ] |
-| Admin roster: set someone's annual PTO hours | not built | [ ] |
+| Payroll screen: record PTO + live balance, per employee | `components/PayrollTool.tsx` (`PtoSection`) | [x] |
+| Admin roster: set someone's annual PTO hours | `pages/Admin.tsx` (`PtoAllowance`), `routers/admin.py` | [x] |
+| Payroll TSV export gains PTO and Tips columns | `components/PayrollTool.tsx` | [x] |
 
 **Calendar year, no roll-over, and PTO never reaches overtime** (both confirmed).
 OT sums only the `billable` bucket, so giving PTO its own bucket is what keeps it
