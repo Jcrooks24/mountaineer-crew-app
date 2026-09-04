@@ -42,6 +42,8 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   // Tap-a-field-title help on the job setup form (2026-09-03). A new interaction
   // is worth nothing if nobody discovers it, and the "?" alone is easy to miss.
   "setupFieldHelp",
+  // Employee directory in Tools (2026-09-04).
+  "employeeDirectory",
 ]);
 
 export function isBeta(feature: string): boolean {

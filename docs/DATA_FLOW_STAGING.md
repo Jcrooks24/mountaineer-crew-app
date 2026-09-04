@@ -1218,6 +1218,39 @@ generated PDF is transliterated. See
 the retry-signs-the-next-phase defect. They are wrong records and need the SQL in
 RUNBOOKS.
 
+## Employee directory in Tools (2026-09-04)
+
+Request ddf88e92. One new field on an existing payload; no new endpoint.
+
+| Path | Where | Status |
+|---|---|---|
+| `phone` added to `DirectoryEntry` on `GET /api/users/directory` | `schemas/users.py`, `routers/users.py` | [x] |
+| `phone?` on the client type, so an older cached roster still parses | `auth/AuthContext.tsx` | [x] |
+| Directory page at `/directory`, reachable from Tools | `pages/EmployeeDirectory.tsx`, `pages/Tools.tsx`, `main.tsx` | [x] |
+
+**CURRENT EMPLOYEES ONLY** (user direction). The endpoint already filtered on
+`is_active` and still does. There is no archive concept in this app - the roster
+action is Revoke / Restore - so "current" and "not revoked" are the same test.
+Somebody who left and was never revoked still appears, which is roster hygiene
+rather than something to work around in code.
+
+**No new endpoint and no second fetch.** The page reads the SAME cached roster
+the rest of the app keeps (`lib/userDirectory`), which is load-bearing already:
+employee hours are keyed on it and it is cached so a crew member with no signal
+can still log hours. Reusing it makes the directory work offline for free; a
+second copy of the same data would only be a way for the two to disagree.
+
+**What changes about visibility.** That endpoint already exposed every active
+crew member's name and email to every signed-in crew member (it backs the profile
+photos in activity logs). Adding `phone` widens what colleagues can see about
+each other, which is the point of the request, but it is a real widening and is
+recorded here as one.
+
+**`phone` is optional end to end.** A roster cached by a build older than this
+has no phone field, so "No phone on file" is a rendered state rather than a
+crash.
+
+
 ## Reimbursement / mileage ledger for the office (2026-09-03)
 
 Request b59434c2 item 3.

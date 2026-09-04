@@ -27,6 +27,7 @@ export default function Tools() {
             APP_VERSION bump. */}
         <Tile icon={<TileIcons.clock />} label="Off-job hours" sublabel="Log non-job time" onClick={() => nav("/off-job")} badge={<BetaTag feature="offJobHours" />} />
         <Tile icon={<TileIcons.road />} label="Long-distance" sublabel="HOS, RODS, per-diem" onClick={() => nav("/long-distance")} />
+        <Tile icon={<TileIcons.doc />} label="Employee directory" sublabel="Phone & email lookup" onClick={() => nav("/directory")} badge={<BetaTag feature="employeeDirectory" />} />
         <Tile icon={<TileIcons.bug />} label="Report a bug" sublabel="Something broken or off" onClick={() => nav("/report-bug")} />
         <Tile icon={<TileIcons.lightbulb />} label="Request a feature" sublabel="Suggest an idea or change" onClick={() => nav("/request-feature")} />
         {user?.role === "admin" && (

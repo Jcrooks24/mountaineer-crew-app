@@ -40,6 +40,13 @@ class DirectoryEntry(BaseModel):
     email: EmailStr
     name: str | None = None
     profile_photo: str | None = None
+    # Added for the crew employee directory (2026-09-04). This endpoint was
+    # already showing every active crew member's name and email to every signed-in
+    # crew member (it backs the profile photos in activity logs), so the phone
+    # number widens what colleagues can see about each other rather than opening
+    # a new door. That is the point of the directory: crew look each other up.
+    # It stays limited to ACTIVE users - see the endpoint.
+    phone: str | None = None
 
     class Config:
         from_attributes = True

@@ -22,6 +22,9 @@ export type DirectoryEntry = {
   email: string;
   name?: string | null;
   profile_photo?: string | null;
+  /** Optional: absent on a roster cached by a build older than the directory
+   *  feature, so every reader must handle "no phone on file". */
+  phone?: string | null;
 };
 
 // Staging-only "preview as role" dev tool. Lets an admin view the app as a

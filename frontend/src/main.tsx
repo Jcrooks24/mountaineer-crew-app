@@ -49,6 +49,7 @@ import DocumentLibrary from "./pages/DocumentLibrary";
 import Reimbursement from "./pages/Reimbursement";
 import OffJob from "./pages/OffJob";
 import Availability from "./pages/Availability";
+import EmployeeDirectory from "./pages/EmployeeDirectory";
 import ReportBug from "./pages/ReportBug";
 import RequestFeature from "./pages/RequestFeature";
 import Tools from "./pages/Tools";
@@ -84,6 +85,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/documents" element={<RequireAuth><DocumentLibrary /></RequireAuth>} />
           <Route path="/reimbursement" element={<RequireAuth><Reimbursement /></RequireAuth>} />
           <Route path="/off-job" element={<RequireAuth><OffJob /></RequireAuth>} />
+          <Route path="/directory" element={<RequireAuth><EmployeeDirectory /></RequireAuth>} />
           <Route path="/report-bug" element={<RequireAuth><ReportBug /></RequireAuth>} />
           <Route path="/request-feature" element={<RequireAuth><RequestFeature /></RequireAuth>} />
           <Route path="/availability" element={<RequireAuth><Availability /></RequireAuth>} />

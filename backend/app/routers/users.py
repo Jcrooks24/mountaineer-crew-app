@@ -67,8 +67,16 @@ def list_directory(
     _current_user: User = Depends(get_current_user),
 ) -> List[DirectoryEntry]:
     """
-    Lists active users (id, email, name, profile photo) so crew members can see
-    each other's profile photos in activity logs, photos, etc.
+    Active users only: id, email, name, phone, profile photo.
+
+    Two jobs. It backs the profile photos in activity logs and photo credits, and
+    it is the roster the crew Employee Directory searches.
+
+    ACTIVE ONLY, deliberately (user direction, 2026-09-04: current employees).
+    There is no archive concept in this app - the roster action is Revoke /
+    Restore on `is_active` - so "current" and "not revoked" are the same test.
+    Somebody who left and was never revoked still appears, which is a roster
+    hygiene problem rather than something to work around here.
     """
     users = (
         db.query(User)
