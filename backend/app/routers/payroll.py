@@ -1892,7 +1892,14 @@ def _payroll_snapshot_rows(db: Session, s_: date, e_: date) -> List[Dict[str, An
     """
     summary = _build_summary(db, s_, e_)
     return [
-        {"name": emp.get("name") or "", "totals": emp.get("totals") or {}}
+        {
+            # The roster id travels with the row. Payroll joins on it everywhere
+            # else so a rename cannot detach somebody from their hours; the sheet
+            # should not be the one place a display name is the identity.
+            "user_id": emp.get("user_id"),
+            "name": emp.get("name") or "",
+            "totals": emp.get("totals") or {},
+        }
         for emp in (summary.get("employees") or [])
     ]
 

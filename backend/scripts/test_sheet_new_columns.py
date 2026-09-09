@@ -196,10 +196,12 @@ RUN = {
     "period_start": "2026-09-01", "period_end": "2026-09-14",
     "finalized_at": "2026-09-15T09:00:00",
     "employees": [
-        {"name": "Casey", "totals": {"regular_hours": 40, "ot_hours": 2, "pto_hours": 8,
-                                     "tips_amount": 40.0, "total_hours": 50}},
-        {"name": "Dev", "totals": {"regular_hours": 32, "ot_hours": 0, "pto_hours": 0,
-                                   "tips_amount": 0.0, "total_hours": 32}},
+        {"user_id": 7, "name": "Casey",
+         "totals": {"regular_hours": 40, "ot_hours": 2, "pto_hours": 8,
+                    "tips_amount": 40.0, "total_hours": 50}},
+        {"user_id": 9, "name": "Dev",
+         "totals": {"regular_hours": 32, "ot_hours": 0, "pto_hours": 0,
+                    "tips_amount": 0.0, "total_hours": 32}},
     ],
 }
 n = sx.export_payroll_period_to_sheets(None, RUN)
@@ -210,6 +212,18 @@ check("the period key is on every row",
 check("tips are a COLUMN on the payroll row", r0.get("tips_amount") == 40.0, str(r0))
 check("PTO is too", r0.get("pto_hours") == 8)
 check("and the employee is named", {r0.get("employee"), r1.get("employee")} == {"Casey", "Dev"})
+# Identity by KEY, not by name. Payroll joins on the roster id everywhere else so
+# a rename cannot detach somebody from their hours; a money tab keyed on a
+# display name alone cannot tell two people with the same name apart.
+check("the roster id travels with the row",
+      {r0.get("user_id"), r1.get("user_id")} == {7, 9}, f"{r0.get('user_id')}/{r1.get('user_id')}")
+check("row_key is unique per row, unlike period",
+      r0.get("row_key") != r1.get("row_key")
+      and r0.get("row_key") == "2026-09-01..2026-09-14:7",
+      f"{r0.get('row_key')} / {r1.get('row_key')}")
+check("which is what lets the nightly integrity check see a duplicate here",
+      r0.get("period") == r1.get("period"),
+      "period repeats by design, so it cannot be the duplicate key")
 
 print("\nA re-finalize replaces the run rather than duplicating it:")
 deleted = []
@@ -245,8 +259,11 @@ try:
     check("a populated header missing the key column raises", False, "it appended anyway")
 except sx.SheetHeaderError as exc:
     check("a populated header missing the key column raises", True)
-    check("the message names the column and says to fix the sheet",
-          "period" in str(exc) and "fix the header" in str(exc), str(exc))
+    # Names PAYROLL_HEADERS[0], which is now `row_key` - and that is the
+    # improvement: the column _ensure_tab protects is the genuinely unique one,
+    # not `period`, which every employee on the run shares.
+    check("the message names the key column and says to fix the sheet",
+          sx.PAYROLL_HEADERS[0] in str(exc) and "fix the header" in str(exc), str(exc))
 check("and nothing was written", appended == [], str(appended))
 
 print()

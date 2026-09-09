@@ -9,17 +9,25 @@ WHY THIS EXISTS. The same set of Sheet syncs is written down TWICE, by hand:
   sheet_backfill.BACKFILL_REGISTRY    drives the audit and re-export - "which
                                       records are in Postgres but never reached
                                       the sheet?"
+  sheet_integrity_check.REGISTRY      drives the NIGHTLY check - "does this tab
+                                      have duplicate keys, or an overwritten
+                                      header row?"
 
 A sync present in the first and missing from the second is the worse way round to
 get it wrong. It looks healthy - the health check reports on the last attempt, so
 a sync that has never been driven reads as fine - while being invisible to the
 one tool that can find stranded records. Nothing would say so.
 
-That is not hypothetical. `tips` was added to SHEET_SYNC_REGISTRY on 2026-09-09
-and left out of BACKFILL_REGISTRY in the same commit, by the same person, in the
-same sitting. The vetting protocol names "a new sync missing from the registry"
-as a finding and it still got missed, because the protocol says *the* registry
-and there are two.
+That is not hypothetical, twice over. `tips` was added to SHEET_SYNC_REGISTRY on
+2026-09-09 and left out of BACKFILL_REGISTRY in the same commit, by the same
+person, in the same sitting. The follow-up vet then found `tips` AND `payroll`
+missing from the integrity registry as well - and `report_waivers`, which had
+been missing since 2026-08-13, so the nightly duplicate check had never once
+looked at that tab.
+
+The vetting protocol names "a new sync missing from the registry" as a finding
+and it was still missed three times, because the protocol says *the* registry and
+there are THREE. Hence this file.
 
 No network, no credentials, no database.
 """
@@ -53,6 +61,25 @@ check("every sync is auditable", not missing,
       "export dies.")
 check("the backfill panel invents no syncs", not extra,
       f"in BACKFILL_REGISTRY but not SHEET_SYNC_REGISTRY: {extra}")
+
+# The third registry. Parsed from source rather than imported: the integrity
+# script is a standalone runner that pulls in Google clients at module scope.
+import re  # noqa: E402
+_integ_src = open(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "sheet_integrity_check.py"),
+    encoding="utf-8",
+).read()
+_blk = _integ_src[_integ_src.index("REGISTRY = ["):]
+_blk = _blk[:_blk.index(chr(10) + "]")]
+integ = set(re.findall(r'\("(SHEETS_[A-Z_]+)"', _blk))
+sync_envs = {e["env"] for e in SHEET_SYNC_REGISTRY}
+uncovered = sorted(sync_envs - integ)
+check("every sync's tab is covered by the NIGHTLY integrity check", not uncovered,
+      f"not in sheet_integrity_check.REGISTRY: {uncovered}. That check is what "
+      "finds duplicate keys and an overwritten header row - the 189-duplicate-row, "
+      "$17,088 failure. A tab missing from it is never looked at.")
+check("the integrity check invents no tabs", not sorted(integ - sync_envs),
+      f"in the integrity registry but not a sync: {sorted(integ - sync_envs)}")
 
 print("\nThe two agree on where each sync WRITES:")
 for key in sorted(set(sync) & set(back)):

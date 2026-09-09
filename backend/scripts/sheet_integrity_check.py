@@ -93,6 +93,16 @@ REGISTRY = [
     ("SHEETS_REIMBURSEMENTS_TAB",    "Reimbursements",    "REIMBURSEMENT_HEADERS",    "reimbursement_uuid"),
     ("SHEETS_AVAILABILITY_TAB",      "Availability",      "AVAILABILITY_HEADERS",     None),
     ("SHEETS_OFF_JOB_TAB",           "OffJobHours",       "OFF_JOB_HEADERS",          "entry_uuid"),
+    # Added 2026-08-13 and never registered here until the 2026-09-09 vet, so the
+    # nightly check has never looked at it.
+    ("SHEETS_REPORT_WAIVERS_TAB",    "ReportWaivers",     "REPORT_WAIVER_HEADERS",    "job_uuid"),
+    ("SHEETS_TIPS_TAB",              "Tips",              "TIP_HEADERS",              "tip_uuid"),
+    # Keyed on row_key (period + user_id), NOT on `period`: every employee on a
+    # run shares the period, so a duplicate check on it would fire on every
+    # healthy multi-person payroll. row_key is unique per row, which is what makes
+    # a real duplicate visible - and this export appends before deleting stale
+    # rows, so a crash between the two leaves exactly that.
+    ("SHEETS_PAYROLL_TAB",           "Payroll",           "PAYROLL_HEADERS",          "row_key"),
 ]
 
 

@@ -1474,6 +1474,8 @@ must be one the app owns end to end.
 | Export refuses a period with no run row, and publishes the snapshot only | `routers/payroll.py` (`_queue_payroll_export`) | [x] |
 | Recorded on finalize (upsert; `run_count` increments on a re-finalize) | `routers/payroll.py` (`_record_payroll_run`) | [x] |
 | **NEW TAB** `Payroll` (`SHEETS_PAYROLL_TAB`), one row per employee per period | `sheets_export.export_payroll_period_to_sheets` | [x] |
+| Rows carry `user_id` and a unique `row_key` (period + user_id) | `sheets_export.PAYROLL_HEADERS` | [x] |
+| All THREE registries: health check, backfill audit, nightly integrity | `sheets_export.py`, `sheet_backfill.py`, `scripts/sheet_integrity_check.py` | [x] |
 | Exported after the finalize commit, off-request on the bounded pool | `routers/payroll.py` (`_queue_payroll_export`) | [x] |
 | Both registries + backfill source and re-export, keyed on `period` | `sheets_export.py`, `sheet_backfill.py` | [x] |
 
@@ -1519,6 +1521,27 @@ where a pay period used to be.
 Bills rebuild needs its own guard because `submission_id` sits at index 14 there;
 here one would be unreachable, and an unreachable check reads as protection that
 is not there.
+
+**Identity by KEY, not by name** (Core Behavior 5). The first cut of this tab
+identified people by display name alone, which is the one thing this app has an
+invariant against - payroll joins on the roster `user_id` everywhere else exactly
+so a rename or a nickname cannot detach somebody from their own hours, and two
+people with the same name would have collapsed onto one row on the money tab.
+Rows now carry `user_id`, and `row_key` (period + user_id) is unique per row.
+
+**`row_key` is also what makes duplicates detectable.** `period` repeats by
+design - every employee on a run shares it - so it cannot be the duplicate key
+for `sheet_integrity_check.py`. Since this export appends before deleting stale
+rows, a crash between the two leaves exactly the duplicates that check exists to
+find. `row_key` is `PAYROLL_HEADERS[0]`, so it is also the column `_ensure_tab`
+protects against a renamed header row.
+
+**All THREE registries, not two.** The 2026-09-09 vet found `tips` and `payroll`
+registered for the health check and the backfill audit but absent from
+`scripts/sheet_integrity_check.py` - the NIGHTLY duplicate and header-overwrite
+check, which is the one that found the 189-duplicate-row, $17,088 failure. It
+also found `report_waivers` missing there since 2026-08-13, so that tab had never
+once been checked. `scripts/test_sync_registries.py` now asserts all three agree.
 
 **The Tips tab stays**, holding the itemization behind the total: which job, which
 note, who entered it. Same relationship Materials has to the Bills materials line

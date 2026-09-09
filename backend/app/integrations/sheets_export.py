@@ -4288,7 +4288,19 @@ def delete_off_job_from_sheets(db: Session, entry_uuid: str) -> int:
 # -- Payroll period ------------------------------------------------------------
 
 PAYROLL_HEADERS = [
-    "period", "period_start", "period_end", "employee",
+    # `row_key` is period + user_id: unique per ROW, unlike `period`, which every
+    # employee on the run shares. The delete still keys on `period` (that is what
+    # sweeps somebody who dropped off the payroll since), but a per-row key is
+    # what lets sheet_integrity_check.py detect duplicates on this tab - and
+    # append-then-delete-stale can legitimately leave some after a crash.
+    "row_key",
+    "period", "period_start", "period_end",
+    # user_id, not just the name. Payroll matches people by roster id everywhere
+    # else precisely so a rename or a nickname cannot detach somebody from their
+    # own hours (see EmployeeHoursEntry.user_id); a money tab keyed on a display
+    # name alone cannot tell two people with the same name apart. Core invariant:
+    # records are identified by a unique key, never by a name.
+    "user_id", "employee",
     "regular_hours", "ot_hours", "non_billable_hours", "other_hours", "pto_hours",
     "total_hours",
     "per_diem_nights", "per_diem_amount", "reimbursement_amount",
@@ -4347,8 +4359,13 @@ def export_payroll_period_to_sheets(db: Session, run: Dict[str, Any]) -> int:
     rows = []
     for e in employees:
         t = e.get("totals") or {}
+        uid = e.get("user_id")
         rows.append(_build_row({
+            # Blank user_id would collapse two same-named people onto one key, so
+            # fall back to the name rather than emitting a colliding "period:".
+            "row_key": f"{period}:{uid if uid is not None else (e.get('name') or '?')}",
             "period": period,
+            "user_id": uid if uid is not None else "",
             "period_start": run.get("period_start") or "",
             "period_end": run.get("period_end") or "",
             "employee": e.get("name") or "",
