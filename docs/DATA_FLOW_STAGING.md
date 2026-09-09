@@ -1547,6 +1547,45 @@ because the gate can say the date is stale but not what the right new one is.
 their "hours" is a count of nights, not a duration.
 
 
+## Bill lines are checked one at a time (2026-09-09)
+
+Vet finding 7, redirected by the user. **Class D-ish: no endpoint, no queue, no
+migration.** What changes is a field inside the bill's existing free-form items
+JSON, and what gates report submission.
+
+| Path | Where | Status |
+|---|---|---|
+| `LineItem.verifiedSig` - the line's value-signature when it was ticked | `components/BillCalculator.tsx` | [x] |
+| `isVerified` / `unverifiedLines`, exported for the gate | `components/BillCalculator.tsx` | [x] |
+| `BillSlots.unverified` comes down the render prop so the readout re-renders | `components/BillCalculator.tsx` | [x] |
+| Submission and the step-through both block, naming the lines | `components/JobReport.tsx` | [x] |
+| `ReportDraft.billReviewed` is DEAD, kept only so older drafts parse | `components/JobReport.tsx` | [x] |
+
+**It rides in the bill items JSON**, which the API already stores free-form
+(`items: billData.items`), so there is no schema change, no new column, and a
+tick survives a reload and reaches a second device with the rest of the bill.
+
+**A tick is a signature, not a boolean** (ADR 0044). A line counts as checked only
+while its signature still matches its label / qty / rate / unit / discount, so any
+later change - a materials rebuild, a corrected end time, an auto-fill added next
+year - un-ticks it without any invalidation code to keep in step.
+
+**Truck lines are no longer re-sized after creation.** The previous behaviour
+re-derived any line without an explicit lock, which repaired the frozen-1h bills
+and also silently overwrote every deliberate figure entered before the lock
+existed. Old bills are left alone at the user's direction (2026-09-09): they have
+been corrected by hand where it mattered, and the 1h bug cannot recur because the
+line is not created until there are hours to size it from.
+
+**The truck hours rule itself is unchanged**, and is what was asked for: the
+longest single billable shift, minus that shift's breaks.
+`EmployeeHoursEntry.hours` is already `span - breaks` (`JobReport.tsx`,
+`hours: Math.max(0, (span - breakMin) / 60)`), and `longestBillableShift` reads
+`hours`, so "longest shift minus breaks" is what already shipped. A coverage /
+union-of-shifts rule was considered and **not** adopted; the review burden moves
+to the per-line check instead.
+
+
 ## Truck lines on the bill are sized from the longest shift (2026-09-03)
 
 Admin report: "trucks are autopopulating as 1 hr". A truck line is $90/hr, so

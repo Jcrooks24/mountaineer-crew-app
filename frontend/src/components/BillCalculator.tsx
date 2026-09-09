@@ -49,7 +49,41 @@ type LineItem = {
    *  carries, so the bills currently stuck at a wrong 1h re-size themselves on
    *  open instead of needing to be found and fixed by hand. */
   qtyLocked?: boolean;
+  /** The line's value-signature at the moment somebody ticked it as checked.
+   *
+   *  NOT a boolean, deliberately. A plain `verified: true` is theatre: the crew
+   *  tick every line, then the materials rebuild changes a total or somebody
+   *  fixes an end time and re-sizes the labor line, and the tick still claims
+   *  the new number was checked. Storing the signature makes the tick describe
+   *  a SPECIFIC set of numbers, so any later change to them un-checks the line
+   *  by itself, with no invalidation logic at the dozen places that write to a
+   *  line. Compare with `lineSignature`; see `isVerified`.
+   *
+   *  Persisted with the bill (items are free-form JSON), so a tick survives a
+   *  reload and the report cannot be finished on a different device without the
+   *  lines being looked at. */
+  verifiedSig?: string;
 };
+
+/** The values a crew member is agreeing to when they tick a line: what it is
+ *  called, how many, at what rate, less what discount. Anything that changes
+ *  what the customer is charged belongs in here; anything cosmetic must not, or
+ *  ticks would clear for no reason. */
+function lineSignature(it: LineItem): string {
+  return [it.label, it.qty, it.rate, it.unit, it.discount].join("~|~");
+}
+
+/** Has this line been checked AT ITS CURRENT VALUES? */
+function isVerified(it: LineItem): boolean {
+  return !!it.verifiedSig && it.verifiedSig === lineSignature(it);
+}
+
+/** Lines still needing a look. Exported so JobReport can gate submission on it
+ *  rather than on a single "I reviewed the bill" checkbox that could be ticked
+ *  without reading anything. */
+export function unverifiedLines(items: LineItem[]): LineItem[] {
+  return items.filter((it) => !isVerified(it));
+}
 
 type Bill = {
   items: LineItem[];
@@ -189,6 +223,12 @@ export type BillSlots = {
   /** Grand total (line items + materials, after global discount). Lets a caller
    *  show the bill amount in a read-only recap without the editable totals card. */
   total: number;
+  /** Lines not yet checked at their current values. JobReport gates submission
+   *  on this being empty, and names them when it is not. Passed down rather than
+   *  read off the ref, because the report has to RE-RENDER as lines are ticked -
+   *  an imperative getData() would leave the status frozen until something else
+   *  happened to re-render the page. */
+  unverified: LineItem[];
 };
 
 type Props = {
@@ -490,10 +530,22 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       for (let i = 1; i <= truckCount; i++) {
         const label = `Truck #${i} (per hour)`;
         const existing = prev.items.find((it) => it.source === "truck" && it.label === label);
-        // A hand-typed override wins, for good. Everything else tracks the
-        // longest shift, which is also what repairs the bills already sitting at
-        // a frozen 1h: they carry no lock, so they re-size on open.
-        const overridden = existing?.qtyLocked === true;
+        // AN EXISTING LINE IS NEVER RE-SIZED. Auto-fill happens once, when the
+        // line is created; after that the number is the office's, whether they
+        // typed it or accepted it.
+        //
+        // An earlier version of this re-sized any line that carried no explicit
+        // lock, to repair the bills sitting at a frozen 1h. That also silently
+        // overwrote every deliberate figure entered before the lock existed, on
+        // a $90/hr line, which is a worse failure than the one it fixed. Old
+        // bills are left alone at the user's direction (2026-09-09): they have
+        // been corrected by hand where it mattered. Going forward the 1h bug
+        // cannot recur anyway, because the line is no longer created before
+        // there are hours to size it from.
+        //
+        // "Use crew hours" on the row re-derives on demand, which is the
+        // deliberate version of what this used to do behind everyone's back.
+        const overridden = existing !== undefined && existing.qtyLocked !== false;
         desired.push({
           id: existing?.id ?? uuid(),
           label,
@@ -586,6 +638,12 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
           next.qtyLocked = true;
         }
         return next;
+        // NOTE: nothing here clears `verifiedSig`. It does not need to - the tick
+        // is stored as the signature of the values it was given for, so changing
+        // any of them makes it stop matching on its own (see isVerified). That is
+        // the whole reason it is a signature and not a boolean: there is no list
+        // of writers to keep in step, and a new auto-fill added later cannot
+        // forget to invalidate.
       }),
     }));
   }
@@ -761,7 +819,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
         Select a job to build a bill.
       </div>
     );
-    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null, total: 0 })}</>;
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null, total: 0, unverified: [] })}</>;
     return placeholder;
   }
 
@@ -769,7 +827,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     const placeholder = (
       <div className="card" style={{ color: "var(--muted)", fontSize: 13, padding: 14 }}>Loading bill…</div>
     );
-    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null, total: 0 })}</>;
+    if (children) return <>{children({ billHelper: placeholder, totals: null, notes: null, total: 0, unverified: [] })}</>;
     return placeholder;
   }
 
@@ -785,6 +843,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
       <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 0 }}>
         <div className="sectionTitle" style={{ marginBottom: 0 }}>Invoice Builder</div>
         <BetaTag feature="autoLaborLines" style={{ marginTop: 0 }} />
+        <BetaTag feature="billLineChecks" style={{ marginTop: 0 }} />
       </div>
       {jobName && (
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 2 }}>
@@ -1013,7 +1072,7 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   );
 
   if (children) {
-    return <>{children({ billHelper: billHelperSlot, totals: totalsSlot, notes: notesSlot, total: grandTotal })}</>;
+    return <>{children({ billHelper: billHelperSlot, totals: totalsSlot, notes: notesSlot, total: grandTotal, unverified: unverifiedLines(bill.items) })}</>;
   }
 
   return (
@@ -1035,8 +1094,15 @@ function LineItemRow({ item, onChange, onRemove }: {
   onRemove: () => void;
 }) {
   const subtotal = lineSubtotal(item);
+  const verified = isVerified(item);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px",
+      borderBottom: "1px solid var(--border)",
+      // A quiet left edge on anything still needing a look, so a long bill shows
+      // at a glance where the remaining work is without reading every row.
+      borderLeft: verified ? "3px solid transparent" : "3px solid var(--warn)",
+    }}>
       {/* Description + running amount + remove. */}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input value={item.label} onChange={(e) => onChange({ label: e.target.value })} placeholder="Description"
@@ -1077,6 +1143,26 @@ function LineItemRow({ item, onChange, onRemove }: {
             onChange={(discount) => onChange({ discount })} style={{ ...numInputStyle, width: 64 }} />
         </label>
       </div>
+      {/* Per-line verification. Replaces a single "I reviewed the bill"
+          checkbox at the bottom of the report, which could be - and was - ticked
+          without reading a thing. This one cannot be satisfied in one tap, and
+          it un-ticks itself if the line changes afterwards. */}
+      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 2 }}>
+        <input
+          type="checkbox"
+          checked={verified}
+          onChange={(e) => onChange({ verifiedSig: e.target.checked ? lineSignature(item) : undefined })}
+          style={{ accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+        />
+        <span className="small" style={{ color: verified ? "var(--muted)" : "var(--text)" }}>
+          {verified
+            ? "Checked"
+            : item.verifiedSig
+              ? "This line changed since it was checked - check it again"
+              : "I have checked this line"}
+        </span>
+      </label>
+
       {/* The way back out of an override.
           Without this, typing a number into a truck line silently detaches it
           from the crew's hours FOREVER. Hours get corrected all the time - a

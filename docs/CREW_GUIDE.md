@@ -290,7 +290,7 @@ Labor hours: The bill automatically creates one labor line item per crew member 
 Materials: Every material logged feeds in as a line item.
 Dumpster / recycling charges: Driven by the sliders in the report.
 Personal vehicles: one line per personal vehicle flagged to bill as crew transport.
-Trucks: one "Truck (per hour)" line for each truck recorded in Truck fullness (Section 7.6). Like the labor lines, a hand-edited truck line keeps its qty and rate on later renders.
+Trucks: one "Truck (per hour)" line for each truck recorded in Truck fullness (Section 7.6). Its hours default to the longest single shift on the job (the truck is there at least as long as the longest crew member's day), taken after that person's breaks. The line is only created once somebody's hours have been entered, so it can no longer appear stuck at 1 hour. Once a truck line exists its hours are yours: nothing re-sizes it afterwards, and "Use crew hours" on the row re-derives it if you want the current figure.
 ### 7.2 What You Can Edit
 Any line item: label, quantity, rate, unit, per-line discount %.
 Add custom line items.
@@ -298,8 +298,12 @@ Add company charge items from the built-in catalog (fuel surcharge, Big Sky trip
 Add a Tips line item from the Add line-item menu. It is a flat-amount line you fill in; use it to record cash or card tips on the bill.
 Apply a global discount % to the whole bill.
 Add bill notes.
-### 7.3 Submitting
-Check the "Reviewed" checkbox to unlock the report Submit button. The bill cannot be skipped.
+### 7.3 Submitting  NEW
+Every line on the bill has its own "I have checked this line" tick, and all of them must be ticked before the report will submit. This replaces the single "Reviewed" checkbox that used to sit at the bottom of the report. The bill cannot be skipped.
+
+A tick applies to the numbers the line had when you ticked it. If that line changes afterwards - somebody corrects an end time and the labor line moves, or a material is added - it un-ticks itself and says "This line changed since it was checked". Lines still needing a look carry a coloured left edge, and the report tells you which ones by name if you try to submit early.
+
+The reason for the change: one checkbox covering the whole bill could be ticked without reading anything, and truck lines went out to customers at 1 hour on a $90/hr charge underneath it.
 ### 7.4 Employee Hours
 Inside the Job Report, the Employee Hours card lets the crew lead log hours per person for everyone on the job. Type a name (a roster typeahead suggests names from the crew list as you type, but any name can be entered), pick the start and end timeline events for that person, then add any clocked-out periods (lunch, errands, anything that should be subtracted from hours worked) before saving the entry. Repeat for each crew member.
 Hours default to the first START and last FINISH on the timeline, but can be overridden manually per person.

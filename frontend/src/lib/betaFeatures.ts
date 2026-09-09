@@ -44,6 +44,10 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   "setupFieldHelp",
   // Employee directory in Tools (2026-09-04).
   "employeeDirectory",
+  // Bill lines are now checked one at a time instead of with a single "I
+  // reviewed the bill" tick (2026-09-09, ADR 0044). It is more taps at close-out
+  // and the crew will notice, so it says so rather than looking like a bug.
+  "billLineChecks",
 ]);
 
 export function isBeta(feature: string): boolean {

@@ -89,7 +89,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { formatMountainTime, mountainHHMM, mountainDateYYYYMMDD } from "../lib/time";
 import DVIRReminderModal from "./DVIRReminderModal";
-import BillCalculator, { type BillHandle } from "./BillCalculator";
+import BillCalculator, { unverifiedLines, type BillHandle } from "./BillCalculator";
 import { BetaTag } from "./BetaTag";
 import CloseoutStepper, { type CloseoutValue } from "./CloseoutStepper";
 import WrapUpEstimator from "./WrapUpEstimator";
@@ -231,7 +231,16 @@ const REPORT_DRAFT_PREFIX = "crew_report_draft_v1:";
 // server report when it was saved AFTER the server's last update (i.e. it holds
 // newer in-progress edits). A server report updated on another device since
 // this device's draft was saved wins (cross-device continuity).
-type ReportDraft = { data: ReportData; billReviewed: boolean; savedAt?: string };
+type ReportDraft = {
+  data: ReportData;
+  /** DEAD as of 2026-09-09, kept so drafts written by an older build still
+   *  parse. It was the single "I have reviewed the bill" tick that gated
+   *  submission; verification is now per line and lives on the line itself
+   *  (`LineItem.verifiedSig`), inside the bill draft. Nothing reads this to
+   *  decide anything - do not reintroduce a gate on it. */
+  billReviewed: boolean;
+  savedAt?: string;
+};
 
 function reportDraftKey(uuid: string) {
   return `${REPORT_DRAFT_PREFIX}${uuid || "none"}`;
@@ -562,6 +571,8 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
   // Crew must confirm the auto-populated bill rows before the report submits.
   // The checkbox lives below the M1 sliders so crew see the M1-driven
   // charges populate before acknowledging them.
+  // Dead flag, still written so an older build can read our drafts. See
+  // ReportDraft. The bill gate is per line now.
   const [billReviewed, setBillReviewed] = useState(false);
   const pendingSaveRef = useRef<(() => Promise<void>) | null>(null);
   const billRef = useRef<BillHandle>(null);
@@ -1296,8 +1307,12 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
     const firstCloseOut = !saved;
     // Validate bill review checkbox
     const billData = billRef.current?.getData();
-    if (!driveOnly && billData !== null && billData !== undefined && !billReviewed) {
-      return setErr("Please confirm you have reviewed the auto-populated bill items before saving.");
+    const unchecked = billData ? unverifiedLines(billData.items) : [];
+    if (!driveOnly && billData !== null && billData !== undefined && unchecked.length > 0) {
+      return setErr(
+        `${unchecked.length} bill line${unchecked.length > 1 ? "s have" : " has"} not been checked yet: ` +
+        `${unchecked.map((l) => l.label).join(", ")}. Tick each line in the Invoice Builder above.`,
+      );
     }
 
     // Force-flush both drafts BEFORE the POST attempt. The autosave
@@ -1456,8 +1471,13 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       // Surface the bill-review checkbox here (not only at the final POST) so it
       // is caught before the crew leave the editable view.
       const billData = billRef.current?.getData();
-      if (billData != null && !billReviewed)
-        return { anchor: "bill_review", msg: "Please confirm you have reviewed the auto-populated bill items before continuing." };
+      const uncheckedLines = billData ? unverifiedLines(billData.items) : [];
+      if (billData != null && uncheckedLines.length > 0)
+        return {
+          anchor: "bill_review",
+          msg: `${uncheckedLines.length} bill line${uncheckedLines.length > 1 ? "s have" : " has"} not been checked: ` +
+               `${uncheckedLines.map((l) => l.label).join(", ")}.`,
+        };
     }
     return null;
   }
@@ -2270,19 +2290,27 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
           {billSlots.notes}
         </div>
         {fieldErr("bill_review")}
-        <label id="jrq-bill_review" style={{ scrollMarginTop: 90, display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 4 }}>
-          <input
-            type="checkbox"
-            checked={billReviewed}
-            onChange={(e) => { setBillReviewed(e.target.checked); setSaved(false); }}
-            style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
-          />
-          <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--text)" }}>
-            I have reviewed and confirmed the correctness of the auto-populated line items
-            in the Invoice Builder above (labor lines from Employee Hours plus any
-            dumpster / recycling charges from the sliders).
-          </span>
-        </label>
+        {/* The single "I have reviewed the bill" checkbox that used to live here
+            is gone. One tick covering every auto-populated line is the cheapest
+            possible thing to satisfy without reading anything, and the truck line
+            frozen at 1h - a $90/hr line, on real invoices - went out under it
+            repeatedly. Verification is now per line, in the Invoice Builder
+            above, and each tick un-ticks itself if that line's numbers change
+            afterwards. This is only the status readout. */}
+        <div id="jrq-bill_review" style={{ scrollMarginTop: 90, marginTop: 4 }}>
+          {billSlots.unverified.length === 0 ? (
+            <div className="small" style={{ color: "var(--muted)" }}>
+              Every bill line has been checked.
+            </div>
+          ) : (
+            <div className="small" style={{ color: "var(--warn)", fontWeight: 600 }}>
+              {billSlots.unverified.length} bill line
+              {billSlots.unverified.length > 1 ? "s" : ""} still need
+              {billSlots.unverified.length > 1 ? "" : "s"} checking in the Invoice
+              Builder above: {billSlots.unverified.map((l) => l.label).join(", ")}.
+            </div>
+          )}
+        </div>
         <div id="jrq-billing_method" style={{ scrollMarginTop: 90, fontWeight: 700, fontSize: 13, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 14 }}>Billing method *</div>
         {fieldErr("billing_method")}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
