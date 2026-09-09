@@ -36,6 +36,9 @@ type Totals = {
   per_diem_amount: number;
   reimbursement_amount: number;
   tips_amount: number;
+  /** Optional until the bonus endpoints land: a summary from an older backend
+   *  carries no such key, and the column renders "-" rather than an empty cell. */
+  bonus_amount?: number;
   mileage_miles: number;
   mileage_amount: number;
 };
@@ -481,10 +484,19 @@ export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: strin
                     <th style={{ padding: "6px 8px" }}>OT</th>
                     <th style={{ padding: "6px 8px" }}>Non-bill</th>
                     <th style={{ padding: "6px 8px" }}>Other</th>
+                    {/* PTO sits with the hours it is, beside the other hour
+                        buckets, and BEFORE Total - which includes it. Tips and
+                        Bonus sit with the money, after it. Both were in the TSV
+                        export and missing from the screen, so the figure the
+                        office pasted into QuickBooks did not match the figure
+                        they were reading. */}
+                    <th style={{ padding: "6px 8px" }}>PTO</th>
                     <th style={{ padding: "6px 8px" }}>Total</th>
                     <th style={{ padding: "6px 8px" }}>Per-diem</th>
                     <th style={{ padding: "6px 8px" }}>Reimb</th>
                     <th style={{ padding: "6px 8px" }}>Miles</th>
+                    <th style={{ padding: "6px 8px" }}>Tips</th>
+                    <th style={{ padding: "6px 8px" }}>Bonus</th>
                     <th style={{ padding: "6px 8px" }} />
                   </tr>
                 </thead>
@@ -621,6 +633,14 @@ function EmployeeRows({
       {n === 0 ? <span style={{ color: "var(--muted)" }}>0</span> : fmtHours(n)}
     </td>
   );
+  // A plain dollar cell. `?? 0` because a payroll summary served by an older
+  // backend than this bundle has no tips or bonus key at all, and `undefined`
+  // would render as an empty cell rather than as nothing owed.
+  const money = (amount: number | undefined) => (
+    <td style={{ textAlign: "right", padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>
+      {amount ? `$${amount.toFixed(2)}` : <span style={{ color: "var(--muted)" }}>-</span>}
+    </td>
+  );
   // A count cell that also shows its dollar figure when a rate is configured.
   const unitNum = (count: number, amount: number) => (
     <td style={{ textAlign: "right", padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>
@@ -650,6 +670,7 @@ function EmployeeRows({
         {num(t.ot_hours)}
         {num(t.non_billable_hours)}
         {num(t.other_hours)}
+        {num(t.pto_hours ?? 0)}
         <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
           {fmtHours(t.total_hours)}
         </td>
@@ -658,6 +679,8 @@ function EmployeeRows({
           {t.reimbursement_amount ? `$${t.reimbursement_amount.toFixed(2)}` : <span style={{ color: "var(--muted)" }}>-</span>}
         </td>
         {unitNum(t.mileage_miles, t.mileage_amount)}
+        {money(t.tips_amount)}
+        {money(t.bonus_amount)}
         <td style={{ textAlign: "right", padding: "6px 8px" }}>
           <button type="button" onClick={onToggle} style={{ fontSize: 12 }}>
             {open ? "Close" : "Detail"}
@@ -666,7 +689,7 @@ function EmployeeRows({
       </tr>
       {open && (
         <tr>
-          <td colSpan={10} style={{ padding: "4px 8px 14px" }}>
+          <td colSpan={13} style={{ padding: "4px 8px 14px" }}>
             <EmployeeDetail emp={emp} period={period} onChanged={onChanged} />
           </td>
         </tr>
@@ -1101,8 +1124,14 @@ function PtoSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }
  * A tip is dated by when it is PAID, not by the job it came from, because tips
  * arrive late - a customer rings two weeks after the move. Adding one here dates
  * it today, so it pays on the run being looked at rather than landing in a
- * period that has already been finalized. A tip for a specific job is added from
- * that job's Admin Job Summary instead, which carries the job through.
+ * period that has already been finalized.
+ *
+ * THIS IS THE ONLY PLACE TIPS ARE ENTERED (2026-09-09). There used to be a
+ * second entry point on the Job Summary, so a tip could be added from either
+ * screen and the office had to know which. It also could not be used on a job
+ * whose report had no roster-matched crew - the person picker came from
+ * `employee_hours` and was simply empty - so it read as a missing feature. One
+ * place, on the screen where the money is actually being worked out.
  */
 function TipsSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }) {
   const [amount, setAmount] = useState("");
@@ -1194,8 +1223,8 @@ function TipsSection({ emp, onChanged }: { emp: Employee; onChanged: () => void 
         </button>
       </div>
       <div className="small" style={{ color: "var(--muted)", marginTop: 4 }}>
-        Dated today, so it pays on this period. For a tip that came in for a
-        specific job, add it from that job's Job Summary instead.
+        Dated today, so it pays on this period - even if the job it came from
+        was weeks ago.
       </div>
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 4 }}>{err}</div>}
     </div>

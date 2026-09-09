@@ -1,17 +1,24 @@
 /**
- * The two tip entry points (request f8e008cb).
+ * Tips are entered in ONE place, and never dated by the job (request f8e008cb).
  * `node scripts/verify_tips_ui.mjs`
  *
  * WHY THIS EXISTS. The tip feature has a property that is invisible in the UI
  * and easy to undo by accident: a tip is dated by when it is PAID, never by the
  * job it came from. Tips arrive after the job's pay period has been finalized,
- * so dating one by the job drops it into a closed run where it is missed.
+ * so dating one by the job drops it into a closed run where it is missed. The
+ * screen relies on the server defaulting `tip_date` to today, and the way to
+ * break that is for somebody to "helpfully" pass the job's date. So this asserts
+ * the client sends NO tip_date at all.
  *
- * Both screens rely on the server defaulting `tip_date` to today. The way to
- * break that is for somebody to "helpfully" pass the job's date from the Job
- * Summary, where it is right there on screen. So this asserts the client sends
- * NO tip_date at all, from either entry point, and that the copy on screen still
- * tells the admin which period the money lands in.
+ * REWRITTEN 2026-09-09. There used to be TWO entry points - the payroll screen
+ * and a card on the Job Summary - and this file asserted both existed. The
+ * office asked for one, and the Job Summary one was the wrong one to keep: its
+ * person picker was built from the job report's `employee_hours` filtered to
+ * roster-matched rows, so on a job with no report yet, or with legacy hours
+ * rows, the picker was empty and the card could not be used at all. It read as
+ * a missing feature. Tips now live only where the money is worked out, and this
+ * file asserts the Job Summary entry point is GONE - the inverse of what it
+ * used to check.
  *
  * Cannot verify the rendering or the taps: no jsdom or test runner in this
  * project, and the Chrome tools are off limits here.
@@ -30,61 +37,46 @@ const check = (n, c, d = "") => {
 const payroll = readFileSync(`${ROOT}/frontend/src/components/PayrollTool.tsx`, "utf8");
 const admin = readFileSync(`${ROOT}/frontend/src/pages/Admin.tsx`, "utf8");
 const api = readFileSync(`${ROOT}/backend/app/routers/payroll.py`, "utf8");
+// The amount guards are pydantic validators, which live in the schema module
+// rather than the router - reading only the router silently skipped them.
+const schema = readFileSync(`${ROOT}/backend/app/schemas/payroll.py`, "utf8");
 
-console.log("Both entry points exist:");
-check("payroll screen has a tips section", /function TipsSection\(/.test(payroll));
-check("job summary has a tips card", /function JobTipsCard\(/.test(admin));
-check("the payroll employee row renders it", /<TipsSection /.test(payroll));
-// [\s>] rather than \n: these files have CRLF line endings, so an anchor on a
-// bare \n immediately after the tag name never matches.
-check("the job summary renders it", /<JobTipsCard[\s>]/.test(admin));
+console.log("There is exactly ONE place to enter a tip:");
+check("the payroll screen has a tips section", /function TipsSection\(/.test(payroll));
+check("it is rendered on the employee row", /<TipsSection /.test(payroll));
+check("the Job Summary tips card is gone", !/JobTipsCard/.test(admin),
+  "two entry points meant the office had to know which screen to use, and the "
+  + "Job Summary one could not be used on a job with no roster-matched crew");
+check("and nothing in Admin posts a tip any more", !/payroll\/tips/.test(admin));
+check("the help text no longer sends people to the Job Summary",
+  !/Job Summary instead/.test(payroll));
 
-console.log("\nTHE INVARIANT: neither entry point dates a tip itself");
-// The server defaults tip_date to today (Mountain). A client that sends one -
-// especially the Job Summary, where the job's date is on screen - would put the
-// money in a finalized period.
+console.log("\nThe payout date is the server's, never the job's:");
 const payrollPost = payroll.match(/apiFetch\("\/api\/admin\/payroll\/tips",[\s\S]{0,300}/);
 check("payroll POST found, and the window reaches its body",
   !!payrollPost && /body: JSON.stringify/.test(payrollPost[0]));
 check("payroll POST sends no tip_date",
   !!payrollPost && !/tip_date/.test(payrollPost[0]), payrollPost?.[0]);
-const adminPost = admin.match(/apiFetch\("\/api\/admin\/payroll\/tips",[\s\S]{0,300}/);
-check("job summary POST found, and the window reaches its body",
-  !!adminPost && /body: JSON.stringify/.test(adminPost[0]));
-check("job summary POST sends no tip_date",
-  !!adminPost && !/tip_date/.test(adminPost[0]), adminPost?.[0]);
-check("but the job summary DOES send the job, for reference",
-  !!adminPost && /job_uuid: jobUuid/.test(adminPost[0]));
-check("the payroll entry sends no job (there is none)",
-  !!payrollPost && !/job_uuid/.test(payrollPost[0]));
-
-console.log("\nThe server is the one that decides the date:");
-check("tip_date defaults to today in Mountain time",
-  /utc_naive_to_mountain_date\(datetime\.now\(timezone\.utc\)/.test(api));
-check("and the period comes from tip_date, not the job",
+check("the server defaults it to today in Mountain time",
+  /utc_naive_to_mountain_date\(datetime\.now\(timezone\.utc\)/.test(api),
+  "UTC would already be tomorrow at 6pm Mountain and could shift the pay period");
+check("and the server windows on tip_date, not on the job's date",
   /EmployeeTip\.tip_date >= start\.isoformat\(\)/.test(api));
 
 console.log("\nThe admin is told where the money lands:");
-check("job summary says it pays on the CURRENT period",
-  /Paid on the CURRENT payroll period/.test(admin));
-check("job summary says there is no automatic split",
-  /no automatic split/.test(admin));
-check("payroll entry says it is dated today",
-  /Dated today, so it pays on this period/.test(payroll));
+check("the payroll screen says it pays on this period",
+  /pays on this period/.test(payroll));
 
-console.log("\nA tips list that fails to load must not break the page:");
-check("the job summary swallows a tips fetch failure",
-  /catch \{[\s\S]{0,200}?setTips\(\[\]\)/.test(admin),
-  "the rest of the Job Summary is why somebody opened it");
+console.log("\nA tips list that will not load must not take the row with it:");
+check("the payroll section handles its own failure",
+  /Could not add the tip\./.test(payroll));
 
-console.log("\nGuards on the input:");
+console.log("\nGuards on the amount:");
 check("payroll rejects a non-positive amount client-side",
-  /!Number\.isFinite\(value\) \|\| value <= 0/.test(payroll));
-check("job summary rejects a non-positive amount client-side",
-  /!Number\.isFinite\(value\) \|\| value <= 0/.test(admin));
-check("job summary requires a person", /if \(!userId\)/.test(admin));
-check("and handles a job whose crew has no roster match",
-  /Nobody on this job's report has a roster match/.test(admin));
+  /Enter a dollar amount greater than zero\./.test(payroll));
+check("the server rejects it too, so the UI is not the only gate",
+  /a tip must be a positive dollar amount/.test(schema));
+check("and an implausible one", /tip looks like a typo/.test(schema));
 
 console.log();
 if (fails.length) {

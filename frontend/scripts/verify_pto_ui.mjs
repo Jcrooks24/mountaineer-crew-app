@@ -93,6 +93,25 @@ check("Tips is in the TSV header", /"Tips \$"/.test(payroll));
 check("PTO is in the TSV rows", /e\.totals\.pto_hours \?\? 0/.test(payroll));
 check("Tips is in the TSV rows", /e\.totals\.tips_amount \?\? 0/.test(payroll));
 
+// THE SCREEN AND THE EXPORT HAVE TO AGREE. PTO and Tips were in the TSV and
+// missing from the on-screen table, so the office read one set of figures and
+// pasted a different set into QuickBooks. Reported 2026-09-09.
+console.log("\nAnd they are columns on the table, not only in the export:");
+for (const label of ["PTO", "Tips", "Bonus"]) {
+  check(`${label} is a column on the payroll table`,
+    payroll.includes(`}}>${label}</th>`), label);
+}
+check("PTO renders as hours, beside the other hour buckets",
+  payroll.includes("{num(t.pto_hours ?? 0)}"));
+check("tips and bonus render as money",
+  payroll.includes("{money(t.tips_amount)}") && payroll.includes("{money(t.bonus_amount)}"));
+// A colSpan that does not match the header count leaves the expanded detail
+// panel visibly short of the table it belongs to.
+const numericCols = (payroll.match(/}}>(?:Regular|OT|Non-bill|Other|PTO|Total|Per-diem|Reimb|Miles|Tips|Bonus)<\/th>/g) || []).length;
+check("the detail row spans every column",
+  payroll.includes(`colSpan={${numericCols + 2}}`),
+  `${numericCols} value columns + Employee + the Detail button = ${numericCols + 2}`);
+
 console.log();
 if (fails.length) {
   console.log("FAILURES: " + fails.join(", "));
