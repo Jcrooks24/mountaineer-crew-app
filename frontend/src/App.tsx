@@ -17,6 +17,12 @@ import { drainAll as drainJobInventory } from "./lib/jobInventoryQueue";
 import { drainJobSetups } from "./lib/jobSetupStore";
 import JobSetupPanel from "./components/JobSetupPanel";
 import { drainChecklistChecks } from "./lib/jobChecklistStore";
+// The three long-distance / BOL queues. Aliased because each module exports a
+// function called `syncQueue`. See drainLongDistance below for why they are here
+// and were not before.
+import { syncQueue as drainBolQueue } from "./lib/bolStore";
+import { syncQueue as drainRodsQueue } from "./lib/rodsStore";
+import { syncQueue as drainLdDayQueue } from "./lib/ldDayStore";
 import JobChecklistCard from "./components/JobChecklistCard";
 import JobClosedPanel from "./components/JobClosedPanel";
 import DqReminderBanner from "./components/DqReminderBanner";
@@ -1882,6 +1888,37 @@ export default function App() {
     setPhotoBusy(false);
   }
 
+  /** Drain the three long-distance / BOL queues.
+   *
+   * These were the ONLY queues in the app not drained here, and they carry the
+   * least replaceable things it holds: a signed Bill of Lading, a federal duty
+   * log, and the per-diem / drive-day record.
+   *
+   *   bolStore    drained only while <BillOfLadingForm> was mounted, which has
+   *               its own `online` listener. Sign a BOL offline, close the
+   *               editor, reconnect - nothing sent it. The BOL reconciler cannot
+   *               help: it recovers Postgres -> Sheet drift, and this never
+   *               reached Postgres.
+   *   rodsStore   drained only from <RodsSignoff> at the moment of signing. Sign
+   *               offline and the screen says "RODS signed - will sync when back
+   *               online", which nothing then did.
+   *   ldDayStore  had NO caller anywhere in the app. Every out-of-town and
+   *               drive-day toggle ever set has sat in localStorage, which is
+   *               why the LongDistancePay tab is empty. Per-diem pay itself is
+   *               safe - payroll takes it from the job report's out_of_town flag
+   *               too, and de-duplicates - but the tab admin tallies from is not.
+   *
+   * Same shape as every other drain here: silent, fire-and-forget, and each
+   * syncQueue returns immediately when offline, already running, or empty, so
+   * the steady-state cost is three localStorage reads.
+   */
+  async function drainLongDistance() {
+    if (!navigator.onLine) return;
+    // Independently, so one failing queue cannot hold the other two. Each
+    // already keeps and marks its own failures (ADR 0013).
+    await Promise.allSettled([drainBolQueue(), drainRodsQueue(), drainLdDayQueue()]);
+  }
+
   // Drain the active job's un-uploaded photos on reconnect.
   //
   // Photos were the one queue with no automatic drain: the UI promised the crew
@@ -1982,7 +2019,7 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainFeatureRequests(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); void drainChecklistChecks(); void drainReimbursements(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainFeatureRequests(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); void drainChecklistChecks(); void drainReimbursements(); void drainLongDistance(); };
     const onOffline = () => setIsOnline(false);
     // Flush any incidents + off-job hours + un-uploaded photos queued while
     // offline on this mount too.
@@ -2003,6 +2040,10 @@ export default function App() {
     // Reimbursement page was mounted, so a transient failure stranded a crew
     // member's receipt until they wandered back to that screen.
     void drainReimbursements();
+    // Signed BOLs, RODS days and LD day toggles queued offline. See
+    // drainLongDistance: these were the only queues with no drain here, and they
+    // hold the least replaceable records in the app.
+    void drainLongDistance();
     // Record which build this device is on, so patch notes can read as a real
     // version history instead of a list of announcements. Fire and forget.
     void reportBuildSeen();

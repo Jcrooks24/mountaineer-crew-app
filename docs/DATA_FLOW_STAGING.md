@@ -215,11 +215,30 @@ Client handling now turns on whether a local copy holds the caption:
 
 Drive description mirroring stays best-effort and still never fails the request.
 
-## The long-distance day queue is still dead on staging
+## The long-distance day queue now drains (fixed 2026-09-09)
 
-`ldDayStore.syncQueue()` still has no caller. The `online` handler at
-`App.tsx:1878` now drains eleven queues and LD day is not among them. See
-DATA_FLOW.md Deviations and Known defects in [RUNBOOKS.md](RUNBOOKS.md).
+`ldDayStore.syncQueue()` had no caller anywhere in the app, so every drive-day
+toggle a crew member ever set sat in `crew_ld_day_queue_v1` and the
+`LongDistancePay` tab stayed empty. Two other queues carrying the least
+replaceable records in the app were nearly as bad: `bolStore` drained only while
+`<BillOfLadingForm>` was mounted, and `rodsStore` only from `<RodsSignoff>` at the
+moment of signing - so a BOL or a duty log signed offline waited for somebody to
+reopen that exact screen while online.
+
+`App.tsx` now drains all three from boot and from `online`
+(`drainLongDistance`), independently via `Promise.allSettled` so one failure does
+not hold the others. All three were identical on `main`, so this was never a
+staging regression - it is how the app has always behaved, and the fix travels
+with this promotion.
+
+`frontend/scripts/verify_ld_drain.mjs` asserts the wiring AND scans `lib/` for
+any queue module not reachable from `App.tsx`, so the next store added cannot
+repeat it.
+
+**Still open:** nothing writes `out_of_town` to an `LdDay` row, so that column
+and the tab's `per_diem` column stay at false / 0. Per-diem PAY is unaffected
+(payroll reads the job report's flag). See Known defects in
+[RUNBOOKS.md](RUNBOOKS.md).
 
 ## The `online` / boot drain set has grown
 

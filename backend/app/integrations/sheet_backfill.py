@@ -1,10 +1,12 @@
 """Audit and backfill: which records exist in Postgres but never reached the Sheet.
 
 Postgres is the system of record and the Sheet is a mirror, so a failed export is
-never data loss - but it is a hole in the mirror that nothing closes. Only two
-syncs self-heal: events and BOLs, via `auto_reconciler`. Every other export fires
-once at write time, and if it dies (quota 429, SSL drop, worker recycled
-mid-flight) the row is stranded until a human happens to re-save that record.
+never data loss - but it is a hole in the mirror that nothing closes. Three syncs
+self-heal via `auto_reconciler`: events, BOLs, and the Bills materials line
+(2026-08-27). The generic sweep re-drives the rest on a slower cadence. Every
+other export fires once at write time, and if it dies (quota 429, SSL drop,
+worker recycled mid-flight) the row is stranded until a human happens to re-save
+that record.
 `sheet_sync_status` cannot tell you which ones - it stores one row per export
 *function*, so a later success for some other record overwrites the evidence.
 
@@ -244,6 +246,16 @@ def _src_reimbursements(db: Session) -> List[Dict[str, Any]]:
     } for r in rows if r.reimbursement_uuid]
 
 
+def _src_tips(db: Session) -> List[Dict[str, Any]]:
+    from app.db.models.employee_tip import EmployeeTip
+    rows = db.query(EmployeeTip).order_by(EmployeeTip.created_at.desc()).all()
+    return [{
+        "id": r.tip_uuid,
+        "label": f"{r.user_name or 'unknown'} ${float(r.amount or 0):.2f} ({r.tip_date or ''})".strip(" ()"),
+        "created_at": _iso(r.created_at),
+    } for r in rows if r.tip_uuid]
+
+
 def _src_off_job(db: Session) -> List[Dict[str, Any]]:
     from app.db.models.off_job_entry import OffJobEntry
     rows = db.query(OffJobEntry).order_by(OffJobEntry.updated_at.desc()).all()
@@ -432,6 +444,14 @@ def _re_report_waiver(db: Session, ref: Any) -> None:
         _queue_waiver_export(db, row)
 
 
+def _re_tip(db: Session, ref: Any) -> None:
+    from app.db.models.employee_tip import EmployeeTip
+    from app.routers.payroll import _queue_tip_export
+    row = db.query(EmployeeTip).filter(EmployeeTip.tip_uuid == str(ref)).first()
+    if row:
+        _queue_tip_export(row)
+
+
 def _re_off_job(db: Session, ref: Any) -> None:
     from app.db.models.off_job_entry import OffJobEntry
     from app.routers.off_job import _export
@@ -458,6 +478,17 @@ def _re_availability(db: Session, ref: Any) -> None:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry. `key` matches SHEET_SYNC_REGISTRY so the two panels line up.
+#
+# THESE ARE TWO HAND-MAINTAINED LISTS OF THE SAME THING and nothing used to hold
+# them together. SHEET_SYNC_REGISTRY drives the health check ("is this sync
+# working?"); this one drives the audit ("which records never landed?") and the
+# re-export. A sync added to one and not the other looks healthy while being
+# unauditable, which is the worse half to miss: the health check only reports the
+# last attempt, so a sync that has never been driven at all reads as fine.
+#
+# It happened immediately: the `tips` sync was added to SHEET_SYNC_REGISTRY on
+# 2026-09-09 and missed here in the same commit. `scripts/test_sync_registries.py`
+# now asserts the two agree, so the next one cannot.
 # `auto` marks the syncs auto_reconciler already backfills - listed so the panel
 # accounts for all 19, but not diffed (scanning every event is expensive and the
 # reconciler already owns that job).
@@ -516,6 +547,9 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
     {"key": "availability", "label": "Availability", "env": "SHEETS_AVAILABILITY_TAB",
      "default": "Availability", "key_cols": ["user_name", "window_start"],
      "source": _src_availability, "reexport": _re_availability},
+    {"key": "tips", "label": "Employee tips", "env": "SHEETS_TIPS_TAB",
+     "default": "Tips", "key_cols": ["tip_uuid"],
+     "source": _src_tips, "reexport": _re_tip},
     {"key": "off_job_hours", "label": "Off-job hours", "env": "SHEETS_OFF_JOB_TAB",
      "default": "OffJobHours", "key_cols": ["entry_uuid"],
      "source": _src_off_job, "reexport": _re_off_job},

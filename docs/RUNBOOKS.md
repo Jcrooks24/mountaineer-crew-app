@@ -1101,34 +1101,37 @@ it fires in exactly this case and names the section to fill.
    confound the drift device-test that has not been run. Fix it after that test,
    not before.
 
-2. **The long-distance day queue never drains: `drive_day` never reaches the server.**
-   `LdWorkday.tsx:70` calls `setLdDay()` when the crew picks "Driving" in the LD day
-   plan. That writes `crew_ld_day_v1:<date>` and pushes an upsert onto
-   `crew_ld_day_queue_v1`. **Nothing in the app calls `ldDayStore.syncQueue()`** -
-   no component imports it, and the only internal caller is `retryFailedLdDay`,
-   which is itself uncalled. `POST /api/long-distance/day` therefore never fires
-   from the app, and `long_distance.py:375` is the only place `LdDay` rows are
-   created.
+2. **`out_of_town` is never written to an `LdDay` row by any crew screen.**
 
-   **Symptoms:** the `LdDays` table stays empty, the `LongDistancePay` tab stays
-   empty, Admin's job summary shows "Per-diem days: 0 · Drive days: 0"
-   (`Admin.tsx:7154`) no matter what the crew selected, and `crew_ld_day_queue_v1`
-   grows on every Driving toggle and never empties.
+   **The drain half of this was FIXED 2026-09-09.** `App.tsx` now calls
+   `ldDayStore.syncQueue()` from its boot and `online` handlers alongside every
+   other queue (`drainLongDistance`), so `drive_day` reaches Postgres and the
+   `LongDistancePay` tab. `frontend/scripts/verify_ld_drain.mjs` fails if it is
+   ever unwired again.
+
+   **What remains is the other half named in the original entry.**
+   `LdWorkday.tsx:83` is the only caller of `setLdDay`, and it passes
+   `drive_day` alone. Nothing writes `out_of_town` into an `LdDay` row, so that
+   column - and the `per_diem` column derived from it on the
+   `LongDistancePay` tab - is always false / 0, however many out-of-town nights
+   the crew actually worked.
 
    **Not a payroll-money bug.** `payroll.py::_per_diem_nights` takes per-diem
-   primarily from the per-employee `out_of_town` flag on job-report hours and only
-   supplements from `LdDay`, so pay is correct. **Confirmed with the owner
+   primarily from the per-employee `out_of_town` flag on job-report hours and
+   only supplements from `LdDay`, so pay is correct. **Confirmed with the owner
    2026-08-11: payroll showing "per-diem 0" for everyone on `main` is not a
-   defect - no out-of-town nights have actually been logged yet.** Do not go
-   looking for a payroll bug behind that zero until someone has logged one. The real loss is `drive_day`, which
-   has no other source. Note also that `setLdDay` is only ever called with
-   `drive_day`; `out_of_town` is never written locally either, so fixing the drain
-   alone leaves that half of the record empty.
+   defect - no out-of-town nights had actually been logged yet.** Do not go
+   looking for a payroll bug behind that zero until someone has logged one.
 
-   **Confirmed on both `main` (`72b544a`) and `staging`.** Found 2026-08-06 while
-   mapping data flow, not fixed. Fix is to call a drain from `App.tsx`'s boot and
-   `online` handlers alongside the other queues, and to decide where `out_of_town`
-   should be written. See [DATA_FLOW.md](DATA_FLOW.md) Deviations.
+   **What it does cost:** the per-diem column of the `LongDistancePay` tab is
+   not a second, independent record of out-of-town nights, which is what it
+   looks like. Read per-diem from the job report, not from that tab.
+
+   **The decision nobody has made** is where `out_of_town` should be written.
+   The day plan has no out-of-town toggle; the job report has one per employee.
+   Either the plan grows one (and then two sources have to agree), or the
+   `LdDay.out_of_town` column and the tab's `per_diem` column are dropped as
+   unfillable. Do not add a toggle without deciding which is authoritative.
 
 2. **The estimator queue drains only while its tab is mounted.** `estimatorQueue.drain`
    is called from `EstimatorTab.tsx:524` on mount and on `estimate_uuid` change, and
