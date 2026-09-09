@@ -79,6 +79,22 @@ for key, s in sorted(sync.items()):
           "the status table keys on this name; a typo means the health check "
           "silently never matches a status row")
 
+# The audit compares a source record's `id` against the tab's KEY COLUMN. If the
+# declared key column is not actually a column the export writes, the comparison
+# has nothing to match on and every record reads as missing - a panel screaming
+# about hundreds of stranded rows that are all present. A typo is enough.
+print("\nEvery declared key column is a column something actually writes:")
+_hdrs = {n: getattr(sx, n) for n in dir(sx)
+         if n.endswith("_HEADERS") and isinstance(getattr(sx, n), list)}
+for key, b in sorted(back.items()):
+    if b.get("auto"):
+        continue
+    kc = (b.get("key_cols") or [None])[0]
+    check(f"{key}: {kc!r} exists in a headers constant",
+          any(kc in cols for cols in _hdrs.values()),
+          "not written by any export - the audit would report every record missing")
+
+
 # -- Drive folders -----------------------------------------------------------
 # Same theme, different resource. Every Drive folder the app writes to holds
 # something with no second copy, and each is isolated between staging and prod by
