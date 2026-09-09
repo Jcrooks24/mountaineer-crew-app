@@ -17,6 +17,7 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 | [docs/decisions/](docs/decisions/) | Why things are the way they are. **Read before "fixing" something that looks wrong.** |
 | [docs/business/](docs/business/) | The company this app serves: who does what, the SOP, the tools audit, the M1 merger assessment. **Read before deciding whether a feature should exist.** |
 | [docs/DEBUGGING_PROTOCOL.md](docs/DEBUGGING_PROTOCOL.md) | **Mandatory for any debugging work** (`/debug`). How to go from "something is wrong" to a proven cause: pin the environment and build, reproduce, triage blast radius, then **hypothesis + falsifier before any fix**. |
+| [docs/SANITY_CHECK_PROTOCOL.md](docs/SANITY_CHECK_PROTOCOL.md) | The workflow/UX/UI review (`/sanity`). **Findings only, fixes nothing.** Asks whether a tool is the right answer to the job it exists for, and whether its category covers every real scenario. Runs before a feature is called done, and periodically on old features via its Coverage ledger. |
 | [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md) | The pre-promotion test protocol (`/vet`). **Start at STEP 0**, which is not diff-derived. |
 | [docs/VET_POSTMORTEM_2026-08.md](docs/VET_POSTMORTEM_2026-08.md) | Why STEP 0 exists: every defect that reached crews since the v1.8 merge, and what the protocol was structurally blind to. Read before deciding a check is unnecessary. |
 | [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) | Admin-facing guide: what admin can do in the app. Keep accurate against `Admin.tsx` / `admin.py`. |
@@ -29,7 +30,7 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 
 A change is not done when the code works. It is done when the next person can still run this system without you. Every change, in the **same commit**:
 
-1. **Code works**, verified by exercising it, not just by typecheck.
+1. **Code works**, verified by exercising it, not just by typecheck. **A new feature is not done until it has been through a sanity check** ([docs/SANITY_CHECK_PROTOCOL.md](docs/SANITY_CHECK_PROTOCOL.md), `/sanity`) and the user has ruled on its findings. That pass comes **before** the vet, because anything it turns up becomes code that then needs vetting.
 2. **New env var, secret, or Google API?** → it is in `docs/CREDENTIALS.md`, and the user has been told to set it on Render/Vercel.
 3. **New service, integration, queue, or data flow?** → `docs/ARCHITECTURE.md` and its diagram still match reality.
    **Touched a queue, a drain trigger, a debounce timing, an endpoint, or a Sheet export path?** → `docs/DATA_FLOW_STAGING.md` is updated in the same commit, including the per-field table for that domain. Adding a field to a payload without adding it there is how that doc goes stale. `docs/DATA_FLOW.md` is the production baseline and changes only at promotion.
@@ -38,7 +39,13 @@ A change is not done when the code works. It is done when the next person can st
 6. **Changed setup, local dev, or deploy?** → `README.md` is current.
 7. **Edited a frontend file?** → check [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) and apply any items that match **the files you already touched**. A few per commit, noted in the commit message. Do not go hunting in other files, and do not let it become the point of the commit. Skip anything not obviously safe.
 
-Run **`/handoff`** at the end of a working session to sweep all of this. Run **`/vet`** before promoting to `main`.
+Run **`/handoff`** at the end of a working session to sweep all of this. Run **`/sanity`** before calling a feature done. Run **`/vet`** before promoting to `main`.
+
+## Sanity check rule
+
+**A feature is not done because it works.** [docs/SANITY_CHECK_PROTOCOL.md](docs/SANITY_CHECK_PROTOCOL.md) (`/sanity`) reviews the tool the way a person uses it: does it do its stated job, does its whole category of tool have an answer for every real scenario (job cancelled on arrival, crew swapped mid-day, no signal all day, nobody started it until 4 PM), is the friction as low as it can be, are confirmations where they matter and absent where they are noise, does it fit the rest of the app, are its code-level preconditions actually true, and does it render in an organized way with no sticky buttons or silently-submitted default values.
+
+**It reports and changes nothing.** Findings go to the user, who decides what becomes work; more than one approved finding runs through Batch mode in the debugging protocol. It also runs periodically on features nobody flagged: take the oldest row in that doc's **Coverage ledger**, run the pass, update the row. One area per session, the same way [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) is paid down.
 
 ## Debugging rule
 

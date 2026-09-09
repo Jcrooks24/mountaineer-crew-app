@@ -9,6 +9,14 @@ is not yet known is a different job with its own mandatory protocol:
 [DEBUGGING_PROTOCOL.md](DEBUGGING_PROTOCOL.md) (`/debug`). A debugging session
 ends by handing its fix to this doc.
 
+**It also checks the change against its own intent, not against the intent.** A
+feature can pass everything here and still leave crew with no answer for a
+scenario they hit weekly. That is
+[SANITY_CHECK_PROTOCOL.md](SANITY_CHECK_PROTOCOL.md) (`/sanity`), a findings-only
+workflow/UX/UI review that runs **before** this one: its findings become code,
+and that code needs vetting. If a `/sanity` pass produced a rule worth applying
+to every future change, it belongs in this doc.
+
 ## How to run this
 
 You are vetting the Crew App (frontend: `frontend/` Vite + React + TS PWA;
