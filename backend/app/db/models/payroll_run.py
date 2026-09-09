@@ -21,7 +21,7 @@ one, so the ledger stays one-row-per-period and `finalized_at` means "most
 recently run", which is what matters for re-driving the export.
 """
 
-from sqlalchemy import Column, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import Column, DateTime, Integer, String, Text, UniqueConstraint
 
 from app.db.session import Base
 
@@ -45,6 +45,22 @@ class PayrollRun(Base):
     # How many times it has been run. A period finalized repeatedly usually means
     # corrections kept arriving after the fact, which is worth being able to see.
     run_count = Column(Integer, nullable=False, server_default="1", default=1)
+
+    # The rows written to the Payroll worksheet for this run, as JSON.
+    #
+    # A SNAPSHOT, not a cache. The mirror must show what was FINALIZED, and
+    # rebuilding the summary at export time does not: a correction entered after
+    # a finalize but before a re-finalize changes what the summary returns, so a
+    # backfill re-drive weeks later would push figures to the sheet that were
+    # never finalized by anybody. Money that was decided is not recomputed.
+    #
+    # Overwritten on a re-finalize, which is the one event that legitimately
+    # changes what a period paid.
+    #
+    # Nullable: runs recorded before this column existed have none, and
+    # `_queue_payroll_export` refuses to invent them rather than falling back to
+    # live figures.
+    rows_json = Column(Text, nullable=True)
 
     @property
     def period_key(self) -> str:

@@ -5,14 +5,19 @@
  * WHY THIS EXISTS. Three queues were not in App.tsx's drain set, and they were
  * the three holding the least replaceable records in the app:
  *
- *   bolStore     a SIGNED BILL OF LADING. Drained only while <BillOfLadingForm>
- *                was mounted. Sign offline, close the editor, reconnect -
- *                nothing sent it. The BOL reconciler cannot save this: it
+ *   bolStore     a SIGNED BILL OF LADING. Three drain triggers, none of them a
+ *                reconnect the crew are not already looking at:
+ *                <BillOfLadingForm>'s own `online` listener (mounted only),
+ *                <BolInventoryTab>, and autosyncDraft's one-shot 1s debounce
+ *                after an edit - which returns immediately when offline and
+ *                never re-fires. Sign offline, close the editor, reconnect:
+ *                nothing sent it. The BOL reconciler cannot save this - it
  *                recovers Postgres -> Sheet drift, and this never reached
  *                Postgres.
- *   rodsStore    a FEDERAL DUTY LOG. Drained only from <RodsSignoff> at the
- *                moment of signing, which prints "RODS signed - will sync when
- *                back online". Nothing then did.
+ *   rodsStore    a FEDERAL DUTY LOG, and worse: NO `online` listener anywhere in
+ *                the app. Drained only from <RodsSignoff> at the moment of
+ *                signing, which prints "RODS signed - will sync when back
+ *                online". Nothing then did.
  *   ldDayStore   per-diem and drive-day. Had NO CALLER ANYWHERE. Every toggle
  *                ever set sat in localStorage, which is why the LongDistancePay
  *                tab is empty.

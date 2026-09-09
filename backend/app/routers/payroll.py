@@ -1795,6 +1795,11 @@ def finalize_period(
     paid_rows = _mark_reimbursements_paid(db, s, e, finalize_roster)
     reimbursements_paid = len(paid_rows)
 
+    # Snapshot what this run pays, INSIDE the transaction and after the paid
+    # stamps, so the Payroll worksheet mirrors the period as finalized rather
+    # than as it happens to compute later. See _queue_payroll_export.
+    payroll_run.rows_json = json.dumps(_payroll_snapshot_rows(db, s, e))
+
     # Committed after the loop: only the corrections whose email actually went
     # out (or was deliberately suppressed) carry a notified_at, so a failure is
     # retried by the next finalize instead of being silently marked done.
@@ -1825,7 +1830,7 @@ def finalize_period(
     # commit, so nothing is mirrored that was not durably recorded, and after the
     # paid stamps so the sheet shows the period as it ended up.
     try:
-        _queue_payroll_export(db, s, e, payroll_run.finalized_at)
+        _queue_payroll_export(db, s, e)
     except Exception as exc:  # noqa: BLE001
         # Best-effort, like the reimbursement mirror above: payroll is finalized
         # in Postgres either way, and the backfill audit can re-drive this.
@@ -1878,25 +1883,72 @@ def _record_payroll_run(db: Session, s_: date, e_: date, who: str) -> "PayrollRu
     return row
 
 
-def _queue_payroll_export(db: Session, s_: date, e_: date, finalized_at: Any) -> None:
-    """Mirror a finalized period to the Payroll worksheet, off-request.
+def _payroll_snapshot_rows(db: Session, s_: date, e_: date) -> List[Dict[str, Any]]:
+    """The per-employee rows to mirror for this period, as finalized.
 
-    The summary is rebuilt here rather than reusing the one finalize already
-    computed, because that one was built BEFORE the paid stamps were written and
-    the sheet should show the period as it ended up. It is the same read the
-    payroll screen does, on a background thread, once per finalize.
+    Built inside the finalize transaction, AFTER the paid stamps are written, so
+    the snapshot reflects the period as it ended up rather than as it looked
+    before the run.
+    """
+    summary = _build_summary(db, s_, e_)
+    return [
+        {"name": emp.get("name") or "", "totals": emp.get("totals") or {}}
+        for emp in (summary.get("employees") or [])
+    ]
+
+
+def _queue_payroll_export(db: Session, s_: date, e_: date) -> None:
+    """Mirror a FINALIZED period to the Payroll worksheet, off-request.
+
+    THE MIRROR SHOWS FINALIZED PAYROLLS ONLY, and that is enforced here rather
+    than left to whoever calls it. Two properties, both load-bearing:
+
+    1. **No `payroll_runs` row means no export.** A period nobody finalized never
+       reaches the sheet, whatever a future caller intends. Previously this was
+       true only because the sole caller happened to be `finalize_period`.
+
+    2. **The figures come from the snapshot taken at finalize, never from a live
+       rebuild.** This is the one that actually bites: `_build_summary` reflects
+       the data as it is NOW, so a correction entered after a finalize but before
+       a re-finalize changes what it returns - and a backfill re-drive weeks
+       later would publish figures to the sheet that nobody ever finalized.
+       Money that has been decided is not recomputed. A re-finalize is the one
+       event that legitimately changes it, and it rewrites the snapshot.
+
+    A run with no snapshot (recorded before the column existed) is skipped and
+    said out loud, rather than quietly falling back to live figures - which would
+    be the exact failure this exists to prevent.
     """
     from app.integrations.sheets_export import (
         export_payroll_period_to_sheets,
         run_export_in_background,
     )
-    summary = _build_summary(db, s_, e_)
+    run = (
+        db.query(PayrollRun)
+        .filter(PayrollRun.period_start == s_.isoformat(),
+                PayrollRun.period_end == e_.isoformat())
+        .first()
+    )
+    if run is None:
+        print(f"[payroll] refusing to mirror {s_}..{e_}: that period has not been "
+              f"finalized. The Payroll tab shows finalized runs only.")
+        return
+    if not run.rows_json:
+        print(f"[payroll] no snapshot stored for {s_}..{e_}, so there is nothing "
+              f"to mirror. Re-finalize the period to publish it.")
+        return
+    try:
+        rows = json.loads(run.rows_json)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[payroll] snapshot for {s_}..{e_} is unreadable ({exc}); not mirroring.")
+        return
+
     run_export_in_background(export_payroll_period_to_sheets, {
         "period": f"{s_.isoformat()}..{e_.isoformat()}",
         "period_start": s_.isoformat(),
         "period_end": e_.isoformat(),
-        "finalized_at": finalized_at,
-        "employees": summary.get("employees") or [],
+        "finalized_at": run.finalized_at,
+        "employees": rows,
     })
 
 

@@ -474,8 +474,10 @@ def _re_payroll(db: Session, ref: Any) -> None:
         .first()
     )
     if row:
-        _queue_payroll_export(db, _date.fromisoformat(start), _date.fromisoformat(end),
-                              row.finalized_at)
+        # No finalized_at passed: _queue_payroll_export reads the snapshot stored
+        # at finalize, so a re-drive republishes exactly what was finalized
+        # rather than recomputing it from data that has moved since.
+        _queue_payroll_export(db, _date.fromisoformat(start), _date.fromisoformat(end))
 
 
 def _re_tip(db: Session, ref: Any) -> None:

@@ -1894,14 +1894,18 @@ export default function App() {
    * least replaceable things it holds: a signed Bill of Lading, a federal duty
    * log, and the per-diem / drive-day record.
    *
-   *   bolStore    drained only while <BillOfLadingForm> was mounted, which has
-   *               its own `online` listener. Sign a BOL offline, close the
-   *               editor, reconnect - nothing sent it. The BOL reconciler cannot
-   *               help: it recovers Postgres -> Sheet drift, and this never
-   *               reached Postgres.
-   *   rodsStore   drained only from <RodsSignoff> at the moment of signing. Sign
-   *               offline and the screen says "RODS signed - will sync when back
-   *               online", which nothing then did.
+   *   bolStore    had three drain triggers, none of them a reconnect the crew
+   *               are not already looking at: <BillOfLadingForm>'s own `online`
+   *               listener (mounted only), <BolInventoryTab>, and
+   *               `autosyncDraft`'s one-shot 1s debounce after an edit - which
+   *               returns immediately when offline and never re-fires. Sign a
+   *               BOL offline, close the editor, reconnect: nothing sent it. The
+   *               BOL reconciler cannot help - it recovers Postgres -> Sheet
+   *               drift, and this never reached Postgres.
+   *   rodsStore   worse: NO `online` listener anywhere in the app. Drained only
+   *               from <RodsSignoff> at the moment of signing, and from a manual
+   *               retry of a failed day. Sign offline and the screen says "RODS
+   *               signed - will sync when back online", which nothing then did.
    *   ldDayStore  had NO caller anywhere in the app. Every out-of-town and
    *               drive-day toggle ever set has sat in localStorage, which is
    *               why the LongDistancePay tab is empty. Per-diem pay itself is

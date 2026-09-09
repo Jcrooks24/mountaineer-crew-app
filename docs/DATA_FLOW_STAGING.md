@@ -1469,11 +1469,33 @@ must be one the app owns end to end.
 
 | Path | Where | Status |
 |---|---|---|
-| `payroll_runs` table - one row per finalized period | migration `o5q7s9n1p3r5`, `db/models/payroll_run.py` | [x] |
+| `payroll_runs` table - one row per finalized period, with `rows_json` | migration `o5q7s9n1p3r5`, `db/models/payroll_run.py` | [x] |
+| Snapshot of the run's rows taken INSIDE the finalize transaction | `routers/payroll.py` (`_payroll_snapshot_rows`) | [x] |
+| Export refuses a period with no run row, and publishes the snapshot only | `routers/payroll.py` (`_queue_payroll_export`) | [x] |
 | Recorded on finalize (upsert; `run_count` increments on a re-finalize) | `routers/payroll.py` (`_record_payroll_run`) | [x] |
 | **NEW TAB** `Payroll` (`SHEETS_PAYROLL_TAB`), one row per employee per period | `sheets_export.export_payroll_period_to_sheets` | [x] |
 | Exported after the finalize commit, off-request on the bounded pool | `routers/payroll.py` (`_queue_payroll_export`) | [x] |
 | Both registries + backfill source and re-export, keyed on `period` | `sheets_export.py`, `sheet_backfill.py` | [x] |
+
+**FINALIZED PAYROLLS ONLY** (user direction, 2026-09-09), enforced at the
+export rather than left to whoever calls it. Two ways it could be false, and only
+one is obvious:
+
+1. A period nobody finalized reaching the tab. Refused: no `payroll_runs` row,
+   no export. Before this it was true only because the sole caller happened to be
+   `finalize_period`, which is an accident, not a guarantee.
+2. **The one that actually bites** - a finalized period whose FIGURES are not the
+   ones that were finalized. `_build_summary` reflects the data as it is now, so
+   a correction entered after a finalize but before a re-finalize changes what it
+   returns, and the backfill re-drives exports from `payroll_runs` weeks later.
+   That would have published numbers nobody ever finalized. Money that has been
+   decided is not recomputed.
+
+So the run stores `rows_json`, a snapshot taken inside the finalize transaction
+after the paid stamps. A re-drive republishes exactly what was finalized; a
+re-finalize is the one event that legitimately rewrites it. A run with no
+snapshot is skipped and logged rather than falling back to live figures, which
+would be the exact failure the snapshot exists to prevent.
 
 **Why a run ledger had to come first.** `system_config` held only the LATEST
 finalized period, so "which periods have been finalized" was unanswerable - which

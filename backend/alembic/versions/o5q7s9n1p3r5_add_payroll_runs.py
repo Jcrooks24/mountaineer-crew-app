@@ -36,6 +36,10 @@ def upgrade() -> None:
         sa.Column('finalized_at', sa.DateTime(), nullable=False),
         sa.Column('finalized_by_name', sa.String(), nullable=True),
         sa.Column('run_count', sa.Integer(), nullable=False, server_default='1'),
+        # Snapshot of the rows written to the Payroll worksheet for this run.
+        # The mirror shows what was FINALIZED; recomputing at export time would
+        # let a re-drive publish figures nobody finalized.
+        sa.Column('rows_json', sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('period_start', 'period_end', name='uq_payroll_runs_period'),
     )
