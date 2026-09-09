@@ -1312,6 +1312,8 @@ stored as an off-job entry purely because that is where payroll picks it up.
 | Crew POST refuses `pto` with 403; `CREW_PAY_STRUCTURES` excludes it | `routers/off_job.py` | [x] |
 | `POST /api/admin/off-job-hours/pto` records PTO against an employee (admin) | `routers/off_job.py` | [x] |
 | `GET /api/admin/off-job-hours/pto-balance/{user_id}` (admin) | `routers/off_job.py` | [x] |
+| `GET /api/admin/off-job-hours/pto?user_id=` lists what has been recorded (admin) | `routers/off_job.py` | [x] |
+| `DELETE /api/admin/off-job-hours/pto/{entry_uuid}` removes a mistake; PTO-only, 409 on logged work | `routers/off_job.py`, `sheets_export.delete_off_job_from_sheets` | [x] |
 | PTO filtered out of the crew's off-job list and BOTH Worked Hours queries | `routers/off_job.py`, `routers/hours.py` | [x] |
 | `off_job_entries.recorded_by_id` / `recorded_by_name` | migration `m3o5q7l9n1p3` | [x] |
 | `recorded_by` on `OffJobOut` and as a NEW COLUMN on the OffJobHours tab | `routers/off_job.py`, `sheets_export.OFF_JOB_HEADERS` | [x] |
@@ -1349,6 +1351,21 @@ an error.
 `entry_uuid` to edit, so the entry's own prior hours are excluded from the "used"
 figure - otherwise lowering 8 hours to 4 is refused for exceeding a cap the 8 had
 already filled.
+
+**A mistake can be taken back** (added 2026-09-09, vet finding 5). PTO is the one
+entry in this app that SPENDS something finite, and there was no way to undo a
+wrong one: nothing deletes an off-job entry, `hours` must be positive so it could
+not be zeroed, the payroll screen never listed the entries or their uuids, and
+`CORRECTION_BUCKETS` has no `pto` so a payroll correction could not offset one
+either. A mistyped 80 instead of 8 consumed somebody's year, permanently, short of
+a psql session.
+
+The delete is **PTO-only and refuses a crew member's logged work with a 409**. That
+work is a record of something that happened and is not the office's to erase;
+re-using this path for it would turn an audit trail into an edit surface. It is a
+hard delete, and the Sheet row goes with it - the balance is derived from the
+entries, so removing the row IS the correction, which is exactly why the balance
+was built derived rather than stored.
 
 
 ## Office-entered money reaches the Sheet (2026-09-09)

@@ -4256,6 +4256,22 @@ def export_off_job_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
     return 1
 
 
+def delete_off_job_from_sheets(db: Session, entry_uuid: str) -> int:
+    """Drop a removed off-job entry's row.
+
+    Added for office-recorded PTO, which is the one off-job entry a person can
+    delete: a mistyped PTO figure spends somebody's annual allowance, and until
+    now nothing in the app could take it back. The Sheet has to lose the row too,
+    or the office reconciles against paid time that was never taken.
+    """
+    if not entry_uuid:
+        return 0
+    tab = os.getenv("SHEETS_OFF_JOB_TAB", "OffJobHours").strip() or "OffJobHours"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    svc = _get_sheets_svc(db)
+    return _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", entry_uuid)
+
+
 # -- Employee tips ------------------------------------------------------------
 
 TIP_HEADERS = [

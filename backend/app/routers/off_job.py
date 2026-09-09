@@ -15,7 +15,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.pto import PTO_PAY_STRUCTURE, check_pto_allowed, pto_balance
+from app.core.pto import (
+    PTO_PAY_STRUCTURE,
+    check_pto_allowed,
+    pto_balance,
+    pto_year_bounds,
+)
 from app.core.deps import get_current_user, get_db, require_admin
 from app.db.models.off_job_entry import OffJobEntry
 from app.db.models.user import User
@@ -257,6 +262,82 @@ def admin_record_pto(
     db.refresh(e)
     _export(e)
     return _to_out(e)
+
+
+@admin_router.get("/pto", response_model=List[OffJobOut])
+def list_pto_for_user(
+    user_id: int,
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """One employee's recorded PTO for a calendar year, newest first.
+
+    The office needs to SEE what it has recorded before it can fix any of it.
+    Without this the payroll screen showed a balance and no way to find out what
+    made it up, so a mistyped entry was invisible as well as unfixable.
+
+    Admin-only like the rest of PTO: the employee is deliberately not shown their
+    own PTO anywhere (user direction, 2026-09-03).
+    """
+    from datetime import date as _date
+    y = year or _date.today().year
+    lo, hi = pto_year_bounds(y)
+    rows = (
+        db.query(OffJobEntry)
+        .filter(
+            OffJobEntry.submitted_by_id == user_id,
+            OffJobEntry.pay_structure == PTO_PAY_STRUCTURE,
+            OffJobEntry.work_date >= lo,
+            OffJobEntry.work_date <= hi,
+        )
+        .order_by(OffJobEntry.work_date.desc())
+        .limit(200)
+        .all()
+    )
+    return [_to_out(r) for r in rows]
+
+
+@admin_router.delete("/pto/{entry_uuid}", status_code=204)
+def admin_delete_pto(
+    entry_uuid: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Remove a PTO entry recorded by mistake. Office-only.
+
+    WHY THIS EXISTS. PTO is the one entry in this app that SPENDS something
+    finite. Every other kind of hour records something that happened; a wrong PTO
+    figure takes days off somebody's year. Until this endpoint there was no way
+    to take it back: nothing in the app deletes an off-job entry, `hours` must be
+    positive so it could not be zeroed, the payroll screen never listed the
+    entries or their uuids, and `CORRECTION_BUCKETS` has no "pto" so a payroll
+    correction could not offset one either. The only remedy was a psql session.
+
+    PTO ONLY, deliberately. This will not delete a crew member's logged work:
+    that is a record of something that happened and is not the office's to erase,
+    and re-using this path for it would turn an audit trail into an edit surface.
+    A non-PTO entry gets a 409 that says so.
+
+    A hard delete, like a mistyped tip. The balance is derived from the entries
+    (app/core/pto.py), so removing the row IS the correction - there is no stored
+    total to keep in step, which is exactly why the balance was built derived.
+    """
+    e = db.query(OffJobEntry).filter(OffJobEntry.entry_uuid == entry_uuid).first()
+    if e is None:
+        raise HTTPException(status_code=404, detail="No such entry.")
+    if (e.pay_structure or "") != PTO_PAY_STRUCTURE:
+        raise HTTPException(
+            status_code=409,
+            detail="That is not a PTO entry. Only PTO can be removed here.",
+        )
+    db.delete(e)
+    db.commit()
+    # The Sheet has to lose it too, or the office reconciles against paid time
+    # that was never taken.
+    from app.integrations.sheets_export import delete_off_job_from_sheets
+    run_export_in_background(delete_off_job_from_sheets, entry_uuid)
+    return None
 
 
 @admin_router.get("", response_model=List[OffJobOut])

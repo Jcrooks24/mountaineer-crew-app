@@ -177,6 +177,59 @@ check("and records who in the office entered it",
 check("re-using a non-PTO entry uuid cannot convert it into PTO",
       "cannot be turned into one" in oj_src)
 
+print("\nA PTO entry recorded by mistake can be taken back:")
+# PTO is the one entry in this app that SPENDS something finite. Until this
+# endpoint there was no way to undo a wrong one: nothing deletes an off-job
+# entry, hours must be positive so it could not be zeroed, the payroll screen
+# never listed the entries, and CORRECTION_BUCKETS has no "pto" to offset it
+# with. A mistyped 80 instead of 8 permanently consumed somebody's year.
+import app.routers.off_job as oj  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+
+# The export is a background Sheets call; stub it so this stays offline and so
+# the delete-the-Sheet-row call is assertable.
+exported = []
+oj.run_export_in_background = lambda fn, *a: exported.append((getattr(fn, "__name__", str(fn)), a))
+
+before = pto_used_hours(db, 1, 2026)
+doomed = log_pto(1, 4, "2026-06-01", uuid="oops")
+check("the wrong entry spends the allowance while it exists",
+      pto_used_hours(db, 1, 2026) == before + 4)
+
+oj.admin_delete_pto("oops", db=db, _=eligible)
+check("removing it gives the hours back",
+      pto_used_hours(db, 1, 2026) == before, str(pto_used_hours(db, 1, 2026)))
+check("the row is gone, not just zeroed",
+      db.query(OffJobEntry).filter(OffJobEntry.entry_uuid == "oops").first() is None)
+check("and the Sheet row is deleted too, or the office reconciles against "
+      "paid time nobody took",
+      any(name == "delete_off_job_from_sheets" and a == ("oops",)
+          for name, a in exported), str(exported))
+
+
+def refuses(uuid):
+    try:
+        oj.admin_delete_pto(uuid, db=db, _=eligible)
+        return None
+    except HTTPException as exc:
+        return exc.status_code
+
+
+# The important guard: this must not become a way to erase a crew member's
+# logged work. That is a record of something that happened, and it is not the
+# office's to delete - re-using this path for it would turn an audit trail into
+# an edit surface.
+worked = log_pto(1, 6, "2026-06-02", structure="regular", uuid="real-work")
+check("it REFUSES a crew member's logged work, with 409 not 404",
+      refuses("real-work") == 409)
+check("and that entry is still there",
+      db.query(OffJobEntry).filter(OffJobEntry.entry_uuid == "real-work").first() is not None)
+check("an unknown entry 404s", refuses("nope") == 404)
+
+check("the delete is admin-only", '@admin_router.delete("/pto/{entry_uuid}"' in oj_src)
+check("and so is the list the office removes from",
+      '@admin_router.get("/pto"' in oj_src)
+
 print()
 if FAILURES:
     print("FAILURES: " + ", ".join(FAILURES))

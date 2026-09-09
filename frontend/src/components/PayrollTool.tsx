@@ -934,6 +934,14 @@ function PtoSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }
   // 404 was never shown to anybody. A read that fails must still say so.
   const [balErr, setBalErr] = useState<string | null>(null);
 
+  // What has actually been recorded this year. The office cannot fix what it
+  // cannot see: before this the panel showed a balance and nothing about what
+  // made it up, so a mistyped entry was invisible as well as unfixable.
+  const [entries, setEntries] = useState<Array<{
+    entry_uuid: string; work_date: string | null; hours: number;
+    notes: string; recorded_by_name?: string | null;
+  }>>([]);
+
   const loadBal = useCallback(async () => {
     try {
       setBal(await apiFetch(`/api/admin/off-job-hours/pto-balance/${emp.user_id}`));
@@ -944,9 +952,31 @@ function PtoSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }
       setBal(null);
       setBalErr(e instanceof ApiError ? e.message : "Could not read the PTO balance.");
     }
+    try {
+      setEntries(await apiFetch(`/api/admin/off-job-hours/pto?user_id=${emp.user_id}`));
+    } catch {
+      // Non-fatal in the other direction: the balance is the number that
+      // matters, and a list that will not load must not hide it.
+      setEntries([]);
+    }
   }, [emp.user_id]);
 
   useEffect(() => { loadBal(); }, [loadBal]);
+
+  async function removeEntry(entryUuid: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/off-job-hours/pto/${encodeURIComponent(entryUuid)}`,
+                     { method: "DELETE" });
+      await loadBal();
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not remove the PTO entry.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function record() {
     if (!date) { setErr("Pick the date the PTO is for."); return; }
@@ -1020,6 +1050,30 @@ function PtoSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }
           {busy ? "Saving..." : "Record PTO"}
         </button>
       </div>
+      {entries.length > 0 && (
+        <div className="col" style={{ gap: 4, marginTop: 8 }}>
+          {entries.map((t) => (
+            <div key={t.entry_uuid} className="row"
+                 style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="small" style={{ minWidth: 78 }}>{t.work_date || "-"}</span>
+              <span className="small" style={{ fontWeight: 600 }}>{t.hours}h</span>
+              <span className="small" style={{ color: "var(--muted)", flex: "1 1 100px", minWidth: 0 }}>
+                {t.notes}
+                {t.recorded_by_name ? ` - entered by ${t.recorded_by_name}` : ""}
+              </span>
+              {/* A wrong PTO figure spends somebody's year. This is the only way
+                  to take one back: nothing else in the app deletes an off-job
+                  entry, hours cannot be zeroed, and there is no "pto" payroll
+                  correction bucket to offset it with. */}
+              <button type="button" onClick={() => removeEntry(t.entry_uuid)}
+                      disabled={busy} aria-label={`Remove ${t.hours}h of PTO on ${t.work_date || "this date"}`}
+                      style={{ fontSize: 11, padding: "2px 8px" }}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {bal && bal.remaining_hours <= 0 && (
         <div className="small" style={{ color: "var(--warn)", marginTop: 4 }}>
           No PTO left for {bal.year}. Raise the allowance on the roster to record more.
