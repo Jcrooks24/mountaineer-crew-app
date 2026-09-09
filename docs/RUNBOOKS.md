@@ -622,6 +622,50 @@ Two causes, in order of likelihood:
 written from the same assumption as the code cannot check the code, which is the
 specific way this class of bug survived once already.
 
+## Crew see "Not authenticated" and cannot submit a job report
+
+**Reported from production 2026-09-09.** A crew member finished a job, filled in
+the job report, could not submit it ("Not authenticated"), logged out and back in
+on the app's own advice, and found the whole report gone.
+
+**What each half is.**
+
+`"Not authenticated"` is `deps.py:23` exactly, and it means ONE thing: the
+request carried **no Authorization header at all**. It is not an expired token -
+that is a different string ("Invalid or expired token"), and the lifetime is 90
+days anyway. So `getToken()` returned null when the request was built.
+
+Two places clear the token, and both do it for ANY 401 regardless of what the
+401 was about:
+
+- `api/client.ts` - `if (res.status === 401) clearToken();`
+- `App.tsx` `readPhotoUploadResponse` - clears it and shows "Session expired -
+  log out and sign in again to upload photos", which is where the crew member
+  got the advice that then cost them their report.
+
+Once the token is gone every later call, including the job-report POST, has no
+header and answers "Not authenticated". The app looks broken app-wide until
+re-login.
+
+**The data loss is FIXED (2026-09-09).** A job report is only ever a draft
+(`crew_report_draft_v1:<job_uuid>`) until its POST succeeds - it has no
+`failed_at` and no queue - so `preserveFailedWork` did not know about it and
+`clearCrewState` deleted it. It and its bill draft are now preserved across a
+wipe, user-scoped, the same way ADR 0021 preserves pending BOL work.
+`verify_report_draft_survives_logout.mjs` covers it.
+
+**The 401 trigger is NOT yet found, and this entry stays open until it is.** What
+is established is the amplifier, not the cause: something returns a first 401,
+and the unconditional `clearToken()` turns it into a full logout. To find the
+cause, get from Render logs the request that 401'd FIRST, before the report POST.
+Do not assume it was the report.
+
+**Do not "fix" it by removing the clearToken calls.** They exist so a genuinely
+revoked session does not leave the crew tapping Retry forever. The fix, once the
+trigger is known, is to stop that specific 401 happening - or to make clearing
+the session conditional on the 401 actually being about the session rather than
+about one request.
+
 ## Known defects
 
 ### A PARTLY answered close-out does not fully survive a remount

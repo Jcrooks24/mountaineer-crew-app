@@ -19,6 +19,18 @@
  * hold blobs and are wiped via `deleteDatabase`; preserving those across a
  * wholesale DB delete is a larger change and is not covered here (see RUNBOOKS).
  *
+ * JOB REPORT / BILL EXCEPTION (added 2026-09-09, after a production report): the
+ * same assumption is false for the close-out. A job report is typed up over a
+ * whole job - hours per crew member, close-out answers, the bill - and it is
+ * NEVER queued: it is a draft under `crew_report_draft_v1:<job_uuid>` that only
+ * becomes a queued fact when the POST succeeds. So it has no `failed_at` to
+ * preserve and no queue to drain, and the wipe simply deletes it.
+ *
+ * That is not hypothetical. A crew member hit a 401, was told by the app to
+ * "log out and sign in again", did so, and lost the entire report - the app
+ * instructed them to take the action that destroyed their work. Preserving these
+ * two draft prefixes is what makes that advice survivable.
+ *
  * BOL EXCEPTION (ADR 0021): the "pending drains normally" assumption is FALSE for
  * the Digital BOL. Crew routinely hand a shared phone off (or log out) mid-job,
  * offline, right after signing - so the pending submit/sign/pdf ops have no
@@ -39,6 +51,13 @@ const BACKUP_PREFIX = "keepfailed_v1:";
 const BOL_QUEUE_KEY = "crew_bol_queue_v1";
 const BOL_DRAFT_PREFIX = "crew_bol_draft_v1:";
 const BOL_DRAFTS_SECTION = "__bol_drafts__";
+
+// The close-out drafts. Same shape as the BOL drafts - one copy, keyed by
+// job_uuid, never queued - so they get the same treatment and their own reserved
+// section. Both are preserved together because a report and its bill are one
+// piece of work to the crew member who typed them.
+const JOB_DRAFT_PREFIXES = ["crew_report_draft_v1:", "crew_bill_draft_v1:"] as const;
+const JOB_DRAFTS_SECTION = "__job_drafts__";
 
 // Every localStorage queue that carries a `failed_at` mark (ADR 0013). If a new
 // queue is added, add its key here or its failed work is lost on a user switch.
@@ -68,6 +87,52 @@ function loadArray(key: string): unknown[] {
   } catch {
     return [];
   }
+}
+
+
+/** The close-out drafts worth carrying across a wipe, newest jobs first.
+ *
+ * BOUNDED ON PURPOSE. The BOL draft block above is scarred by this: it used to
+ * copy every draft on the device at logout, which on a phone with a season of
+ * them was megabytes of synchronous JSON on the main thread - the freeze crews
+ * reported - and briefly doubled stored bytes right before the wipe, on exactly
+ * the devices nearest quota.
+ *
+ * Report and bill drafts are plain JSON rather than base64 signatures, so they
+ * are far smaller, but the same reasoning applies: a crew member logging out
+ * mid-job has ONE job in flight, not forty. Group by job_uuid, take the newest
+ * few, and keep a report with its own bill - to the person who typed them they
+ * are one piece of work.
+ */
+const MAX_JOB_DRAFT_JOBS = 3;
+
+function collectJobDrafts(): Array<{ k: string; v: string }> {
+  const byJob = new Map<string, { at: string; entries: Array<{ k: string; v: string }> }>();
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    const prefix = JOB_DRAFT_PREFIXES.find((p) => k.startsWith(p));
+    if (!prefix) continue;
+    const v = localStorage.getItem(k);
+    if (v == null) continue;
+    const job = k.slice(prefix.length);
+    let at = "";
+    try {
+      const parsed = JSON.parse(v) as { savedAt?: unknown };
+      if (typeof parsed?.savedAt === "string") at = parsed.savedAt;
+    } catch {
+      /* unparseable draft: keep it, but it sorts last */
+    }
+    const cur = byJob.get(job) || { at: "", entries: [] };
+    cur.entries.push({ k, v });
+    // The job's recency is its most recently touched half.
+    if (at > cur.at) cur.at = at;
+    byJob.set(job, cur);
+  }
+  return [...byJob.values()]
+    .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
+    .slice(0, MAX_JOB_DRAFT_JOBS)
+    .flatMap((g) => g.entries);
 }
 
 /**
@@ -107,6 +172,14 @@ export function backupFailedWork(userId: number | string | undefined | null): bo
     const drafts = collectBolDraftsFor(neededDraftJobs(backup[BOL_QUEUE_KEY]));
     if (drafts.length > 0) {
       backup[BOL_DRAFTS_SECTION] = drafts;
+      any = true;
+    }
+    // The close-out drafts. Unconditional rather than keyed off a queue, because
+    // there IS no queue: a job report is only ever a draft until its POST
+    // succeeds, so there is no `failed_at` anywhere to notice it by.
+    const jobDrafts = collectJobDrafts();
+    if (jobDrafts.length > 0) {
+      backup[JOB_DRAFTS_SECTION] = jobDrafts;
       any = true;
     }
     if (any) localStorage.setItem(backupKey(userId), JSON.stringify(backup));
@@ -199,6 +272,17 @@ export function restoreFailedWork(userId: number | string | undefined | null): n
       : [];
     for (const d of drafts) {
       if (d && typeof d.k === "string" && typeof d.v === "string" && d.k.startsWith(BOL_DRAFT_PREFIX)) {
+        if (localStorage.getItem(d.k) == null) localStorage.setItem(d.k, d.v);
+      }
+    }
+    // Restore the close-out drafts on the same terms: never clobber a draft the
+    // returning user has since started on this device.
+    const jobDrafts = Array.isArray((backup as Record<string, unknown[]>)[JOB_DRAFTS_SECTION])
+      ? ((backup as Record<string, unknown[]>)[JOB_DRAFTS_SECTION] as Array<{ k?: string; v?: string }>)
+      : [];
+    for (const d of jobDrafts) {
+      if (d && typeof d.k === "string" && typeof d.v === "string"
+          && JOB_DRAFT_PREFIXES.some((p) => d.k!.startsWith(p))) {
         if (localStorage.getItem(d.k) == null) localStorage.setItem(d.k, d.v);
       }
     }
