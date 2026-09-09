@@ -1,5 +1,5 @@
 {
-  "generated_from": "b8a8d6467881291d6ceef045b91f3b50d1337ddb",
+  "generated_from": "8fdab3499fc61c40158f0154112095202a06f477",
   "note": "Regenerate with: cd backend && python scripts/dump_api_routes.py",
   "paths": [
     "/",
@@ -56,6 +56,7 @@
     "/api/admin/sheets/reconcile-events",
     "/api/admin/skills",
     "/api/admin/skills/{skill_id}",
+    "/api/admin/system-check/drive",
     "/api/admin/system-check/sheet-backfill",
     "/api/admin/system-check/sheet-backfill-all",
     "/api/admin/system-check/sheets",

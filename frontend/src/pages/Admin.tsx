@@ -4672,6 +4672,7 @@ function AdvancedSettingsPage() {
       </div>
       <SheetSyncCard />
       <SheetSyncHealthCard />
+      <DriveFolderCheckCard />
       <SheetBackfillCard />
       <AppHealthCard />
 
@@ -4726,6 +4727,89 @@ function StagingToolsCheck() {
 }
 
 // ─────────────────────────────────────────
+type DriveFolderCheck = {
+  key: string;
+  label: string;
+  env: string;
+  holds: string;
+  fallback: string;
+  env_set: boolean;
+  folder_id: string | null;
+  needs_attention: boolean;
+};
+
+/**
+ * Which Drive folders this environment writes to.
+ *
+ * THE POINT: every folder listed here holds something with no second copy, and
+ * each is pinned per environment by a folder ID. When that ID is unset the code
+ * falls back to resolving the folder BY NAME - and staging and prod, sharing the
+ * name, resolve the SAME real folder, so staging can overwrite production's
+ * signed Bills of Lading in place.
+ *
+ * That was previously invisible: the BOL fallback did not even log, and there
+ * was no Drive entry in System Check at all. Checking it meant reading Render's
+ * env tab and knowing to.
+ *
+ * Env-only on the server - no Drive API call - so it still answers when Drive
+ * credentials are broken, which is exactly when somebody is looking.
+ */
+function DriveFolderCheckCard() {
+  const [busy, setBusy] = useState(false);
+  const [data, setData] = useState<{ ok: boolean; folders: DriveFolderCheck[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true); setErr(null); setData(null);
+    try {
+      setData(await apiFetch("/api/admin/system-check/drive"));
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Drive check failed");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card">
+      <div className="microLabel" style={{ marginBottom: 10 }}>System Check - Drive Folders</div>
+      <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
+        Every folder below holds documents with no second copy. Each should be pinned
+        to a folder ID that is different on staging and production. An unset one
+        resolves by name instead, which means both environments write to the same
+        real folder.
+      </div>
+      <button onClick={run} disabled={busy} className="btnPrimary" style={{ padding: "6px 14px", fontSize: 13 }}>
+        {busy ? "Checking…" : "Run check"}
+      </button>
+      {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+      {data && (
+        <div style={{ marginTop: 12 }}>
+          <div className="small" style={{ marginBottom: 8, fontWeight: 700, color: data.ok ? "var(--ok)" : "var(--warn)" }}>
+            {data.ok
+              ? "✓ Every folder is pinned to an explicit ID"
+              : `⚠ ${data.folders.filter((f) => f.needs_attention).length} folder(s) not pinned - this environment may share them with the other one`}
+          </div>
+          <div className="col" style={{ gap: 8 }}>
+            {data.folders.map((f) => (
+              <div key={f.key} className="small" style={{
+                borderLeft: `3px solid ${f.needs_attention ? "var(--warn)" : "var(--ok)"}`,
+                paddingLeft: 8,
+              }}>
+                <div style={{ fontWeight: 600 }}>
+                  {f.label} <span style={{ color: "var(--muted)", fontWeight: 400 }}>- {f.holds}</span>
+                </div>
+                <div style={{ color: "var(--muted)", wordBreak: "break-all" }}>
+                  {f.env}: {f.env_set ? f.folder_id : `NOT SET - ${f.fallback}`}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // Sheet-sync health check (System Check)
 // Verifies every app->sheet sync in one place. New feature syncs are picked up
 // automatically from the backend registry (SHEET_SYNC_REGISTRY).

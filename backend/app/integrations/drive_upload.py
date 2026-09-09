@@ -1,7 +1,7 @@
 import os
 import re
 import threading
-from typing import Any, BinaryIO, Optional
+from typing import Any, BinaryIO, Dict, Optional
 
 # NOT imported at module scope, deliberately. googleapiclient.discovery costs
 # ~180 ms to import and this module is pulled in by app.routers.photos, so that
@@ -429,6 +429,17 @@ def _get_bol_folder_id(svc, db: Optional[Session]) -> str:
         return folder_id_env
 
     folder_name = os.getenv("DRIVE_BOL_FOLDER_NAME", DEFAULT_BOL_FOLDER_NAME).strip() or DEFAULT_BOL_FOLDER_NAME
+    # SAY SO. The estimator and reimbursement paths both warn when their folder
+    # env var is unset; this one - whose fallback is the dangerous one, the
+    # name-based lookup that resolves staging and prod to the SAME real folder -
+    # was the only one that fell back silently. On the one document class with no
+    # second copy. RUNBOOKS greps for the [drive] prefix.
+    print(
+        f"[drive] {BOL_FOLDER_ID_ENV_VAR} not set - resolving the signed-BOL folder "
+        f"by NAME ({folder_name!r}). Staging and prod sharing that name resolve the "
+        f"SAME folder, so this environment can overwrite the other's signed legal "
+        f"documents. Set {BOL_FOLDER_ID_ENV_VAR} per environment."
+    )
 
     if db:
         row = db.execute(
@@ -695,3 +706,51 @@ def update_drive_file_description(db: Session, file_id: str, description: str) -
         body={"description": description or ""},
         fields="id",
     ).execute()
+
+
+# -- Drive folder health ------------------------------------------------------
+
+
+def check_drive_folders() -> Dict[str, Any]:
+    """Which Drive folders this environment is configured to write to.
+
+    THE ENVIRONMENT-ISOLATION AUDIT, made visible. Every one of these folders
+    holds something with no second copy - a signed Bill of Lading, a receipt, a
+    driver qualification file, an estimate photo - and each resolves either by an
+    explicit folder ID (safe: staging and prod point at different folders) or, if
+    that env var is unset, by NAME or by a shared default (unsafe: both
+    environments resolve the SAME real folder, and an in-place update from
+    staging can overwrite a production document).
+
+    Nothing surfaced that before this: the fallback was silent for BOLs, the
+    other paths only printed to the log, and there was no Drive entry in System
+    Check at all. The vetting protocol calls this audit out by name and it was
+    still only checkable by reading Render's env tab.
+
+    Reads env only - no Drive API call, so it is safe to poll and works when
+    Drive credentials are broken.
+    """
+    folders = [
+        {"key": "bol", "label": "Signed Bills of Lading", "env": BOL_FOLDER_ID_ENV_VAR,
+         "holds": "signed legal documents, one copy",
+         "fallback": "resolved by NAME - shared with the other environment"},
+        {"key": "dq", "label": "Driver qualification files", "env": DQ_FOLDER_ID_ENV_VAR,
+         "holds": "DOT compliance records with PII",
+         "fallback": "resolved by NAME - shared with the other environment"},
+        {"key": "reimbursements", "label": "Reimbursement receipts",
+         "env": REIMBURSEMENT_PARENT_ENV_VAR, "holds": "receipt and odometer photos",
+         "fallback": "falls back to the shared app parent folder"},
+        {"key": "estimator", "label": "Estimator photos",
+         "env": ESTIMATOR_PARENT_ENV_VAR, "holds": "estimate walkthrough photos",
+         "fallback": "falls back to the shared app parent folder"},
+    ]
+    out = []
+    for f in folders:
+        raw = (os.getenv(f["env"]) or "").strip()
+        out.append({**f, "env_set": bool(raw),
+                    # The ID itself is not a secret (it is in every Drive URL the
+                    # office opens), and seeing it is how you tell two
+                    # environments apart at a glance.
+                    "folder_id": raw or None,
+                    "needs_attention": not raw})
+    return {"folders": out, "ok": all(not f["needs_attention"] for f in out)}

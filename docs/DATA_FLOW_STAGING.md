@@ -848,6 +848,35 @@ key keep it, and are re-driven from Admin -> Sheet Backfill afterwards. See
 
 ---
 
+## Drive folder isolation is now checkable (2026-09-09)
+
+Not a data path change - a change to what can be SEEN about one.
+
+Every Drive folder the app writes to holds something with no second copy (a
+signed BOL, a receipt, a DQ file with PII, an estimate photo), and each is kept
+apart between staging and prod by an explicit folder-ID env var. When the ID is
+unset the code resolves the folder BY NAME, and both environments resolve the
+SAME real folder - which is how staging came to overwrite production's signed
+BOLs (ADR 0020).
+
+Three things made that invisible:
+
+- the BOL fallback did not log at all, while the estimator and reimbursement
+  paths both warned. The most dangerous fallback was the only silent one.
+- there was no Drive entry in System Check.
+- so checking it meant reading Render's env tab, and knowing to.
+
+Now: `GET /api/admin/system-check/drive` reports all four folders, whether each
+is pinned and to which id; Admin > Advanced Settings shows it beside the Sheet
+Syncs card; and an unset BOL folder prints a `[drive]` warning naming the
+consequence. `scripts/test_sync_registries.py` asserts every `DRIVE_*_ENV_VAR`
+declared in `drive_upload` is reported by the check, so a fifth folder cannot be
+added without appearing there.
+
+Env-only, no Drive API call, so it answers when Drive credentials are broken -
+which is when somebody is looking at it.
+
+
 # Deviations new on staging
 
 **Everything in this section is a promotion blocker** until fixed or waived in

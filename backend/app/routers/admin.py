@@ -1494,6 +1494,26 @@ def system_check_sheets(
     return check_sheets_sync(db)
 
 
+@router.get("/system-check/drive")
+def system_check_drive(
+    _: User = Depends(require_admin),
+):
+    """Which Drive folders this environment writes to, and whether each is
+    pinned by an explicit folder ID.
+
+    The environment-isolation audit the vetting protocol asks for, made visible.
+    An unset folder ID means this environment resolves the SAME real Drive folder
+    as the other one, so staging can overwrite production's signed BOLs. That was
+    previously only checkable by reading Render's env tab, and for BOLs the
+    fallback did not even log.
+
+    Env-only: no Drive API call, so it still answers when Drive credentials are
+    broken - which is exactly when somebody is looking at it.
+    """
+    from app.integrations.drive_upload import check_drive_folders
+    return check_drive_folders()
+
+
 @router.get("/system-check/sheet-backfill")
 def system_check_sheet_backfill(
     db: Session = Depends(get_db),

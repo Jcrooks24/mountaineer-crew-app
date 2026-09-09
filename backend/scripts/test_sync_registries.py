@@ -79,6 +79,41 @@ for key, s in sorted(sync.items()):
           "the status table keys on this name; a typo means the health check "
           "silently never matches a status row")
 
+# -- Drive folders -----------------------------------------------------------
+# Same theme, different resource. Every Drive folder the app writes to holds
+# something with no second copy, and each is isolated between staging and prod by
+# an explicit folder ID env var. A folder whose env var is not surfaced by the
+# health check is one nobody can tell is unpinned - and an unpinned folder means
+# both environments resolve the SAME real folder, which is how staging came to
+# overwrite production's signed BOLs.
+print("\nEvery Drive folder the app writes to is health-checked:")
+import app.integrations.drive_upload as du  # noqa: E402
+
+reported = {f["env"] for f in du.check_drive_folders()["folders"]}
+declared = {
+    getattr(du, name) for name in dir(du)
+    if name.endswith("_ENV_VAR") and isinstance(getattr(du, name), str)
+    and getattr(du, name).startswith("DRIVE_")
+}
+check("every DRIVE_* folder env var appears in the check",
+      declared <= reported,
+      f"declared in drive_upload but not reported: {sorted(declared - reported)}")
+check("the check invents no folders", reported <= declared,
+      f"reported but not declared: {sorted(reported - declared)}")
+
+# needs_attention must actually track the env var, or the panel is decorative.
+import os  # noqa: E402
+_before = {f["env"]: f["needs_attention"] for f in du.check_drive_folders()["folders"]}
+os.environ["DRIVE_BOL_FOLDER_ID"] = "test-folder-id"
+_after = {f["env"]: f for f in du.check_drive_folders()["folders"]}
+check("setting a folder ID clears its warning",
+      _before["DRIVE_BOL_FOLDER_ID"] and not _after["DRIVE_BOL_FOLDER_ID"]["needs_attention"])
+check("and the id is shown, so two environments can be told apart",
+      _after["DRIVE_BOL_FOLDER_ID"]["folder_id"] == "test-folder-id")
+del os.environ["DRIVE_BOL_FOLDER_ID"]
+check("unsetting it brings the warning back",
+      du.check_drive_folders()["folders"][0]["needs_attention"])
+
 print()
 if FAILURES:
     print("FAILURES: " + ", ".join(FAILURES))
