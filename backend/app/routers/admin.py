@@ -181,9 +181,11 @@ def update_user(
     if payload.phone is not None:
         user.phone = payload.phone.strip() or None
     if payload.pto_hours_annual is not None:
-        # Clamped, not rejected: a negative allowance is meaningless and the
-        # useful reading of one is "none". The upper bound is a typo guard -
-        # 2000 hours is most of a working year.
+        # REJECTED, not clamped. A negative allowance is meaningless and the
+        # upper bound is a typo guard (2000 hours is most of a working year),
+        # but silently rewriting either to a legal value would tell the admin
+        # their number was accepted while storing a different one - and this
+        # number decides how much paid time somebody can take.
         hours = float(payload.pto_hours_annual)
         if hours < 0 or hours > 2000:
             raise HTTPException(

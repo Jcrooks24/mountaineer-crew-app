@@ -926,12 +926,23 @@ function PtoSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Why the balance could not be read, or null when it could. Kept SEPARATE from
+  // `err` (which reports a failed save) because these two failures need
+  // different words, and because a swallowed one here is what hid the fact that
+  // this panel was calling a URL that did not exist: the catch set `bal = null`,
+  // the panel rendered as if the person simply had no allowance yet, and the
+  // 404 was never shown to anybody. A read that fails must still say so.
+  const [balErr, setBalErr] = useState<string | null>(null);
+
   const loadBal = useCallback(async () => {
     try {
-      setBal(await apiFetch(`/api/admin/off-job/pto-balance/${emp.user_id}`));
-    } catch {
-      // A balance that will not load must not take the payroll row with it.
+      setBal(await apiFetch(`/api/admin/off-job-hours/pto-balance/${emp.user_id}`));
+      setBalErr(null);
+    } catch (e) {
+      // A balance that will not load must not take the payroll row with it, so
+      // this stays non-fatal - but it is surfaced rather than swallowed.
       setBal(null);
+      setBalErr(e instanceof ApiError ? e.message : "Could not read the PTO balance.");
     }
   }, [emp.user_id]);
 
@@ -944,11 +955,15 @@ function PtoSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }
     setBusy(true);
     setErr(null);
     try {
-      await apiFetch("/api/admin/off-job/pto", {
+      await apiFetch("/api/admin/off-job-hours/pto", {
         method: "POST",
         body: JSON.stringify({
-          // Minted here so a double-tap or a retry cannot record the same day
-          // twice. Re-sending the same uuid EDITS the entry.
+          // A FRESH uuid per press, so this is a create every time. What stops a
+          // double-tap is `busy` plus the disabled button, not this - the uuid
+          // is the server's idempotency key for a RETRY of one request, and
+          // re-sending the same one edits that entry in place rather than
+          // adding a second. Nothing here ever re-sends one; the remove button
+          // below is how a mistake is undone.
           entry_uuid: crypto.randomUUID(),
           user_id: emp.user_id,
           work_date: date,
@@ -1008,6 +1023,12 @@ function PtoSection({ emp, onChanged }: { emp: Employee; onChanged: () => void }
       {bal && bal.remaining_hours <= 0 && (
         <div className="small" style={{ color: "var(--warn)", marginTop: 4 }}>
           No PTO left for {bal.year}. Raise the allowance on the roster to record more.
+        </div>
+      )}
+      {balErr && (
+        <div className="small" style={{ color: "var(--warn)", marginTop: 4 }}>
+          Balance unavailable: {balErr} The cap is still enforced by the server,
+          so recording PTO is safe, but the figures above are missing.
         </div>
       )}
       {err && <div className="small" style={{ color: "var(--danger)", marginTop: 4 }}>{err}</div>}

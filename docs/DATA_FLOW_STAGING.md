@@ -1308,8 +1308,8 @@ stored as an off-job entry purely because that is where payroll picks it up.
 | `users.pto_hours_annual` (Float, default 0, 0 = not eligible) | migration `l2n4p6k8m0o2`, `db/models/user.py` | [x] |
 | Eligibility / cap / remaining, derived from entries | `core/pto.py` | [x] |
 | Crew POST refuses `pto` with 403; `CREW_PAY_STRUCTURES` excludes it | `routers/off_job.py` | [x] |
-| `POST /api/admin/off-job/pto` records PTO against an employee (admin) | `routers/off_job.py` | [x] |
-| `GET /api/admin/off-job/pto-balance/{user_id}` (admin) | `routers/off_job.py` | [x] |
+| `POST /api/admin/off-job-hours/pto` records PTO against an employee (admin) | `routers/off_job.py` | [x] |
+| `GET /api/admin/off-job-hours/pto-balance/{user_id}` (admin) | `routers/off_job.py` | [x] |
 | PTO filtered out of the crew's off-job list and BOTH Worked Hours queries | `routers/off_job.py`, `routers/hours.py` | [x] |
 | `off_job_entries.recorded_by_id` / `recorded_by_name` | migration `m3o5q7l9n1p3` | [x] |
 | Payroll: its own `pto` bucket, in `totals.pto_hours` and per day | `routers/payroll.py` | [x] |
