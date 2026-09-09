@@ -523,6 +523,15 @@ def _reimbursements(
                 out[uid]["amount"] += amt
             out[uid]["items"].append(
                 {**base, "kind": "expense",
+                 # The card is stated on the item rather than left implied. The
+                 # office asked for it explicitly (2026-09-09): every expense
+                 # that reaches payroll is one somebody paid for out of their own
+                 # pocket, and a list that does not say so reads the same as one
+                 # that might contain company spend. Company-card expenses are
+                 # excluded above and stay excluded - no money is owed back on
+                 # them - so this always reads "personal card", which is the
+                 # point: it is an assertion, not a variable.
+                 "payment_method": (r.payment_method or "personal"),
                  "label": (r.vendor or r.category or "Expense"),
                  "amount": round(amt, 2), "miles": None}
             )

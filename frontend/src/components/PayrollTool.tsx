@@ -74,6 +74,10 @@ type LineRow = {
 };
 
 type ReimbItem = {
+  /** "personal" on every expense that reaches payroll - company-card spend is
+   *  excluded server-side because no money is owed back on it. Stated rather
+   *  than implied, at the office's request. Absent on mileage. */
+  payment_method?: string | null;
   uuid: string;
   date: string;
   kind: string;
@@ -883,7 +887,7 @@ function EmployeeDetail({
       {emp.reimbursement_items.length > 0 && (
         <div>
           <div className="small" style={{ color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>
-            Reimbursements (paid personally)
+            Reimbursements owed
             {emp.reimbursements_unreviewed > 0 && (
               <span style={{ color: "var(--warn)", marginLeft: 6 }}>
                 - {emp.reimbursements_unreviewed} not yet reviewed
@@ -896,8 +900,10 @@ function EmployeeDetail({
               really "reviewed, and it stands", and "Decline" is the action that
               changes money and emails the crew member. */}
           <div className="small" style={{ color: "var(--muted)", marginBottom: 6 }}>
-            These are paid unless you decline them. Declining emails the crew
-            member with your reason.
+            Personal-card business expenses and mileage only. Anything bought on
+            a company card is an expense log, not money owed back, and is not
+            listed here. These are paid unless you decline them; declining emails
+            the crew member with your reason.
           </div>
           <div className="col" style={{ gap: 5 }}>
             {emp.reimbursement_items.map((r) => (
@@ -909,6 +915,13 @@ function EmployeeDetail({
                 }}>
                   {shortDate(r.date)} - {r.label}
                   {r.amount != null ? ` - $${r.amount.toFixed(2)}` : ""}
+                  {/* Named on every row, not just in the heading above: a row
+                      read on its own should still say whose money it was. */}
+                  {r.kind === "expense" && (
+                    <span style={{ color: "var(--muted)" }}>
+                      {" "}- {r.payment_method === "company" ? "company card" : "personal card"}
+                    </span>
+                  )}
                   {r.miles != null ? ` - ${r.miles} mi (see the Mileage $ total; set the rate in Settings)` : ""}
                 </span>
                 <ReimbDecision item={r} onChanged={onChanged} />
