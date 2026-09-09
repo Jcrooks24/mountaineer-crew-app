@@ -71,6 +71,10 @@ type LineRow = {
   reported_hours: number | null;
   correction_id: number | null;
   correction_reason: string | null;
+  /** Whether finalize emails the crew member about this line. Optional: a
+   *  summary from a backend older than the flag has no such key, and the form
+   *  then defaults to emailing, which is what that backend does. */
+  notify?: boolean;
 };
 
 type ReimbItem = {
@@ -138,6 +142,15 @@ const BUCKET_LABELS: Record<string, string> = {
   other: "Other pay",
   per_diem_nights: "Per-diem nights",
 };
+
+/** The add-a-line picker offers one more option than there are correction
+ *  buckets. A bonus is DOLLARS and every correction bucket is HOURS, so it
+ *  cannot be a bucket without breaking every sum that adds them up - it routes
+ *  to the bonus endpoint instead. Presented together because to the person doing
+ *  it, "add the bonus I owe Dev" and "add the per-diem night Dev forgot" are the
+ *  same job: recording something that never got logged. */
+const BONUS_OPTION = "__bonus__";
+const ADD_OPTIONS: Record<string, string> = { ...BUCKET_LABELS, [BONUS_OPTION]: "Bonus ($)" };
 
 const SOURCE_LABELS: Record<string, string> = {
   job: "Job",
@@ -1403,22 +1416,52 @@ function CorrectionForm({
   const [workDate, setWorkDate] = useState(line?.date || period.start);
   const [label, setLabel] = useState(line?.source_label || "");
   const [reason, setReason] = useState(line?.correction_reason || "");
+  // Whether finalize emails this crew member about this line. Defaults to
+  // emailing, always: an adjustment to somebody's pay that nobody tells them
+  // about is the worse failure, so silence has to be chosen.
+  const [notify, setNotify] = useState(line?.notify ?? true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const isBonus = !line && bucket === BONUS_OPTION;
+
   const save = async () => {
     const n = Number(hours);
-    if (!Number.isFinite(n) || n < 0) {
+    if (!Number.isFinite(n) || n <= (isBonus ? 0 : -1)) {
+      setErr(isBonus
+        ? "Enter the bonus as a dollar amount greater than zero."
+        : "Enter the corrected hours as a number.");
+      return;
+    }
+    if (!isBonus && !Number.isFinite(n)) {
       setErr("Enter the corrected hours as a number.");
       return;
     }
-    if (!reason.trim()) {
+    // A bonus needs no reason: it is money being ADDED, not a disputed number
+    // being changed, and demanding a justification for paying somebody extra is
+    // friction with nothing behind it. Every other line still requires one,
+    // because that text is what the crew member is emailed.
+    if (!isBonus && !reason.trim()) {
       setErr("A reason is required - the crew member is emailed this text.");
       return;
     }
     setBusy(true);
     setErr(null);
     try {
+      if (isBonus) {
+        // Its own endpoint: a bonus is dollars, and every correction bucket is
+        // hours. Putting it in a bucket would corrupt every sum that adds them.
+        await apiFetch("/api/admin/payroll/bonuses", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: emp.user_id,
+            amount: n,
+            note: reason.trim(),
+          }),
+        });
+        onSaved();
+        return;
+      }
       await apiFetch("/api/admin/payroll/corrections", {
         method: "PUT",
         body: JSON.stringify({
@@ -1433,6 +1476,7 @@ function CorrectionForm({
           original_hours: original,
           corrected_hours: n,
           reason: reason.trim(),
+          notify,
         }),
       });
       onSaved();
@@ -1468,13 +1512,36 @@ function CorrectionForm({
       }}
     >
       <div style={{ fontWeight: 700, fontSize: 13 }}>
-        {line ? `Correct: ${line.source_label} (${shortDate(line.date)})` : `Add a line for ${emp.name}`}
+        {line
+          ? `Adjust: ${line.source_label} (${shortDate(line.date)})`
+          : `Add something ${emp.name} did not log`}
       </div>
       <div className="small" style={{ color: "var(--muted)" }}>
-        This does not change what the crew submitted. It records an override for
-        this pay period, and {emp.name} is emailed the before, the after, and
-        your reason when you finalize.
+        {line
+          ? `This does not change what ${emp.name} submitted - it records a separate line for this pay period.`
+          : `For things that never got logged: a bonus, a per-diem night, a contractor's hours. It adds a line to this pay period; it does not edit anything ${emp.name} already submitted. To change something they DID log, correct it where it was logged.`}
       </div>
+
+      <label className="row" style={{ gap: 8, alignItems: "center" }}>
+        <input
+          type="checkbox"
+          checked={!notify}
+          onChange={(e) => setNotify(!e.target.checked)}
+          style={{ accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+        />
+        <span className="small">
+          Do not email {emp.name} about this line
+        </span>
+      </label>
+      {/* Opt-OUT, never opt-in. Changing somebody's pay without telling them is
+          the worse default, so the quiet path is a deliberate tick. Ticking it
+          leaves the line out of the finalize email; if every line for a person
+          is ticked, they get no email at all rather than an empty one. */}
+      {!notify && (
+        <div className="small" style={{ color: "var(--warn)" }}>
+          {emp.name} will not be told about this line when you finalize.
+        </div>
+      )}
 
       <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
         {!line && (
@@ -1492,7 +1559,7 @@ function CorrectionForm({
         <label className="col" style={{ gap: 3 }}>
           <span className="small" style={{ color: "var(--muted)" }}>Bucket</span>
           <select value={bucket} onChange={(e) => setBucket(e.target.value)} disabled={!!line}>
-            {Object.entries(BUCKET_LABELS).map(([k, v]) => (
+            {Object.entries(line ? BUCKET_LABELS : ADD_OPTIONS).map(([k, v]) => (
               <option key={k} value={k}>{v}</option>
             ))}
           </select>

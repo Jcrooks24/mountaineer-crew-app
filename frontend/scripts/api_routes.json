@@ -1,5 +1,5 @@
 {
-  "generated_from": "e3d3de97c7bf68976685bab0efe92a4be74f98cc",
+  "generated_from": "f944f72949b8c9d47a5b283c6c5ab9cd79da2c28",
   "note": "Regenerate with: cd backend && python scripts/dump_api_routes.py",
   "paths": [
     "/",
@@ -42,6 +42,8 @@
     "/api/admin/off-job-hours/pto",
     "/api/admin/off-job-hours/pto-balance/{user_id}",
     "/api/admin/off-job-hours/pto/{entry_uuid}",
+    "/api/admin/payroll/bonuses",
+    "/api/admin/payroll/bonuses/{bonus_uuid}",
     "/api/admin/payroll/corrections",
     "/api/admin/payroll/corrections/{correction_id}",
     "/api/admin/payroll/finalize",

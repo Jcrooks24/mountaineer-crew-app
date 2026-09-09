@@ -4146,7 +4146,7 @@ SHEET_SYNC_REGISTRY = [
     {"key": "report_waivers",    "label": "Report waivers",      "env": "SHEETS_REPORT_WAIVERS_TAB",     "default": "ReportWaivers",     "fn": "export_report_waiver_to_sheets"},
     {"key": "bug_reports",       "label": "Bug reports",         "env": "SHEETS_BUGS_TAB",               "default": "Bugs",              "fn": "export_bug_report_to_sheets"},
     {"key": "feature_requests",  "label": "Feature requests",    "env": "SHEETS_FEATURE_REQUESTS_TAB",   "default": "FeatureRequests",   "fn": "export_feature_request_to_sheets"},
-    {"key": "tips",              "label": "Employee tips",       "env": "SHEETS_TIPS_TAB",               "default": "Tips",              "fn": "export_tip_to_sheets"},
+    {"key": "tips",              "label": "Tips and bonuses",    "env": "SHEETS_TIPS_TAB",               "default": "Tips",              "fn": "export_extra_pay_to_sheets"},
     {"key": "payroll",           "label": "Payroll periods",     "env": "SHEETS_PAYROLL_TAB",            "default": "Payroll",           "fn": "export_payroll_period_to_sheets"},
 ]
 
@@ -4304,7 +4304,7 @@ PAYROLL_HEADERS = [
     "regular_hours", "ot_hours", "non_billable_hours", "other_hours", "pto_hours",
     "total_hours",
     "per_diem_nights", "per_diem_amount", "reimbursement_amount",
-    "mileage_miles", "mileage_amount", "tips_amount",
+    "mileage_miles", "mileage_amount", "tips_amount", "bonus_amount",
     "finalized_at",
 ]
 
@@ -4381,6 +4381,7 @@ def export_payroll_period_to_sheets(db: Session, run: Dict[str, Any]) -> int:
             "mileage_miles": t.get("mileage_miles", ""),
             "mileage_amount": t.get("mileage_amount", ""),
             "tips_amount": t.get("tips_amount", ""),
+            "bonus_amount": t.get("bonus_amount", ""),
             "finalized_at": _iso(run.get("finalized_at")),
         }, headers))
 
@@ -4404,57 +4405,55 @@ def export_payroll_period_to_sheets(db: Session, run: Dict[str, Any]) -> int:
     return len(rows)
 
 
-# -- Employee tips ------------------------------------------------------------
+# -- Extra pay: tips and bonuses ----------------------------------------------
 
-TIP_HEADERS = [
-    "tip_uuid", "user_name", "tip_date", "amount",
+EXTRA_PAY_HEADERS = [
+    "entry_uuid", "kind", "user_id", "user_name", "date", "amount",
     "job_name", "job_uuid", "note", "entered_by",
     "created_at", "updated_at",
 ]
 
 
-def export_tip_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
-    """Replace-style export: one row per tip_uuid on the Tips tab.
+def export_extra_pay_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """One row per tip or bonus, replace-style on `entry_uuid`.
 
-    WHY ITS OWN TAB rather than a column on an existing one. The rule for this
-    Sheet is that new data joins the worksheet it is categorically like, and only
-    genuinely different data earns a tab. A tip is close to a reimbursement in
-    SHAPE (employee, date, amount, optional job, note) but not in MEANING: a
-    reimbursement pays somebody back for money they spent, and folding tips into
-    that tab would make its amount column stop answering "what do we owe in
-    expenses". It is not hours either, so OffJobHours does not fit. So: its own
-    tab.
+    ONE TAB, NOT TWO. A tip and a bonus carry identical fields - a person, a
+    date, a flat amount, an optional job, a note, and who entered it - and the
+    rule for this Sheet is that categorically similar data joins the worksheet it
+    is like, with only genuinely different data earning a tab. `kind` is the
+    fresh column that separates them.
 
-    `SHEETS_TIPS_TAB` controls the name, like every other sync, which is also how
-    staging is kept off the production worksheet. Point it at a different tab if
-    the office already keeps one - but the export OWNS the header row it writes,
-    so it has to be a tab the app manages rather than a hand-maintained sheet
-    with its own columns.
+    They remain separate TABLES, because they answer different questions: a tip
+    is a customer's money and a bonus is ours, and "what did we pay out in
+    bonuses" must not come back inflated by tips.
 
-    Replace-style on tip_uuid so a correction rewrites the row in place. A tip is
-    DELETED rather than edited in the UI, which `delete_tip_from_sheets` mirrors.
+    `user_id` travels with the row. Payroll joins on the roster id everywhere
+    else so a rename cannot detach somebody from their own money, and a display
+    name alone cannot tell two people with the same name apart.
     """
     tab = os.getenv("SHEETS_TIPS_TAB", "Tips").strip() or "Tips"
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
-    tip_uuid = entry.get("tip_uuid") or ""
-    if not tip_uuid:
+    entry_uuid = entry.get("entry_uuid") or ""
+    if not entry_uuid:
         return 0
 
     svc = _get_sheets_svc(db)
-    headers = _ensure_tab(svc, spreadsheet_id, tab, TIP_HEADERS)
-    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "tip_uuid", tip_uuid)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, EXTRA_PAY_HEADERS)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", entry_uuid)
 
     row = {
-        "tip_uuid": tip_uuid,
+        "entry_uuid": entry_uuid,
+        # "tip" or "bonus". The whole reason one tab serves both.
+        "kind": entry.get("kind") or "tip",
+        "user_id": entry.get("user_id") if entry.get("user_id") is not None else "",
         "user_name": entry.get("user_name") or "",
-        # The PAYOUT date, which is what decides the pay period - not the job's
-        # date. See the EmployeeTip model.
-        "tip_date": entry.get("tip_date") or "",
+        # The PAYOUT date, which decides the pay period - not the job's.
+        "date": entry.get("date") or "",
         "amount": entry.get("amount") if entry.get("amount") is not None else "",
         "job_name": entry.get("job_name") or "",
         "job_uuid": entry.get("job_uuid") or "",
         "note": entry.get("note") or "",
-        "entered_by": entry.get("created_by_name") or "",
+        "entered_by": entry.get("entered_by") or "",
         "created_at": _iso(entry.get("created_at")),
         "updated_at": _iso(entry.get("updated_at")),
     }
@@ -4462,17 +4461,16 @@ def export_tip_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
     return 1
 
 
-def delete_tip_from_sheets(db: Session, tip_uuid: str) -> int:
-    """Drop a removed tip's row. A tip is hard-deleted in the app (a mistyped
-    dollar figure on a payroll screen is worse than losing the fact somebody
-    fat-fingered it), so the Sheet has to lose it too - otherwise the office
-    reconciles against money nobody is owed."""
-    if not tip_uuid:
+def delete_extra_pay_from_sheets(db: Session, entry_uuid: str) -> int:
+    """Drop a removed tip or bonus. Both are hard-deleted in the app, so the
+    Sheet has to lose the row too - otherwise the office reconciles against money
+    nobody is owed."""
+    if not entry_uuid:
         return 0
     tab = os.getenv("SHEETS_TIPS_TAB", "Tips").strip() or "Tips"
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
     svc = _get_sheets_svc(db)
-    return _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "tip_uuid", tip_uuid)
+    return _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", entry_uuid)
 
 
 REPORT_WAIVER_HEADERS = [

@@ -158,22 +158,43 @@ r2 = fr2.row()
 check("paid_at is blank, not a date", r2.get("paid_at") == "", str(r2.get("paid_at")))
 check("qb_status defaults to pending", r2.get("qb_status") == "pending", str(r2.get("qb_status")))
 
-print("\nTips get their own tab:")
+print("\nTips and bonuses share one tab, separated by kind:")
+# The office's rule for this Sheet: categorically similar data joins the
+# worksheet it is like, and only genuinely different data earns a tab. A tip and
+# a bonus carry identical fields - person, date, flat amount, optional job, note,
+# who entered it - so `kind` is the fresh column rather than a second tab.
 ft = FakeSheet([])
 ft.install("Tips")
-sx.export_tip_to_sheets(None, {
-    "tip_uuid": "t1", "user_name": "Casey", "tip_date": "2026-09-09",
-    "amount": 40.0, "job_name": "Smith move", "job_uuid": "j-1",
-    "note": "customer rang the office", "created_by_name": "Office",
+sx.export_extra_pay_to_sheets(None, {
+    "entry_uuid": "t1", "kind": "tip", "user_id": 7, "user_name": "Casey",
+    "date": "2026-09-09", "amount": 40.0, "job_name": "Smith move", "job_uuid": "j-1",
+    "note": "customer rang the office", "entered_by": "Office",
     "created_at": "2026-09-09T10:00:00", "updated_at": "2026-09-09T10:00:00",
 })
 t = ft.row()
 check("the tip row carries the person and the amount",
       t.get("user_name") == "Casey" and t.get("amount") == 40.0, str(t))
-check("dated by PAYOUT, which is what picks the pay period",
-      t.get("tip_date") == "2026-09-09")
+check("dated by PAYOUT, which is what picks the pay period", t.get("date") == "2026-09-09")
 check("the job is recorded for reference", t.get("job_uuid") == "j-1")
 check("and who entered it", t.get("entered_by") == "Office")
+check("it is marked as a tip", t.get("kind") == "tip")
+check("the roster id travels with it, so a rename cannot detach the money",
+      t.get("user_id") == 7)
+
+ft.written.clear()
+sx.export_extra_pay_to_sheets(None, {
+    "entry_uuid": "b1", "kind": "bonus", "user_id": 9, "user_name": "Dev",
+    "date": "2026-09-09", "amount": 250.0, "note": "covered the Denver run",
+    "entered_by": "Office",
+    "created_at": "2026-09-09T11:00:00", "updated_at": "2026-09-09T11:00:00",
+})
+b = ft.row()
+check("a bonus lands on the SAME tab", b.get("user_name") == "Dev")
+check("marked as a bonus, which is what separates the two", b.get("kind") == "bonus",
+      str(b.get("kind")))
+check("and needs no job", b.get("job_uuid") == "")
+check("both kinds share one key column, so one delete path serves both",
+      "entry_uuid" in ft.header and "tip_uuid" not in ft.header)
 
 print("\nIt is in the health-check registry, or nothing watches it:")
 keys = {e["key"] for e in sx.SHEET_SYNC_REGISTRY}
@@ -182,7 +203,7 @@ tips_entry = next(e for e in sx.SHEET_SYNC_REGISTRY if e["key"] == "tips")
 check("with its own tab env var so staging cannot write to the prod tab",
       tips_entry["env"] == "SHEETS_TIPS_TAB", str(tips_entry))
 check("and the function name the status table keys on",
-      tips_entry["fn"] == "export_tip_to_sheets")
+      tips_entry["fn"] == "export_extra_pay_to_sheets")
 
 print("\nThe Payroll tab: one row per employee, replaced on a re-finalize:")
 # The key column is `period`, shared by every employee row in the run, and the

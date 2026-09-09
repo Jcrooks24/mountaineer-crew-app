@@ -266,13 +266,30 @@ def _src_payroll(db: Session) -> List[Dict[str, Any]]:
 
 
 def _src_tips(db: Session) -> List[Dict[str, Any]]:
+    """Every tip AND bonus, because they share one tab keyed on entry_uuid.
+
+    A source that returned only tips would report every bonus as missing from
+    the sheet, forever - the audit compares this list against the tab's key
+    column, so a half-enumerated source is worse than none.
+    """
+    from app.db.models.employee_bonus import EmployeeBonus
     from app.db.models.employee_tip import EmployeeTip
-    rows = db.query(EmployeeTip).order_by(EmployeeTip.created_at.desc()).all()
-    return [{
-        "id": r.tip_uuid,
-        "label": f"{r.user_name or 'unknown'} ${float(r.amount or 0):.2f} ({r.tip_date or ''})".strip(" ()"),
-        "created_at": _iso(r.created_at),
-    } for r in rows if r.tip_uuid]
+    out: List[Dict[str, Any]] = []
+    for r in db.query(EmployeeTip).order_by(EmployeeTip.created_at.desc()).all():
+        if r.tip_uuid:
+            out.append({
+                "id": r.tip_uuid,
+                "label": f"tip: {r.user_name or 'unknown'} ${float(r.amount or 0):.2f} ({r.tip_date or ''})".strip(" ()"),
+                "created_at": _iso(r.created_at),
+            })
+    for r in db.query(EmployeeBonus).order_by(EmployeeBonus.created_at.desc()).all():
+        if r.bonus_uuid:
+            out.append({
+                "id": r.bonus_uuid,
+                "label": f"bonus: {r.user_name or 'unknown'} ${float(r.amount or 0):.2f} ({r.bonus_date or ''})".strip(" ()"),
+                "created_at": _iso(r.created_at),
+            })
+    return out
 
 
 def _src_off_job(db: Session) -> List[Dict[str, Any]]:
@@ -481,11 +498,17 @@ def _re_payroll(db: Session, ref: Any) -> None:
 
 
 def _re_tip(db: Session, ref: Any) -> None:
+    """Re-drive whichever kind of extra pay this uuid is."""
+    from app.db.models.employee_bonus import EmployeeBonus
     from app.db.models.employee_tip import EmployeeTip
-    from app.routers.payroll import _queue_tip_export
-    row = db.query(EmployeeTip).filter(EmployeeTip.tip_uuid == str(ref)).first()
-    if row:
-        _queue_tip_export(row)
+    from app.routers.payroll import _queue_bonus_export, _queue_tip_export
+    tip = db.query(EmployeeTip).filter(EmployeeTip.tip_uuid == str(ref)).first()
+    if tip:
+        _queue_tip_export(tip)
+        return
+    bonus = db.query(EmployeeBonus).filter(EmployeeBonus.bonus_uuid == str(ref)).first()
+    if bonus:
+        _queue_bonus_export(bonus)
 
 
 def _re_off_job(db: Session, ref: Any) -> None:
@@ -586,8 +609,8 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
     {"key": "payroll", "label": "Payroll periods", "env": "SHEETS_PAYROLL_TAB",
      "default": "Payroll", "key_cols": ["period"],
      "source": _src_payroll, "reexport": _re_payroll},
-    {"key": "tips", "label": "Employee tips", "env": "SHEETS_TIPS_TAB",
-     "default": "Tips", "key_cols": ["tip_uuid"],
+    {"key": "tips", "label": "Tips and bonuses", "env": "SHEETS_TIPS_TAB",
+     "default": "Tips", "key_cols": ["entry_uuid"],
      "source": _src_tips, "reexport": _re_tip},
     {"key": "off_job_hours", "label": "Off-job hours", "env": "SHEETS_OFF_JOB_TAB",
      "default": "OffJobHours", "key_cols": ["entry_uuid"],

@@ -1462,6 +1462,49 @@ a payroll run because Google was slow would be the wrong trade).
 staging tips land in the production `Tips` tab. See CREDENTIALS.md.
 
 
+## Add-a-line becomes one tool for what an employee forgot to log (2026-09-09)
+
+Office direction. "Add a line" and the requested bonus tool are the same job to
+the person doing it - recording something that never got logged - so they are
+one control, not two.
+
+| Path | Where | Status |
+|---|---|---|
+| `employee_bonuses` table | migration `p6r8t0o2q4s6`, `db/models/employee_bonus.py` | [x] |
+| `POST/GET/DELETE /api/admin/payroll/bonuses` | `routers/payroll.py`, `schemas/payroll.py` (`BonusCreate`) | [x] |
+| `payroll_corrections.notify` - per-line email opt-out | migration `p6r8t0o2q4s6` | [x] |
+| `totals.bonus_amount` + `bonus_items` on the summary | `routers/payroll.py` (`_bonuses`) | [x] |
+| Tips and bonuses share ONE tab, separated by a `kind` column | `sheets_export.export_extra_pay_to_sheets` | [x] |
+| Bonus column on the Payroll tab and in the TSV | `sheets_export.PAYROLL_HEADERS`, `PayrollTool.tsx` | [x] |
+
+**It is an ADD tool, not a correction tool** (the wording the office objected to).
+The old copy said it "records an override", which invited its use for fixing
+numbers crew had already submitted. Corrections belong on the thing that was
+logged; this adds a line that never existed. The heading and help say so.
+
+**A bonus is not a bucket.** Every correction bucket is HOURS and a bonus is
+DOLLARS, so it cannot share the mechanism without corrupting every sum that adds
+them up. It appears in the same picker and routes to its own endpoint.
+
+**A bonus needs no reason; everything else does.** That text is what the crew
+member is emailed, and demanding a justification for paying somebody extra is
+friction with nothing behind it.
+
+**`notify` is opt-OUT, defaulting to true.** Changing somebody's pay without
+telling them is the worse default, so silence is a deliberate tick, per line. A
+line marked do-not-notify is left out of the finalize email but STILL stamped
+`notified_at`, or every finalize would pick it up again forever. If every line
+for one person is marked, they get no email rather than an empty one.
+
+**ONE TAB for tips and bonuses**, per the office's rule that categorically
+similar data joins the worksheet it is like. The fields are identical - person,
+date, flat amount, optional job, note, who entered it - so `kind` is the fresh
+column. They stay separate TABLES because "what did we pay out in bonuses" must
+not come back inflated by tips. Safe to restructure the tab's key column
+(`tip_uuid` to `entry_uuid`) because Tips is new and unpromoted, so there is no
+live data to disturb. All THREE registries updated.
+
+
 ## Payroll periods reach a worksheet, with Tips as a column (2026-09-09)
 
 User direction: tips belong on the payroll sheet in a fresh column, and the tab

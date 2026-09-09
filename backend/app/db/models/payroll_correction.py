@@ -21,6 +21,7 @@ period, and losing it silently would be worse than keeping it.
 """
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -77,6 +78,18 @@ class PayrollCorrection(Base):
     # roster row is later deactivated.
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     user_name = Column(String, nullable=False)
+
+    # Whether finalize emails the crew member about this line.
+    #
+    # Defaults TRUE, which is today's behaviour: a change to somebody's pay tells
+    # them. Opt-OUT rather than opt-in on purpose - silently altering pay is the
+    # worse default, so the quiet path has to be chosen deliberately, per line.
+    #
+    # Added with the payroll add-a-line tool (2026-09-09): that tool records what
+    # an employee FORGOT to log, and "you forgot your Tuesday off-job hours, I
+    # added them" does not always warrant an email the way a disputed correction
+    # does.
+    notify = Column(Boolean, nullable=False, server_default="true", default=True)
 
     # What is being corrected. See CORRECTION_SOURCES.
     source = Column(String(16), nullable=False)

@@ -79,6 +79,7 @@ from app.db.models.payroll_correction import (
     PayrollCorrection,
 )
 from app.db.models.employee_tip import EmployeeTip
+from app.db.models.employee_bonus import EmployeeBonus
 from app.db.models.payroll_run import PayrollRun
 from app.db.models.reimbursement import Reimbursement
 from app.db.models.user import User
@@ -87,6 +88,7 @@ from app.schemas.payroll import (
     PayrollCorrectionUpsert,
     PayrollFinalizeRequest,
     ReimbursementDecision,
+    BonusCreate,
     TipCreate,
     ReportWaiverRequest,
 )
@@ -607,6 +609,45 @@ def _tips(
     return out
 
 
+def _bonuses(
+    db: Session, start: date, end: date, roster: Dict[int, User]
+) -> Dict[int, Dict[str, Any]]:
+    """Bonuses owed in this period, per employee.
+
+    Identical treatment to `_tips` and for the same reasons: windowed on the
+    PAYOUT date rather than the job's, so a bonus decided in arrears pays on the
+    current run instead of being added to a period that has already been
+    finalized; money rather than hours, so it never enters a bucket, never
+    reaches the OT calculation, and is not quarter-rounded.
+
+    Separate from tips because the two answer different questions. A tip is a
+    customer's money and a bonus is the company's, and an admin asking "what did
+    we pay out in bonuses this quarter" must not get an answer inflated by tips.
+    """
+    rows = (
+        db.query(EmployeeBonus)
+        .filter(EmployeeBonus.bonus_date >= start.isoformat(),
+                EmployeeBonus.bonus_date <= end.isoformat())
+        .all()
+    )
+    out: Dict[int, Dict[str, Any]] = defaultdict(lambda: {"amount": 0.0, "items": []})
+    for b in rows:
+        if b.user_id is None or b.user_id not in roster:
+            continue
+        amt = float(b.amount or 0)
+        out[b.user_id]["amount"] += amt
+        out[b.user_id]["items"].append({
+            "uuid": b.bonus_uuid,
+            "date": b.bonus_date,
+            "amount": round(amt, 2),
+            "job_uuid": b.job_uuid,
+            "job_name": b.job_name or "",
+            "note": b.note or "",
+            "entered_by": b.created_by_name or "",
+        })
+    return out
+
+
 def _mark_reimbursements_paid(
     db: Session, start: date, end: date, roster: Dict[int, User]
 ) -> List[Reimbursement]:
@@ -719,6 +760,7 @@ def _apply_corrections(
         base["reported_hours"] = reported
         base["correction_id"] = c.id
         base["correction_reason"] = c.reason
+        base["notify"] = bool(getattr(c, "notify", True))
         out.append(base)
 
     for target, c in by_target.items():
@@ -734,6 +776,7 @@ def _apply_corrections(
         r["reported_hours"] = float(c.original_hours)
         r["correction_id"] = c.id
         r["correction_reason"] = c.reason
+        r["notify"] = bool(getattr(c, "notify", True))
         out.append(r)
 
     return out, by_target
@@ -760,6 +803,7 @@ def _employee_summary(
     user: User, rows: List[Dict[str, Any]], start: date, end: date,
     reimb: Dict[str, Any], rates: Dict[str, float],
     tips: Optional[Dict[str, Any]] = None,
+    bonuses: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     days: Dict[date, Dict[str, float]] = defaultdict(
         lambda: {"billable": 0.0, "non_billable": 0.0, "other": 0.0, "pto": 0.0}
@@ -828,6 +872,9 @@ def _employee_summary(
             # Flat dollars, never hours: tips do not touch the buckets above and
             # are deliberately absent from the OT calculation.
             "tips_amount": round((tips or {}).get("amount", 0.0), 2),
+            # Company money, unlike a tip. Flat dollars either way: never a
+            # bucket, never in the OT calculation, never rounded.
+            "bonus_amount": round((bonuses or {}).get("amount", 0.0), 2),
             "mileage_miles": miles,
             "mileage_amount": mileage_amount,
         },
@@ -858,6 +905,9 @@ def _employee_summary(
                     ),
                     "correction_id": r.get("correction_id"),
                     "correction_reason": r.get("correction_reason"),
+                    # Seeds the add-a-line form so re-opening a
+                    # line does not silently re-arm its email.
+                    "notify": r.get("notify", True),
                 }
                 for r in rows
             ],
@@ -865,6 +915,7 @@ def _employee_summary(
         ),
         "reimbursement_items": reimb.get("items", []),
         "tip_items": (tips or {}).get("items", []),
+        "bonus_items": (bonuses or {}).get("items", []),
         # How many of this person's claims nobody has approved or declined yet.
         # They ARE being paid (pay-unless-declined), so this is a nag, not a
         # blocker - it exists so "nobody looked" is visible instead of silent.
@@ -985,6 +1036,7 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
         rows = _round_rows(rows)
     reimb = _reimbursements(db, start, end, roster)
     tips = _tips(db, start, end, roster)
+    bonuses = _bonuses(db, start, end, roster)
     rates = _payroll_rates(db)
 
     by_user: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
@@ -993,7 +1045,7 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
 
     employees = [
         _employee_summary(roster[uid], urows, start, end, reimb.get(uid, {}), rates,
-                          tips.get(uid, {}))
+                          tips.get(uid, {}), bonuses.get(uid, {}))
         for uid, urows in by_user.items()
         if uid in roster
     ]
@@ -1001,10 +1053,11 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     # invisible on the page. That now includes somebody whose only entry this
     # period is a tip - a late tip for a job in an earlier period is exactly
     # that case, and it is the whole reason tips are dated by payout.
-    for uid in set(list(reimb.keys()) + list(tips.keys())):
+    for uid in set(list(reimb.keys()) + list(tips.keys()) + list(bonuses.keys())):
         if uid not in by_user and uid in roster:
             employees.append(_employee_summary(
-                roster[uid], [], start, end, reimb.get(uid, {}), rates, tips.get(uid, {}),
+                roster[uid], [], start, end, reimb.get(uid, {}), rates,
+                tips.get(uid, {}), bonuses.get(uid, {}),
             ))
 
     # By LAST name. Sorting on the full string put everyone in first-name order,
@@ -1210,6 +1263,7 @@ def upsert_correction(
         existing.corrected_hours = body.corrected_hours
         existing.original_hours = body.original_hours
         existing.reason = body.reason
+        existing.notify = body.notify
         existing.work_date = wd.isoformat()
         existing.source_label = body.source_label
         existing.created_by_id = admin.id
@@ -1234,6 +1288,7 @@ def upsert_correction(
         original_hours=body.original_hours,
         corrected_hours=body.corrected_hours,
         reason=body.reason,
+        notify=body.notify,
         created_by_id=admin.id,
         created_by_name=admin.name or admin.email,
         created_at=now,
@@ -1483,6 +1538,7 @@ def upsert_job_correction(
         original_hours=original,
         corrected_hours=body.corrected_hours,
         reason=body.reason,
+        notify=body.notify,
         created_by_id=admin.id,
         created_by_name=admin.name or admin.email,
         created_at=now,
@@ -1760,13 +1816,27 @@ def finalize_period(
                 c.notified_at = now
             suppressed.append({"user_id": uid, "name": name, "count": len(cs)})
             continue
+
+        # PER-LINE opt-out, distinct from the per-user `suppress` above. The
+        # add-a-line tool records what somebody FORGOT to log, and "you did not
+        # log Tuesday's off-job hours, I added them" does not always warrant an
+        # email the way a disputed correction does. Lines marked notify=False
+        # are left out of the email body but STILL stamped notified_at below,
+        # or every finalize would pick them up again forever.
+        notifiable = [c for c in cs if getattr(c, "notify", True)]
+        if not notifiable:
+            for c in cs:
+                c.notified_at = now
+            suppressed.append({"user_id": uid, "name": name, "count": len(cs),
+                               "reason": "every line was marked do-not-notify"})
+            continue
         if user is None or not user.email:
             failed.append({
                 "user_id": uid, "name": name, "count": len(cs),
                 "error": "no email address on the roster",
             })
             continue
-        subject, text = _finalize_email(db, name or user.email, s, e, cs)
+        subject, text = _finalize_email(db, name or user.email, s, e, notifiable)
         try:
             send_email(to_email=user.email, subject=subject, text=text)
         except Exception as exc:
@@ -1971,23 +2041,26 @@ def _queue_payroll_export(db: Session, s_: date, e_: date) -> None:
 def _queue_tip_export(tip: EmployeeTip) -> None:
     """Mirror a tip to the Sheet, off-request on the bounded pool.
 
-    Imported locally, like the other export helpers in this module: a
-    module-level import of sheets_export drags the Google client libraries into
-    the web worker's import surface, which CLAUDE.md is explicit about.
+    Shares the extra-pay tab with bonuses, separated by `kind`. Imported locally,
+    like the other export helpers here: a module-level import of sheets_export
+    drags the Google client libraries into the web worker's import surface, which
+    CLAUDE.md is explicit about.
     """
     from app.integrations.sheets_export import (
-        export_tip_to_sheets,
+        export_extra_pay_to_sheets,
         run_export_in_background,
     )
-    run_export_in_background(export_tip_to_sheets, {
-        "tip_uuid": tip.tip_uuid,
+    run_export_in_background(export_extra_pay_to_sheets, {
+        "entry_uuid": tip.tip_uuid,
+        "kind": "tip",
+        "user_id": tip.user_id,
         "user_name": tip.user_name or "",
-        "tip_date": tip.tip_date or "",
+        "date": tip.tip_date or "",
         "amount": float(tip.amount or 0),
         "job_name": tip.job_name or "",
         "job_uuid": tip.job_uuid or "",
         "note": tip.note or "",
-        "created_by_name": tip.created_by_name or "",
+        "entered_by": tip.created_by_name or "",
         "created_at": tip.created_at,
         "updated_at": tip.updated_at,
     })
@@ -2122,10 +2195,161 @@ def delete_tip(
     # The Sheet has to lose it too, or the office reconciles against money
     # nobody is owed.
     from app.integrations.sheets_export import (
-        delete_tip_from_sheets,
+        delete_extra_pay_from_sheets,
         run_export_in_background,
     )
-    run_export_in_background(delete_tip_from_sheets, tip_uuid)
+    run_export_in_background(delete_extra_pay_from_sheets, tip_uuid)
+    return None
+
+
+
+# -- Bonuses ------------------------------------------------------------------
+# Deliberately a near-copy of the tips endpoints rather than a shared generic
+# one. The two look identical today and are not the same thing: a tip is a
+# customer's money and a bonus is ours, they will grow different rules (approval,
+# tax treatment, who may enter one), and a premature merge would make the first
+# divergence a refactor instead of an edit.
+
+
+def _queue_bonus_export(bonus: EmployeeBonus) -> None:
+    """Mirror a bonus to the Sheet, off-request on the bounded pool."""
+    from app.integrations.sheets_export import (
+        export_extra_pay_to_sheets,
+        run_export_in_background,
+    )
+    run_export_in_background(export_extra_pay_to_sheets, {
+        "entry_uuid": bonus.bonus_uuid,
+        "kind": "bonus",
+        "user_id": bonus.user_id,
+        "user_name": bonus.user_name or "",
+        "date": bonus.bonus_date or "",
+        "amount": float(bonus.amount or 0),
+        "job_name": bonus.job_name or "",
+        "job_uuid": bonus.job_uuid or "",
+        "note": bonus.note or "",
+        "entered_by": bonus.created_by_name or "",
+        "created_at": bonus.created_at,
+        "updated_at": bonus.updated_at,
+    })
+
+
+@router.post("/bonuses")
+def create_bonus(
+    body: BonusCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Record a bonus owed to one employee. Flat dollars, typed in.
+
+    Lands in whichever period contains `bonus_date`, which defaults to today in
+    Mountain time - so a bonus decided in arrears pays on the current run rather
+    than being added to a period that has already been finalized.
+    """
+    user = db.query(User).filter(User.id == body.user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="No such employee on the roster.")
+
+    amount = round(float(body.amount), 2)
+
+    if body.bonus_date:
+        d = _parse_date_str(body.bonus_date)
+        if d is None:
+            raise HTTPException(status_code=400, detail="bonus_date must be YYYY-MM-DD.")
+    else:
+        # Mountain, not UTC: a bonus entered at 6pm Mountain is entered "today"
+        # from the office's point of view, and UTC would already be tomorrow.
+        d = utc_naive_to_mountain_date(datetime.now(timezone.utc).replace(tzinfo=None))
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    bonus = EmployeeBonus(
+        bonus_uuid=str(uuid.uuid4()),
+        job_uuid=(body.job_uuid or None),
+        job_name=(body.job_name or None),
+        user_id=user.id,
+        user_name=user.name or user.email,
+        bonus_date=d.isoformat(),
+        amount=amount,
+        note=(body.note or "").strip(),
+        created_by_id=current_user.id,
+        created_by_name=current_user.name or current_user.email,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(bonus)
+    db.commit()
+    _queue_bonus_export(bonus)
+    return {
+        "ok": True,
+        "bonus": {
+            "uuid": bonus.bonus_uuid,
+            "user_id": bonus.user_id,
+            "user_name": bonus.user_name,
+            "date": bonus.bonus_date,
+            "amount": amount,
+            "note": bonus.note,
+        },
+    }
+
+
+@router.get("/bonuses")
+def list_bonuses(
+    job_uuid: Optional[str] = None,
+    period_start: Optional[str] = None,
+    period_end: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Bonuses for one job, or one period. At least one filter is required so
+    this cannot become an unbounded table scan as bonuses accumulate."""
+    if not job_uuid and not (period_start and period_end):
+        raise HTTPException(
+            status_code=400,
+            detail="Pass job_uuid, or period_start and period_end.",
+        )
+    q = db.query(EmployeeBonus)
+    if job_uuid:
+        q = q.filter(EmployeeBonus.job_uuid == job_uuid)
+    if period_start and period_end:
+        s_, e_ = _parse_period(period_start, period_end)
+        q = q.filter(EmployeeBonus.bonus_date >= s_.isoformat(),
+                     EmployeeBonus.bonus_date <= e_.isoformat())
+    return {
+        "bonuses": [
+            {
+                "uuid": b.bonus_uuid,
+                "user_id": b.user_id,
+                "user_name": b.user_name,
+                "date": b.bonus_date,
+                "amount": round(float(b.amount or 0), 2),
+                "job_uuid": b.job_uuid,
+                "job_name": b.job_name or "",
+                "note": b.note or "",
+                "entered_by": b.created_by_name or "",
+            }
+            for b in q.order_by(EmployeeBonus.bonus_date.desc()).limit(500).all()
+        ],
+    }
+
+
+@router.delete("/bonuses/{bonus_uuid}", status_code=204)
+def delete_bonus(
+    bonus_uuid: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Remove a bonus entered by mistake. Hard delete, like a tip: a mistyped
+    dollar figure on a payroll screen is worse than losing the fact that
+    somebody fat-fingered it."""
+    bonus = db.query(EmployeeBonus).filter(EmployeeBonus.bonus_uuid == bonus_uuid).first()
+    if bonus is None:
+        raise HTTPException(status_code=404, detail="No such bonus.")
+    db.delete(bonus)
+    db.commit()
+    from app.integrations.sheets_export import (
+        delete_extra_pay_from_sheets,
+        run_export_in_background,
+    )
+    run_export_in_background(delete_extra_pay_from_sheets, bonus_uuid)
     return None
 
 

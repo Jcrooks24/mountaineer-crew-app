@@ -96,7 +96,7 @@ REGISTRY = [
     # Added 2026-08-13 and never registered here until the 2026-09-09 vet, so the
     # nightly check has never looked at it.
     ("SHEETS_REPORT_WAIVERS_TAB",    "ReportWaivers",     "REPORT_WAIVER_HEADERS",    "job_uuid"),
-    ("SHEETS_TIPS_TAB",              "Tips",              "TIP_HEADERS",              "tip_uuid"),
+    ("SHEETS_TIPS_TAB",              "Tips",              "EXTRA_PAY_HEADERS",        "entry_uuid"),
     # Keyed on row_key (period + user_id), NOT on `period`: every employee on a
     # run shares the period, so a duplicate check on it would fire on every
     # healthy multi-person payroll. row_key is unique per row, which is what makes

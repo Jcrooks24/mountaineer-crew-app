@@ -26,6 +26,12 @@ class PayrollCorrectionUpsert(BaseModel):
     original_hours: float = 0.0
     corrected_hours: float = 0.0
     reason: str
+    # Whether finalize emails the crew member about this line. Defaults True,
+    # which is the existing behaviour: a change to somebody's pay tells them.
+    # The quiet path is chosen deliberately, per line - most useful on the
+    # add-a-line tool, where "you forgot to log Tuesday, I added it" does not
+    # always warrant an email the way a disputed correction does.
+    notify: bool = True
 
     @field_validator("reason")
     @classmethod
@@ -71,6 +77,12 @@ class JobCorrectionUpsert(BaseModel):
     bucket: str = "billable"
     corrected_hours: float = 0.0
     reason: str
+    # Whether finalize emails the crew member about this line. Defaults True,
+    # which is the existing behaviour: a change to somebody's pay tells them.
+    # The quiet path is chosen deliberately, per line - most useful on the
+    # add-a-line tool, where "you forgot to log Tuesday, I added it" does not
+    # always warrant an email the way a disputed correction does.
+    notify: bool = True
 
     @field_validator("reason")
     @classmethod
@@ -172,6 +184,40 @@ class TipCreate(BaseModel):
             raise ValueError("a tip must be a positive dollar amount")
         if float(v) > 10000:
             raise ValueError("tip looks like a typo (over $10,000)")
+        return round(float(v), 2)
+
+    @field_validator("note")
+    @classmethod
+    def note_length(cls, v: str) -> str:
+        v = (v or "").strip()
+        if len(v) > 500:
+            raise ValueError("note too long")
+        return v
+
+
+class BonusCreate(BaseModel):
+    """A bonus owed to one employee. Company money, entered by an admin.
+
+    Same shape and same rules as TipCreate - `bonus_date` is the PAYOUT date and
+    decides the period, defaulting to today - because to payroll a bonus and a
+    tip differ only in whose money it was.
+    """
+    user_id: int
+    amount: float
+    bonus_date: Optional[str] = None
+    job_uuid: Optional[str] = None
+    job_name: Optional[str] = None
+    note: str = ""
+
+    @field_validator("amount")
+    @classmethod
+    def amount_positive(cls, v: float) -> float:
+        # A negative bonus is a deduction wearing a bonus's clothes; payroll
+        # corrections are the tool for taking money off.
+        if v is None or float(v) <= 0:
+            raise ValueError("a bonus must be a positive dollar amount")
+        if float(v) > 25000:
+            raise ValueError("bonus looks like a typo (over $25,000)")
         return round(float(v), 2)
 
     @field_validator("note")
