@@ -587,6 +587,41 @@ resolve different Drive folders, or whether a screen is legible in sunlight.
 **Run `/vet` before promoting.** Treating a green gate as a vet is how the
 durability bugs shipped the first time.
 
+## "A client /api path does not exist on the server"
+
+`frontend/scripts/verify_api_contract.mjs` failed. It compares every `/api/...`
+string literal in `frontend/src` against the server's real route table.
+
+**This is usually a real bug, and a silent one.** It exists because the PTO
+feature shipped to staging completely dead: the payroll screen called
+`/api/admin/off-job/pto` while the router served `/api/admin/off-job-hours/pto`.
+Every request 404'd, the balance read's `catch` swallowed it, and the screen
+rendered as though the employee simply had no allowance. Nothing else could have
+caught it - a URL is a string, so the build cannot; `test_pto.py` drives the
+router functions directly and never forms a URL, so it passed against a feature
+that did not work; and `verify_pto_ui.mjs` asserted the same wrong URL as the
+code, so it agreed with the bug.
+
+Two causes, in order of likelihood:
+
+1. **The client is calling a path that does not exist.** Fix the client. The
+   failure prints the offending path and the file it came from.
+2. **The route table is stale.** You added, renamed or removed an endpoint and
+   did not re-dump it:
+
+   ```
+   cd backend && python scripts/dump_api_routes.py
+   ```
+
+   That rewrites `frontend/scripts/api_routes.json`. Commit it with the router
+   change - it is checked in because the frontend check runs in node with no
+   Python and no database. The script warns when the file's `generated_from`
+   commit does not match HEAD.
+
+**Do not "fix" this by deleting the assertion or widening the matcher.** A check
+written from the same assumption as the code cannot check the code, which is the
+specific way this class of bug survived once already.
+
 ## Known defects
 
 ### A PARTLY answered close-out does not fully survive a remount
