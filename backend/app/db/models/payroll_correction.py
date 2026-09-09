@@ -161,4 +161,19 @@ class PayrollCorrection(Base):
             unique=True,
             postgresql_where=text("job_uuid IS NOT NULL"),
         ),
+        # And for the DATE-scoped rows that are not jobs - off-job hour
+        # corrections (2026-09-09). They carry no period (nothing to stamp them
+        # with, and the record's own work_date decides which period pays them)
+        # and no job_uuid, so neither rule above reaches them: the first is
+        # keyed on NULL periods, which Postgres treats as distinct, and the
+        # second is partial on job_uuid IS NOT NULL.
+        Index(
+            "uq_payroll_correction_dated",
+            "user_id",
+            "source",
+            "source_key",
+            "bucket",
+            unique=True,
+            postgresql_where=text("period_start IS NULL AND job_uuid IS NULL"),
+        ),
     )

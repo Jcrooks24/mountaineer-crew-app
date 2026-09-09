@@ -2014,6 +2014,102 @@ Reported from the field 2026-09-01: with no honest option for a day spent moving
 items inside one home, crews were ticking **Loading**, which recorded a wrong
 activity and offered a BOL inventory for a shipment that does not exist.
 
+## Off-job hours reach the Job Summary lookup, and can be corrected there (2026-09-09)
+
+Off-job hours were the last logged thing with no admin surface anywhere:
+`GET /api/admin/off-job-hours` existed and **nothing called it**. The crew could
+file them, payroll summed them, and a wrong number could only be fixed by
+deleting the entry and asking the person to file it again.
+
+### Exchanges
+
+| Change | Path | Trigger | Adherence |
+|---|---|---|---|
+| `GET /api/admin/job-search` takes `include_off_job` (default **false**) and may return `kind:"off_job"` rows | `routers/admin.py::job_search` | admin presses Search in the Job Summary lookup | read |
+| `GET /api/admin/payroll/off-job/{entry_uuid}/corrections` | `routers/payroll.py::list_off_job_corrections` | admin opens an off-job result | read |
+| `PUT /api/admin/payroll/off-job/{entry_uuid}/corrections` | `routers/payroll.py::upsert_off_job_correction` | admin saves a correction | write, immediate |
+| `DELETE /api/admin/payroll/off-job/{entry_uuid}/corrections/{correction_id}` | `routers/payroll.py::delete_off_job_correction` | admin withdraws one | write, immediate |
+
+No queue and no offline path: this is an admin-only desk surface, and a
+correction that silently retried later is worse than one that failed loudly.
+
+`include_off_job` is **opt-in**, and that is a correctness property rather than
+tidiness. `job-search` has a second caller - the admin-notes job picker, which
+attaches a `job_uuid` to a note. An off-job entry has none, so an always-on flag
+would let an admin file a note against nothing. Exactly one caller passes it.
+
+### Per-field: `kind:"off_job"` search rows
+
+| Field | Source | Notes |
+|---|---|---|
+| `kind` | literal | `"off_job"`; `"job"` on every other row |
+| `entry_uuid` | `off_job_entries.entry_uuid` | what the caller acts on |
+| `job_uuid` | literal `""` | present so the list has one shape |
+| `job_name` | `"<employee> - off-job hours"` | the row's title |
+| `dates` | `[work_date]` | matched on `work_date` exactly |
+| `hours`, `pay_structure`, `user_name` | the entry | shown on the row |
+| `entered` | literal `false` | data-entry attestation is a job concept |
+
+Matched on the **employee's** name, not a customer's - it is the only name an
+off-job entry has, and it is what an admin looking for "Dylan's shop hours on
+the 3rd" types. Bounded at 200 rows like the sibling queries.
+
+### The correction rows themselves
+
+Off-job corrections are **date-scoped**: `period_start` / `period_end` NULL,
+placed by `work_date`, exactly as job corrections have been since ADR 0032. See
+**[ADR 0045](decisions/0045-corrections-are-scoped-by-period-or-by-date-never-by-job.md)**
+for why, and for the discriminator change it forced.
+
+Two read paths moved, and both moved the same way:
+
+| Path | Was | Now |
+|---|---|---|
+| `_payroll_summary` date-scoped read | `job_uuid IS NOT NULL` + work_date in period | `period_start IS NULL` + work_date in period |
+| `finalize_period` pending-mail query | `period_start == start` only | that **or** `period_start IS NULL` + work_date in period, still excluding `job_uuid IS NOT NULL` |
+
+The finalize half is the load-bearing one. Before it, a correction with neither
+a period nor a job was mailed by **no** path - the attestation only mails by
+`job_uuid`, and the period clause cannot match NULL - so pay would have changed
+with the employee never told. Both queries now key on the same rule, so what a
+period pays and what it mails are one set.
+
+Neither change affects an existing row: job corrections have always nulled their
+period and period corrections have always set one, so `period_start IS NULL`
+selects exactly the set `job_uuid IS NOT NULL` did.
+
+`PUT /api/admin/payroll/corrections` (the payroll screen's per-line editor) also
+drops its period filter for `source="off_job"` and writes NULL periods, so the
+two surfaces cannot each hold a row for the same entry.
+
+Everything factual on the correction is derived server-side from the entry - who
+it is about, the work date, and what was filed - so a stale client cannot
+misattribute one. `OffJobCorrectionUpsert` carries no `user_id` at all.
+
+### Schema
+
+`r8t0v2q4s6u8` adds `uq_payroll_correction_dated`, unique on
+`(user_id, source, source_key, bucket)` where `period_start IS NULL AND
+job_uuid IS NULL`. **Postgres only, guarded on the dialect**: `postgresql_where`
+is silently dropped on SQLite, where this would become a full unique index that
+also binds the period-scoped rows the partial clause exists to exclude.
+
+Nothing new reaches the Sheet. A corrected off-job figure flows out through the
+existing payroll export, because it is applied by `_payroll_summary` like any
+other correction.
+
+### Refused, on purpose
+
+Recorded **PTO** cannot be corrected here. It pays into the `pto` bucket, which
+is deliberately not a correction bucket (it must never reach the overtime sum),
+and it draws down an allowance the PTO tool tracks; correcting it here would
+leave the two out of step. The payload carries `correctable: false` and the
+reason, so the admin reads it instead of filling in a form and taking a 400. An
+entry with no roster account is refused the same way - there is nobody to
+correct, and nobody to tell.
+
+Verified by `frontend/scripts/verify_off_job_corrections.mjs` (44 checks).
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified

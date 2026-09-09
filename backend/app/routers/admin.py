@@ -32,6 +32,7 @@ from app.db.models.job_report import JobReport
 from app.db.models.job_setup import JobSetup
 from app.db.models.long_distance import LdDay
 from app.db.models.materials import MaterialsSubmission
+from app.db.models.off_job_entry import OffJobEntry
 from app.db.models.photo import Photo
 from app.db.models.reimbursement import Reimbursement
 from app.db.models.system_config import SystemConfig
@@ -632,6 +633,10 @@ async def set_app_theme(
 def job_search(
     date: Optional[str] = Query(None, description="YYYY-MM-DD (event date or materials job_date)"),
     name: Optional[str] = Query(None, description="Partial, case-insensitive match on job_name"),
+    include_off_job: bool = Query(
+        False,
+        description="Also return off-job hour entries as candidates (kind='off_job')",
+    ),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
@@ -641,6 +646,17 @@ def job_search(
     A "job" here is any job_uuid that appears in events or materials with a
     matching date/name. Admins rarely remember the UUID, but they do know
     the date and the customer name.
+
+    `include_off_job` folds off-job hour entries into the same result list,
+    marked `kind="off_job"` (everything else is `kind="job"`). It is OPT-IN
+    rather than always-on because this endpoint has a second caller: the
+    admin-notes job picker, which attaches a `job_uuid` to a note. An off-job
+    entry has no job_uuid, so offering one there would produce a note attached
+    to nothing. The Job Summary lookup passes it; the note picker does not.
+
+    Off-job entries match on the EMPLOYEE'S name, not a customer name - that is
+    the only name they have, and it is what an admin looking for "Dylan's shop
+    hours on the 3rd" would type.
     """
     from app.core.time_utils import mountain_date_expr, utc_naive_to_mountain_date
 
@@ -711,6 +727,7 @@ def job_search(
         best_name = max(set(names), key=names.count) if names else ""
         dates_sorted = sorted(c["dates"])
         results.append({
+            "kind": "job",
             "job_uuid": job_uuid,
             "job_name": best_name,
             "dates": dates_sorted,
@@ -718,6 +735,36 @@ def job_search(
             "material_count": c["materials"],
             "entered": job_uuid in entered_uuids,
         })
+
+    # Off-job hours - opt-in, and a different shape of record: one employee, one
+    # day, no job. They are given the same `dates` / `job_name` fields so the one
+    # result list can render both without the caller branching on every field,
+    # but `kind` and `entry_uuid` are what a caller acts on.
+    if include_off_job:
+        oq = db.query(OffJobEntry)
+        if date:
+            oq = oq.filter(OffJobEntry.work_date == date)
+        if needle:
+            oq = oq.filter(func.lower(OffJobEntry.submitted_by_name).like(f"%{needle}%"))
+        # Newest first here too, and bounded the same way as the job queries.
+        for o in oq.order_by(OffJobEntry.work_date.desc()).limit(200).all():
+            who = o.submitted_by_name or "(unknown)"
+            results.append({
+                "kind": "off_job",
+                "entry_uuid": o.entry_uuid,
+                "job_uuid": "",
+                "job_name": f"{who} - off-job hours",
+                "dates": [o.work_date] if o.work_date else [],
+                "event_count": 0,
+                "material_count": 0,
+                # Off-job entries have no data-entry attestation of their own;
+                # the chip is a job concept. False, not omitted, so the shape
+                # stays uniform.
+                "entered": False,
+                "hours": float(o.hours or 0.0),
+                "pay_structure": o.pay_structure,
+                "user_name": who,
+            })
 
     # Newest first by latest known date
     results.sort(key=lambda r: (r["dates"][-1] if r["dates"] else "", r["job_name"]), reverse=True)

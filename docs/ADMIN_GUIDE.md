@@ -143,6 +143,24 @@ reason. This never changes what the crew submitted - it records an override, and
 both numbers stay visible. The correction flows into whichever pay period the
 job falls in, and the payroll page shows it read-only.
 
+**Off-job hours in the same search.** The lookup returns off-job hour entries
+alongside jobs, tagged **Off-job hours**. Search a date to see everything logged
+that day, or type an employee's name (an off-job entry has no customer, so the
+employee's name is what matches). Opening one shows what they filed - the day,
+the hours, the timeline stamps, the pay structure, and their "what you did" note
+- with the same **Hour corrections** surface a job has.
+
+Two differences from a job, both because of what the record is:
+
+- There is no employee picker. The entry already names one person.
+- The correction is emailed when you **finalize the pay period** containing that
+  date, not when you initial anything. There is no initialing step here.
+
+Recorded **PTO** cannot be corrected on this surface: it draws down the PTO
+allowance, so add or take back a PTO day with the PTO tool on the payroll screen
+instead. The panel says so rather than letting you fill in a form that would be
+refused.
+
 **Correcting the bill.** The Bill card has a **Correct bill** button: edit the
 line items, global discount and notes, and the job-report billing fields
 (billing method, M1 dumpster/recycling %, personal vehicles). It shows the new
@@ -224,7 +242,11 @@ line shows the corrected number with an **at Job Summary** marker and no Correct
 button; open that job in Job Summary to change it, and the crew member is emailed
 when you initial the job. Off-job, office and manual lines are still corrected
 here: hit **Correct** on the line, or **+ Add a line** for something with no
-underlying entry at all (a bonus, say).
+underlying entry at all (a bonus, say). An off-job line can also be corrected
+from the Job Summary lookup, which shows the entry as the employee filed it -
+useful when you need to see the timeline stamps and their note before deciding
+what the number should be. Either surface edits the same correction, so you
+cannot end up with two.
 
 **Finalizing.** When the off-job/office/manual corrections are right, **Finalize
 and notify** emails each affected crew member one summary of exactly what changed

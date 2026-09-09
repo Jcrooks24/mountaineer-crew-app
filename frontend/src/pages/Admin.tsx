@@ -7677,16 +7677,50 @@ type NotifyResult = {
 const CORRECTION_BUCKET_LABELS: Record<string, string> = {
   billable: "Billable",
   non_billable: "Non-billable",
+  // The server has always accepted this bucket; the picker just never offered
+  // it. Off-job hours filed under a bespoke pay structure land here, so without
+  // it such an entry has no selectable bucket and cannot be corrected at all.
+  other: "Other",
   per_diem_nights: "Per-diem nights",
 };
 
 type JobCandidate = {
+  /** "job" for everything that has a job_uuid; "off_job" for an off-job hours
+   *  entry, which the Job Summary lookup asks for and the admin-notes job
+   *  picker does not (a note attaches to a job_uuid, and an off-job entry has
+   *  none). Absent on an older backend, hence the optional. */
+  kind?: "job" | "off_job";
   job_uuid: string;
   job_name: string;
   dates: string[];
   event_count: number;
   material_count: number;
   entered: boolean;
+  /** off_job rows only. */
+  entry_uuid?: string;
+  hours?: number;
+  pay_structure?: string;
+  user_name?: string;
+};
+
+type OffJobCorrectionsResp = {
+  entry_uuid: string;
+  user_id: number | null;
+  user_name: string;
+  work_date: string;
+  hours: number;
+  bucket: string;
+  pay_structure: string;
+  pay_other_note: string;
+  start_time: string;
+  end_time: string;
+  notes: string;
+  recorded_by_name: string;
+  correctable: boolean;
+  correctable_reason: string | null;
+  reported: JobReported[];
+  corrections: JobCorrection[];
+  pending_notify_count: number;
 };
 
 function fmtHrs(n: number): string {
@@ -7959,6 +7993,332 @@ function JobHourCorrections({
         <div className="small" style={{ color: "var(--muted)" }}>No corrections on this job.</div>
       )}
     </div>
+  );
+}
+
+
+/** One off-job hours entry, opened from the Job Summary lookup, with the same
+ *  correction surface a job has (office request, 2026-09-09).
+ *
+ *  Off-job hours were the one logged thing with no admin surface anywhere: the
+ *  crew could file them, payroll summed them, and a wrong number could only be
+ *  fixed by deleting the entry and asking the person to file it again. This is
+ *  the twin of JobHourCorrections, and the differences are the record's, not
+ *  the design's:
+ *
+ *    - No employee picker. An off-job entry belongs to exactly one person, so
+ *      the only thing a picker could add is the chance of correcting somebody
+ *      else's hours.
+ *    - No initialing step. A job's corrections are mailed when the job is
+ *      initialed; there is no equivalent ceremony here, so these are mailed
+ *      when the pay period is finalized. The card says so, because "not yet
+ *      sent" with nothing to press would read as broken.
+ *    - Recorded PTO is refused, and says why. It draws down an allowance the
+ *      PTO tool tracks, and correcting it here would leave the two out of step.
+ */
+function OffJobEntryPanel({
+  entryUuid,
+  onBack,
+}: {
+  entryUuid: string;
+  onBack: () => void;
+}) {
+  const [resp, setResp] = useState<OffJobCorrectionsResp | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  const [bucket, setBucket] = useState("billable");
+  const [hours, setHours] = useState("");
+  const [reason, setReason] = useState("");
+  const [notify, setNotify] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [formErr, setFormErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const data = await apiFetch<OffJobCorrectionsResp>(
+        `/api/admin/payroll/off-job/${encodeURIComponent(entryUuid)}/corrections`,
+      );
+      setResp(data);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not load this entry.");
+    } finally {
+      setLoading(false);
+    }
+  }, [entryUuid]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const reportedFor = (b: string): number =>
+    resp?.reported.find((r) => r.bucket === b)?.hours ?? 0;
+
+  const closeForm = () => {
+    setAdding(false);
+    setEditingId(null);
+    setBucket(resp?.bucket && resp.bucket !== "pto" ? resp.bucket : "billable");
+    setHours("");
+    setReason("");
+    setNotify(true);
+    setFormErr(null);
+  };
+
+  const openAdd = () => {
+    closeForm();
+    // Default to the bucket the entry actually pays into, which is what is
+    // being corrected nine times in ten.
+    if (resp?.bucket && resp.bucket !== "pto") setBucket(resp.bucket);
+    setHours(resp ? String(resp.hours) : "");
+    setAdding(true);
+  };
+
+  const openEdit = (c: JobCorrection) => {
+    setAdding(false);
+    setEditingId(c.id);
+    setBucket(c.bucket);
+    setHours(String(c.corrected_hours));
+    setReason(c.reason);
+    setNotify(true);
+    setFormErr(null);
+  };
+
+  const save = async () => {
+    const n = Number(hours);
+    if (!Number.isFinite(n) || n < 0) { setFormErr("Enter the corrected hours as a number."); return; }
+    if (!reason.trim()) { setFormErr("A reason is required - the employee is emailed this text."); return; }
+    setBusy(true);
+    setFormErr(null);
+    try {
+      await apiFetch(`/api/admin/payroll/off-job/${encodeURIComponent(entryUuid)}/corrections`, {
+        method: "PUT",
+        body: JSON.stringify({
+          bucket,
+          corrected_hours: n,
+          reason: reason.trim(),
+          notify,
+        }),
+      });
+      closeForm();
+      await load();
+    } catch (e) {
+      setFormErr(e instanceof ApiError ? e.message : "Could not save the correction.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (c: JobCorrection) => {
+    if (!confirm(
+      `Remove the correction to ${c.user_name}'s ${CORRECTION_BUCKET_LABELS[c.bucket] || c.bucket} hours? `
+      + "The entry goes back to what they filed.",
+    )) return;
+    setBusy(true);
+    try {
+      await apiFetch(
+        `/api/admin/payroll/off-job/${encodeURIComponent(entryUuid)}/corrections/${c.id}`,
+        { method: "DELETE" },
+      );
+      if (editingId === c.id) closeForm();
+      await load();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not remove the correction.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const corrections = resp?.corrections ?? [];
+  const pending = resp?.pending_notify_count ?? 0;
+  const unit = bucket === "per_diem_nights" ? "nights" : "hrs";
+  const formOpen = adding || editingId !== null;
+
+  return (
+    <>
+      <div className="card">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <div className="microLabel" style={{ marginBottom: 0 }}>Off-job hours</div>
+          <button type="button" onClick={onBack} style={{ fontSize: 12 }}>← Back to results</button>
+        </div>
+
+        {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+        {loading && !resp && <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>Loading…</div>}
+
+        {resp && (
+          <>
+            <div style={{ fontWeight: 700, fontSize: 16, marginTop: 8 }}>
+              {resp.user_name || "(unknown employee)"}
+            </div>
+            <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+              {resp.work_date || "no date"}
+              {" · "}{fmtHrs(resp.hours)} hrs
+              {" · "}{CORRECTION_BUCKET_LABELS[resp.bucket] || resp.bucket}
+              {resp.start_time || resp.end_time
+                ? ` · ${resp.start_time || "?"} to ${resp.end_time || "?"}`
+                : ""}
+            </div>
+            {resp.pay_other_note && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                Pay structure note: {resp.pay_other_note}
+              </div>
+            )}
+            {resp.recorded_by_name && (
+              <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
+                Recorded by {resp.recorded_by_name} on the employee's behalf
+              </div>
+            )}
+            {resp.notes && (
+              <div className="small" style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
+                <span style={{ color: "var(--muted)" }}>What they did: </span>{resp.notes}
+              </div>
+            )}
+            <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace", fontSize: 11, marginTop: 6 }}>
+              {resp.entry_uuid}
+            </div>
+          </>
+        )}
+      </div>
+
+      {resp && (
+        <div className="card">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div className="microLabel" style={{ marginBottom: 0 }}>Hour corrections</div>
+            {resp.correctable && !formOpen && (
+              <button type="button" onClick={openAdd} style={{ fontSize: 12 }}>+ Correct hours</button>
+            )}
+          </div>
+
+          {!resp.correctable ? (
+            <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>
+              {resp.correctable_reason}
+            </div>
+          ) : (
+            <div className="small" style={{ color: "var(--muted)", margin: "8px 0 10px" }}>
+              This never changes what the employee submitted - it records an
+              override for payroll. Corrections are emailed when you finalize the
+              pay period that contains {resp.work_date || "this date"}.
+            </div>
+          )}
+
+          {corrections.length > 0 && (
+            <div className="col" style={{ gap: 6, marginBottom: 10 }}>
+              {corrections.map((c) => (
+                <div
+                  key={c.id}
+                  className="row"
+                  style={{
+                    justifyContent: "space-between", alignItems: "center", gap: 10,
+                    padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 8,
+                    fontSize: 13,
+                  }}
+                >
+                  <div className="col" style={{ gap: 1, minWidth: 0 }}>
+                    <span style={{ fontWeight: 600 }}>
+                      {c.user_name}
+                      <span style={{ color: "var(--muted)", fontWeight: 400 }}>
+                        {" "}({CORRECTION_BUCKET_LABELS[c.bucket] || c.bucket})
+                      </span>
+                    </span>
+                    <span className="small" style={{ color: "var(--brand)" }}>
+                      {fmtHrs(c.original_hours)} → {fmtHrs(c.corrected_hours)}
+                      {c.bucket === "per_diem_nights" ? " nights" : " hrs"} · {c.reason}
+                    </span>
+                    <span className="small" style={{ color: "var(--muted)" }}>
+                      {c.notified_at
+                        ? "Employee emailed"
+                        : "Not yet sent - goes out when the pay period is finalized"}
+                    </span>
+                  </div>
+                  <div className="row" style={{ gap: 8, flexShrink: 0 }}>
+                    <button type="button" onClick={() => openEdit(c)} disabled={busy} style={{ fontSize: 12 }}>Edit</button>
+                    <button type="button" onClick={() => remove(c)} disabled={busy} style={{ fontSize: 12, color: "var(--danger)" }}>Remove</button>
+                  </div>
+                </div>
+              ))}
+              {pending > 0 && (
+                <div className="small" style={{ color: "var(--warn, #e0a800)" }}>
+                  {pending} correction{pending === 1 ? "" : "s"} not yet emailed.
+                  Finalizing the pay period sends them.
+                </div>
+              )}
+            </div>
+          )}
+
+          {formOpen && (
+            <div className="col" style={{ gap: 10, padding: 12, borderRadius: 10, border: "1px solid var(--brand)" }}>
+              <div className="row wrap" style={{ gap: 10, alignItems: "flex-end" }}>
+                <div className="col" style={{ gap: 3, minWidth: 160 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Employee</span>
+                  {/* Not a picker: the entry names the person. */}
+                  <div style={{ fontWeight: 600, paddingBottom: 6 }}>{resp.user_name}</div>
+                </div>
+                <label className="col" style={{ gap: 3 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>Bucket</span>
+                  <select value={bucket} onChange={(e) => setBucket(e.target.value)} disabled={editingId !== null}>
+                    {Object.entries(CORRECTION_BUCKET_LABELS).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="col" style={{ gap: 3, width: 130 }}>
+                  <span className="small" style={{ color: "var(--muted)" }}>
+                    {bucket === "per_diem_nights" ? "Nights" : "Should be"}
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step={0.25}
+                    value={hours}
+                    onChange={(e) => setHours(e.target.value)}
+                  />
+                </label>
+                <div className="small" style={{ color: "var(--muted)", paddingBottom: 6 }}>
+                  Filed {fmtHrs(reportedFor(bucket))} {unit}
+                </div>
+              </div>
+              {bucket !== resp.bucket && (
+                // Moving hours between buckets takes two corrections, and an
+                // admin who makes only the second one pays the hours twice.
+                // Said here rather than discovered on the payroll table.
+                <div className="small" style={{ color: "var(--warn, #e0a800)" }}>
+                  This entry pays into {CORRECTION_BUCKET_LABELS[resp.bucket] || resp.bucket}.
+                  To MOVE the hours, also correct {CORRECTION_BUCKET_LABELS[resp.bucket] || resp.bucket} to 0 -
+                  otherwise both buckets are paid.
+                </div>
+              )}
+              <label className="col" style={{ gap: 3 }}>
+                <span className="small" style={{ color: "var(--muted)" }}>Reason (the employee is emailed this)</span>
+                <textarea
+                  rows={2}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. Shop work finished at 2, not 4 - confirmed with the shop lead."
+                  style={{ width: "100%", resize: "vertical" }}
+                />
+              </label>
+              <label className="row" style={{ gap: 8, alignItems: "center" }}>
+                <input type="checkbox" checked={!notify} onChange={(e) => setNotify(!e.target.checked)} />
+                <span className="small">
+                  Do not email {resp.user_name} about this line
+                </span>
+              </label>
+              {formErr && <span className="small" style={{ color: "var(--danger)" }}>{formErr}</span>}
+              <div className="row" style={{ gap: 8 }}>
+                <button type="button" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save correction"}</button>
+                <button type="button" onClick={closeForm} disabled={busy}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {corrections.length === 0 && !formOpen && !loading && resp.correctable && (
+            <div className="small" style={{ color: "var(--muted)" }}>No corrections on this entry.</div>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -8523,6 +8883,9 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
   const [name, setName] = useState("");
   const [candidates, setCandidates] = useState<JobCandidate[] | null>(null);
   const [summary, setSummary] = useState<JobSummary | null>(null);
+  // An off-job hours entry opened from the same results list. Mutually
+  // exclusive with `summary` - one lookup, two kinds of record.
+  const [offJobUuid, setOffJobUuid] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [invoiceCopied, setInvoiceCopied] = useState(false);
@@ -8576,11 +8939,16 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
     setLoading(true);
     setErr(null);
     setSummary(null);
+    setOffJobUuid(null);
     setCandidates(null);
     try {
       const params = new URLSearchParams();
       if (date) params.set("date", date);
       if (name.trim()) params.set("name", name.trim());
+      // Off-job hours entries come back in the same list, marked kind="off_job".
+      // Asked for HERE only: the admin-notes job picker uses the same endpoint
+      // to attach a job_uuid to a note, and an off-job entry has none.
+      params.set("include_off_job", "true");
       const rows = await apiFetch<JobCandidate[]>(`/api/admin/job-search?${params.toString()}`);
       setCandidates(rows);
     } catch (e: any) {
@@ -8594,6 +8962,9 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
     setLoading(true);
     setErr(null);
     setSummary(null);
+    // Opening a job closes an off-job entry, and vice versa. The deep-link from
+    // the payroll pending-review list comes through here too.
+    setOffJobUuid(null);
     setEntrySaved(false);
     setEntryError(null);
     try {
@@ -8814,38 +9185,58 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
         {err && <div className="small" style={{ color: "var(--danger)", marginTop: 8 }}>{err}</div>}
       </div>
 
-      {candidates != null && !summary && (
+      {candidates != null && !summary && !offJobUuid && (
         <div className="card">
           <div className="microLabel" style={{ marginBottom: 10 }}>
             Matches ({candidates.length})
           </div>
           {candidates.length === 0 ? (
             <div className="small" style={{ color: "var(--muted)" }}>
-              No jobs match those filters.
+              No jobs or off-job hours match those filters.
             </div>
           ) : (
             <div className="col" style={{ gap: 8 }}>
-              {candidates.map((c) => (
+              {candidates.map((c) => {
+                // Off-job hours entries share this list. They are a different
+                // kind of record - one person, one day, no job - so they get
+                // their own row rather than being dressed up as a job with
+                // zero events and a "Pending entry" chip that means nothing.
+                const isOffJob = c.kind === "off_job" && !!c.entry_uuid;
+                return (
                 <button
-                  key={c.job_uuid}
-                  onClick={() => loadSummary(c.job_uuid)}
+                  key={isOffJob ? `oj:${c.entry_uuid}` : c.job_uuid}
+                  onClick={() => (isOffJob ? setOffJobUuid(c.entry_uuid!) : loadSummary(c.job_uuid))}
                   style={{ textAlign: "left" }}
                 >
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>
                       {c.job_name || "(unnamed job)"}
                     </div>
-                    <span
-                      className="chip"
-                      style={{
-                        fontSize: 10,
-                        padding: "2px 8px",
-                        color: c.entered ? "var(--ok)" : "var(--brand2)",
-                        borderColor: c.entered ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
-                      }}
-                    >
-                      {c.entered ? "✓ Entered" : "Pending entry"}
-                    </span>
+                    {isOffJob ? (
+                      <span
+                        className="chip"
+                        style={{
+                          fontSize: 10,
+                          padding: "2px 8px",
+                          color: "var(--brand)",
+                          borderColor: "color-mix(in srgb, var(--brand) 30%, transparent)",
+                        }}
+                      >
+                        Off-job hours
+                      </span>
+                    ) : (
+                      <span
+                        className="chip"
+                        style={{
+                          fontSize: 10,
+                          padding: "2px 8px",
+                          color: c.entered ? "var(--ok)" : "var(--brand2)",
+                          borderColor: c.entered ? "color-mix(in srgb, var(--ok) 30%, transparent)" : "color-mix(in srgb, var(--brand2) 30%, transparent)",
+                        }}
+                      >
+                        {c.entered ? "✓ Entered" : "Pending entry"}
+                      </span>
+                    )}
                   </div>
                   <div className="small" style={{ color: "var(--muted)", marginTop: 2 }}>
                     {c.dates.length > 0
@@ -8853,17 +9244,23 @@ function JobSummaryTab({ openJobUuid, onOpened }: { openJobUuid?: string | null;
                         ? c.dates[0]
                         : `${c.dates[0]} → ${c.dates[c.dates.length - 1]}`
                       : "no dates"}
-                    {" · "}{c.event_count} event{c.event_count === 1 ? "" : "s"}
-                    {" · "}{c.material_count} material{c.material_count === 1 ? "" : "s"}
+                    {isOffJob
+                      ? ` · ${fmtHrs(c.hours ?? 0)} hrs`
+                      : `${" · "}${c.event_count} event${c.event_count === 1 ? "" : "s"} · ${c.material_count} material${c.material_count === 1 ? "" : "s"}`}
                   </div>
                   <div className="small" style={{ color: "var(--muted)", fontFamily: "monospace", fontSize: 11, marginTop: 2 }}>
-                    {c.job_uuid}
+                    {isOffJob ? c.entry_uuid : c.job_uuid}
                   </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
+      )}
+
+      {offJobUuid && (
+        <OffJobEntryPanel entryUuid={offJobUuid} onBack={() => setOffJobUuid(null)} />
       )}
 
       {summary && (

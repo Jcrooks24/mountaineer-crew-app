@@ -104,6 +104,41 @@ class JobCorrectionUpsert(BaseModel):
         return round(float(v), 2)
 
 
+class OffJobCorrectionUpsert(BaseModel):
+    """A correction to one off-job hours entry, made from the Job Summary lookup.
+
+    Smaller again than JobCorrectionUpsert. An off-job entry belongs to exactly
+    ONE employee, so there is no user_id to send: sending one would only create
+    the chance of correcting the wrong person's hours. Who, when, and what was
+    reported all come from the entry itself; the admin supplies the bucket, the
+    corrected number, and why.
+    """
+
+    bucket: str = "billable"
+    corrected_hours: float = 0.0
+    reason: str
+    notify: bool = True
+
+    @field_validator("reason")
+    @classmethod
+    def reason_required(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("a correction needs a reason - the crew member is told it")
+        if len(v) > 2000:
+            raise ValueError("reason too long")
+        return v
+
+    @field_validator("corrected_hours")
+    @classmethod
+    def hours_sane(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("hours cannot be negative")
+        if v > 400:
+            raise ValueError("hours out of range")
+        return round(float(v), 2)
+
+
 class PayrollFinalizeRequest(BaseModel):
     period_start: str
     period_end: str

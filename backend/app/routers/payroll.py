@@ -53,7 +53,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
@@ -86,6 +86,7 @@ from app.db.models.reimbursement import Reimbursement
 from app.db.models.user import User
 from app.schemas.payroll import (
     JobCorrectionUpsert,
+    OffJobCorrectionUpsert,
     PayrollCorrectionUpsert,
     PayrollFinalizeRequest,
     ReimbursementDecision,
@@ -1010,10 +1011,21 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     #     evaporating an admin's decision (the exact thing ADR 0029/0032 forbid).
     #   - period-scoped legacy / non-job rows (off-job, office, manual), keyed by
     #     the period as before.
+    # DATE-scoped corrections: made once against a record that carries its own
+    # date, and read into whichever ad-hoc period contains that date. Job
+    # corrections (ADR 0032) were the first of these; off-job corrections are
+    # the second. There is no pay-period table to look a period up in, so a
+    # correction to a dated record cannot be period-stamped at write time -
+    # this is what makes "correct it once, it is correct everywhere" work.
+    #
+    # Keyed on period_start being NULL rather than on job_uuid being set. Those
+    # are the same set today (a job correction always nulls its period, and a
+    # period correction always sets one), so this changes nothing for existing
+    # rows - it just stops the discriminator from being job-specific.
     job_corrections = (
         db.query(PayrollCorrection)
         .filter(
-            PayrollCorrection.job_uuid.isnot(None),
+            PayrollCorrection.period_start.is_(None),
             PayrollCorrection.work_date >= start.isoformat(),
             PayrollCorrection.work_date <= end.isoformat(),
         )
@@ -1022,7 +1034,6 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
     period_corrections = (
         db.query(PayrollCorrection)
         .filter(
-            PayrollCorrection.job_uuid.is_(None),
             PayrollCorrection.period_start == start.isoformat(),
             PayrollCorrection.period_end == end.isoformat(),
         )
@@ -1241,18 +1252,27 @@ def upsert_correction(
         source_key = f"manual:{uuid.uuid4()}"
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    existing = (
-        db.query(PayrollCorrection)
-        .filter(
+    # An off-job correction is DATE-scoped, not period-scoped: the entry carries
+    # its own work_date, and that date decides which period pays it. It is also
+    # editable from two places now - here, and the Job Summary lookup's off-job
+    # panel - so the lookup must not be period-filtered. If it were, this
+    # endpoint would miss a correction the other surface made and insert a
+    # SECOND row for the same entry; finalize would then mail both (one matching
+    # its period clause, one its date clause) while paying only one of them.
+    # One row per target, found regardless of scope.
+    dated_source = body.source == "off_job"
+    q = db.query(PayrollCorrection).filter(
+        PayrollCorrection.user_id == body.user_id,
+        PayrollCorrection.source == body.source,
+        PayrollCorrection.source_key == source_key,
+        PayrollCorrection.bucket == body.bucket,
+    )
+    if not dated_source:
+        q = q.filter(
             PayrollCorrection.period_start == s.isoformat(),
             PayrollCorrection.period_end == e.isoformat(),
-            PayrollCorrection.user_id == body.user_id,
-            PayrollCorrection.source == body.source,
-            PayrollCorrection.source_key == source_key,
-            PayrollCorrection.bucket == body.bucket,
         )
-        .first()
-    )
+    existing = q.first()
 
     if existing:
         # Editing a correction that already went out re-arms the notification:
@@ -1261,6 +1281,11 @@ def upsert_correction(
             existing.corrected_hours != body.corrected_hours
             or (existing.reason or "") != body.reason
         )
+        if dated_source:
+            # Force the single scope, so a row first written by one surface and
+            # then edited by the other cannot end up governed by both rules.
+            existing.period_start = None
+            existing.period_end = None
         existing.corrected_hours = body.corrected_hours
         existing.original_hours = body.original_hours
         existing.reason = body.reason
@@ -1277,8 +1302,10 @@ def upsert_correction(
         return _correction_json(existing)
 
     c = PayrollCorrection(
-        period_start=s.isoformat(),
-        period_end=e.isoformat(),
+        # NULL for off-job: date-scoped, as above. work_date is already checked
+        # to fall inside this period, so nothing moves between periods by it.
+        period_start=None if dated_source else s.isoformat(),
+        period_end=None if dated_source else e.isoformat(),
         user_id=body.user_id,
         user_name=target.name or target.email,
         source=body.source,
@@ -1573,6 +1600,264 @@ def delete_job_correction(
     return None
 
 
+# ── Off-job hour corrections ─────────────────────────────────────────────────
+#
+# Off-job hours had no admin surface at all: the crew could log them, payroll
+# summed them, and nobody could fix a wrong number without deleting the entry
+# and asking the employee to re-file it. This is the equivalent of the Job
+# Summary's hour corrections (ADR 0032) for a record that has no job.
+#
+# Same shape as the job pair on purpose - the frontend component is a near-twin
+# - with two differences that come from the record, not from taste:
+#
+#   1. No person picker. An off-job entry belongs to exactly one employee.
+#   2. PTO is refused. A PTO entry contributes to the "pto" bucket, which is
+#      deliberately not a correction bucket (it must never reach the OT sum),
+#      and it draws down an allowance the PTO tool tracks. Correcting one here
+#      would move hours out of that accounting silently. The PTO tool on the
+#      payroll screen is where a PTO day is added or taken back.
+
+
+def _off_job_entry(db: Session, entry_uuid: str) -> OffJobEntry:
+    e = (
+        db.query(OffJobEntry)
+        .filter(OffJobEntry.entry_uuid == entry_uuid)
+        .first()
+    )
+    if e is None:
+        raise HTTPException(status_code=404, detail="off-job entry not found")
+    return e
+
+
+def _off_job_bucket(e: OffJobEntry) -> str:
+    """The payroll bucket this entry's hours land in. Mirrors _off_job_hours;
+    kept beside it in behaviour rather than merged, because that one builds rows
+    for a whole period and this one answers a question about a single entry."""
+    ps = (e.pay_structure or "regular").lower()
+    return {
+        "regular": "billable",
+        "non_billable": "non_billable",
+        PTO_PAY_STRUCTURE: "pto",
+    }.get(ps, "other")
+
+
+def _off_job_correction_payload(db: Session, e: OffJobEntry) -> Dict[str, Any]:
+    bucket = _off_job_bucket(e)
+    corrections = (
+        db.query(PayrollCorrection)
+        .filter(
+            PayrollCorrection.source == "off_job",
+            PayrollCorrection.source_key == e.entry_uuid,
+        )
+        .all()
+    )
+    corrections = _dedupe_corrections(corrections)
+    who = e.submitted_by_name or ""
+    if e.submitted_by_id:
+        u = db.query(User).filter(User.id == e.submitted_by_id).first()
+        if u:
+            who = u.name or u.email or who
+    is_pto = bucket == "pto"
+    unlinked = e.submitted_by_id is None
+    return {
+        "entry_uuid": e.entry_uuid,
+        "user_id": e.submitted_by_id,
+        "user_name": who,
+        "work_date": e.work_date or "",
+        "hours": float(e.hours or 0.0),
+        "bucket": bucket,
+        "pay_structure": e.pay_structure,
+        "pay_other_note": e.pay_other_note or "",
+        "start_time": e.start_time or "",
+        "end_time": e.end_time or "",
+        "notes": e.notes or "",
+        "recorded_by_name": e.recorded_by_name or "",
+        # Why the form is closed, in the words the admin needs, rather than
+        # letting them fill it in and take a 400 at the end.
+        "correctable": not is_pto and not unlinked,
+        "correctable_reason": (
+            "This is recorded PTO. Add or take back a PTO day with the PTO tool "
+            "on the payroll screen - correcting it here would leave the PTO "
+            "allowance out of step."
+            if is_pto
+            else (
+                "This entry is not linked to a roster account, so there is "
+                "nobody to correct or to tell."
+                if unlinked
+                else None
+            )
+        ),
+        # Same shape as the job endpoint's `reported`, so the two components can
+        # share their table. One row: the entry's own contribution.
+        "reported": [
+            {
+                "user_id": e.submitted_by_id,
+                "user_name": who,
+                "bucket": bucket,
+                "hours": round(float(e.hours or 0.0), 2),
+            }
+        ],
+        "corrections": [_job_correction_json(c) for c in corrections],
+        "pending_notify_count": sum(1 for c in corrections if c.notified_at is None),
+    }
+
+
+@router.get("/off-job/{entry_uuid}/corrections")
+def list_off_job_corrections(
+    entry_uuid: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """The entry as filed, plus any corrections already on record."""
+    return _off_job_correction_payload(db, _off_job_entry(db, entry_uuid))
+
+
+@router.put("/off-job/{entry_uuid}/corrections")
+def upsert_off_job_correction(
+    entry_uuid: str,
+    body: OffJobCorrectionUpsert,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    if body.bucket not in CORRECTION_BUCKETS:
+        raise HTTPException(status_code=400, detail="unknown bucket")
+
+    e = _off_job_entry(db, entry_uuid)
+    entry_bucket = _off_job_bucket(e)
+    if entry_bucket == "pto":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Recorded PTO is corrected with the PTO tool on the payroll "
+                "screen, not here - it draws down an allowance this surface "
+                "does not track."
+            ),
+        )
+    if e.submitted_by_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This entry is not linked to a roster account, so it cannot be corrected.",
+        )
+
+    target = db.query(User).filter(User.id == e.submitted_by_id).first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="employee not found")
+
+    # Everything factual comes from the entry, never from the client: WHO it is
+    # about, WHEN the work happened (so the correction lands in the pay period
+    # and the OT week containing that day), and WHAT was reported (so the email
+    # says the number the employee actually filed). The admin supplies only the
+    # judgement - the bucket, the corrected figure, and the reason.
+    work_date = (e.work_date or "").strip()
+    if not _parse_date_str(work_date):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This entry has no usable work date, so a correction could not "
+                "be placed in a pay period."
+            ),
+        )
+    # Reported hours only where the correction is aimed at the bucket the entry
+    # actually contributes to. Correcting a DIFFERENT bucket is how hours are
+    # moved between buckets, and there the employee reported nothing.
+    original = float(e.hours or 0.0) if body.bucket == entry_bucket else 0.0
+    label = f"Off-job {work_date}".strip()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    existing = (
+        db.query(PayrollCorrection)
+        .filter(
+            PayrollCorrection.user_id == e.submitted_by_id,
+            PayrollCorrection.source == "off_job",
+            PayrollCorrection.source_key == entry_uuid,
+            PayrollCorrection.bucket == body.bucket,
+        )
+        .first()
+    )
+    if existing is not None:
+        # Editing a correction that already went out re-arms the notification:
+        # the employee was told the old number and is owed the new one.
+        changed = (
+            existing.corrected_hours != body.corrected_hours
+            or (existing.reason or "") != body.reason
+        )
+        # Migrate a legacy period-scoped row (one made from the payroll screen's
+        # per-line editor) in place, so the two surfaces cannot end up holding
+        # two corrections for the same thing.
+        existing.period_start = None
+        existing.period_end = None
+        existing.corrected_hours = body.corrected_hours
+        existing.original_hours = original
+        existing.reason = body.reason
+        existing.work_date = work_date
+        existing.source_label = label
+        existing.user_name = target.name or target.email
+        existing.notify = body.notify
+        existing.created_by_id = admin.id
+        existing.created_by_name = admin.name or admin.email
+        existing.updated_at = now
+        if changed:
+            existing.notified_at = None
+        db.commit()
+        db.refresh(existing)
+        return _job_correction_json(existing)
+
+    c = PayrollCorrection(
+        # Date-scoped, like a job correction and for the same reason: there is
+        # no pay-period table to stamp it with, and the entry's own date is what
+        # decides which period pays it.
+        job_uuid=None,
+        period_start=None,
+        period_end=None,
+        user_id=e.submitted_by_id,
+        user_name=target.name or target.email,
+        source="off_job",
+        source_key=entry_uuid,
+        source_label=label,
+        work_date=work_date,
+        bucket=body.bucket,
+        original_hours=original,
+        corrected_hours=body.corrected_hours,
+        reason=body.reason,
+        notify=body.notify,
+        created_by_id=admin.id,
+        created_by_name=admin.name or admin.email,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return _job_correction_json(c)
+
+
+@router.delete("/off-job/{entry_uuid}/corrections/{correction_id}", status_code=204)
+def delete_off_job_correction(
+    entry_uuid: str,
+    correction_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Withdraw a correction, putting the entry back to what the employee filed.
+
+    Scoped to the entry in the path, not just the id, so a stale tab cannot
+    delete some other record's correction.
+    """
+    c = (
+        db.query(PayrollCorrection)
+        .filter(
+            PayrollCorrection.id == correction_id,
+            PayrollCorrection.source == "off_job",
+            PayrollCorrection.source_key == entry_uuid,
+        )
+        .first()
+    )
+    if c is None:
+        raise HTTPException(status_code=404, detail="correction not found")
+    db.delete(c)
+    db.commit()
+
+
 def _job_correction_email(
     db: Session, employee_name: str, job_name: str, work_date: str,
     cs: List[PayrollCorrection],
@@ -1701,7 +1986,7 @@ def _finalize_email(
 def finalize_period(
     body: PayrollFinalizeRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     """Mail every un-notified correction for the period to the crew it affects.
 
@@ -1783,13 +2068,32 @@ def finalize_period(
     pending = (
         db.query(PayrollCorrection)
         .filter(
-            # Period-scoped rows only. Job corrections are mailed when their job
-            # is initialed on the Job Summary, not from here (ADR 0032), so a
-            # period finalize must not also mail them - that would double-notify.
+            # NOT job corrections. Those are mailed when their job is initialed
+            # on the Job Summary (ADR 0032), so mailing them here too would
+            # double-notify. Every other correction is mailed from finalize.
             PayrollCorrection.job_uuid.is_(None),
-            PayrollCorrection.period_start == s.isoformat(),
-            PayrollCorrection.period_end == e.isoformat(),
             PayrollCorrection.notified_at.is_(None),
+            or_(
+                # Period-scoped: stamped with this exact period at write time.
+                and_(
+                    PayrollCorrection.period_start == s.isoformat(),
+                    PayrollCorrection.period_end == e.isoformat(),
+                ),
+                # Date-scoped and not a job: an off-job correction, which lands
+                # in whichever period contains its work_date. This clause is
+                # load-bearing, not defensive. Without it such a row is invisible
+                # to BOTH mailing paths - it is not a job, so the attestation
+                # never sees it, and its period is NULL, so the clause above
+                # never matches - and payroll would quietly pay a corrected
+                # figure the employee was never told about. The read path above
+                # picks these up by the same rule, so what is paid and what is
+                # mailed stay the same set.
+                and_(
+                    PayrollCorrection.period_start.is_(None),
+                    PayrollCorrection.work_date >= s.isoformat(),
+                    PayrollCorrection.work_date <= e.isoformat(),
+                ),
+            ),
         )
         .all()
     )
