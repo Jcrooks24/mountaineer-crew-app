@@ -4,7 +4,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, List, Dict, Any, Optional, Set
 
 from sqlalchemy.orm import Session
@@ -2089,11 +2089,46 @@ def reconcile_job_materials_bills(db: Session, max_jobs: int = 100) -> Dict[str,
         out["error"] = str(exc)
         return out
     out["pending"] = len(rows)
-    for (job_uuid,) in rows:
-        if not job_uuid:
-            continue
+    keys = [k for (k,) in rows if k]
+    for job_uuid in keys:
         schedule_job_materials_bills_rebuild(job_uuid)
         out["queued"] += 1
+
+    # ROTATE what we just picked up to the back of the queue.
+    #
+    # The read above is `ORDER BY exported_at LIMIT :n`, oldest first, and a
+    # marker is only cleared when its rebuild SUCCEEDS. So a job whose rebuild
+    # fails deterministically - the SheetHeaderError guard firing on a broken
+    # Bills header is the realistic one - keeps its marker forever AND keeps its
+    # place at the front of the queue. Twenty-five of those and no other job is
+    # ever re-driven again: the reconciler would spend every cycle on the same
+    # doomed twenty-five while genuinely recoverable work behind them starves,
+    # silently, on the money export.
+    #
+    # Touching exported_at makes the ordering round-robin instead. A failing job
+    # still gets retried, just behind everything else that is waiting, so a
+    # permanent failure costs one slot per cycle rather than the whole cycle.
+    # It stays visible as a RED sync and in the failure ring either way.
+    if keys:
+        try:
+            db.execute(
+                text(
+                    "UPDATE sheet_generic_exports SET exported_at = :now "
+                    "WHERE kind = :kind AND export_key IN :keys"
+                ).bindparams(bindparam("keys", expanding=True)),
+                {"now": datetime.now(timezone.utc).isoformat(), "kind": _BILLS_PENDING_KIND,
+                 "keys": keys},
+            )
+            db.commit()
+        except Exception as exc:  # noqa: BLE001
+            # Best-effort. Failing to rotate costs fairness on the next cycle,
+            # never the rebuild itself, so it must not fail the sweep.
+            print(f"[sheets] could not rotate Bills rebuild markers: {exc}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
     out["duration_ms"] = int((time.monotonic() - started) * 1000)
     return out
 

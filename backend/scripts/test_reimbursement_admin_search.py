@@ -112,6 +112,31 @@ check("filters combine rather than replacing each other",
 check("nothing matching returns empty, not everything", len(search(q="zzzz")) == 0)
 check("no filters returns the lot", len(search()) == 5, str(len(search())))
 
+print("\nA claim with NO expense_date is dated by when it was submitted:")
+# expense_date is nullable - crew can clear the date picker, and every claim
+# filed before the field existed has none. A bare comparison drops those rows,
+# so the claim VANISHES from the ledger the moment the office picks a date
+# range, while payroll keeps paying it (payroll falls back to created_at).
+# The ledger has to agree with payroll or the office reconciles against a list
+# that is missing rows it is paying.
+undated = claim(reimbursement_uuid="undated", expense_date=None, vendor="Ace",
+                created_at=datetime(2026, 9, 4, 19, 0, 0),
+                updated_at=datetime(2026, 9, 4, 19, 0, 0))
+check("it still appears with no date filter",
+      any(r.reimbursement_uuid == "undated" for r in search(q="Ace")))
+check("and inside a range that contains its created_at",
+      any(r.reimbursement_uuid == "undated"
+          for r in search(date_from="2026-09-01", date_to="2026-09-06")))
+check("but not in a range that excludes it",
+      not any(r.reimbursement_uuid == "undated"
+              for r in search(date_from="2026-09-06", date_to="2026-09-09")))
+check("a dated claim is still filtered on its own date, not created_at",
+      # every claim above was created 2026-09-01 but dated later; a window on
+      # the creation day alone must not sweep them all in
+      not any(r.expense_date == "2026-09-08"
+              for r in search(date_from="2026-09-01", date_to="2026-09-01")))
+
+
 print("\nReceipt and odometer links come back for the office to open:")
 withphoto = claim(receipt_photo_url="https://drive.example/receipt", vendor="Ace")
 out = search(q="Ace")[0]
@@ -128,8 +153,13 @@ check("who entered it is recorded", res.qb_entered_by_name == "Office",
       str(res.qb_entered_by_name))
 check("and when", res.qb_entered_at is not None)
 check("it is findable by qb_status", len(search(qb_status="entered")) == 1)
-check("and the rest are still pending", len(search(qb_status="pending")) == 5,
-      str(len(search(qb_status="pending"))))
+# Derived, not a literal: exactly one claim was flipped to "entered", so every
+# other claim in the table must still be pending. A hardcoded number here just
+# breaks whenever a fixture is added, which teaches the next person to re-baseline
+# it rather than read it - and a count nobody reads is where a real regression hides.
+check("and the rest are still pending",
+      len(search(qb_status="pending")) == len(search()) - 1,
+      f"{len(search(qb_status='pending'))} pending of {len(search())} total")
 
 print("\nAnd putting it back, because a mis-click must be undoable:")
 res2 = set_qb_status(a.reimbursement_uuid, QbStatusIn(qb_status="pending"), db=db, current_user=admin)

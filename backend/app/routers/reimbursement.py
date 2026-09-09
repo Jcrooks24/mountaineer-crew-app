@@ -15,16 +15,17 @@ Both are idempotent on reimbursement_uuid (offline retry path).
 from __future__ import annotations
 
 import traceback
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db, require_admin
+from app.core.time_utils import mountain_day_utc_bounds
 from app.db.models.reimbursement import REIMBURSEMENT_STATUSES, Reimbursement
 from app.db.models.user import User
 from app.integrations.drive_upload import upload_reimbursement_photo_to_drive
@@ -434,10 +435,35 @@ def search_reimbursements(
         query = query.filter(Reimbursement.qb_status == qb_status)
     if payment_method:
         query = query.filter(Reimbursement.payment_method == payment_method)
+    # `expense_date` is NULLABLE - it is crew-entered, and every claim filed
+    # before that field existed has none. A bare comparison drops those rows
+    # silently, so a claim with no date would VANISH from the ledger the moment
+    # anybody picked a date range, while still being paid by payroll. Payroll
+    # already handles this by falling back to `created_at` (see `_reimbursements`
+    # in routers/payroll.py); the ledger has to agree with it, or the office is
+    # reconciling against a list that is missing rows it is paying.
+    # Bounds come from mountain_day_utc_bounds so the fallback is DST-safe and
+    # agrees with how the rest of the app reads a submission's date. A malformed
+    # date string is ignored rather than 400'd: these come from a date picker,
+    # and dropping a filter is better than failing the whole ledger.
     if date_from:
-        query = query.filter(Reimbursement.expense_date >= date_from)
+        try:
+            lo, _ = mountain_day_utc_bounds(date.fromisoformat(date_from))
+            query = query.filter(or_(
+                Reimbursement.expense_date >= date_from,
+                and_(Reimbursement.expense_date.is_(None), Reimbursement.created_at >= lo),
+            ))
+        except ValueError:
+            pass
     if date_to:
-        query = query.filter(Reimbursement.expense_date <= date_to)
+        try:
+            _, hi = mountain_day_utc_bounds(date.fromisoformat(date_to))
+            query = query.filter(or_(
+                Reimbursement.expense_date <= date_to,
+                and_(Reimbursement.expense_date.is_(None), Reimbursement.created_at < hi),
+            ))
+        except ValueError:
+            pass
     if q:
         like = f"%{q.strip()}%"
         query = query.filter(

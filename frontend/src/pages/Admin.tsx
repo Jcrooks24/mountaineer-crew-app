@@ -8416,7 +8416,23 @@ function ReimbursementsAdminTab() {
   const [to, setTo] = useState("");
   const [q, setQ] = useState("");
 
-  const load = useCallback(async () => {
+  // The search box, debounced. `q` is what the office is typing; `qDebounced` is
+  // what actually reaches the server.
+  //
+  // Without this the effect below fired one request per KEYSTROKE, because `load`
+  // is rebuilt whenever `q` changes. Typing "Home Depot" was ten searches. That
+  // matters more here than it looks: the backend runs with
+  // `--limit-max-requests 1000` and recycles - visibly, for several seconds -
+  // when it hits that, and CLAUDE.md is explicit that the request budget is
+  // something crews feel. Burning it on characters nobody searched for is the
+  // easiest kind of waste to avoid.
+  const [qDebounced, setQDebounced] = useState("");
+  useEffect(() => {
+    const t = window.setTimeout(() => setQDebounced(q), 300);
+    return () => window.clearTimeout(t);
+  }, [q]);
+
+  const load = useCallback(async (alive: () => boolean = () => true) => {
     setLoading(true);
     setErr(null);
     try {
@@ -8427,17 +8443,28 @@ function ReimbursementsAdminTab() {
       if (status) p.set("status", status);
       if (from) p.set("date_from", from);
       if (to) p.set("date_to", to);
-      if (q.trim()) p.set("q", q.trim());
-      setRows(await apiFetch<AdminReimbursement[]>(`/api/reimbursements/search?${p.toString()}`));
+      if (qDebounced.trim()) p.set("q", qDebounced.trim());
+      const found = await apiFetch<AdminReimbursement[]>(`/api/reimbursements/search?${p.toString()}`);
+      // Responses are not guaranteed to come back in the order they were sent,
+      // so without this a slower earlier search can land last and paint results
+      // for a needle the office has already moved on from. Same guard
+      // JobChecklistCard.refresh carries, for the same reason.
+      if (!alive()) return;
+      setRows(found);
     } catch (e) {
+      if (!alive()) return;
       setErr(e instanceof ApiError ? e.message : "Could not load reimbursements.");
       setRows([]);
     } finally {
-      setLoading(false);
+      if (alive()) setLoading(false);
     }
-  }, [qbStatus, type, payment, status, from, to, q]);
+  }, [qbStatus, type, payment, status, from, to, qDebounced]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    let live = true;
+    load(() => live);
+    return () => { live = false; };
+  }, [load]);
 
   async function setQb(row: AdminReimbursement, next: string) {
     setBusy(row.reimbursement_uuid);

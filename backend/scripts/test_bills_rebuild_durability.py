@@ -228,6 +228,33 @@ scheduled.clear()
 res = sx.reconcile_job_materials_bills(db, max_jobs=1)
 check("max_jobs bounds one cycle", len(scheduled) == 1 and res["queued"] == 1, str(res))
 
+# A permanently-failing job must not pin the front of the queue forever.
+#
+# The read is `ORDER BY exported_at LIMIT n`, oldest first, and a marker is only
+# cleared on SUCCESS. So without rotation a job whose rebuild always throws (the
+# SheetHeaderError guard on a broken Bills header is the realistic cause) is
+# picked first on every single cycle, and with max_jobs of it nothing behind it
+# is ever re-driven again - on the money export, silently. Rotating the keys we
+# just took to the back makes the ordering round-robin.
+print("\nA stuck job does not starve the ones behind it")
+for k in ("job-C", "job-D"):
+    sx._clear_bills_rebuild_pending(db, k)
+sx._mark_bills_rebuild_pending(db, "stuck")     # oldest, and never succeeds
+sx._mark_bills_rebuild_pending(db, "waiting")   # behind it, recoverable
+
+seen = []
+for _ in range(4):
+    scheduled.clear()
+    sx.reconcile_job_materials_bills(db, max_jobs=1)
+    seen.extend(scheduled)
+check("the stuck job does not take every cycle", "waiting" in seen, f"got {seen}")
+check("and it alternates rather than one starving the other",
+      seen.count("stuck") >= 1 and seen.count("waiting") >= 1, f"got {seen}")
+check("neither marker was cleared by a re-drive",
+      {r[0] for r in db.execute(
+          text("SELECT export_key FROM sheet_generic_exports WHERE kind=:k"),
+          {"k": sx._BILLS_PENDING_KIND}).fetchall()} == {"stuck", "waiting"})
+
 sx.schedule_job_materials_bills_rebuild = real_schedule
 
 print()

@@ -40,14 +40,38 @@ check("and does not call the PTO endpoints", !/pto-balance|off-job\/pto/.test(of
 console.log("\nThe office CAN record it, from the payroll screen:");
 check("payroll has a PTO panel", /function PtoSection\(/.test(payroll));
 check("it is rendered on the employee row", /<PtoSection /.test(payroll));
-check("it posts to the ADMIN endpoint",
-  /apiFetch\("\/api\/admin\/off-job\/pto"/.test(payroll));
-check("it reads the balance from the ADMIN endpoint",
-  /\/api\/admin\/off-job\/pto-balance\//.test(payroll));
-check("it mints an idempotency key so a double-tap cannot double-record",
+// THE URLS ARE CHECKED AGAINST THE SERVER'S REAL ROUTE TABLE, not against a
+// string written here.
+//
+// This block used to assert `/api/admin/off-job/pto`, which is not an endpoint -
+// the router's prefix is `/api/admin/off-job-hours`. The client called the wrong
+// URL, this test asserted the same wrong URL, and both agreed with each other
+// while every request 404'd and the whole feature was dead. A check written from
+// the same wrong assumption as the code cannot catch the code.
+//
+// So the route table (dumped from FastAPI by backend/scripts/dump_api_routes.py)
+// is the authority. verify_api_contract.mjs enforces this across the whole app;
+// these two assertions keep the failure named where somebody debugging PTO will
+// read it.
+const routes = JSON.parse(readFileSync(`${ROOT}/frontend/scripts/api_routes.json`, "utf8")).paths;
+const ptoPost = (payroll.match(/apiFetch\("(\/api\/[^"]*pto)"/) || [])[1] || "";
+const ptoBalance = (payroll.match(/apiFetch\(`(\/api\/[^`$]*pto-balance)\//) || [])[1] || "";
+check("it posts to a PTO endpoint that exists on the server",
+  routes.includes(ptoPost), `client posts to ${ptoPost || "(none found)"}`);
+check("it reads the balance from an endpoint that exists on the server",
+  routes.some((r) => r.startsWith(`${ptoBalance}/`)),
+  `client reads ${ptoBalance || "(none found)"}`);
+
+check("it mints a fresh uuid per press, so each Record is a create",
   /entry_uuid: crypto\.randomUUID\(\)/.test(payroll));
+// A read that fails must SAY so. The old version set `bal = null` and said
+// nothing, which renders identically to "this person has no allowance yet" -
+// that silence is what let the 404 above go unnoticed for the life of the
+// feature. Non-fatal, but never invisible.
 check("a balance that fails to load does not break the row",
-  /catch \{[\s\S]{0,120}?setBal\(null\)/.test(payroll));
+  /setBal\(null\);[\s\S]{0,120}?setBalErr\(/.test(payroll));
+check("and a failed balance read is surfaced, not swallowed",
+  /\{balErr &&/.test(payroll) && /Balance unavailable/.test(payroll));
 check("somebody with no allowance is told, not shown a form that will 403",
   /Not set up for PTO/.test(payroll));
 check("and the button is disabled when nothing is left",
