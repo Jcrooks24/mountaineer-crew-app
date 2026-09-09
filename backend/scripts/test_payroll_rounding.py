@@ -136,12 +136,18 @@ check("the cutover is at least a week after the request date (2026-09-03)",
       (PAYROLL_ROUNDING_EFFECTIVE_FROM - date(2026, 9, 3)).days >= 7,
       f"{PAYROLL_ROUNDING_EFFECTIVE_FROM} is only "
       f"{(PAYROLL_ROUNDING_EFFECTIVE_FROM - date(2026, 9, 3)).days} days out")
-# The guard against the real hazard: a fixed date plus an unknown promotion date.
-# This cannot fail in CI on the day it is written, so it is a REMINDER, not a
-# test - it prints rather than fails, and PROMOTION_CHECKLIST 7b is the real gate.
+# The real hazard is a fixed date plus an unknown promotion date. That is now a
+# BLOCKING check in scripts/promotion_gate.py (check id "cutover"), which CI runs
+# on every PR into main: it fails outright once this date is not in the future,
+# and prints a note when it is within three days. It used to be a print here plus
+# a manual checklist tick, neither of which can stop a merge - and the 2026-09-09
+# vet found the date one day from expiry with main four weeks behind.
+#
+# This line stays as a local heads-up for anyone running the tests directly. The
+# gate is what actually stops the merge.
 if PAYROLL_ROUNDING_EFFECTIVE_FROM <= date.today():
-    print("  NOTE  the cutover is now in the PAST. Bump it before promoting, or "
-          "already-reconciled periods will be restated (PROMOTION_CHECKLIST 7b).")
+    print("  NOTE  the cutover is now in the PAST. promotion_gate.py will BLOCK "
+          "the merge until it is bumped (PROMOTION_CHECKLIST 7b).")
 
 print("\n_round_rows does not mutate what it is given")
 src = [row(h(2, 5))]

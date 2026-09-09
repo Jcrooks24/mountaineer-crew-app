@@ -46,19 +46,20 @@ def round_billable_quarter(hours: float) -> float:
 # whole. A period that straddles this date keeps the old behaviour rather than
 # mixing two rules inside one payroll run, which nobody could check by hand.
 #
-# Set to one week out from the day this was written (2026-09-03), so the first
-# rounded period is one nobody has started reconciling yet.
+# Set one week out from the day it is set, so the first rounded period is one
+# nobody has started reconciling yet.
 #
-# *** CHECK THIS BEFORE PROMOTING. *** It is a fixed date and the promotion date
-# is not known. If this day has already passed by the time the change reaches
-# production, the cutover is in the PAST and periods people have already been
-# paid for would be restated on their next look - the precise thing it exists to
-# prevent. PROMOTION_CHECKLIST.md carries this as a step; bump the date if it has
-# gone stale.
+# *** THIS IS CHECKED MECHANICALLY. *** It is a fixed date and the promotion date
+# is not known, so a promotion that slips past it turns the cutover into the PAST
+# and periods people have already been paid for get restated the next time anyone
+# opens them - the precise thing it exists to prevent. `scripts/promotion_gate.py`
+# FAILS when this date is not in the future, and CI runs that gate on every PR
+# into main, so the only way past it is to bump the date deliberately.
 #
-# Deliberately a constant rather than a setting: "which payroll first used
-# rounding?" is only answerable if the answer cannot be quietly changed later.
-PAYROLL_ROUNDING_EFFECTIVE_FROM = date(2026, 9, 10)
+# Moved from 2026-09-10 to 2026-09-16 on 2026-09-09, at the user's direction,
+# because the promotion had not happened and 09-10 was one day away.
+#
+PAYROLL_ROUNDING_EFFECTIVE_FROM = date(2026, 9, 16)
 
 
 def payroll_rounds(period_start: date) -> bool:

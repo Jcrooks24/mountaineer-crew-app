@@ -173,9 +173,16 @@ Constants that decide behaviour by a calendar date. They are written assuming a
 promotion soon after, and a promotion that slips turns them into a cutover in the
 PAST, which is the opposite of what they were for.
 
+> **This section is now enforced mechanically.** `scripts/promotion_gate.py`
+> fails the check id `cutover` when the date below is not in the future, and CI
+> runs that gate on every PR into `main`. The tick is still here because the
+> gate can tell you the date is stale but not what the right new date is - that
+> depends on which period the office has begun reconciling.
+
 - [ ] **`PAYROLL_ROUNDING_EFFECTIVE_FROM`** in `backend/app/core/hours_rounding.py`.
       Payroll quarter-rounding applies to periods STARTING on or after this date.
-      It was set to 2026-09-10, one week out from when the change was written, so
+      It was set to 2026-09-16 (moved from 2026-09-10 on 2026-09-09, when the
+      promotion had not happened and the original was a day away), so
       the first rounded period would be one nobody had begun reconciling.
       **If that date has passed, bump it** to the start of the next unreconciled
       period before merging. Leaving it stale restates periods people have

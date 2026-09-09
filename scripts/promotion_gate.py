@@ -34,6 +34,7 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -275,6 +276,58 @@ def report(base_ref: str) -> None:
     print()
 
 
+# -- check: dated cutovers baked into the code have not gone stale -------------
+
+
+def check_dated_cutovers() -> None:
+    """A constant that switches behaviour on a calendar date must still be in
+    the FUTURE at merge time.
+
+    `PAYROLL_ROUNDING_EFFECTIVE_FROM` decides which pay periods get quarter
+    rounding. It is written a week ahead on the assumption of a prompt
+    promotion, and rounding is deliberately not retroactive: earlier periods
+    were reconciled by hand and re-rounding them restates what people have
+    already been paid. A promotion that slips past the date inverts that - the
+    cutover lands in the past and every period that started after it is
+    restated the next time anybody opens it.
+
+    This lived as a manual checklist tick and a print-only NOTE inside
+    `test_payroll_rounding.py`, neither of which can stop a merge. It was found
+    one day from expiry on the 2026-09-09 vet, with main four weeks behind. A
+    date that decides what people are paid is exactly the kind of thing a
+    machine should be checking, so it is checked here.
+
+    Parsed out of the source rather than imported: this script runs with no
+    backend dependencies installed.
+    """
+    src = REPO / "backend" / "app" / "core" / "hours_rounding.py"
+    if not src.exists():
+        fail("cutover", f"{src.relative_to(REPO)} is missing; the rounding cutover cannot be checked")
+        return
+    m = re.search(
+        r"^PAYROLL_ROUNDING_EFFECTIVE_FROM\s*=\s*date\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})\)",
+        src.read_text(encoding="utf-8"), re.M,
+    )
+    if not m:
+        fail("cutover", "could not find PAYROLL_ROUNDING_EFFECTIVE_FROM in hours_rounding.py "
+                        "(renamed or reformatted? this check needs updating)")
+        return
+    cutover = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    today = date.today()
+    if cutover <= today:
+        fail("cutover",
+             f"PAYROLL_ROUNDING_EFFECTIVE_FROM is {cutover.isoformat()}, which is "
+             f"{'today' if cutover == today else 'in the PAST'} (today is {today.isoformat()}). "
+             "Promoting now applies quarter rounding to periods that have already "
+             "been paid. Bump it to the start of the next unreconciled period "
+             "(PROMOTION_CHECKLIST 7b).")
+    elif (cutover - today).days < 3:
+        notes.append(
+            f"PAYROLL_ROUNDING_EFFECTIVE_FROM is {cutover.isoformat()}, only "
+            f"{(cutover - today).days} day(s) away. If this promotion slips, bump it."
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-ref", default=os.environ.get("GATE_BASE_REF") or None,
@@ -287,6 +340,7 @@ def main() -> int:
     check_adr_numbers(args.base_ref)
     check_single_alembic_head()
     check_data_flow_blockers()
+    check_dated_cutovers()
 
     waivers = load_waivers()
     active, waived = [], []
