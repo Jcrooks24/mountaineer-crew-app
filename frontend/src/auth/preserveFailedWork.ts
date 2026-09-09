@@ -31,6 +31,14 @@
  * instructed them to take the action that destroyed their work. Preserving these
  * two draft prefixes is what makes that advice survivable.
  *
+ * PAYROLL NOTE EXCEPTION (added 2026-09-09, found by a vet): the office's rolling
+ * payroll note keeps a local mirror on every keystroke, precisely so a save that
+ * never reached the server is not lost. Its key is `crew_`-prefixed, so the wipe
+ * deleted it - cutting the net at the one moment it exists for, and leaving the
+ * server's copy to win silently on the next load, which is the exact outcome
+ * that component's design says must never happen. Same treatment as the
+ * close-out drafts, and user-scoped for the same reason.
+ *
  * BOL EXCEPTION (ADR 0021): the "pending drains normally" assumption is FALSE for
  * the Digital BOL. Crew routinely hand a shared phone off (or log out) mid-job,
  * offline, right after signing - so the pending submit/sign/pdf ops have no
@@ -58,6 +66,22 @@ const BOL_DRAFTS_SECTION = "__bol_drafts__";
 // piece of work to the crew member who typed them.
 const JOB_DRAFT_PREFIXES = ["crew_report_draft_v1:", "crew_bill_draft_v1:"] as const;
 const JOB_DRAFTS_SECTION = "__job_drafts__";
+
+// The office's rolling payroll note (see components/PayrollNotes.tsx). Same
+// exception as the close-out drafts and for the same reason: it is not a queue,
+// so it has no `failed_at` to notice it by, and the mirror IS the safety net for
+// a save that never reached the server. The wipe was cutting exactly that net -
+// found by vet 2026-09-09. Restored only to the account that wrote it (office
+// decision, 2026-09-09), so a second admin on the same machine sees only the
+// server's copy.
+const PAYROLL_NOTE_MIRROR_KEY = "crew_admin_payroll_notes_mirror_v1";
+const PAYROLL_NOTE_SECTION = "__payroll_note__";
+// Above this the note could not have been saved anyway (the server refuses more
+// than a Google Sheets cell holds, 50k), and stuffing it into the backup would
+// risk the QuotaExceededError that loses the WHOLE backup - signed BOLs
+// included. Skipped loudly rather than truncated: silently shortening the text
+// is the one outcome this field must never produce.
+const PAYROLL_NOTE_MAX_CHARS = 100_000;
 
 // Every localStorage queue that carries a `failed_at` mark (ADR 0013). If a new
 // queue is added, add its key here or its failed work is lost on a user switch.
@@ -182,6 +206,23 @@ export function backupFailedWork(userId: number | string | undefined | null): bo
       backup[JOB_DRAFTS_SECTION] = jobDrafts;
       any = true;
     }
+    // The payroll note's mirror. One small key, so no grouping or capping to do
+    // beyond the size guard - but it is backed up whether or not it differs from
+    // the server, because nothing on this side can tell the two apart. A copy
+    // that turns out to match the server simply restores invisibly.
+    const note = localStorage.getItem(PAYROLL_NOTE_MIRROR_KEY);
+    if (note != null && note !== "") {
+      if (note.length <= PAYROLL_NOTE_MAX_CHARS) {
+        backup[PAYROLL_NOTE_SECTION] = note;
+        any = true;
+      } else {
+        // eslint-disable-next-line no-console
+        console.error(
+          "[preserveFailedWork] payroll note too large to back up; it is about "
+          + "to be wiped and was never saved:", note.length, "chars",
+        );
+      }
+    }
     if (any) localStorage.setItem(backupKey(userId), JSON.stringify(backup));
     return true;
   } catch (e) {
@@ -285,6 +326,13 @@ export function restoreFailedWork(userId: number | string | undefined | null): n
           && JOB_DRAFT_PREFIXES.some((p) => d.k!.startsWith(p))) {
         if (localStorage.getItem(d.k) == null) localStorage.setItem(d.k, d.v);
       }
+    }
+    // Restore the payroll note on the same non-clobber terms: if this admin has
+    // already typed something on this device since, that is newer and wins.
+    const note = (backup as Record<string, unknown>)[PAYROLL_NOTE_SECTION];
+    if (typeof note === "string" && note !== ""
+        && localStorage.getItem(PAYROLL_NOTE_MIRROR_KEY) == null) {
+      localStorage.setItem(PAYROLL_NOTE_MIRROR_KEY, note);
     }
     localStorage.removeItem(backupKey(userId));
     return restored;

@@ -74,6 +74,33 @@ check("and the office is told, with a retry",
 check("a failed save is surfaced, never swallowed",
   /setStatus\("error"\)/.test(notes) && !/catch \{\s*\}/.test(notes));
 
+// The mirror is the net for a save that never landed. Logging out wiped it,
+// because its key carries the `crew_` prefix clearCrewState sweeps - so the one
+// moment the net exists for was the one moment it was not there, and the
+// server's copy then won silently on the next load. Found by vet 2026-09-09.
+console.log("\nAnd the mirror survives the thing that used to destroy it:");
+const preserve = readFileSync(`${ROOT}/frontend/src/auth/preserveFailedWork.ts`, "utf8");
+const wipe = readFileSync(`${ROOT}/frontend/src/auth/clearCrewState.ts`, "utf8");
+check("the wipe still sweeps this key's prefix",
+  /KEY_PREFIXES = \["crew_", "mm_"\]/.test(wipe)
+  && /NOTES_MIRROR_KEY = "crew_/.test(notes),
+  "if either changes, the rest of this section is checking the wrong hazard");
+check("so the backup captures it before the wipe",
+  /PAYROLL_NOTE_MIRROR_KEY = "crew_admin_payroll_notes_mirror_v1"/.test(preserve)
+  && /backup\[PAYROLL_NOTE_SECTION\] = note;/.test(preserve));
+check("the two files name the SAME key",
+  (notes.match(/"(crew_admin_payroll_notes_mirror_v1)"/) || [])[1]
+  === (preserve.match(/"(crew_admin_payroll_notes_mirror_v1)"/) || [])[1],
+  "a typo here fails open: the backup silently preserves nothing");
+check("and it is restored to that account",
+  /localStorage\.setItem\(PAYROLL_NOTE_MIRROR_KEY, note\)/.test(preserve));
+check("without clobbering newer text typed since",
+  /localStorage\.getItem\(PAYROLL_NOTE_MIRROR_KEY\) == null/.test(preserve));
+check("an oversized note is skipped loudly, never truncated",
+  /PAYROLL_NOTE_MAX_CHARS/.test(preserve) && !/note\.slice\(/.test(preserve),
+  "truncating is the one outcome this field must not produce, and an unbounded "
+  + "write risks the quota error that loses the whole backup, BOLs included");
+
 console.log("\nFormatting is markdown, so the archive stays readable:");
 check("bold wraps in asterisks", /\$\{before\}\*\*\$\{body\}\*\*\$\{after\}/.test(notes));
 check("bullets prefix with a dash", /l\.startsWith\("- "\) \? l : `- \$\{l\}`/.test(notes));

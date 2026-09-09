@@ -433,7 +433,9 @@ export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: strin
           </div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 8 }}>
             Tap a job to open its Job Summary, then review and initial it. Finalize
-            is blocked until every job in the period is initialed.
+            is blocked until every job in the period is initialed. A job marked
+            "edited after review" was initialed already, but its report has been
+            changed since - check what moved and initial it again.
           </div>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {data.jobs_pending_review.map((j) => (

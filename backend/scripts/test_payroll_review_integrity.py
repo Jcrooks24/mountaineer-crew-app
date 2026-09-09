@@ -213,6 +213,56 @@ summary = pr._build_summary(db, S, E)
 check("initialing clears it",
       "job-1" not in {p["job_uuid"] for p in summary["jobs_pending_review"]})
 
+# SYMPTOM IT CATCHES: a crew member edits their hours AFTER the admin initialed
+# the job. Reproduced 2026-09-09 during a vet: initialed at 8 hours, crew edited
+# to 14, payroll paid 14 and the job never came back to the pending list. The
+# attestation recorded WHEN it was made but not WHAT it covered.
+print("\nAn edit after initialing re-opens the job:")
+db = fresh()
+db.add(Event(event_id="ev-3", job_uuid="job-3", job_name="Late edit", type="start",
+             timestamp=datetime(2026, 9, 3, 15, 0, 0), logged_at=NOW))
+rep = JobReport(job_uuid="job-3", billing_method="hourly", review_candidate="no",
+                hours_match=True,
+                employee_hours_json='[{"user_id": 1, "name": "Dylan Reed", "hours": 8, "date": "2026-09-03"}]',
+                created_at=NOW, updated_at=NOW)
+db.add(rep)
+db.add(AdminEntryStatus(job_uuid="job-3", entered_by="Office", entered_on="2026-09-15",
+                        validated=True, corrected=True, confirmed_in_sheet=True,
+                        updated_at=NOW))
+db.commit()
+s1 = pr._build_summary(db, S, E)
+check("initialed and quiet, it is not pending",
+      not s1["jobs_pending_review"], str(s1["jobs_pending_review"]))
+
+rep.employee_hours_json = '[{"user_id": 1, "name": "Dylan Reed", "hours": 14, "date": "2026-09-03"}]'
+rep.updated_at = datetime(2026, 9, 16, 10, 0, 0)      # strictly after the attestation
+db.commit()
+s2 = pr._build_summary(db, S, E)
+pend = {p["job_uuid"]: p.get("reason") for p in s2["jobs_pending_review"]}
+check("a later crew edit puts it back", "job-3" in pend, str(pend))
+check("and says why, so it is not confused with a job never initialed",
+      pend.get("job-3") == "edited after review", str(pend))
+check("payroll still pays the NEW number, it is not reverted",
+      abs(hours_for(s2)["total_hours"] - 14.0) < 1e-6,
+      "the gate stops the run; it must never quietly pay the stale figure instead")
+
+# Re-initialing after the edit closes it again.
+db.query(AdminEntryStatus).filter(AdminEntryStatus.job_uuid == "job-3").first().updated_at = (
+    datetime(2026, 9, 16, 11, 0, 0))
+db.commit()
+check("re-initialing clears it once more",
+      not pr._build_summary(db, S, E)["jobs_pending_review"])
+
+# An admin correction must NOT look like a crew edit, or every corrected job
+# re-opens forever and the gate becomes noise nobody reads.
+print("\nAn admin's own correction does not re-open the job:")
+db.add(correction(job_uuid="job-3", source="job", source_key="job-3",
+                  period_start=None, period_end=None, corrected_hours=12.0))
+db.commit()
+check("correcting hours leaves the job reviewed",
+      not pr._build_summary(db, S, E)["jobs_pending_review"],
+      "corrections live in their own table and never touch the crew's report")
+
 print("\nA waiver is not a review:")
 db = fresh()
 db.add(Event(event_id="ev-2", job_uuid="job-2", job_name="Waived job", type="start",
@@ -256,6 +306,60 @@ check("but it is still on screen, so a mis-click can be undone",
       any(i["uuid"] == "r-no" for i in emp["reimbursement_items"]))
 check("and the un-reviewed one is counted for the finalize warning",
       emp["reimbursements_unreviewed"] == 1, str(emp["reimbursements_unreviewed"]))
+
+# SYMPTOM IT CATCHES: a reimbursement quietly stops being paid because the
+# query that finds it was narrowed. `_reimbursements` used to load the whole
+# table and filter in Python; it now windows in SQL first (vet 2026-09-09, the
+# 512 MB worker). Narrowing a money query is exactly where a row goes missing,
+# so this asserts the new set equals what the old full scan would have kept -
+# including the awkward rows that motivated the two-query shape.
+print("\nNarrowing the reimbursement query pays the same rows as the full scan:")
+db = fresh()
+IN, OUT = "2026-09-03", "2026-08-03"
+inside_utc = datetime(2026, 9, 4, 18, 0, 0)     # inside the window in Mountain
+outside_utc = datetime(2026, 7, 4, 18, 0, 0)
+
+
+def claim(uuid, amount, expense_date, created):
+    return Reimbursement(reimbursement_uuid=uuid, user_id=1, user_name="Dylan Reed",
+                         type="expense", vendor=uuid, amount=amount,
+                         expense_date=expense_date, status="submitted",
+                         payment_method="personal", created_at=created,
+                         updated_at=created)
+
+
+# One of each shape the Python fallback has to handle.
+db.add(claim("plain", 10.0, IN, inside_utc))            # normal, in range
+db.add(claim("null-date", 20.0, None, inside_utc))      # no expense_date -> created_at
+db.add(claim("empty-date", 40.0, "", inside_utc))       # empty string -> created_at
+db.add(claim("junk-date", 80.0, "09/03/2026", inside_utc))  # unparseable -> created_at
+db.add(claim("late-entry", 160.0, IN, outside_utc))     # filed late, but dated in range
+db.add(claim("out", 999.0, OUT, outside_utc))           # genuinely outside
+db.add(claim("out-dated-in-created", 555.0, OUT, inside_utc))  # created in, dated out
+db.commit()
+
+got = pr._reimbursements(db, S, E, pr._roster(db)[0])
+paid = {i["uuid"] for i in got[1]["items"]}
+# What the OLD code would have kept: every row, then this exact test.
+expected = set()
+for r in db.query(Reimbursement).all():
+    d = pr._parse_date_str(r.expense_date) or (
+        pr.utc_naive_to_mountain_date(r.created_at) if r.created_at else None)
+    if d is not None and S <= d <= E:
+        expected.add(r.reimbursement_uuid)
+check("the same set of claims, exactly", paid == expected,
+      f"new={sorted(paid)} old={sorted(expected)}")
+check("a null expense_date still falls back to created_at", "null-date" in paid)
+check("so does an empty one", "empty-date" in paid)
+check("and an unparseable one, which no SQL predicate could have matched",
+      "junk-date" in paid, "this is why it is two queries and not one WHERE")
+check("a claim dated in range but filed late is still paid", "late-entry" in paid)
+check("a claim created in range but dated outside is NOT paid",
+      "out-dated-in-created" not in paid,
+      "the wider query over-fetches it; the Python check must still reject it")
+check("and one outside on both counts is not paid", "out" not in paid)
+check("the amount matches the rows, not the fetch",
+      abs(got[1]["amount"] - 310.0) < 1e-6, str(got[1]["amount"]))
 
 # ── 6. The router still uses the query this test models ──────────────────────
 # SYMPTOM IT CATCHES: this file passing forever after the router stopped

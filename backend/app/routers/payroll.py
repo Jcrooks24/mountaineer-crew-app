@@ -480,7 +480,44 @@ def _reimbursements(
     # Rejected rows are FETCHED but not summed. The admin has to be able to see a
     # decline to undo it; filtering them out of the query made a mis-click
     # unrecoverable from the payroll screen.
-    rows = db.query(Reimbursement).all()
+    # NARROWED IN SQL, then re-checked in Python. This used to be a bare
+    # `db.query(Reimbursement).all()`: every reimbursement ever filed, loaded
+    # into a 512 MB worker on every payroll page load, and then thrown away by a
+    # date test in Python. It is the one aggregator on this page that did that -
+    # tips, bonuses, off-job and office hours all window in SQL - and CLAUDE.md
+    # is explicit that unbounded growth in this process is the recurring OOM
+    # class here. Found by vet 2026-09-09.
+    #
+    # Two queries rather than one predicate, because a row's date is
+    # `expense_date` when it parses and `created_at` when it does not, and "does
+    # this string parse as a date" is not something to express in portable SQL:
+    #
+    #   (A) expense_date inside the window. Plain string comparison, which is
+    #       exact for ISO dates and is the same thing _off_job_hours does.
+    #   (B) created_at inside the window's UTC span. Catches every row whose
+    #       expense_date is null, empty or malformed - the fallback cases - and
+    #       harmlessly over-fetches some rows whose expense_date is valid but out
+    #       of range, which the Python check below then discards.
+    #
+    # The union is exactly the set the old full-table scan would have kept. The
+    # Python re-check is unchanged and remains the authority, so nothing here
+    # changes which rows are paid.
+    lo_utc, _ = mountain_day_utc_bounds(start)
+    _, hi_utc = mountain_day_utc_bounds(end)
+    by_expense = (
+        db.query(Reimbursement)
+        .filter(
+            Reimbursement.expense_date >= start.isoformat(),
+            Reimbursement.expense_date <= end.isoformat(),
+        )
+        .all()
+    )
+    by_created = (
+        db.query(Reimbursement)
+        .filter(Reimbursement.created_at >= lo_utc, Reimbursement.created_at < hi_utc)
+        .all()
+    )
+    rows = list({r.id: r for r in (by_expense + by_created)}.values())
     out: Dict[int, Dict[str, Any]] = defaultdict(
         lambda: {"amount": 0.0, "miles": 0, "items": [], "unreviewed": 0}
     )
@@ -1086,6 +1123,7 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
         if r.get("source") == "job" and r.get("source_key"):
             period_jobs.setdefault(r["source_key"], r.get("source_label") or "")
     reviewed: set = set()
+    stale: set = set()
     if period_jobs:
         # A WAIVER ROW IS NOT A REVIEW.
         #
@@ -1101,8 +1139,10 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
         # by the waiver and never initialed since. Legacy rows (both null, from
         # before ADR 0032's attestation existed) still count as reviewed, so this
         # does not retroactively reopen old periods.
-        reviewed = {
-            u for (u,) in db.query(AdminEntryStatus.job_uuid)
+        attested: Dict[str, Any] = {
+            u: ts for (u, ts) in db.query(
+                AdminEntryStatus.job_uuid, AdminEntryStatus.updated_at
+            )
             .filter(
                 AdminEntryStatus.job_uuid.in_(list(period_jobs)),
                 ~(
@@ -1111,11 +1151,47 @@ def _build_summary(db: Session, start: date, end: date) -> Dict[str, Any]:
                 ),
             ).all()
         }
+        # AN ATTESTATION GOES STALE WHEN THE REPORT CHANGES UNDER IT.
+        #
+        # Initialing a job records "I checked this data on this date". It did not
+        # previously record WHICH data, so a crew member who edited their hours
+        # after the job was initialed was paid the new number and the job never
+        # came back to the pending list. Found by vet 2026-09-09 and reproduced:
+        # initialed at 8 hours, edited to 14, payroll paid 14 with nothing
+        # pending. The gate's whole purpose is to stop payroll running over
+        # unreviewed work, and that is unreviewed work.
+        #
+        # Compared against the REPORT only, not the bill. The report is what
+        # carries hours, and hours are what this gate protects; a bill edit is
+        # almost always the admin's own, made during the review, so including it
+        # would mostly just ask for a second tick (office decision, 2026-09-09).
+        #
+        # Safe to key on `updated_at` because routers/job_report.py is its only
+        # writer - the Sheet backfill reads job reports and never touches them -
+        # and admin corrections live in their own table and never write to the
+        # crew's submission (ADR 0029). So this cannot fire on our own activity.
+        report_touched: Dict[str, Any] = {
+            u: ts for (u, ts) in db.query(JobReport.job_uuid, JobReport.updated_at)
+            .filter(JobReport.job_uuid.in_(list(period_jobs)))
+            .all()
+            if ts is not None
+        }
+        for u, attested_at in attested.items():
+            touched_at = report_touched.get(u)
+            if attested_at is not None and touched_at is not None and touched_at > attested_at:
+                stale.add(u)
+            else:
+                reviewed.add(u)
     period_pending = [
-        {"job_uuid": u, "job_name": n, "reason": "not initialed"}
+        {
+            "job_uuid": u,
+            "job_name": n,
+            "reason": "edited after review" if u in stale else "not initialed",
+        }
         for u, n in sorted(period_jobs.items(), key=lambda kv: (kv[1] or "").lower())
         if u not in reviewed
     ]
+
     # Jobs that worked this period but never got a report at all (finding 5): they
     # pay nobody, so they never reach period_jobs and would slip past the gate.
     report_less = [

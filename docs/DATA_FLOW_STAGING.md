@@ -2110,6 +2110,91 @@ correct, and nobody to tell.
 
 Verified by `frontend/scripts/verify_off_job_corrections.mjs` (44 checks).
 
+## Admin-review vet fixes (2026-09-09)
+
+Three findings from a vet of the payroll / job-report-review / reimbursement
+surfaces. No new endpoint and no new payload field; two read paths change and one
+localStorage key changes hands at logout.
+
+### 1. An attestation goes stale when the report changes under it
+
+| Change | Path | Adherence |
+|---|---|---|
+| `jobs_pending_review[].reason` may now be `"edited after review"` | `routers/payroll.py::_build_summary` | read |
+
+A job counted as reviewed forever once initialed. A crew member editing their
+hours afterwards was paid the new number and the job never returned to the
+pending list. **Reproduced**: initialed at 8 hours, edited to 14, payroll paid
+14.0 with `jobs_pending_review == []`.
+
+The gate now compares `AdminEntryStatus.updated_at` against
+`JobReport.updated_at` for the same job and treats a later report as unreviewed.
+Two extra bounded queries, both restricted to the period's own job list.
+
+Compared against the **report only**, not the bill (office decision): the report
+carries hours and hours are what this gate protects, while a bill edit is
+usually the admin's own during review and would just ask for a second tick.
+
+Safe to key on `updated_at` because `routers/job_report.py` is its only writer -
+the Sheet backfill reads job reports and never writes them - and admin
+corrections live in `payroll_corrections` and never touch the crew's submission
+(ADR 0029). Asserted in the test: correcting hours does **not** re-open a job.
+
+The frontend needs no contract change; the new reason string renders where
+`"not initialed"` already did, and the Waive button stays keyed to
+`"no report filed"`.
+
+### 2. The payroll read no longer loads every reimbursement ever filed
+
+| Change | Path | Adherence |
+|---|---|---|
+| `_reimbursements` windows in SQL instead of scanning the table | `routers/payroll.py::_reimbursements` | read |
+| `ix_reimbursements_expense_date`, `ix_reimbursements_created_at` | migration `s9u1w3r5t7v9` | schema |
+
+`db.query(Reimbursement).all()` ran on every payroll page load and threw most of
+the result away in a Python date test. It was the only aggregator on the page
+doing that; tips, bonuses, off-job and office hours all window in SQL. This is
+the unbounded-growth-in-the-worker class CLAUDE.md documents.
+
+Now two bounded queries whose union is the same set:
+
+- `expense_date` inside the window (ISO string compare, as `_off_job_hours` does);
+- `created_at` inside the window's UTC span, which catches every row whose
+  `expense_date` is null, empty **or unparseable** - the fallback cases, none of
+  which a portable SQL predicate can express - and over-fetches a few that the
+  unchanged Python check then discards.
+
+The Python re-check remains the authority, so **which rows are paid does not
+change**. Proven by an equivalence test over all seven shapes, including a
+`"09/03/2026"` expense_date and a claim created in-window but dated out.
+
+The indexes are what make it bounded work rather than only bounded memory: the
+table only grows, and the office opens this page repeatedly during a run.
+
+### 3. The payroll note's mirror survives a logout
+
+| Change | Path | Adherence |
+|---|---|---|
+| `crew_admin_payroll_notes_mirror_v1` is backed up before `clearCrewState` | `auth/preserveFailedWork.ts` | write, local only |
+
+The note mirrors to localStorage on every keystroke so a save that never reached
+the server is not lost. Its key is `crew_`-prefixed, so the logout/user-switch
+wipe deleted it - cutting the net at the one moment it exists for. Worse, the
+next load then had no local copy to disagree with the server, so the server's
+copy won silently, which is exactly what `PayrollNotes.tsx` is built to prevent.
+
+Preserved the same way the close-out drafts are, and **user-scoped**: restored
+only to the account that wrote it (office decision), so a second admin on the
+same machine sees only the server's copy. Restore never clobbers text typed
+since. A note over 100k chars is skipped with a console error rather than
+truncated - it could not have been saved anyway (the server caps at a Sheets
+cell's 50k), and an unbounded write here risks the `QuotaExceededError` that
+would lose the entire backup, signed BOLs included.
+
+Nothing reaches the Sheet differently. Verified by
+`backend/scripts/test_payroll_review_integrity.py` (37 checks) and
+`frontend/scripts/verify_payroll_notes.mjs`.
+
 # Not yet documented
 
 Nothing outstanding as of `7f41611`. Every data path changed since the "Verified

@@ -230,6 +230,19 @@ the numbers wrong, most importantly a name on a job report that matches nobody
 on the roster. Those hours are **not counted**, so fix the name or add the
 person before you run payroll.
 
+**Jobs pending review.** A red panel lists every job feeding this period that
+still needs you, and **Finalize is blocked until it is empty**. Tap a job to open
+its Job Summary, review it, and initial it. Three reasons appear:
+
+- *not initialed* - you have not reviewed it yet.
+- *no report filed* - nobody filed a report for this job at all. If none is ever
+  coming (off-job hours logged against a manual job, an unpaid drive leg), use
+  **Waive** so it stops holding the period up. A waiver says only "no report is
+  coming"; it never counts as having checked the job.
+- *edited after review* - you initialed it, and the crew has changed the report
+  since. Payroll pays the NEW number, so open it, see what moved, and initial it
+  again. Your own corrections do not put a job back in this list.
+
 **Correcting a crew mistake.** Open an employee's **Detail** to see their week
 by week overtime, hours by day, and every line the totals were built from.
 Corrections never change what the crew submitted - they are an override, and

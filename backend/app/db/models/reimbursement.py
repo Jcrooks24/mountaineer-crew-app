@@ -56,7 +56,9 @@ class Reimbursement(Base):
     # Crew-entered date the expense / trip actually occurred (YYYY-MM-DD).
     # Distinct from created_at, which is the submission timestamp - crew often
     # log on a different day from the actual event.
-    expense_date = Column(String, nullable=True)
+    # Indexed: both the payroll read and the admin search window on this, on a
+    # table that only grows. See migration s9u1w3r5t7v9.
+    expense_date = Column(String, nullable=True, index=True)
 
     # Mileage fields - both null for expense rows.
     odometer_start = Column(Integer, nullable=True)
@@ -113,5 +115,7 @@ class Reimbursement(Base):
     qb_entered_at = Column(DateTime, nullable=True)
     qb_entered_by_name = Column(String, nullable=True)
 
-    created_at = Column(DateTime, nullable=False)
+    # Indexed alongside expense_date: it is the fallback the payroll read
+    # windows on when expense_date is absent or unparseable.
+    created_at = Column(DateTime, nullable=False, index=True)
     updated_at = Column(DateTime, nullable=False)
