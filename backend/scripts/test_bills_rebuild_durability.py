@@ -47,7 +47,7 @@ def check(name, cond, detail=""):
 
 
 # --------------------------------------------------------------------------
-# 1. keep_last spares the bottom-most match (the row just appended)
+# 1. keep_last_n spares the bottom-most match(es) (the rows just appended)
 # --------------------------------------------------------------------------
 class FakeExec:
     def __init__(self, payload): self.payload = payload
@@ -97,21 +97,33 @@ sx._sheet_ids = lambda svc, sid, refresh=False: {"Bills": 7}
 
 svc = FakeSvc(HEADERS, COLUMN)
 n = sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER)
-check("keep_last=False deletes every match", deleted_indices(svc) == [1, 3, 5],
+check("keep_last_n=0 deletes every match", deleted_indices(svc) == [1, 3, 5],
       f"got {deleted_indices(svc)}")
 
 svc = FakeSvc(HEADERS, COLUMN)
-n = sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER, keep_last=True)
-check("keep_last=True spares the bottom-most match", deleted_indices(svc) == [1, 3],
+n = sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER, keep_last_n=1)
+check("keep_last_n=1 spares the bottom-most match", deleted_indices(svc) == [1, 3],
       f"got {deleted_indices(svc)}")
 
 svc = FakeSvc(HEADERS, [["submission_id"], ["other"]])
-sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER, keep_last=True)
-check("keep_last with no matches deletes nothing", deleted_indices(svc) == [])
+sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER, keep_last_n=1)
+check("keep_last_n with no matches deletes nothing", deleted_indices(svc) == [])
 
 svc = FakeSvc(HEADERS, [["submission_id"], [MARKER]])
-sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER, keep_last=True)
-check("keep_last with ONE match (the fresh row) deletes nothing", deleted_indices(svc) == [])
+sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER, keep_last_n=1)
+check("keep_last_n with ONE match (the fresh row) deletes nothing", deleted_indices(svc) == [])
+
+# keep_last_n is a COUNT, not a flag, because one logical entity does not always
+# mean one row: a payroll period writes one row per employee, all sharing the
+# same key. Sparing a single row there would delete everybody except the last
+# person on the run.
+svc = FakeSvc(HEADERS, [["submission_id"], [MARKER], ["other"], [MARKER], [MARKER]])
+sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER, keep_last_n=2)
+check("keep_last_n=2 spares the bottom TWO matches", deleted_indices(svc) == [1],
+      str(deleted_indices(svc)))
+svc = FakeSvc(HEADERS, [["submission_id"], [MARKER], [MARKER]])
+sx._delete_sheet_rows_by_value(svc, "sid", "Bills", "submission_id", MARKER, keep_last_n=5)
+check("sparing more than exist deletes nothing", deleted_indices(svc) == [])
 
 # --------------------------------------------------------------------------
 # 2. append happens BEFORE the stale delete

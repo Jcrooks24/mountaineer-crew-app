@@ -67,11 +67,14 @@ sheet. This is the most common configuration mistake in this system.
 `SHEETS_REPORT_WAIVERS_TAB` (default `ReportWaivers`; the payroll job-report
 waiver, new 2026-08-13),
 `SHEETS_TIPS_TAB` (default `Tips`; employee tips paid through payroll, new
-2026-09-09). Unset is harmless on prod (the default is correct)
+2026-09-09),
+`SHEETS_PAYROLL_TAB` (default `Payroll`; one row per employee per finalized
+pay period, new 2026-09-09). Unset is harmless on prod (the default is correct)
 but on STAGING it writes test waivers into the production tab, like every
 other var in this list.
 
-**`SHEETS_TIPS_TAB` must be set on STAGING before tips are used there**, or
+**`SHEETS_PAYROLL_TAB` and `SHEETS_TIPS_TAB` must both be set on STAGING**
+before payroll is finalized or tips are used there, or
 staging tips land in the production `Tips` tab. It is money owed to a person, so
 that is worse than the usual case: the prod tab is what the office pays from.
 Set it to `TipsStaging`.

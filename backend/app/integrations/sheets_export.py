@@ -1999,11 +1999,11 @@ def rebuild_job_materials_total_in_bills(db: Session, job_uuid: str) -> int:
     # export whose output is money. Delete-first turns a crash into a silently
     # missing charge; append-first turns the same crash into a duplicate line,
     # which is visible on the Bills tab, flagged by sheet_integrity_check, and
-    # cleaned up by the very next rebuild of this job (keep_last spares only the
+    # cleaned up by the very next rebuild of this job (keep_last_n spares only the
     # newest row). A recoverable duplicate beats an invisible hole.
     _api(_append)
     _delete_sheet_rows_by_value(
-        svc, spreadsheet_id, tab, "submission_id", marker, keep_last=True,
+        svc, spreadsheet_id, tab, "submission_id", marker, keep_last_n=1,
     )
     return 1
 
@@ -2521,21 +2521,26 @@ def _delete_sheet_rows_by_value(
     tab: str,
     col_name: str,
     target_value: str,
-    keep_last: bool = False,
+    keep_last_n: int = 0,
 ) -> int:
     """Delete every row in `tab` where the `col_name` cell equals
     `target_value`. Used by replace-style exports (estimates, job reports)
     to guarantee exactly one row per logical entity regardless of how
     many times it's saved.
 
-    `keep_last=True` spares the LAST matching row (the greatest grid index) and
-    deletes only the ones above it. That is what turns a replace-style export
-    from delete-then-append into append-then-delete-stale, which is the ordering
-    a crash can survive: a worker that dies mid-sequence leaves a visible
-    duplicate that the next run cleans up, instead of a hole where the row used
-    to be. Sheets appends at the bottom, so the row just written is the greatest
-    index; the selection is re-read on every retry, so a concurrent append
-    cannot make this spare the wrong one.
+    `keep_last_n` spares that many of the BOTTOM-MOST matching rows and deletes
+    only the ones above them. That is what turns a replace-style export from
+    delete-then-append into append-then-delete-stale, which is the ordering a
+    crash can survive: a worker that dies mid-sequence leaves a visible duplicate
+    that the next run cleans up, instead of a hole where the row used to be.
+    Sheets appends at the bottom, so the rows just written are the greatest
+    indices; the selection is re-read on every retry, so a concurrent append
+    cannot make this spare the wrong ones.
+
+    It is a COUNT rather than a flag because one logical entity does not always
+    mean one row. A payroll period writes one row per employee, all sharing the
+    same `period` key, so sparing a single row would delete everybody except the
+    last person on the run.
 
     Returns the number of rows deleted. No-op if the tab doesn't exist
     yet, the column isn't present, or no rows match."""
@@ -2576,12 +2581,12 @@ def _delete_sheet_rows_by_value(
             i for i, row in enumerate(col_values)
             if i > 0 and (row[0] if row else "") == target_value
         ]
-        if keep_last and matches:
-            # Spare the bottom-most match: it is the row this export just
+        if keep_last_n > 0 and matches:
+            # Spare the bottom-most matches: they are the rows this export just
             # appended. Computed here rather than by the caller because _find is
-            # re-invoked on a stale-index retry, and the row to spare has to be
+            # re-invoked on a stale-index retry, and the rows to spare have to be
             # re-derived from the grid as it is NOW, not as it was.
-            matches.pop()
+            matches = matches[:-keep_last_n]
         return matches
 
     return _delete_rows_matching(
@@ -4142,6 +4147,7 @@ SHEET_SYNC_REGISTRY = [
     {"key": "bug_reports",       "label": "Bug reports",         "env": "SHEETS_BUGS_TAB",               "default": "Bugs",              "fn": "export_bug_report_to_sheets"},
     {"key": "feature_requests",  "label": "Feature requests",    "env": "SHEETS_FEATURE_REQUESTS_TAB",   "default": "FeatureRequests",   "fn": "export_feature_request_to_sheets"},
     {"key": "tips",              "label": "Employee tips",       "env": "SHEETS_TIPS_TAB",               "default": "Tips",              "fn": "export_tip_to_sheets"},
+    {"key": "payroll",           "label": "Payroll periods",     "env": "SHEETS_PAYROLL_TAB",            "default": "Payroll",           "fn": "export_payroll_period_to_sheets"},
 ]
 
 
@@ -4277,6 +4283,108 @@ def delete_off_job_from_sheets(db: Session, entry_uuid: str) -> int:
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
     svc = _get_sheets_svc(db)
     return _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "entry_uuid", entry_uuid)
+
+
+# -- Payroll period ------------------------------------------------------------
+
+PAYROLL_HEADERS = [
+    "period", "period_start", "period_end", "employee",
+    "regular_hours", "ot_hours", "non_billable_hours", "other_hours", "pto_hours",
+    "total_hours",
+    "per_diem_nights", "per_diem_amount", "reimbursement_amount",
+    "mileage_miles", "mileage_amount", "tips_amount",
+    "finalized_at",
+]
+
+
+def export_payroll_period_to_sheets(db: Session, run: Dict[str, Any]) -> int:
+    """One row per employee for one finalized payroll period.
+
+    WHAT THIS IS FOR. The office keys payroll into QuickBooks by hand from a
+    sheet. Until now the app's only route there was the payroll screen's
+    clipboard TSV - a manual copy/paste with nothing recording that it had
+    happened, and nothing to audit against. This writes the same figures to a tab
+    the app owns.
+
+    KEYED BY PERIOD, NOT BY ROW. The key column is `period`
+    ("2026-09-01..2026-09-14"), shared by every employee row in that run, and the
+    export DELETES the whole period before writing it back. That is what makes a
+    re-finalize - which the admin does whenever one more correction turns up -
+    rewrite the run in place instead of appending a second copy of everybody.
+    Deleting by a per-employee key would leave last run's rows behind for anyone
+    who dropped off the payroll since.
+
+    APPEND FIRST, THEN DROP THE STALE ROWS, for the same reason the Bills
+    materials line does (ADR 0043): a worker recycle between the two leaves a
+    visible duplicate that the next run cleans up, rather than a hole where a pay
+    period used to be.
+
+    TIPS ARE A COLUMN HERE, at the user's direction (2026-09-09): a tip is money
+    owed on a payroll run, so it belongs on the row the office reads when running
+    payroll, not only on its own tab. The Tips tab keeps the itemization behind
+    this total - which job, which note, who entered it - exactly as Materials
+    itemizes what the Bills materials line totals.
+    """
+    tab = os.getenv("SHEETS_PAYROLL_TAB", "Payroll").strip() or "Payroll"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    period = run.get("period") or ""
+    employees = run.get("employees") or []
+    if not period:
+        return 0
+
+    svc = _get_sheets_svc(db)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, PAYROLL_HEADERS)
+
+    # NO EXTRA HEADER GUARD HERE, deliberately. The Bills rebuild carries one
+    # because its dedupe key (`submission_id`) sits at index 14 of BILL_HEADERS,
+    # and _ensure_tab only protects headers[0] - so a Bills header could lose the
+    # dedupe column and still pass. Here the dedupe key IS headers[0]
+    # ("period"), so _ensure_tab already raises SheetHeaderError on a populated
+    # header row that has lost it, BEFORE anything is appended. A second check
+    # would be unreachable, and an unreachable check reads as protection that
+    # is not there.
+
+    rows = []
+    for e in employees:
+        t = e.get("totals") or {}
+        rows.append(_build_row({
+            "period": period,
+            "period_start": run.get("period_start") or "",
+            "period_end": run.get("period_end") or "",
+            "employee": e.get("name") or "",
+            "regular_hours": t.get("regular_hours", ""),
+            "ot_hours": t.get("ot_hours", ""),
+            "non_billable_hours": t.get("non_billable_hours", ""),
+            "other_hours": t.get("other_hours", ""),
+            "pto_hours": t.get("pto_hours", ""),
+            "total_hours": t.get("total_hours", ""),
+            "per_diem_nights": t.get("per_diem_nights", ""),
+            "per_diem_amount": t.get("per_diem_amount", ""),
+            "reimbursement_amount": t.get("reimbursement_amount", ""),
+            "mileage_miles": t.get("mileage_miles", ""),
+            "mileage_amount": t.get("mileage_amount", ""),
+            "tips_amount": t.get("tips_amount", ""),
+            "finalized_at": _iso(run.get("finalized_at")),
+        }, headers))
+
+    if rows:
+        def _append():
+            svc.spreadsheets().values().append(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!A1",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": rows},
+            ).execute()
+        _api(_append)
+
+    # Drop the PREVIOUS run's rows for this period, sparing the ones just
+    # appended. keep_last_n spares that many bottom-most rows, so it is passed the
+    # count of rows written rather than used bare.
+    _delete_sheet_rows_by_value(
+        svc, spreadsheet_id, tab, "period", period, keep_last_n=len(rows),
+    )
+    return len(rows)
 
 
 # -- Employee tips ------------------------------------------------------------

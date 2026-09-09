@@ -38,6 +38,7 @@ import app.db.models.job_setup  # noqa: F401 - register job_setup (job header, A
 import app.db.models.job_checklist_check  # noqa: F401 - register job_checklist_checks (C3)
 import app.db.models.dq_document  # noqa: F401 - register dq_documents (C4)
 import app.db.models.off_job_entry  # noqa: F401 - register off-job hours
+import app.db.models.payroll_run  # noqa: F401 - register finalized payroll periods
 import app.db.models.user_email_alias  # noqa: F401 - register user_email_aliases
 import app.db.models.bol  # noqa: F401 - register digital_bols table
 import app.db.models.job_inventory  # noqa: F401 - register job_inventory_items table

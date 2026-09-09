@@ -246,6 +246,25 @@ def _src_reimbursements(db: Session) -> List[Dict[str, Any]]:
     } for r in rows if r.reimbursement_uuid]
 
 
+def _src_payroll(db: Session) -> List[Dict[str, Any]]:
+    """Finalized payroll periods. Keyed by PERIOD, not by employee row.
+
+    The Payroll tab holds one row per employee per period, all sharing the same
+    `period` key, so this audit answers "did this run reach the sheet at all?"
+    rather than "is every employee's row present". That is the honest granularity
+    for a key column that is shared, and it catches the failure that matters -
+    a finalize whose export died and left the period missing entirely.
+    """
+    from app.db.models.payroll_run import PayrollRun
+    rows = db.query(PayrollRun).order_by(PayrollRun.period_start.desc()).all()
+    return [{
+        "id": f"{r.period_start}..{r.period_end}",
+        "label": f"{r.period_start} to {r.period_end}"
+                 + (f" (run {r.run_count}x)" if (r.run_count or 1) > 1 else ""),
+        "created_at": _iso(r.finalized_at),
+    } for r in rows if r.period_start and r.period_end]
+
+
 def _src_tips(db: Session) -> List[Dict[str, Any]]:
     from app.db.models.employee_tip import EmployeeTip
     rows = db.query(EmployeeTip).order_by(EmployeeTip.created_at.desc()).all()
@@ -444,6 +463,21 @@ def _re_report_waiver(db: Session, ref: Any) -> None:
         _queue_waiver_export(db, row)
 
 
+def _re_payroll(db: Session, ref: Any) -> None:
+    from datetime import date as _date
+    from app.routers.payroll import _queue_payroll_export
+    from app.db.models.payroll_run import PayrollRun
+    start, _, end = str(ref).partition("..")
+    row = (
+        db.query(PayrollRun)
+        .filter(PayrollRun.period_start == start, PayrollRun.period_end == end)
+        .first()
+    )
+    if row:
+        _queue_payroll_export(db, _date.fromisoformat(start), _date.fromisoformat(end),
+                              row.finalized_at)
+
+
 def _re_tip(db: Session, ref: Any) -> None:
     from app.db.models.employee_tip import EmployeeTip
     from app.routers.payroll import _queue_tip_export
@@ -547,6 +581,9 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
     {"key": "availability", "label": "Availability", "env": "SHEETS_AVAILABILITY_TAB",
      "default": "Availability", "key_cols": ["user_name", "window_start"],
      "source": _src_availability, "reexport": _re_availability},
+    {"key": "payroll", "label": "Payroll periods", "env": "SHEETS_PAYROLL_TAB",
+     "default": "Payroll", "key_cols": ["period"],
+     "source": _src_payroll, "reexport": _re_payroll},
     {"key": "tips", "label": "Employee tips", "env": "SHEETS_TIPS_TAB",
      "default": "Tips", "key_cols": ["tip_uuid"],
      "source": _src_tips, "reexport": _re_tip},

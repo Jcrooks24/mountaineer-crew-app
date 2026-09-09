@@ -26,6 +26,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import app.integrations.sheets_export as sx  # noqa: E402
 
+# Captured before any stub replaces it, so the header-guard check below can
+# exercise the REAL _ensure_tab.
+_REAL_ENSURE = sx._ensure_tab
+
 FAILURES = []
 
 
@@ -179,6 +183,71 @@ check("with its own tab env var so staging cannot write to the prod tab",
       tips_entry["env"] == "SHEETS_TIPS_TAB", str(tips_entry))
 check("and the function name the status table keys on",
       tips_entry["fn"] == "export_tip_to_sheets")
+
+print("\nThe Payroll tab: one row per employee, replaced on a re-finalize:")
+# The key column is `period`, shared by every employee row in the run, and the
+# export deletes the whole period before writing it back. Sparing a SINGLE row
+# (the old keep_last flag) would delete everybody except the last person on the
+# run - which is why keep_last_n is a count.
+fp = FakeSheet([])
+fp.install("Payroll")
+RUN = {
+    "period": "2026-09-01..2026-09-14",
+    "period_start": "2026-09-01", "period_end": "2026-09-14",
+    "finalized_at": "2026-09-15T09:00:00",
+    "employees": [
+        {"name": "Casey", "totals": {"regular_hours": 40, "ot_hours": 2, "pto_hours": 8,
+                                     "tips_amount": 40.0, "total_hours": 50}},
+        {"name": "Dev", "totals": {"regular_hours": 32, "ot_hours": 0, "pto_hours": 0,
+                                   "tips_amount": 0.0, "total_hours": 32}},
+    ],
+}
+n = sx.export_payroll_period_to_sheets(None, RUN)
+check("one row per employee", n == 2, str(n))
+r0, r1 = fp.row(0), fp.row(1)
+check("the period key is on every row",
+      r0.get("period") == "2026-09-01..2026-09-14" == r1.get("period"))
+check("tips are a COLUMN on the payroll row", r0.get("tips_amount") == 40.0, str(r0))
+check("PTO is too", r0.get("pto_hours") == 8)
+check("and the employee is named", {r0.get("employee"), r1.get("employee")} == {"Casey", "Dev"})
+
+print("\nA re-finalize replaces the run rather than duplicating it:")
+deleted = []
+sx._delete_sheet_rows_by_value = lambda svc, sid, tab, col, val, keep_last_n=0: (
+    deleted.append((col, val, keep_last_n)) or 0)
+fp.written.clear()
+sx.export_payroll_period_to_sheets(None, RUN)
+check("the stale rows are dropped by PERIOD, not per employee",
+      deleted and deleted[-1][0] == "period" and deleted[-1][1] == RUN["period"],
+      str(deleted))
+check("sparing exactly the rows just appended, not one",
+      deleted[-1][2] == 2, f"keep_last_n={deleted[-1][2]} for a 2-employee run")
+
+print("\nA broken header refuses to append rather than piling up duplicates:")
+# The dedupe key IS PAYROLL_HEADERS[0], so _ensure_tab itself raises on a
+# populated header row that has lost it, before anything is appended - the same
+# protection that stops a renamed row 1 turning an append-first export into the
+# Reimbursements cascade (189 duplicate rows, $17,088 over-counted). The export
+# therefore carries NO second guard of its own; one would be unreachable, and an
+# unreachable check reads as protection that is not there.
+#
+# Exercised against the REAL _ensure_tab: the FakeSheet stub appends missing
+# columns exactly as the real one does, so it never reaches the guard, and a test
+# written against the stub would have reported this as working either way.
+sx._ensure_tab = _REAL_ENSURE
+sx._get_sheets_svc = lambda db: object()
+sx._sheet_ids = lambda svc, sid, refresh=False: {"Payroll": 1}
+sx._header_cache_get = lambda sid, tab: ["something_else", "another"]
+appended = []
+sx._api = lambda fn: appended.append("wrote")
+try:
+    sx.export_payroll_period_to_sheets(None, RUN)
+    check("a populated header missing the key column raises", False, "it appended anyway")
+except sx.SheetHeaderError as exc:
+    check("a populated header missing the key column raises", True)
+    check("the message names the column and says to fix the sheet",
+          "period" in str(exc) and "fix the header" in str(exc), str(exc))
+check("and nothing was written", appended == [], str(appended))
 
 print()
 if FAILURES:

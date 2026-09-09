@@ -1462,6 +1462,47 @@ a payroll run because Google was slow would be the wrong trade).
 staging tips land in the production `Tips` tab. See CREDENTIALS.md.
 
 
+## Payroll periods reach a worksheet, with Tips as a column (2026-09-09)
+
+User direction: tips belong on the payroll sheet in a fresh column, and the tab
+must be one the app owns end to end.
+
+| Path | Where | Status |
+|---|---|---|
+| `payroll_runs` table - one row per finalized period | migration `o5q7s9n1p3r5`, `db/models/payroll_run.py` | [x] |
+| Recorded on finalize (upsert; `run_count` increments on a re-finalize) | `routers/payroll.py` (`_record_payroll_run`) | [x] |
+| **NEW TAB** `Payroll` (`SHEETS_PAYROLL_TAB`), one row per employee per period | `sheets_export.export_payroll_period_to_sheets` | [x] |
+| Exported after the finalize commit, off-request on the bounded pool | `routers/payroll.py` (`_queue_payroll_export`) | [x] |
+| Both registries + backfill source and re-export, keyed on `period` | `sheets_export.py`, `sheet_backfill.py` | [x] |
+
+**Why a run ledger had to come first.** `system_config` held only the LATEST
+finalized period, so "which periods have been finalized" was unanswerable - which
+meant the backfill audit had nothing to enumerate and the new sync would have
+been unauditable. A sync nobody can audit is one whose stranded rows are
+invisible, which is the hole `sheet_backfill` exists to close.
+
+**Keyed by PERIOD, not per employee.** Every employee row in a run carries the
+same `period` key, and the export replaces the whole period. Deleting by a
+per-employee key would leave last run's rows behind for anyone who dropped off
+the payroll since. This is why `_delete_sheet_rows_by_value`'s `keep_last` flag
+became `keep_last_n`, a COUNT: sparing a single row would delete everybody except
+the last person on the run.
+
+**Append first, then drop the stale rows** (ADR 0043), so a worker recycle
+mid-sequence leaves a visible duplicate the next run cleans up rather than a hole
+where a pay period used to be.
+
+**No second header guard.** The dedupe key IS `PAYROLL_HEADERS[0]`, so
+`_ensure_tab` already raises on a populated header row that has lost it. The
+Bills rebuild needs its own guard because `submission_id` sits at index 14 there;
+here one would be unreachable, and an unreachable check reads as protection that
+is not there.
+
+**The Tips tab stays**, holding the itemization behind the total: which job, which
+note, who entered it. Same relationship Materials has to the Bills materials line
+- a total on the sheet the office works from, the detail on its own tab.
+
+
 ## Tips are paid out through payroll (2026-09-03)
 
 Request f8e008cb. Money.

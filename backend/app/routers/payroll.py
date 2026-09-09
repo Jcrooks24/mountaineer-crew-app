@@ -79,6 +79,7 @@ from app.db.models.payroll_correction import (
     PayrollCorrection,
 )
 from app.db.models.employee_tip import EmployeeTip
+from app.db.models.payroll_run import PayrollRun
 from app.db.models.reimbursement import Reimbursement
 from app.db.models.user import User
 from app.schemas.payroll import (
@@ -1772,6 +1773,12 @@ def finalize_period(
     # Hours summary now runs from the day after this period's end.
     set_last_finalized_period(db, s, e)
 
+    # And the durable record that this period was run at all. system_config only
+    # ever held the LATEST period, so "which periods have been finalized" was
+    # unanswerable - which also meant the Payroll worksheet export had nothing to
+    # be audited against.
+    payroll_run = _record_payroll_run(db, s, e, current_user.name or current_user.email)
+
     # Every claim this run paid is stamped paid. Deliberately AFTER the email
     # loop and inside the same transaction as the notified_at stamps, so the one
     # commit below either records the whole finalize or none of it.
@@ -1814,6 +1821,16 @@ def finalize_period(
                 print(f"[payroll] could not queue paid-stamp export for "
                       f"{r.reimbursement_uuid}: {exc}")
 
+    # The Payroll worksheet: one row per employee for this period. After the
+    # commit, so nothing is mirrored that was not durably recorded, and after the
+    # paid stamps so the sheet shows the period as it ended up.
+    try:
+        _queue_payroll_export(db, s, e, payroll_run.finalized_at)
+    except Exception as exc:  # noqa: BLE001
+        # Best-effort, like the reimbursement mirror above: payroll is finalized
+        # in Postgres either way, and the backfill audit can re-drive this.
+        print(f"[payroll] could not queue the Payroll worksheet export: {exc}")
+
     return {
         "period": {"start": s.isoformat(), "end": e.isoformat()},
         "sent": sent,
@@ -1830,6 +1847,57 @@ def finalize_period(
 
 
 # ── Tips ─────────────────────────────────────────────────────────────────────
+
+
+def _record_payroll_run(db: Session, s_: date, e_: date, who: str) -> "PayrollRun":
+    """Upsert the run ledger for this period. Does NOT commit - finalize owns the
+    transaction.
+
+    One row per period, updated on a re-finalize rather than appended, so
+    `finalized_at` means "most recently run" and the ledger stays one row per
+    period. `run_count` is kept because a period finalized repeatedly usually
+    means corrections kept arriving, which is worth being able to see.
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    row = (
+        db.query(PayrollRun)
+        .filter(PayrollRun.period_start == s_.isoformat(),
+                PayrollRun.period_end == e_.isoformat())
+        .first()
+    )
+    if row is None:
+        row = PayrollRun(
+            period_start=s_.isoformat(), period_end=e_.isoformat(),
+            finalized_at=now, finalized_by_name=who, run_count=1,
+        )
+        db.add(row)
+    else:
+        row.finalized_at = now
+        row.finalized_by_name = who
+        row.run_count = int(row.run_count or 0) + 1
+    return row
+
+
+def _queue_payroll_export(db: Session, s_: date, e_: date, finalized_at: Any) -> None:
+    """Mirror a finalized period to the Payroll worksheet, off-request.
+
+    The summary is rebuilt here rather than reusing the one finalize already
+    computed, because that one was built BEFORE the paid stamps were written and
+    the sheet should show the period as it ended up. It is the same read the
+    payroll screen does, on a background thread, once per finalize.
+    """
+    from app.integrations.sheets_export import (
+        export_payroll_period_to_sheets,
+        run_export_in_background,
+    )
+    summary = _build_summary(db, s_, e_)
+    run_export_in_background(export_payroll_period_to_sheets, {
+        "period": f"{s_.isoformat()}..{e_.isoformat()}",
+        "period_start": s_.isoformat(),
+        "period_end": e_.isoformat(),
+        "finalized_at": finalized_at,
+        "employees": summary.get("employees") or [],
+    })
 
 
 def _queue_tip_export(tip: EmployeeTip) -> None:

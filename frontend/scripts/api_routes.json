@@ -1,5 +1,5 @@
 {
-  "generated_from": "8fdab3499fc61c40158f0154112095202a06f477",
+  "generated_from": "e3d3de97c7bf68976685bab0efe92a4be74f98cc",
   "note": "Regenerate with: cd backend && python scripts/dump_api_routes.py",
   "paths": [
     "/",
