@@ -2224,6 +2224,11 @@ def delete_tip(
 # flattened version missing whatever it could not represent.
 PAYROLL_NOTES_KEY = "payroll_notes"
 
+# Google Sheets refuses a cell longer than this. The note is archived into one
+# cell of the Payroll tab at finalize, so it is the real ceiling on the field -
+# named once here so the validator and the message cannot drift from each other.
+SHEETS_CELL_MAX_CHARS = 50000
+
 
 def _get_payroll_notes(db: Session) -> str:
     from app.db.models.system_config import SystemConfig
@@ -2246,13 +2251,24 @@ class PayrollNotesIn(BaseModel):
     @field_validator("notes")
     @classmethod
     def not_absurd(cls, v: str) -> str:
-        # A generous cap rather than a tight one: this is the office's scratchpad
-        # and the point of it is that things can be written down. The limit exists
-        # so a runaway paste cannot put a megabyte into a Sheet cell (Sheets caps
-        # a cell at 50k characters, and the archive writes this into one).
+        # THE CAP IS THE SHEET CELL CAP, deliberately the same number rather than
+        # a cautious fraction of it. The archive writes this note into one cell of
+        # the Payroll tab, and Google caps a cell at 50,000 characters - so this
+        # is the point past which the note stops being archivable at all.
+        #
+        # A lower limit would refuse text the Sheet could hold, which is a worse
+        # trade: this is the office's scratchpad and the whole point is that
+        # things can be written down. Anything that fits in the archive is
+        # allowed; anything that does not is refused HERE, where somebody is
+        # looking at it, rather than silently truncating on the way to the Sheet
+        # weeks later at finalize.
         v = v or ""
-        if len(v) > 20000:
-            raise ValueError("payroll notes are limited to 20,000 characters")
+        if len(v) > SHEETS_CELL_MAX_CHARS:
+            raise ValueError(
+                f"payroll notes are limited to {SHEETS_CELL_MAX_CHARS:,} characters, "
+                "which is the most a Google Sheets cell can hold - the note is "
+                "archived into one when a period is finalized."
+            )
         return v
 
 

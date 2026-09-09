@@ -96,9 +96,17 @@ console.log("\nGuards:");
 check("the endpoints are admin-only",
   /@router\.get\("\/notes"\)[\s\S]{0,220}?require_admin/.test(api)
   && /@router\.put\("\/notes"\)[\s\S]{0,260}?require_admin/.test(api));
-check("an absurd paste is refused before it reaches a Sheet cell",
-  /limited to 20,000 characters/.test(api),
-  "Sheets caps a cell at 50k and the archive writes this into one");
+// The cap IS the Sheet cell cap, not a cautious fraction of it: anything that
+// fits in the archive is allowed, and anything that does not is refused where
+// somebody is looking at it rather than truncated silently at finalize weeks
+// later. A drift between the two numbers is the failure worth catching.
+check("the cap is named once, from the Sheets limit",
+  /SHEETS_CELL_MAX_CHARS = 50000/.test(api));
+check("and the validator uses that constant, not a literal",
+  /len\(v\) > SHEETS_CELL_MAX_CHARS/.test(api),
+  "a second literal would drift from the real ceiling");
+check("the message tells the office why that number",
+  /most a Google Sheets cell can hold/.test(api));
 
 console.log();
 if (fails.length) {

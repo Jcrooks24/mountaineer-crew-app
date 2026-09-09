@@ -1502,8 +1502,12 @@ would be lost or read as noise. No editor library was added.
 a backfill re-drives an old run would rewrite history - the note keeps changing
 after a period is finalized. Same reasoning as `rows_json`.
 
-**A 20,000 character cap.** Generous, because the point is that things can be
-written down, but Sheets caps a cell at 50k and the archive writes this into one.
+**The cap IS the Sheet cell cap** (50,000 characters), not a cautious fraction of
+it. The archive writes the note into one cell of the Payroll tab, so that is the
+point past which it stops being archivable at all - and a lower limit would
+refuse text the Sheet could happily hold. Named once as `SHEETS_CELL_MAX_CHARS`
+so the validator and its message cannot drift apart, and refused where somebody
+is looking at it rather than truncated silently at finalize weeks later.
 
 
 ## Add-a-line becomes one tool for what an employee forgot to log (2026-09-09)
