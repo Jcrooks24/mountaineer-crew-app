@@ -62,6 +62,16 @@ class PayrollRun(Base):
     # live figures.
     rows_json = Column(Text, nullable=True)
 
+    # What the payroll notes field said when this run was finalized.
+    #
+    # A SNAPSHOT, like rows_json and for the same reason. The note is ONE ROLLING
+    # note that carries across periods and keeps being edited, so re-reading it
+    # later would publish what it says NOW rather than what it said when this
+    # payroll was run - and a backfill re-drive would quietly rewrite history.
+    #
+    # Nullable: runs finalized before the field existed have none.
+    notes_snapshot = Column(Text, nullable=True)
+
     @property
     def period_key(self) -> str:
         """The value written into the Payroll tab's key column, and the key the

@@ -54,6 +54,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db, require_admin
@@ -1878,6 +1879,9 @@ def finalize_period(
     # stamps, so the Payroll worksheet mirrors the period as finalized rather
     # than as it happens to compute later. See _queue_payroll_export.
     payroll_run.rows_json = json.dumps(_payroll_snapshot_rows(db, s, e))
+    # Archive what the rolling note says right now. NOT cleared - it carries on
+    # into the next period, which is the whole point of it being rolling.
+    payroll_run.notes_snapshot = _get_payroll_notes(db)
 
     # Committed after the loop: only the corrections whose email actually went
     # out (or was deliberately suppressed) carry a notified_at, so a failure is
@@ -2034,6 +2038,7 @@ def _queue_payroll_export(db: Session, s_: date, e_: date) -> None:
         "period_start": s_.isoformat(),
         "period_end": e_.isoformat(),
         "finalized_at": run.finalized_at,
+        "notes": run.notes_snapshot or "",
         "employees": rows,
     })
 
@@ -2201,6 +2206,75 @@ def delete_tip(
     run_export_in_background(delete_extra_pay_from_sheets, tip_uuid)
     return None
 
+
+
+# -- Payroll notes -------------------------------------------------------------
+#
+# ONE ROLLING NOTE (office direction, 2026-09-09), not one per period. The
+# information the office keeps here is standing information - who is on light
+# duties, which rate changed, what to remember before the next run - so a field
+# that emptied itself every fortnight would just be re-typed every fortnight.
+#
+# Finalizing ARCHIVES what it says at that moment onto the run and into the
+# Sheet, and deliberately does NOT clear it.
+#
+# Stored as markdown. The office asked for bold, bullets and line breaks; markdown
+# gives them that while staying readable as plain text, which is what the archive
+# and the Sheet cell get. A rich-text format would archive as either markup or a
+# flattened version missing whatever it could not represent.
+PAYROLL_NOTES_KEY = "payroll_notes"
+
+
+def _get_payroll_notes(db: Session) -> str:
+    from app.db.models.system_config import SystemConfig
+    row = db.query(SystemConfig).filter(SystemConfig.key == PAYROLL_NOTES_KEY).first()
+    return (row.value if row and row.value else "") or ""
+
+
+@router.get("/notes")
+def get_payroll_notes(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """The rolling payroll note. Admin-only, like the rest of this module."""
+    return {"notes": _get_payroll_notes(db)}
+
+
+class PayrollNotesIn(BaseModel):
+    notes: str = ""
+
+    @field_validator("notes")
+    @classmethod
+    def not_absurd(cls, v: str) -> str:
+        # A generous cap rather than a tight one: this is the office's scratchpad
+        # and the point of it is that things can be written down. The limit exists
+        # so a runaway paste cannot put a megabyte into a Sheet cell (Sheets caps
+        # a cell at 50k characters, and the archive writes this into one).
+        v = v or ""
+        if len(v) > 20000:
+            raise ValueError("payroll notes are limited to 20,000 characters")
+        return v
+
+
+@router.put("/notes")
+def put_payroll_notes(
+    body: PayrollNotesIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Save the rolling note. Called by an autosave, so it is a plain overwrite:
+    last write wins, and the client is the only editor of record.
+
+    Returns the stored value rather than an empty ack, so the client can show a
+    save it can actually prove landed instead of assuming."""
+    from app.db.models.system_config import SystemConfig
+    row = db.query(SystemConfig).filter(SystemConfig.key == PAYROLL_NOTES_KEY).first()
+    if row:
+        row.value = body.notes
+    else:
+        db.add(SystemConfig(key=PAYROLL_NOTES_KEY, value=body.notes))
+    db.commit()
+    return {"ok": True, "notes": _get_payroll_notes(db)}
 
 
 # -- Bonuses ------------------------------------------------------------------

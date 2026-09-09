@@ -1,5 +1,5 @@
 {
-  "generated_from": "f944f72949b8c9d47a5b283c6c5ab9cd79da2c28",
+  "generated_from": "de8de8b9aad47b2d31e368a052832456c453e925",
   "note": "Regenerate with: cd backend && python scripts/dump_api_routes.py",
   "paths": [
     "/",
@@ -50,6 +50,7 @@
     "/api/admin/payroll/job/{job_uuid}/corrections",
     "/api/admin/payroll/job/{job_uuid}/corrections/{correction_id}",
     "/api/admin/payroll/job/{job_uuid}/report-waiver",
+    "/api/admin/payroll/notes",
     "/api/admin/payroll/reimbursement/{reimbursement_uuid}/decision",
     "/api/admin/payroll/summary",
     "/api/admin/payroll/tips",

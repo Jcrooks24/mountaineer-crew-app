@@ -4306,6 +4306,14 @@ PAYROLL_HEADERS = [
     "per_diem_nights", "per_diem_amount", "reimbursement_amount",
     "mileage_miles", "mileage_amount", "tips_amount", "bonus_amount",
     "finalized_at",
+    # What the office's rolling payroll note said when this run was finalized.
+    #
+    # A COLUMN on this tab rather than a tab of its own: it is a fact about the
+    # run, and the run already has a tab. It repeats on every employee row of the
+    # period, which is normal for a period-level value in a spreadsheet and means
+    # the note is visible whichever row somebody is looking at, including after a
+    # sort or a filter.
+    "notes",
 ]
 
 
@@ -4383,6 +4391,7 @@ def export_payroll_period_to_sheets(db: Session, run: Dict[str, Any]) -> int:
             "tips_amount": t.get("tips_amount", ""),
             "bonus_amount": t.get("bonus_amount", ""),
             "finalized_at": _iso(run.get("finalized_at")),
+            "notes": run.get("notes") or "",
         }, headers))
 
     if rows:

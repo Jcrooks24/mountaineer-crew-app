@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
+import PayrollNotes from "./PayrollNotes";
 
 /**
  * Admin payroll tool - the page that turns everything the app collects into the
@@ -363,6 +364,10 @@ export default function PayrollTool({ onOpenJob }: { onOpenJob?: (jobUuid: strin
 
   return (
     <div className="col" style={{ gap: 14 }}>
+      {/* Above everything: a rolling note that carries across periods, so it is
+          not about whichever period happens to be selected below. */}
+      <PayrollNotes />
+
       {/* ── Period picker ── */}
       <div className="card">
         <div className="microLabel" style={{ marginBottom: 10 }}>Pay period</div>

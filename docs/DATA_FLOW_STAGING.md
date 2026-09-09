@@ -1462,6 +1462,50 @@ a payroll run because Google was slow would be the wrong trade).
 staging tips land in the production `Tips` tab. See CREDENTIALS.md.
 
 
+## Payroll notes: one rolling note, archived at each finalize (2026-09-09)
+
+Office direction, and the brief was "it is very important the text is saved".
+
+| Path | Where | Status |
+|---|---|---|
+| `system_config["payroll_notes"]` - ONE rolling note, not one per period | `routers/payroll.py` | [x] |
+| `GET` / `PUT /api/admin/payroll/notes`, admin-only | `routers/payroll.py` | [x] |
+| `payroll_runs.notes_snapshot` - what it said at that finalize | migration `q7s9u1p3r5t7` | [x] |
+| `notes` column on the Payroll tab, from the snapshot | `sheets_export.PAYROLL_HEADERS` | [x] |
+| Autosaving editor above the table, markdown bold + bullets | `components/PayrollNotes.tsx` | [x] |
+
+**Rolling, not per period.** What the office keeps here is standing information,
+so a field that emptied itself every fortnight would just be re-typed every
+fortnight. Finalizing archives it and leaves it in place.
+
+**Saved means the server said so.** The status reads "Saved" only once the PUT
+has echoed the text back, never on having sent it - an indicator that reports the
+attempt rather than the outcome is worse than none, because it gets trusted. Any
+later keystroke reads as unsaved again.
+
+**Four ways an autosave loses work, each closed:** a local mirror on every
+keystroke; a flush on pagehide, on tab switch and on unmount (a debounce
+cancelled on unmount is how the last sentence disappears); an immediate save on
+blur; and a failed save that says so in words with a retry rather than being
+swallowed.
+
+**A local copy that never reached the server WINS on load.** If the mirror
+disagrees with the server, that is work whose save did not land, and letting the
+server copy overwrite it silently would destroy the thing this field exists to
+protect. It is kept, and the office is told.
+
+**Markdown, not rich text.** The archive is a Sheet cell. Markdown gives the bold
+and bullets that were asked for and stays readable as plain text there; markup
+would be lost or read as noise. No editor library was added.
+
+**The SNAPSHOT publishes, never the live note.** Re-reading the current note when
+a backfill re-drives an old run would rewrite history - the note keeps changing
+after a period is finalized. Same reasoning as `rows_json`.
+
+**A 20,000 character cap.** Generous, because the point is that things can be
+written down, but Sheets caps a cell at 50k and the archive writes this into one.
+
+
 ## Add-a-line becomes one tool for what an employee forgot to log (2026-09-09)
 
 Office direction. "Add a line" and the requested bonus tool are the same job to
