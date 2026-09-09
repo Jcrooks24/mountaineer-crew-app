@@ -688,11 +688,39 @@ re-login.
 wipe, user-scoped, the same way ADR 0021 preserves pending BOL work.
 `verify_report_draft_survives_logout.mjs` covers it.
 
-**The 401 trigger is NOT yet found, and this entry stays open until it is.** What
-is established is the amplifier, not the cause: something returns a first 401,
-and the unconditional `clearToken()` turns it into a full logout. To find the
-cause, get from Render logs the request that 401'd FIRST, before the report POST.
-Do not assume it was the report.
+**The 401 trigger is NOT yet found, and this entry stays open until it is.**
+
+Logs from the incident (2026-09-09) narrow it and rule things out:
+
+```
+POST /api/job-report                    401     <- the FIRST 401
+GET  /api/patch-notes                   401
+GET  /api/patch-notes/history           401
+GET  /api/availability                  401
+GET  /api/hours/worked-history?weeks=2  401
+GET  /api/dq/my                         401
+POST /api/auth/login                    200     <- logged out and back in
+```
+
+- **The report POST is the first 401**; the five after it are the `clearToken()`
+  cascade, not separate faults.
+- **There is no `/api/auth/me` 401 anywhere.** `loadMe` returns early when the
+  token is null, so it never called - which says the token was ABSENT rather than
+  invalid, matching "Not authenticated" (`deps.py:23`).
+- **`loadMe`'s catch is not the culprit**: it clears only on a real 401/403 and
+  deliberately preserves the session on a network error. Checked and disproved.
+
+What removed the token, with no server-visible 401 before it, is still open.
+Remaining candidates, none yet evidenced: `clearCrewState()` via the `/me`
+identity-mismatch path (needs a successful `/me` returning a different user id);
+a manual logout; or the browser evicting localStorage (iOS does this under
+storage pressure, and it would take the token and the drafts together).
+
+**Next occurrence is now diagnosable.** `deps.py` logs which 401 fired:
+`[401] no bearer credentials` means the client lost its token;
+`[401] token present but undecodable` means a token/secret problem. Grep for
+`[401]`. The uvicorn access line cannot tell these apart and that is what made
+this investigation guesswork.
 
 **Do not "fix" it by removing the clearToken calls.** They exist so a genuinely
 revoked session does not leave the crew tapping Retry forever. The fix, once the
