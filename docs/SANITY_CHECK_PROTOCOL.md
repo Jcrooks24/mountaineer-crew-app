@@ -239,6 +239,11 @@ Pick the oldest row. Break ties toward whatever touches pay, safety, or a
 customer signature. Update the row in the same commit as the report, and keep
 the open-findings count honest.
 
+The count links to that pass's report in `docs/sanity/`, which is the open list
+for the area: findings sit there undecided until they are approved (they become
+work) or declined (a defect moves to Known defects in RUNBOOKS.md, a matter of
+taste is deleted).
+
 | # | Area | Main surfaces | Last checked | Open findings |
 |---|---|---|---|---|
 | 1 | Auth and account | `Login`, `Signup`, `ForgotPassword`, `ResetPassword`, `Profile` | never | - |
@@ -250,7 +255,7 @@ the open-findings count honest.
 | 7 | Customer paperwork | `BillOfLadingForm`, `BolInventoryTab`, `ActualInventory`, `SignaturePad`, `DocumentLibrary` | never | - |
 | 8 | Photos and incidents | `IncidentReport`, photo capture, `IncidentsAdminTab` | never | - |
 | 9 | Estimating | `EstimatorTab`, `WrapUpEstimator`, `BillCalculator` | never | - |
-| 10 | Payroll and close-out | `PayrollTool`, `PayrollNotes`, `CloseoutStepper` | never | - |
+| 10 | Payroll and close-out | `PayrollTool`, `PayrollNotes`, `CloseoutStepper` | 2026-09-09 | [8](sanity/2026-09-09-payroll-closeout.md) |
 | 11 | Roster, skills, DQ files | `EmployeesTab`, `DqFilesTab`, `DqMyFileCard`, `RosterPicker` | never | - |
 | 12 | Admin job summary and notes | `JobSummaryTab`, `NotesTab`, `AdminNotesBanner`, `MapTab` | never | - |
 | 13 | Crew comms | `Bulletin`, `EmployeeDirectory`, patch notes, `UpdateBanner` | never | - |
