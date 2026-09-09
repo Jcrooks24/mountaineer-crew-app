@@ -622,6 +622,40 @@ Two causes, in order of likelihood:
 written from the same assumption as the code cannot check the code, which is the
 specific way this class of bug survived once already.
 
+## A Drive upload fails with RedirectMissingLocation (502 on the endpoint)
+
+**Found in production 2026-09-09, FIXED the same day.** Symptom in the log:
+
+```
+POST /api/reimbursements/expense HTTP/1.1" 502 Bad Gateway
+  File ".../httplib2/__init__.py", line 1470, in _request
+    raise RedirectMissingLocation(
+httplib2.error.RedirectMissingLocation: Redirected but the response is missing
+a Location: header.
+```
+
+**Cause.** Every Drive upload here is resumable with an 8 MB chunk. Between
+chunks Google answers `308 Resume Incomplete`, which googleapiclient's
+`next_chunk()` is written to handle. httplib2 never let it see one: 308 is in
+its `REDIRECT_CODES`, its redirect branch is entered for 308 on any method
+(not just safe ones), and a 308 Resume Incomplete has no `Location` header - so
+it raised instead.
+
+**Why it looked like a receipts bug.** Under 8 MB there is one chunk, Google
+answers 200/201, and no 308 exists. Only a file past the chunk size trips it, so
+it surfaces wherever crews happen to upload something big. It affected EVERY
+resumable upload: job photos, receipts and odometer shots, estimator files, DQ
+documents, and signed Bills of Lading.
+
+**Fix.** `_build_authorized_http` drops 308 from `redirect_codes`, which is
+httplib2's own documented knob. Real redirects (301/302/303/307/300) still
+follow. `backend/scripts/test_drive_resumable_308.py` reproduces the raise
+against httplib2's real constants and shows the fix removing it.
+
+**If it comes back:** check nobody raised `DRIVE_UPLOAD_CHUNK_SIZE` to dodge a
+symptom. That bound is an RSS guard (CLAUDE.md's OOM history), and raising it
+only moves the threshold at which this reappears.
+
 ## Crew see "Not authenticated" and cannot submit a job report
 
 **Reported from production 2026-09-09.** A crew member finished a job, filled in

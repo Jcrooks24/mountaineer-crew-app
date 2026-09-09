@@ -71,6 +71,39 @@ def _build_authorized_http(creds):
     import httplib2
     import google_auth_httplib2
     http = httplib2.Http(ca_certs=certifi.where(), timeout=GOOGLE_HTTP_TIMEOUT_S)
+
+    # A 308 FROM GOOGLE IS "RESUME INCOMPLETE", NOT A REDIRECT.
+    #
+    # Every Drive upload here is resumable with an 8 MB chunk size (that bound
+    # exists for RSS - see CLAUDE.md's OOM history). Between chunks Google answers
+    # 308 Resume Incomplete, and googleapiclient's next_chunk() is written to
+    # expect exactly that. httplib2 never lets it see one: 308 is in its
+    # REDIRECT_CODES, its redirect branch is entered for 308 on ANY method, and a
+    # 308 Resume Incomplete carries no Location header - so it raises
+    #
+    #   httplib2.error.RedirectMissingLocation: Redirected but the response is
+    #   missing a Location: header.
+    #
+    # and the upload dies. Observed in production 2026-09-09 on two receipt
+    # uploads (POST /api/reimbursements/expense -> 502), but the receipts were
+    # only the file that happened to be big enough. It affects EVERY upload past
+    # one chunk: job photos, estimator files, DQ documents, and signed Bills of
+    # Lading - the last being a one-copy legal document that ADR 0020 and ADR
+    # 0021 exist to protect.
+    #
+    # Under 8 MB there is a single chunk, Google answers 200/201, no 308 is ever
+    # produced and nothing fails, which is why this looked fine for so long.
+    #
+    # Dropping 308 from redirect_codes is httplib2's own supported knob ("To
+    # change, assign to `Http().redirect_codes`"). The 308 then returns to
+    # googleapiclient, which continues the upload. Nothing else is affected:
+    # Google does not use 308 as a permanent redirect on these APIs, and 301 /
+    # 302 / 307 still follow normally.
+    try:
+        http.redirect_codes = set(http.redirect_codes) - {308}
+    except Exception:  # noqa: BLE001 - very old httplib2 without the attribute
+        pass
+
     return google_auth_httplib2.AuthorizedHttp(creds, http=http)
 
 
