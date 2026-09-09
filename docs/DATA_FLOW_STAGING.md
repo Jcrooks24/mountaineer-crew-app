@@ -1262,6 +1262,8 @@ Request b59434c2 item 3.
 | `PATCH /api/reimbursements/{uuid}/qb-status` - reversible | `routers/reimbursement.py` | [x] |
 | `paid_at` / `paid_period_*` and the QB fields on `ReimbursementOut` | `routers/reimbursement.py` | [x] |
 | Admin module UI: search, filters, Drive links, QB toggle | `pages/Admin.tsx` (`ReimbursementsAdminTab`, its own nav tab) | [x] |
+| `qb_status` / `qb_entered_at` / `qb_entered_by` as NEW COLUMNS on the Reimbursements tab; the PATCH re-exports | `sheets_export.REIMBURSEMENT_HEADERS`, `routers/reimbursement.py` | [x] |
+| Date filters fall back to `created_at` when `expense_date` is NULL, matching payroll | `routers/reimbursement.py` | [x] |
 
 **Receipts are LINKS, not downloads** (user direction). The module renders plain
 anchors with `target="_blank"` for `receipt_photo_url`,
@@ -1312,6 +1314,7 @@ stored as an off-job entry purely because that is where payroll picks it up.
 | `GET /api/admin/off-job-hours/pto-balance/{user_id}` (admin) | `routers/off_job.py` | [x] |
 | PTO filtered out of the crew's off-job list and BOTH Worked Hours queries | `routers/off_job.py`, `routers/hours.py` | [x] |
 | `off_job_entries.recorded_by_id` / `recorded_by_name` | migration `m3o5q7l9n1p3` | [x] |
+| `recorded_by` on `OffJobOut` and as a NEW COLUMN on the OffJobHours tab | `routers/off_job.py`, `sheets_export.OFF_JOB_HEADERS` | [x] |
 | Payroll: its own `pto` bucket, in `totals.pto_hours` and per day | `routers/payroll.py` | [x] |
 | Payroll screen: record PTO + live balance, per employee | `components/PayrollTool.tsx` (`PtoSection`) | [x] |
 | Admin roster: set someone's annual PTO hours | `pages/Admin.tsx` (`PtoAllowance`), `routers/admin.py` | [x] |
@@ -1348,6 +1351,52 @@ figure - otherwise lowering 8 hours to 4 is refused for exceeding a cap the 8 ha
 already filled.
 
 
+## Office-entered money reaches the Sheet (2026-09-09)
+
+Vet findings 4 and 8. The rule the user set for this: **new data joins the
+worksheet it is categorically like; only genuinely different data earns a new
+tab.**
+
+Four facts the OFFICE owns were being stored in Postgres and surfaced only
+in-app. Postgres is not the record the office reconciles from - the Sheet is -
+so "it is in the database" was not the same as recorded, and one of them
+(`recorded_by`) was readable in no screen at all.
+
+| Fact | Where it went | Why there |
+|---|---|---|
+| PTO `recorded_by` | **column** on OffJobHours | it is a fact about an off-job entry, and off-job entries have a tab |
+| Reimbursement `paid_at` / `paid_period_*` | **columns** on Reimbursements | facts about a reimbursement |
+| Reimbursement `qb_status` / `qb_entered_at` / `qb_entered_by` | **columns** on Reimbursements | same |
+| Tips | **new tab** `Tips` | see below |
+
+**Why tips did NOT become a column.** A tip is close to a reimbursement in shape
+(employee, date, amount, optional job, note) but not in meaning: a reimbursement
+pays somebody back for money they spent. Folding tips in would make that tab's
+amount column stop answering "what do we owe in expenses", which is the question
+it exists for. It is not hours either. So it is the one that earned a tab.
+
+**Adding a column is safe and needs no migration.** `_ensure_tab` appends a
+column that is missing from an existing tab, to the RIGHT of what is there, and
+`_build_row` maps positionally against the header actually in the sheet. Rows
+written before the column come back blank rather than shifted.
+`scripts/test_sheet_new_columns.py` asserts exactly that, because the
+Reimbursements header being overwritten is what produced 189 duplicate rows and a
+$17,088 over-count in the 2026-08-05 audit.
+
+**Blank means blank, not zero.** `paid_at` is empty on every claim settled by
+hand before the stamp existed - the migration deliberately did not backfill,
+because inventing a payment record is worse than an empty cell.
+
+**Re-export is wired at every writer**, or the columns would only ever show the
+value a row had when it was filed: the QB PATCH re-exports its claim, and
+finalize re-exports every claim it stamped (after the commit, best-effort on the
+bounded pool - the money has already moved and the DB already says so, so failing
+a payroll run because Google was slow would be the wrong trade).
+
+**`SHEETS_TIPS_TAB` must be set on staging** before tips are used there, or
+staging tips land in the production `Tips` tab. See CREDENTIALS.md.
+
+
 ## Tips are paid out through payroll (2026-09-03)
 
 Request f8e008cb. Money.
@@ -1360,6 +1409,8 @@ Request f8e008cb. Money.
 | `totals.tips_amount` + `tip_items` on the payroll summary | `routers/payroll.py` | [x] |
 | Payroll screen: per-employee tip entry, list and remove | `components/PayrollTool.tsx` (`TipsSection`) | [x] |
 | Admin Job Summary: per-job tip entry, list and remove | `pages/Admin.tsx` (`JobTipsCard`) | [x] |
+| **NEW TAB** `Tips` (`SHEETS_TIPS_TAB`), replace-style on `tip_uuid`; a delete removes the row | `sheets_export.export_tip_to_sheets` / `delete_tip_from_sheets` | [x] |
+| Registered in `SHEET_SYNC_REGISTRY`, so the Sheet-syncs health check covers it | `integrations/sheets_export.py` | [x] |
 
 **The design point.** Tips arrive late, so `tip_date` (the payout date, defaulting
 to today in Mountain time) decides the pay period, NOT the job's date. A tip
@@ -1397,6 +1448,7 @@ Request b59434c2 item 2.
 | Stamped on payroll finalize, in the same transaction as the correction emails | `routers/payroll.py` (`_mark_reimbursements_paid`) | [x] |
 | Returned on the payroll summary's reimbursement items as `paid_at` + `paid_period` | `routers/payroll.py` | [x] |
 | Finalize response carries `reimbursements_paid` (a count) | `routers/payroll.py` | [x] |
+| `paid_at` / `paid_period_start` / `paid_period_end` as NEW COLUMNS on the Reimbursements tab, re-exported after the finalize commit | `sheets_export.REIMBURSEMENT_HEADERS`, `routers/payroll.py` | [x] |
 
 **A separate stamp, not a `status = "paid"` value.** Approval and payment are two
 different facts about one row; overwriting the status would lose who approved it

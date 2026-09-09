@@ -33,6 +33,10 @@ from app.db.models.reimbursement import Reimbursement  # noqa: E402
 from app.db.models.user import User  # noqa: E402
 from app.routers.payroll import _mark_reimbursements_paid  # noqa: E402
 
+# _mark_reimbursements_paid returns the ROWS it stamped (finalize re-exports
+# them to the Sheet); every assertion below is about how many, so each call is
+# wrapped in len() rather than each check being rewritten.
+
 FAILURES = []
 
 
@@ -84,7 +88,7 @@ print("What counts as paid:")
 submitted = claim("submitted")
 approved = claim("approved")
 rejected = claim("rejected")
-n = _mark_reimbursements_paid(db, START, END, roster)
+n = len(_mark_reimbursements_paid(db, START, END, roster))
 db.commit()
 check("an approved claim is marked paid", approved.paid_at is not None)
 check("an UNREVIEWED claim is marked paid too (payroll pays unless declined)",
@@ -102,7 +106,7 @@ print("\nOut of the window, or nobody's claim:")
 before = claim("approved", expense_date="2026-08-31")
 after = claim("approved", expense_date="2026-09-15")
 orphan = claim("approved", user_id=999)
-n2 = _mark_reimbursements_paid(db, START, END, roster)
+n2 = len(_mark_reimbursements_paid(db, START, END, roster))
 db.commit()
 check("a claim before the period is untouched", before.paid_at is None)
 check("a claim after the period is untouched", after.paid_at is None)
@@ -112,7 +116,7 @@ check("and none of them were counted", n2 == 0, str(n2))
 print("\nIDEMPOTENCE: re-finalizing must not move anything:")
 first_stamp = approved.paid_at
 first_period = approved.paid_period_start
-n3 = _mark_reimbursements_paid(db, START, END, roster)
+n3 = len(_mark_reimbursements_paid(db, START, END, roster))
 db.commit()
 check("a second run stamps nothing", n3 == 0, str(n3))
 check("and does not move the payment date", approved.paid_at == first_stamp)
@@ -120,7 +124,7 @@ check("and does not move the payment date", approved.paid_at == first_stamp)
 # The trap: a claim paid on an EARLIER run must keep that run's dates, not be
 # re-attributed to whichever period is finalized next.
 LATER_START, LATER_END = date(2026, 9, 15), date(2026, 9, 28)
-n4 = _mark_reimbursements_paid(db, LATER_START, LATER_END, roster)
+n4 = len(_mark_reimbursements_paid(db, LATER_START, LATER_END, roster))
 db.commit()
 check("finalizing a LATER period does not re-attribute an already-paid claim",
       approved.paid_period_start == first_period, str(approved.paid_period_start))
@@ -132,7 +136,7 @@ check("and counts exactly that one", n4 == 1, str(n4))
 print("\nA declined claim later approved is paid by the NEXT run, not retroactively:")
 rejected.status = "approved"
 db.commit()
-n5 = _mark_reimbursements_paid(db, START, END, roster)
+n5 = len(_mark_reimbursements_paid(db, START, END, roster))
 db.commit()
 check("it is picked up once it is no longer declined", rejected.paid_at is not None)
 check("and stamped with the run that actually paid it", n5 == 1, str(n5))

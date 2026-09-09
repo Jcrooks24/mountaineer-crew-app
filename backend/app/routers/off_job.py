@@ -62,6 +62,12 @@ class OffJobOut(BaseModel):
     pay_other_note: Optional[str] = None
     notes: str
     created_at: str
+    # Who in the OFFICE entered this, when it was not the employee. Blank on
+    # anything a crew member logged themselves; set on office-recorded PTO. It is
+    # returned so the Sheet export can carry it - for paid time drawn from an
+    # allowance, "who granted this" is a question somebody will ask, and it was
+    # previously stored in Postgres and readable nowhere.
+    recorded_by_name: Optional[str] = None
 
 
 def _to_out(e: OffJobEntry) -> OffJobOut:
@@ -77,6 +83,7 @@ def _to_out(e: OffJobEntry) -> OffJobOut:
         pay_other_note=e.pay_other_note,
         notes=e.notes or "",
         created_at=e.created_at.isoformat() if e.created_at else "",
+        recorded_by_name=e.recorded_by_name,
     )
 
 

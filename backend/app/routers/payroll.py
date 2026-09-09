@@ -599,8 +599,8 @@ def _tips(
 
 def _mark_reimbursements_paid(
     db: Session, start: date, end: date, roster: Dict[int, User]
-) -> int:
-    """Stamp every claim this period actually paid, and return how many.
+) -> List[Reimbursement]:
+    """Stamp every claim this period actually paid, and return the rows.
 
     WHAT COUNTS AS PAID. The same rows payroll counted: everything in the window
     except what an admin explicitly declined.
@@ -621,10 +621,15 @@ def _mark_reimbursements_paid(
 
     Does NOT commit; finalize owns the transaction and commits once at the end,
     so a failure part-way through leaves nothing stamped.
+
+    Returns the rows it stamped, not just a count, so the caller can re-export
+    them to the Sheet AFTER the commit. The paid stamp is a column on the
+    Reimbursements tab and the office reconciles from that tab, so a stamp that
+    never reaches it is only half recorded.
     """
     rows = db.query(Reimbursement).filter(Reimbursement.paid_at.is_(None)).all()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    marked = 0
+    stamped: List[Reimbursement] = []
     for r in rows:
         if r.user_id is None or r.user_id not in roster:
             continue
@@ -638,8 +643,8 @@ def _mark_reimbursements_paid(
         r.paid_at = now
         r.paid_period_start = start.isoformat()
         r.paid_period_end = end.isoformat()
-        marked += 1
-    return marked
+        stamped.append(r)
+    return stamped
 
 
 def _dedupe_corrections(
@@ -1780,12 +1785,34 @@ def finalize_period(
     # deliberately includes inactive users (somebody who left mid-period is still
     # owed that period), and a narrower set here would leave their claims unpaid.
     finalize_roster, _ = _roster(db)
-    reimbursements_paid = _mark_reimbursements_paid(db, s, e, finalize_roster)
+    paid_rows = _mark_reimbursements_paid(db, s, e, finalize_roster)
+    reimbursements_paid = len(paid_rows)
 
     # Committed after the loop: only the corrections whose email actually went
     # out (or was deliberately suppressed) carry a notified_at, so a failure is
     # retried by the next finalize instead of being silently marked done.
     db.commit()
+
+    # Mirror the paid stamp to the Sheet, AFTER the commit so nothing is exported
+    # that was not durably recorded. Off-request on the bounded pool, like every
+    # other export, and replace-style on reimbursement_uuid so each claim's
+    # existing row is rewritten rather than duplicated.
+    #
+    # Best-effort by design: the money has already moved and the DB already says
+    # so, and failing a payroll finalize because Google was slow would be the
+    # wrong trade. A dropped export is recovered the next time anything touches
+    # that claim, and the Sheet-drift health check surfaces it meanwhile.
+    # Same helper the decision endpoint above uses, imported locally for the same
+    # reason: a module-level import of the reimbursement router here would be a
+    # cycle, and the web worker's import surface is load-bearing (CLAUDE.md).
+    if paid_rows:
+        from app.routers.reimbursement import _queue_export
+        for r in paid_rows:
+            try:
+                _queue_export(r)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[payroll] could not queue paid-stamp export for "
+                      f"{r.reimbursement_uuid}: {exc}")
 
     return {
         "period": {"start": s.isoformat(), "end": e.isoformat()},
@@ -1803,6 +1830,31 @@ def finalize_period(
 
 
 # ── Tips ─────────────────────────────────────────────────────────────────────
+
+
+def _queue_tip_export(tip: EmployeeTip) -> None:
+    """Mirror a tip to the Sheet, off-request on the bounded pool.
+
+    Imported locally, like the other export helpers in this module: a
+    module-level import of sheets_export drags the Google client libraries into
+    the web worker's import surface, which CLAUDE.md is explicit about.
+    """
+    from app.integrations.sheets_export import (
+        export_tip_to_sheets,
+        run_export_in_background,
+    )
+    run_export_in_background(export_tip_to_sheets, {
+        "tip_uuid": tip.tip_uuid,
+        "user_name": tip.user_name or "",
+        "tip_date": tip.tip_date or "",
+        "amount": float(tip.amount or 0),
+        "job_name": tip.job_name or "",
+        "job_uuid": tip.job_uuid or "",
+        "note": tip.note or "",
+        "created_by_name": tip.created_by_name or "",
+        "created_at": tip.created_at,
+        "updated_at": tip.updated_at,
+    })
 
 
 @router.post("/tips")
@@ -1857,6 +1909,7 @@ def create_tip(
     )
     db.add(tip)
     db.commit()
+    _queue_tip_export(tip)
     return {
         "ok": True,
         "tip": {
@@ -1930,6 +1983,13 @@ def delete_tip(
         raise HTTPException(status_code=404, detail="No such tip.")
     db.delete(tip)
     db.commit()
+    # The Sheet has to lose it too, or the office reconciles against money
+    # nobody is owed.
+    from app.integrations.sheets_export import (
+        delete_tip_from_sheets,
+        run_export_in_background,
+    )
+    run_export_in_background(delete_tip_from_sheets, tip_uuid)
     return None
 
 

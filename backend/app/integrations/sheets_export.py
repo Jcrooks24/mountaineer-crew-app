@@ -3774,6 +3774,19 @@ REIMBURSEMENT_HEADERS = [
     "amount", "category", "vendor", "payment_method", "receipt_photo_url",
     "photos_link",
     "notes", "status", "approver", "approved_at", "approval_notes",
+    # Payment and QuickBooks entry, appended 2026-09-09. Both are facts the
+    # OFFICE owns rather than the crew, and both lived only in Postgres and the
+    # in-app admin module until now - which made the Sheet, the thing the office
+    # actually reconciles against, unable to answer "has this been paid" or "has
+    # this been keyed in".
+    #
+    # Deliberately COLUMNS on this tab rather than a new one: they are facts
+    # about a reimbursement, and a reimbursement already has a tab. Approval and
+    # payment stay separate values, because a claim can be paid without having
+    # been explicitly approved and overwriting one with the other loses who
+    # approved it.
+    "paid_at", "paid_period_start", "paid_period_end",
+    "qb_status", "qb_entered_at", "qb_entered_by",
     "created_at", "updated_at",
 ]
 
@@ -3821,6 +3834,19 @@ def export_reimbursement_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         "approver": entry.get("approver_name", "") or "",
         "approved_at": _iso(entry.get("approved_at")),
         "approval_notes": entry.get("approval_notes", "") or "",
+        # Payment: set when a payroll run that included this claim was finalized.
+        # Blank means it has not been paid THROUGH THE APP, which is the truth for
+        # every claim settled by hand before the stamp existed - the migration
+        # deliberately did not backfill, because inventing a payment record is
+        # worse than an empty cell.
+        "paid_at": _iso(entry.get("paid_at")),
+        "paid_period_start": entry.get("paid_period_start", "") or "",
+        "paid_period_end": entry.get("paid_period_end", "") or "",
+        # QuickBooks entry: a separate fact from payment. A claim can be paid and
+        # still not keyed in, which is exactly the state the office works from.
+        "qb_status": entry.get("qb_status", "") or "pending",
+        "qb_entered_at": _iso(entry.get("qb_entered_at")),
+        "qb_entered_by": entry.get("qb_entered_by_name", "") or "",
         "created_at": _iso(entry.get("created_at")),
         "updated_at": _iso(entry.get("updated_at")),
     }
@@ -4108,6 +4134,7 @@ SHEET_SYNC_REGISTRY = [
     {"key": "report_waivers",    "label": "Report waivers",      "env": "SHEETS_REPORT_WAIVERS_TAB",     "default": "ReportWaivers",     "fn": "export_report_waiver_to_sheets"},
     {"key": "bug_reports",       "label": "Bug reports",         "env": "SHEETS_BUGS_TAB",               "default": "Bugs",              "fn": "export_bug_report_to_sheets"},
     {"key": "feature_requests",  "label": "Feature requests",    "env": "SHEETS_FEATURE_REQUESTS_TAB",   "default": "FeatureRequests",   "fn": "export_feature_request_to_sheets"},
+    {"key": "tips",              "label": "Employee tips",       "env": "SHEETS_TIPS_TAB",               "default": "Tips",              "fn": "export_tip_to_sheets"},
 ]
 
 
@@ -4185,6 +4212,17 @@ def check_sheets_sync(db: Session) -> Dict[str, Any]:
 OFF_JOB_HEADERS = [
     "entry_uuid", "submitted_by", "work_date", "start_time", "end_time",
     "hours", "pay_structure", "pay_other_note", "notes", "created_at",
+    # Who in the OFFICE entered this, when it was not the employee themselves.
+    # Blank on anything a crew member logged for themselves, which is almost
+    # everything; set on office-recorded PTO (pay_structure "pto").
+    #
+    # PTO is paid time drawn from a finite allowance, so "who granted this" is a
+    # question somebody will eventually ask, and Postgres is not the record the
+    # office reads - the Sheet is. It was stored and then unreadable: absent from
+    # OffJobOut, absent from here, surfaced in no screen. Added 2026-09-09.
+    # _ensure_tab appends a new column to the right of an existing tab, so this
+    # needs no migration and old rows simply carry a blank.
+    "recorded_by",
 ]
 
 
@@ -4212,9 +4250,81 @@ def export_off_job_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
         "pay_other_note": entry.get("pay_other_note") or "",
         "notes": entry.get("notes") or "",
         "created_at": entry.get("created_at") or "",
+        "recorded_by": entry.get("recorded_by_name") or "",
     }
     _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
     return 1
+
+
+# -- Employee tips ------------------------------------------------------------
+
+TIP_HEADERS = [
+    "tip_uuid", "user_name", "tip_date", "amount",
+    "job_name", "job_uuid", "note", "entered_by",
+    "created_at", "updated_at",
+]
+
+
+def export_tip_to_sheets(db: Session, entry: Dict[str, Any]) -> int:
+    """Replace-style export: one row per tip_uuid on the Tips tab.
+
+    WHY ITS OWN TAB rather than a column on an existing one. The rule for this
+    Sheet is that new data joins the worksheet it is categorically like, and only
+    genuinely different data earns a tab. A tip is close to a reimbursement in
+    SHAPE (employee, date, amount, optional job, note) but not in MEANING: a
+    reimbursement pays somebody back for money they spent, and folding tips into
+    that tab would make its amount column stop answering "what do we owe in
+    expenses". It is not hours either, so OffJobHours does not fit. So: its own
+    tab.
+
+    `SHEETS_TIPS_TAB` controls the name, like every other sync, which is also how
+    staging is kept off the production worksheet. Point it at a different tab if
+    the office already keeps one - but the export OWNS the header row it writes,
+    so it has to be a tab the app manages rather than a hand-maintained sheet
+    with its own columns.
+
+    Replace-style on tip_uuid so a correction rewrites the row in place. A tip is
+    DELETED rather than edited in the UI, which `delete_tip_from_sheets` mirrors.
+    """
+    tab = os.getenv("SHEETS_TIPS_TAB", "Tips").strip() or "Tips"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    tip_uuid = entry.get("tip_uuid") or ""
+    if not tip_uuid:
+        return 0
+
+    svc = _get_sheets_svc(db)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, TIP_HEADERS)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "tip_uuid", tip_uuid)
+
+    row = {
+        "tip_uuid": tip_uuid,
+        "user_name": entry.get("user_name") or "",
+        # The PAYOUT date, which is what decides the pay period - not the job's
+        # date. See the EmployeeTip model.
+        "tip_date": entry.get("tip_date") or "",
+        "amount": entry.get("amount") if entry.get("amount") is not None else "",
+        "job_name": entry.get("job_name") or "",
+        "job_uuid": entry.get("job_uuid") or "",
+        "note": entry.get("note") or "",
+        "entered_by": entry.get("created_by_name") or "",
+        "created_at": _iso(entry.get("created_at")),
+        "updated_at": _iso(entry.get("updated_at")),
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
+def delete_tip_from_sheets(db: Session, tip_uuid: str) -> int:
+    """Drop a removed tip's row. A tip is hard-deleted in the app (a mistyped
+    dollar figure on a payroll screen is worse than losing the fact somebody
+    fat-fingered it), so the Sheet has to lose it too - otherwise the office
+    reconciles against money nobody is owed."""
+    if not tip_uuid:
+        return 0
+    tab = os.getenv("SHEETS_TIPS_TAB", "Tips").strip() or "Tips"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    svc = _get_sheets_svc(db)
+    return _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "tip_uuid", tip_uuid)
 
 
 REPORT_WAIVER_HEADERS = [

@@ -29,12 +29,21 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.db.models.reimbursement import Reimbursement  # noqa: E402
 from app.db.models.user import User  # noqa: E402
+import app.routers.reimbursement as rr  # noqa: E402
 from app.routers.reimbursement import (  # noqa: E402
     QB_STATUSES,
     QbStatusIn,
     search_reimbursements,
     set_qb_status,
 )
+
+# Marking a claim entered now re-exports it, because qb_status is a COLUMN on the
+# Reimbursements tab and the office reconciles from that tab - a toggle that only
+# reached Postgres would leave the Sheet saying "pending" forever. Stubbed here so
+# the test does not spawn real export threads (they fail noisily against an
+# in-memory DB with no system_config table), and so the call itself is assertable.
+exported = []
+rr._queue_export = lambda row: exported.append(row.reimbursement_uuid)
 
 FAILURES = []
 
@@ -152,6 +161,8 @@ check("the status flips", res.qb_status == "entered")
 check("who entered it is recorded", res.qb_entered_by_name == "Office",
       str(res.qb_entered_by_name))
 check("and when", res.qb_entered_at is not None)
+check("and the row is re-exported, so the Sheet column is not left stale",
+      exported == [a.reimbursement_uuid], str(exported))
 check("it is findable by qb_status", len(search(qb_status="entered")) == 1)
 # Derived, not a literal: exactly one claim was flipped to "entered", so every
 # other claim in the table must still be pending. A hardcoded number here just

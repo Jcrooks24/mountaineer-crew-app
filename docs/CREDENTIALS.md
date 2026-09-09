@@ -65,9 +65,21 @@ sheet. This is the most common configuration mistake in this system.
 `SHEETS_REIMBURSEMENTS_TAB`, `SHEETS_AVAILABILITY_TAB`, `SHEETS_OFF_JOB_TAB`,
 `SHEETS_BUGS_TAB` (default `Bugs`; the Report-a-Bug feature),
 `SHEETS_REPORT_WAIVERS_TAB` (default `ReportWaivers`; the payroll job-report
-waiver, new 2026-08-13). Unset is harmless on prod (the default is correct)
+waiver, new 2026-08-13),
+`SHEETS_TIPS_TAB` (default `Tips`; employee tips paid through payroll, new
+2026-09-09). Unset is harmless on prod (the default is correct)
 but on STAGING it writes test waivers into the production tab, like every
 other var in this list.
+
+**`SHEETS_TIPS_TAB` must be set on STAGING before tips are used there**, or
+staging tips land in the production `Tips` tab. It is money owed to a person, so
+that is worse than the usual case: the prod tab is what the office pays from.
+Set it to `TipsStaging`.
+
+Point it at a different tab name if the office already keeps a tips or payroll
+sheet - but the export OWNS the header row it writes and appends its own columns,
+so it must be a tab the app manages, not a hand-maintained sheet with its own
+layout.
 
 Staging value is the production name plus `Staging` (`Events` → `EventsStaging`).
 

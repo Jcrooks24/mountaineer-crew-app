@@ -142,6 +142,14 @@ def _row_to_export_dict(row: Reimbursement) -> dict:
         "approver_name": row.approver_name or "",
         "approved_at": row.approved_at,
         "approval_notes": row.approval_notes or "",
+        # Payment and QuickBooks entry. Both are office-owned facts that the
+        # Sheet needs, because the Sheet is what the office reconciles against.
+        "paid_at": row.paid_at,
+        "paid_period_start": row.paid_period_start or "",
+        "paid_period_end": row.paid_period_end or "",
+        "qb_status": row.qb_status or "pending",
+        "qb_entered_at": row.qb_entered_at,
+        "qb_entered_by_name": row.qb_entered_by_name or "",
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -521,6 +529,12 @@ def set_qb_status(
         row.qb_entered_by_name = None
     db.commit()
     db.refresh(row)
+    # The export is replace-style on reimbursement_uuid, so this rewrites the
+    # claim's existing row rather than adding one. Without it the qb_status
+    # column on the Sheet would stay at whatever it was when the claim was filed,
+    # and the office would be ticking things off in a screen that never reached
+    # the record they reconcile from.
+    _queue_export(row)
     return _to_out(row)
 
 
