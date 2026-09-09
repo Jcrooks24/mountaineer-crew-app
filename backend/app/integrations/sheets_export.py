@@ -3774,6 +3774,7 @@ REIMBURSEMENT_HEADERS = [
     "amount", "category", "vendor", "payment_method", "receipt_photo_url",
     "photos_link",
     "notes", "status", "approver", "approved_at", "approval_notes",
+    "created_at", "updated_at",
     # Payment and QuickBooks entry, appended 2026-09-09. Both are facts the
     # OFFICE owns rather than the crew, and both lived only in Postgres and the
     # in-app admin module until now - which made the Sheet, the thing the office
@@ -3785,9 +3786,15 @@ REIMBURSEMENT_HEADERS = [
     # payment stay separate values, because a claim can be paid without having
     # been explicitly approved and overwriting one with the other loses who
     # approved it.
+    #
+    # ON THE END, after created_at/updated_at, NOT in the reading order they
+    # would ideally have. _ensure_tab appends a missing column to the RIGHT of an
+    # existing tab, so prod will grow them there whatever this list says; putting
+    # them mid-list here would only make a freshly created tab (staging, a test
+    # sheet) disagree with prod about column ORDER for no benefit. The promotion
+    # gate flags exactly this as MID-LIST, and it is right to.
     "paid_at", "paid_period_start", "paid_period_end",
     "qb_status", "qb_entered_at", "qb_entered_by",
-    "created_at", "updated_at",
 ]
 
 
