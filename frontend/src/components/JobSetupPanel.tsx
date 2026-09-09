@@ -245,7 +245,7 @@ export default function JobSetupPanel({
   // Local / long-distance segmented toggle, used inside the setup form.
   const ldToggle = (
     <div className="col" style={{ gap: 6 }}>
-      <FieldHelp label="Local or long-distance?" help={ht.setupLdToggleHelp} bold />
+      <FieldHelp label="Local or long-distance?" bold />
       <div
         className="row"
         role="group"
@@ -340,7 +340,7 @@ export default function JobSetupPanel({
 
           {/* Crew */}
           <div className="col" style={{ gap: 6 }}>
-            <FieldHelp label="Crew" help={ht.setupCrewHelp} bold />
+            <FieldHelp label="Crew" bold />
             {suggested.length > 0 ? (
               <span className="small" style={{ color: "var(--muted)" }}>
                 Suggested from the calendar invitees (matched by email). Tick to confirm, or add more below.
@@ -407,7 +407,7 @@ export default function JobSetupPanel({
 
           {/* Vehicle units */}
           <div className="col" style={{ gap: 6 }}>
-            <FieldHelp label="Vehicle unit(s)" help={ht.setupVehicleUnitsHelp} bold />
+            <FieldHelp label="Vehicle unit(s)" bold />
             <div className="row wrap" style={{ gap: 8 }}>
               {units.length === 0 && <span className="small" style={{ color: "var(--muted)" }}>No units configured.</span>}
               {units.map((u) => {
@@ -438,7 +438,7 @@ export default function JobSetupPanel({
               this list is the move TYPE (Commercial, Delivery, Storage,
               Labor-only, ...). */}
           <div className="col" style={{ gap: 6 }}>
-            <FieldHelp label="Job type" help={ht.setupJobTypeHelp} bold />
+            <FieldHelp label="Job type" bold />
             <div className="row wrap" style={{ gap: 8 }}>
               {jobTypes.filter((t) => !TRIP_TASK_TAGS.has(t.trim().toLowerCase())).length === 0 && (
                 <span className="small" style={{ color: "var(--muted)" }}>No job types configured.</span>
@@ -467,13 +467,13 @@ export default function JobSetupPanel({
           {/* Addresses */}
           <div className="col" style={{ gap: 6 }}>
             <label className="col" style={{ gap: 2 }}>
-              <FieldHelp label="Origin" help={ht.setupOriginHelp} />
+              <FieldHelp label="Origin" />
               <input value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="Pickup address (blank OK)" />
             </label>
             {stops.map((s, i) => (
               <div key={i} className="row" style={{ gap: 6, alignItems: "flex-end" }}>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <FieldHelp label={`Stop ${i + 1}`} help={ht.setupStopHelp} />
+                  <FieldHelp label={`Stop ${i + 1}`} />
                   <input value={s} onChange={(e) => setStops((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))} />
                 </label>
                 <button type="button" onClick={() => setStops((prev) => prev.filter((_, j) => j !== i))} style={{ fontSize: 12, color: "var(--danger)" }}>Remove</button>
@@ -481,7 +481,7 @@ export default function JobSetupPanel({
             ))}
             <button type="button" onClick={() => setStops((prev) => [...prev, ""])} style={{ fontSize: 12, alignSelf: "flex-start" }}>+ Add stop</button>
             <label className="col" style={{ gap: 2 }}>
-              <FieldHelp label="Destination" help={ht.setupDestinationHelp} />
+              <FieldHelp label="Destination" />
               <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Delivery address (blank OK)" />
             </label>
           </div>
@@ -500,21 +500,21 @@ export default function JobSetupPanel({
               </label>
               <div className="row" style={{ gap: 6 }}>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <FieldHelp label="Shipper phone" help={ht.bolShipperPhoneHelp} />
+                  <FieldHelp label="Shipper phone" />
                   <input value={bolHeader.shipper_phone || ""} onChange={(e) => setBolField("shipper_phone", e.target.value)} />
                 </label>
               </div>
               <label className="col" style={{ gap: 2 }}>
-                <FieldHelp label="Shipper address" help={ht.bolShipperAddressHelp} />
+                <FieldHelp label="Shipper address" />
                 <input value={bolHeader.shipper_address || ""} onChange={(e) => setBolField("shipper_address", e.target.value)} placeholder="If different from pickup" />
               </label>
               <div className="row" style={{ gap: 6 }}>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <FieldHelp label="Agreed pickup" help={ht.bolAgreedPickupHelp} />
+                  <FieldHelp label="Agreed pickup" />
                   <input value={bolHeader.agreed_pickup || ""} onChange={(e) => setBolField("agreed_pickup", e.target.value)} placeholder="Date or window" />
                 </label>
                 <label className="col" style={{ gap: 2, flex: 1 }}>
-                  <FieldHelp label="Agreed delivery" help={ht.bolAgreedDeliveryHelp} />
+                  <FieldHelp label="Agreed delivery" />
                   <input value={bolHeader.agreed_delivery || ""} onChange={(e) => setBolField("agreed_delivery", e.target.value)} placeholder="Date or window" />
                 </label>
               </div>
@@ -570,7 +570,7 @@ export default function JobSetupPanel({
 
           {/* Notes */}
           <label className="col" style={{ gap: 2 }}>
-            <FieldHelp label="Notes" help={ht.setupNotesHelp} />
+            <FieldHelp label="Notes" />
             <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: "100%", resize: "vertical" }} />
           </label>
 

@@ -39,8 +39,10 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   // prompt every interstate crew answers daily is a new thing to notice, and the
   // tag is how they are told to look. Graduates at the next APP_VERSION bump.
   "internalRearrange",
-  // Tap-a-field-title help on the job setup form (2026-09-03). A new interaction
-  // is worth nothing if nobody discovers it, and the "?" alone is easy to miss.
+  // Tap-a-field-title help on the Bill of Lading details (2026-09-03; reworked
+  // 2026-09-09 into a toast with a visible countdown, and trimmed to the nine
+  // fields that actually need explaining). A new interaction is worth nothing if
+  // nobody discovers it, and the "?" alone is easy to miss.
   "setupFieldHelp",
   // Employee directory in Tools (2026-09-04).
   "employeeDirectory",

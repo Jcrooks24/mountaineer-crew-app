@@ -20,19 +20,61 @@ export type ToastMessage = { id: number; text: string };
  *  phone back in a pocket, short enough not to sit over the next tap. */
 const TOAST_MS = 2600;
 
+/** How long a toast should stay up to be READ, given how much it says.
+ *
+ *  A fixed 2.6s is right for "Departure added to timeline" and wrong for a
+ *  paragraph explaining what released-value liability means: the crew member
+ *  reads three words, the toast goes, and they have to tap again. So the
+ *  duration follows the length - three seconds to begin with, and three more for
+ *  every ten words on top of that.
+ *
+ *  Ten words per three seconds is about 200 words a minute, which is ordinary
+ *  adult reading speed, and the flat three seconds on top covers noticing the
+ *  toast at all before starting to read. Generous on purpose: this is somebody
+ *  standing in a driveway on a phone, not at a desk.
+ *
+ *  Exported so the value shown on screen and the value the timer uses are the
+ *  same number. Two of them would eventually disagree, and the progress bar
+ *  would be lying about when the toast goes away. */
+export function readingTimeMs(text: string): number {
+  const words = (text || "").trim().split(/\s+/).filter(Boolean).length;
+  return 3000 + Math.floor(words / 10) * 3000;
+}
+
 export function Toast({
   message,
   onDone,
+  durationMs,
+  align = "center",
+  showProgress = false,
 }: {
   message: ToastMessage | null;
   onDone: () => void;
+  /** Defaults to the short confirmation timing. Pass `readingTimeMs(text)` for
+   *  anything long enough to actually read. */
+  durationMs?: number;
+  /** Confirmations are one centered line; prose reads better left-aligned. */
+  align?: "center" | "left";
+  /** A depleting bar along the bottom. Worth it only when the toast is up long
+   *  enough for somebody to wonder whether it is stuck - see the note where it
+   *  is rendered. */
+  showProgress?: boolean;
 }) {
   const [shown, setShown] = useState(false);
+  // Drives the progress bar. Starts full, then transitions to empty over
+  // exactly `ms`, so what the bar shows and what the timer does are one number.
+  const [draining, setDraining] = useState(false);
   const timer = useRef<number | null>(null);
+  const ms = durationMs ?? TOAST_MS;
 
   useEffect(() => {
     if (!message) return;
     setShown(true);
+    // Two frames: the bar has to paint at full width once before the transition
+    // to zero is applied, or the browser collapses it instantly with no
+    // animation. A single rAF is not always enough on a cold render.
+    setDraining(false);
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => setDraining(true)));
     if (timer.current) window.clearTimeout(timer.current);
     // Keyed on message.id, so a second event tapped while the first toast is up
     // restarts the timer with the new text rather than the new message
@@ -40,11 +82,12 @@ export function Toast({
     timer.current = window.setTimeout(() => {
       setShown(false);
       onDone();
-    }, TOAST_MS);
+    }, ms);
     return () => {
+      cancelAnimationFrame(raf);
       if (timer.current) window.clearTimeout(timer.current);
     };
-  }, [message?.id]);
+  }, [message?.id, ms]);
 
   if (!message) return null;
 
@@ -72,8 +115,10 @@ export function Toast({
         border: "1px solid var(--ok)",
         color: "var(--text)",
         fontSize: 14,
-        fontWeight: 600,
-        textAlign: "center",
+        fontWeight: align === "center" ? 600 : 400,
+        lineHeight: align === "center" ? undefined : 1.45,
+        textAlign: align,
+        overflow: "hidden",
         boxShadow: "0 6px 20px rgba(0,0,0,0.28)",
         opacity: shown ? 1 : 0,
         transform: shown ? "translateY(0)" : "translateY(8px)",
@@ -83,6 +128,41 @@ export function Toast({
       }}
     >
       {message.text}
+      {showProgress && (
+        // WHY THIS EXISTS. A long help toast has no close button, so without
+        // something moving on screen a crew member has no way to tell "this will
+        // go away in a moment" from "this is stuck and the app is broken". The
+        // bar is the answer to that question and nothing else, so it is
+        // deliberately quiet: a hairline in the muted colour, no percentage, no
+        // countdown number.
+        //
+        // aria-hidden because a screen reader gets the text read to it by
+        // role="status" and a draining bar tells it nothing; the timing is a
+        // visual affordance only.
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 2,
+            background: "transparent",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: draining ? "0%" : "100%",
+              background: "var(--muted)",
+              opacity: 0.5,
+              // Linear, not eased: an eased bar looks like it stalls near the
+              // end, which is the exact impression this exists to prevent.
+              transition: `width ${ms}ms linear`,
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

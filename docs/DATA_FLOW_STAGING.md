@@ -1796,29 +1796,50 @@ See the 2026-09-03 addendum to
 [ADR 0040](decisions/0040-closeout-is-a-stepper-with-three-cause-buckets.md).
 
 
-## Job setup gains tap-to-reveal field help (2026-09-03)
+## Field help is a toast, on nine fields only (2026-09-03, reworked 2026-09-09)
 
-From field feedback that the interstate workflow is confusing. 21 new keys on an
-EXISTING synced payload (`helpTexts` in the theme settings), so the flow class
-does not change - only the field list does.
+**Class D, client only.** No endpoint and no queue. `helpTexts` is admin config
+that already round-trips through `SystemConfig`; what changed is which keys exist
+and how the text is shown.
 
-| Path | Where | Status |
+| Change | Where | Adherence |
 |---|---|---|
-| 21 new `helpTexts` keys (`setup*Help`, `bol*Help`) on the theme-settings payload | `theme/ThemeContext.tsx` (`HelpTexts`, `DEFAULT_HELP_TEXTS`) | [x] |
-| Rendered by `<FieldHelp>`: hidden, tap the field title, visible 3s, self-closing | `components/FieldHelp.tsx`, used in `components/JobSetupPanel.tsx` | [x] |
-| Admin-editable, so wording changes need no redeploy | `pages/Admin.tsx` (`HelpTextCard` groups) | [x] |
+| Tapping a field title opens a TOAST, not an inline reveal | `components/FieldHelp.tsx` | read |
+| Duration is `readingTimeMs`: 3s, plus 3s per 10 words | `components/Toast.tsx` | read |
+| A depleting progress bar, driven by that same value | `components/Toast.tsx` | read |
+| 12 help keys retired; 9 remain | `theme/ThemeContext.tsx`, `pages/Admin.tsx` | read |
 
-Theme settings already sync device -> server and merge `DEFAULT_HELP_TEXTS` under
-whatever is stored (`ThemeContext.tsx:411` and `:608`), so a device or a server
-record written by an older build simply gains the new keys at their defaults.
-No endpoint, no queue, no Sheet export, and no env var changes.
+**Why a toast rather than the inline box.** The reveal opened under the field
+title and pushed the rest of the form down, so the field being explained moved
+while it was being read, and on a long form the explanation could open
+off-screen. A toast sits in one predictable place over the form and nothing
+reflows.
 
-Blanking a key in Admin removes the "?" from that field entirely rather than
-opening an empty box, which is the intended way to switch one off.
+**Why the duration is not fixed.** Three seconds suits "Crew" and is far too
+short for the valuation explanation, which is the one people most need to finish.
+Ten words per three seconds is roughly ordinary reading speed, with a flat three
+seconds on top for noticing the toast at all. The longest text runs 21 seconds.
 
-Regression-guarded by `frontend/scripts/verify_field_help.mjs`: the type, the
-defaults, the rendered field and the Admin editor are four separate hardcoded
-lists that nothing links, and tsc only catches one of those pairings.
+**Why the progress bar.** There is no close button, so without something visibly
+moving a crew member cannot tell "this will go in a moment" from "this is stuck".
+The bar and the timer read the same number, so it cannot promise a moment the
+toast does not honour. Tapping still dismisses early (existing `Toast`
+behaviour); the bar is so nobody has to discover that to believe the app works.
+
+**Why only nine fields.** Help on "Crew" and "Origin" is noise, and a "?" on an
+obvious field teaches people the "?" is not worth tapping - so they stop tapping
+it on Valuation, which decides what a customer is owed for a broken television.
+What is left is the set where a wrong answer puts wrong terms on a signed legal
+document, or where the field name is industry vocabulary a new crew member has no
+reason to know: shipper name, form of payment, both COD fields, estimate type,
+valuation, additional carriers, third-party insurance, accessorial services.
+
+**The text is written for somebody new to moving** (office direction). Every
+acronym is spelled out where it is used, and where a wrong answer costs money the
+text says what it costs - released value is explained as "60 cents per pound, so
+a 10 pound TV pays $6". `verify_field_help.mjs` asserts the exact nine, the
+timing arithmetic by exercise rather than by grep, and that COD and DOT are
+expanded wherever they appear.
 
 
 ## BOL queue: a failed `pdf` no longer holds the rest of its BOL (2026-09-03)
