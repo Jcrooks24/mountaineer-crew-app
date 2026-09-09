@@ -1837,7 +1837,13 @@ valuation, additional carriers, third-party insurance, accessorial services.
 **The text is written for somebody new to moving** (office direction). Every
 acronym is spelled out where it is used, and where a wrong answer costs money the
 text says what it costs - released value is explained as "60 cents per pound, so
-a 10 pound TV pays $6". `verify_field_help.mjs` asserts the exact nine, the
+a 10 pound TV pays $6". The valuation text also names released value as the
+STANDARD and points at the job's Google Calendar description, which is where the
+office flags a full-value job (their direction, 2026-09-09), so the crew have
+somewhere to check instead of guessing. It deliberately does not claim the form
+pre-selects released value: the field opens on "Not set", which is correct,
+because released value is a written waiver and an app should not tick a waiver on
+somebody's behalf. `verify_field_help.mjs` asserts the exact nine, the
 timing arithmetic by exercise rather than by grep, and that COD and DOT are
 expanded wherever they appear.
 

@@ -187,7 +187,7 @@ Inventory Tab (LD+ Load/Unload Days)
 
 **Field help.** On the job setup form, a field title with a small "?" next to it can be tapped for an explanation of what that field means, in plain English. It appears as a message at the bottom of the screen and closes itself; a thin bar along the bottom of it shows how long is left, so you can tell it is counting down rather than stuck. Tap the message to close it early.
 
-Only the fields that genuinely need explaining have a "?": Shipper name, Form of payment, both COD boxes, Estimate type, Valuation, Additional carriers, Third-party insurance, and Accessorial services. These are the Bill of Lading details, where the wording is legal and prints onto the document the customer signs. The longer explanations stay up longer, so you are not rushed through the ones that matter most, such as Valuation.
+Only the fields that genuinely need explaining have a "?": Shipper name, Form of payment, both COD boxes, Estimate type, Valuation, Additional carriers, Third-party insurance, and Accessorial services. These are the Bill of Lading details, where the wording is legal and prints onto the document the customer signs. Valuation in particular is worth reading: released value (60 cents per pound) is the standard, and if a job is full value the office will have said so clearly in that job's Google Calendar description, so check there rather than guessing. The longer explanations stay up longer, so you are not rushed through the ones that matter most, such as Valuation.
 
 If something is worded confusingly, the office can rewrite any of these in Admin without an app update.
 

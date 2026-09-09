@@ -381,7 +381,14 @@ export const DEFAULT_HELP_TEXTS: HelpTexts = {
   bolCodNotifyHelp: "Only appears when the customer is paying on delivery, which is what Collect on delivery (COD) means. Put who in the office should be told once you have taken the money, so somebody is expecting it.",
   bolCodMaxHelp: "The most money you are allowed to collect at the door on a Collect on delivery (COD) job. If the customer owes more than this, do not collect the extra - call the office.",
   bolEstimateTypeHelp: "Whether the price can change. \"Binding\" means the quoted price is the price, however the job turns out. \"Non-binding\" means the final bill follows the real weight and the work actually done, so it can come out higher or lower. This prints on the paperwork, so it has to match what the customer already agreed to.",
-  bolValuationHelp: "How much we owe the customer if we break or lose something. \"Full value\" means we pay to repair or replace it, and usually costs the customer extra. \"Released value\" is free but only pays 60 cents per pound of the item, so a 10 pound TV pays $6, not what the TV is worth. Record the one they actually chose, because the free option gives up a lot.",
+  // Says where to LOOK, not just what the words mean. The office flags a
+  // full-value job in the Google Calendar description (their direction,
+  // 2026-09-09), so the crew have somewhere to check rather than guessing or
+  // asking. Deliberately does NOT claim the form pre-selects released value:
+  // the field opens on "Not set", which is right, because released value is a
+  // written waiver and auto-ticking a waiver on somebody's behalf is not
+  // something an app should do.
+  bolValuationHelp: "How much we owe if we break or lose something. Released value is the standard: free, but it only pays 60 cents per pound, so a 10 pound TV pays $6. Full value means we repair or replace it, and costs the customer extra. If this job is full value, the office will have said so clearly in the Google Calendar description - check there.",
   bolAdditionalCarriersHelp: "Any other moving company taking part in this shipment, for example if somebody else drives one leg of it. Put their company name and DOT number if you have them. If we are doing the whole move ourselves, leave this as None.",
   bolThirdPartyInsuranceHelp: "Insurance the customer bought somewhere else, not from us, to cover their things. Most customers have none, so leave it as N/A unless they tell you otherwise.",
   bolAccessorialServicesHelp: "\"Accessorial\" just means extra work beyond loading the truck and driving it. Stairs, a long walk from the door to the truck, a shuttle van, a piano, packing. List whatever was agreed so it can be billed.",

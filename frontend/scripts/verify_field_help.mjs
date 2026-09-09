@@ -134,10 +134,19 @@ for (const [short, long] of ACRONYMS) {
       `uses "${short}" without "${long}"`);
   }
 }
+const val = values.bolValuationHelp || "";
 check("the valuation text says what released value actually pays",
-  /60 cents per pound/.test(values.bolValuationHelp || "")
-  && /\$6/.test(values.bolValuationHelp || ""),
+  /60 cents per pound/.test(val) && /\$6/.test(val),
   "a worked example is the difference between understanding it and not");
+// The office's direction, 2026-09-09: released value is the standard, and a
+// full-value job is flagged in the calendar. Both halves matter - the first
+// tells the crew what to expect, the second tells them where to check instead
+// of guessing or ringing the office mid-job.
+check("it names released value as the standard, so the crew know what to expect",
+  val.includes("Released value is the standard"), val);
+check("it points at the Google Calendar description",
+  /Google Calendar description/.test(val),
+  "without this the crew have nowhere to look and will guess");
 
 console.log("\nHouse rules:");
 check("FieldHelp uses theme vars, no hardcoded hex", !/#[0-9a-fA-F]{3,6}\b/.test(comp),
