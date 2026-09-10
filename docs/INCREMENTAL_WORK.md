@@ -176,6 +176,33 @@ site, not a config entry, so the exception is visible where someone reads it.
 > already red before the color rule landed. Worth its own cleanup someday; not
 > this doc's problem.
 
+## 8. ADR assumption review, in the area you are already in
+
+Not a code cleanup, and it belongs here for the same reason the others do: it is
+real, it is too large to sweep, and it is paid down opportunistically.
+
+**Before changing an area, read the ADRs that govern it and check whether their
+founding assumption still holds today.** Only the area you are working in. Do
+not go hunting through the decision log, that is the scheduled sweep's job.
+
+Three outcomes, per [INTAKE_PROTOCOL.md](INTAKE_PROTOCOL.md):
+
+- **Holds.** Note the date in that doc's ADR review ledger and move on. Most end
+  here.
+- **Holds, but the record is thin** (no driving scenario, no user classes, no
+  stated assumption). Ask the intake questions retroactively and fill them in,
+  noting that the context was added later and when.
+- **Founded on something no longer true.** **Do not quietly rewrite it.** A new
+  ADR supersedes it, saying what the old one assumed and what is actually the
+  case. The fact that the assumption was wrong is the most useful thing in the
+  record.
+
+Reviewing does not authorize changing code. Findings go to the owner.
+
+**Progress:** none yet. The ledger in
+[INTAKE_PROTOCOL.md](INTAKE_PROTOCOL.md) is the source of truth, all nine blocks
+unreviewed as of 2026-09-09.
+
 ---
 
 ## Not on this list, deliberately

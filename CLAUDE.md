@@ -17,6 +17,9 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 | [docs/decisions/](docs/decisions/) | Why things are the way they are. **Read before "fixing" something that looks wrong.** |
 | [docs/business/](docs/business/) | The company this app serves: who does what, the SOP, the tools audit, the M1 merger assessment. **Read before deciding whether a feature should exist.** |
 | [docs/DEBUGGING_PROTOCOL.md](docs/DEBUGGING_PROTOCOL.md) | **Mandatory for any debugging work** (`/debug`). How to go from "something is wrong" to a proven cause: pin the environment and build, reproduce, triage blast radius, then **hypothesis + falsifier before any fix**. |
+| [docs/INTAKE_PROTOCOL.md](docs/INTAKE_PROTOCOL.md) | **How the assistant works here** (`/intake`). Ask direction as a multi-select before executing, capture the real-world scenario in the owner's words, record which user classes it touches. **No size exception** ([ADR 0046](docs/decisions/0046-every-change-goes-through-a-direction-intake.md)). Also holds the ADR review ledger. |
+| [docs/PRD.md](docs/PRD.md) | What each capability is **for** and **who** it serves, in the owner's words. Written from intake answers only. **Nothing enters its body that the owner did not say**: no inference, ever. |
+| [docs/USER_PROFILES.md](docs/USER_PROFILES.md) | Who actually uses this app, under what conditions, for what. One profile per user class. `[confirmed]` vs `[inferred]` marks are load-bearing: an inferred line is an intake question, not a fact to build on. |
 | [docs/SANITY_CHECK_PROTOCOL.md](docs/SANITY_CHECK_PROTOCOL.md) | The workflow/UX/UI review (`/sanity`). **Findings only, fixes nothing.** Asks whether a tool is the right answer to the job it exists for, and whether its category covers every real scenario. Runs before a feature is called done, and periodically on old features via its Coverage ledger. |
 | [docs/VETTING_PROTOCOL.md](docs/VETTING_PROTOCOL.md) | The pre-promotion test protocol (`/vet`). **Start at STEP 0**, which is not diff-derived. |
 | [docs/VET_POSTMORTEM_2026-08.md](docs/VET_POSTMORTEM_2026-08.md) | Why STEP 0 exists: every defect that reached crews since the v1.8 merge, and what the protocol was structurally blind to. Read before deciding a check is unnecessary. |
@@ -26,6 +29,21 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 | [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) | Cleanups paid down opportunistically, a few per commit, in files you are already editing. Check it whenever you touch a frontend file. |
 | [docs/PROMOTION_CHECKLIST.md](docs/PROMOTION_CHECKLIST.md) | Every pre- and post-merge step for `staging -> main`: Sheets mirror, env vars by environment, Apps Script pastes, email workflows, patch note, crew email, in-app config. Driven by `/promote`. |
 
+## Intake rule (applies to every change, before the change)
+
+**Ask before executing. Every time, no size exception.** [docs/INTAKE_PROTOCOL.md](docs/INTAKE_PROTOCOL.md) (`/intake`), decided in [ADR 0046](docs/decisions/0046-every-change-goes-through-a-direction-intake.md). A one-line defect fix goes through it the same as a feature, because deciding what is "big enough" to ask about is itself the leak, and small changes are where the wrong assumptions have historically entered.
+
+1. **Direction as a multi-select**, two to four genuinely different options, recommendation first and labeled, each saying what it costs and what it forecloses. Never an open "what would you like?"
+2. **The reason: what crew or admin real-world scenario drives it?** Who, doing what, when, and what goes wrong today.
+3. **Which user classes it touches, how and why**, written into [docs/USER_PROFILES.md](docs/USER_PROFILES.md) in the same commit.
+4. **Grade the answers** against concrete / causal / bounded / checkable-later, and **surface the grade only when it falls short.** Then either a confirm multi-select whose options are the exact sentences that would enter the record, or one targeted question. **One follow-up round, never two.**
+
+**While answers are pending**, do only work no answer could change (read code, reproduce, write the failing test, build checks). Stop before the fix, the schema, the UI, the copy. **Commit nothing before answers land**, and discard redirected work without arguing for it.
+
+**Carve-outs, about safety and not size:** active data loss is stopped first and asked about after, and the owner may waive intake for a specific change, with the waiver noted in the commit message.
+
+**The answers become the product record.** [docs/PRD.md](docs/PRD.md) owns what a capability is for and who it serves, in the owner's words, and **nothing may enter its body that the owner did not say**. An ADR owns which approach was taken and why not the other, and links up to its PRD entry rather than restating the scenario. The same sentence is never written in both.
+
 ## Definition of done
 
 A change is not done when the code works. It is done when the next person can still run this system without you. Every change, in the **same commit**:
@@ -34,12 +52,12 @@ A change is not done when the code works. It is done when the next person can st
 2. **New env var, secret, or Google API?** → it is in `docs/CREDENTIALS.md`, and the user has been told to set it on Render/Vercel.
 3. **New service, integration, queue, or data flow?** → `docs/ARCHITECTURE.md` and its diagram still match reality.
    **Touched a queue, a drain trigger, a debounce timing, an endpoint, or a Sheet export path?** → `docs/DATA_FLOW_STAGING.md` is updated in the same commit, including the per-field table for that domain. Adding a field to a payload without adding it there is how that doc goes stale. `docs/DATA_FLOW.md` is the production baseline and changes only at promotion.
-4. **Made a decision someone would be tempted to undo?** → write the ADR in `docs/decisions/` now. Apply the test in that folder's README.
+4. **Made a decision someone would be tempted to undo?** → write the ADR in `docs/decisions/` now. Apply the test in that folder's README. **From [ADR 0046](docs/decisions/0046-every-change-goes-through-a-direction-intake.md) on, every ADR carries three extra lines**: `Driving scenario` (the owner's words), `User classes affected`, and `Assumption this rests on`. The last one is what makes a decision checkable later instead of only re-arguable. **Did the change define or change what a capability is for?** → that sentence goes in [docs/PRD.md](docs/PRD.md), in the owner's words, and the ADR links to it instead of repeating it. **No ADR earned?** → the driving scenario still gets written, as a `Why` paragraph in the commit message.
 5. **Found a bug you did not fix?** → add it to Known defects in `docs/RUNBOOKS.md`. **Fixed one that is listed?** → delete the entry.
 6. **Changed setup, local dev, or deploy?** → `README.md` is current.
 7. **Edited a frontend file?** → check [docs/INCREMENTAL_WORK.md](docs/INCREMENTAL_WORK.md) and apply any items that match **the files you already touched**. A few per commit, noted in the commit message. Do not go hunting in other files, and do not let it become the point of the commit. Skip anything not obviously safe.
 
-Run **`/handoff`** at the end of a working session to sweep all of this. Run **`/sanity`** before calling a feature done. Run **`/vet`** before promoting to `main`.
+Run **`/intake`** before starting a change. Run **`/handoff`** at the end of a working session to sweep all of this. Run **`/sanity`** before calling a feature done. Run **`/vet`** before promoting to `main`.
 
 ## Sanity check rule
 
