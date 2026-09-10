@@ -1173,8 +1173,16 @@ function TipsSection({ emp, onChanged }: { emp: Employee; onChanged: () => void 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Idempotency key for the tip being entered. Survives a failed attempt so the
-  // retry is the same write; cleared only once the server has confirmed.
+  // retry is the same write; cleared once the server has confirmed.
   const attemptUuid = useRef<string | null>(null);
+  // ...and cleared when the entry is EDITED. The key identifies the tip as
+  // composed, not the button press. Without this, an admin whose first POST
+  // landed but whose response was lost could correct the amount, retry, and get
+  // the server's replay of the ORIGINAL row back with a success - recording a
+  // different number than the one on screen. A duplicate row is visible and
+  // deletable; a silently wrong amount is neither.
+  const editAmount = (v: string) => { attemptUuid.current = null; setAmount(v); };
+  const editNote = (v: string) => { attemptUuid.current = null; setNote(v); };
 
   const tips = emp.tip_items ?? [];
   const total = tips.reduce((n, t) => n + (t.amount || 0), 0);
@@ -1253,7 +1261,7 @@ function TipsSection({ emp, onChanged }: { emp: Employee; onChanged: () => void 
         <span className="small" style={{ color: "var(--muted)" }}>$</span>
         <input
           value={amount}
-          onChange={(e) => setAmount(e.target.value)}
+          onChange={(e) => editAmount(e.target.value)}
           inputMode="decimal"
           placeholder="0.00"
           aria-label={`Tip amount for ${emp.name}`}
@@ -1261,7 +1269,7 @@ function TipsSection({ emp, onChanged }: { emp: Employee; onChanged: () => void 
         />
         <input
           value={note}
-          onChange={(e) => setNote(e.target.value)}
+          onChange={(e) => editNote(e.target.value)}
           placeholder="Note (optional)"
           aria-label={`Tip note for ${emp.name}`}
           style={{ flex: "1 1 140px", minWidth: 0, fontSize: 13 }}
@@ -1438,7 +1446,9 @@ function CorrectionForm({
   const [workDate, setWorkDate] = useState(line?.date || period.start);
   const [label, setLabel] = useState(line?.source_label || "");
   const [reason, setReason] = useState(line?.correction_reason || "");
-  // Idempotency key for a bonus submission, see TipsSection.
+  // Idempotency key for a bonus submission, see TipsSection. Cleared on edit for
+  // the same reason: the key identifies the entry as composed, so a corrected
+  // amount must not replay onto the row the first attempt already created.
   const attemptUuid = useRef<string | null>(null);
   // Whether finalize emails this crew member about this line. Defaults to
   // emailing, always: an adjustment to somebody's pay that nobody tells them
@@ -1612,7 +1622,7 @@ function CorrectionForm({
             min={0}
             step={0.25}
             value={hours}
-            onChange={(e) => setHours(e.target.value)}
+            onChange={(e) => { attemptUuid.current = null; setHours(e.target.value); }}
           />
         </label>
         {line && (
@@ -1629,7 +1639,7 @@ function CorrectionForm({
         <textarea
           rows={2}
           value={reason}
-          onChange={(e) => setReason(e.target.value)}
+          onChange={(e) => { attemptUuid.current = null; setReason(e.target.value); }}
           placeholder="e.g. Clocked out at 3, not 5 - confirmed with the crew lead."
           style={{ width: "100%", resize: "vertical" }}
         />

@@ -2654,7 +2654,8 @@ export default function App() {
                     <div className="small" style={{ marginBottom: 10 }}>
                       <div style={{ color: "var(--muted)" }}>
                         Use these for your labor: Arrive / Start / Finish / Depart / Note.
-                        Today is logged as {ldLabor.map((a) => LD_LABELS[a]).join(", ")}.
+                        Today is logged as{" "}
+                        {ldLabor.map((a) => LD_LABELS[a] || a).join(", ")}.
                       </div>
                       <div style={{ color: "var(--brand)", fontWeight: 600, marginTop: 6 }}>
                         Driving today? Tick "Driving" in Job setup above to bring up your RODS.

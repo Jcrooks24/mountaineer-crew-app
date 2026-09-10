@@ -85,6 +85,18 @@ NEW - FOR THE CREW
   says the driving log is missing instead of telling you it is handled for you. A
   RODS is federally required on an interstate drive day.
 
+- **Fixed: ticking a second activity could clear "Driving" and make it look
+  uncheckable.** If you picked Driving and then picked Loading, Driving could
+  come straight back off, which left you on a drive day with no RODS recorder
+  and no obvious reason why. Reported from the field. Ticking any combination
+  now keeps every one you tick.
+
+- **Fixed: a selection that could not be saved no longer looks saved.** If the
+  phone is out of storage, the day plan write used to fail silently, so the box
+  showed ticked and then reverted to whatever last saved. You now get the
+  out-of-space message, the same one the rest of the app uses, and the fix is
+  the same: sync or clear old photos and set it again.
+
 - Scale weight has its own spot on the RODS tile. If you load one evening and
   weigh the next morning, there is now somewhere to record it. Before, the Weight
   button did not exist at all on a pure drive day.
