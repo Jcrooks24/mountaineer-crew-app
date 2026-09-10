@@ -24,7 +24,7 @@ import { BetaTag } from "./BetaTag";
 // rest, so `laborSelected` picks it up and the Actions buttons render.
 export type LdActivity = "packing" | "loading" | "unloading" | "unpacking" | "rearranging" | "driving";
 export const LD_ACTIVITIES: LdActivity[] = ["packing", "loading", "unloading", "unpacking", "rearranging", "driving"];
-const LABEL: Record<LdActivity, string> = {
+export const LD_LABELS: Record<LdActivity, string> = {
   packing: "Packing",
   loading: "Loading",
   unloading: "Unloading",
@@ -140,7 +140,7 @@ export function LdPlanTile({
                 onChange={() => onToggleActivity(a)}
                 style={{ accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
               />
-              <span style={{ fontWeight: on ? 700 : 400, color: on ? "var(--text)" : "var(--muted)" }}>{LABEL[a]}</span>
+              <span style={{ fontWeight: on ? 700 : 400, color: on ? "var(--text)" : "var(--muted)" }}>{LD_LABELS[a]}</span>
             </label>
           );
         })}

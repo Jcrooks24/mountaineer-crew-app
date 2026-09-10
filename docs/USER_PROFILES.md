@@ -74,6 +74,17 @@ billing, and client communication (SOP section 6.2).
 - **What breaks their day** [inferred]: a flow that makes them stop the crew to
   finish paperwork, anything that fails in front of a customer, and re-entering
   something the office already has.
+- **Reads the trip toggle as the driving setting** [confirmed, 2026-09-10, ADR
+  0047]: a crew lead on an interstate load-and-drive day set the job up as
+  Long-distance, ticked Packing and Loading, and reported the RODS recorder as a
+  missing feature. In his words: "because today we're loading and driving, you
+  know, that's how I set it up in the app. The issue with that that I'm seeing
+  is there's no option for rods logging when it's set up as that combination."
+  Long-distance and the day's Driving box read to him as one setting, not two.
+- **Reports app faults by what is missing, not by what is unset** [confirmed,
+  2026-09-10]: the same call. A state the app can reach but does not explain
+  gets reported as a bug and costs a phone call mid-job, which is the expensive
+  form of this class discovering something.
 - **Open questions:** How much of the app do they run at the truck versus after
   the job? What do they currently do on paper instead?
 

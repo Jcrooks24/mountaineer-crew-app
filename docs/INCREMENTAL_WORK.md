@@ -61,10 +61,11 @@ real possibility, which is what the ADR 0035 bug looked like from the outside.
 
 Replace `var(--on-brand, #fff)` with `var(--on-brand)`.
 
-**Progress:** 5 occurrences across 2 files remaining as of 2026-08-11
-(`JobSetupPanel.tsx` 4, `PayrollTool.tsx` 1). `JobReport.tsx` cleared (3, while
-open for ADR 0035) and `Admin.tsx` cleared (2, while open for the App
-communication card). Both were opportunistic, which is the point of this doc.
+**Progress:** 1 occurrence across 1 file remaining as of 2026-09-10
+(`PayrollTool.tsx` 1). `JobSetupPanel.tsx` cleared (4, while open for ADR 0047),
+`JobReport.tsx` cleared (3, while open for ADR 0035) and `Admin.tsx` cleared (2,
+while open for the App communication card). All three were opportunistic, which
+is the point of this doc.
 
 ## 3. `Admin.tsx` decomposition
 

@@ -15,7 +15,7 @@ import { apiFetch, ApiError } from "../api/client";
 import RosterPicker from "./RosterPicker";
 import { useJobTypes } from "../lib/jobTypesStore";
 import { getUnitsCached, refreshUnits, type VehicleUnit } from "../lib/vehicleUnits";
-import { LdPlanTile, type LdActivity, type LdPlan } from "./LdWorkday";
+import { LdPlanTile, LD_LABELS, type LdActivity, type LdPlan } from "./LdWorkday";
 import {
   loadJobSetup,
   saveJobSetup,
@@ -85,6 +85,10 @@ export default function JobSetupPanel({
   const [suggested, setSuggested] = useState<{ user_id: number; name: string }[]>([]);
   const [vehicleUnitNames, setVehicleUnitNames] = useState<string[]>([]);
   const [isLD, setIsLD] = useState(false);
+  // "What are you doing today?" expanded on the read-only tile. The day plan
+  // is per-DAY and is NOT part of the job header, so it stays editable after
+  // the header is saved - no confirm-to-edit, no Save. See the tile below.
+  const [doingOpen, setDoingOpen] = useState(false);
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [stops, setStops] = useState<string[]>([]);
@@ -263,7 +267,7 @@ export default function JobSetupPanel({
               style={{
                 padding: "8px 20px", fontSize: 14, fontWeight: on ? 700 : 500, cursor: "pointer", border: "none",
                 background: on ? "var(--brand)" : "transparent",
-                color: on ? "var(--on-brand, #fff)" : "var(--muted)",
+                color: on ? "var(--on-brand)" : "var(--muted)",
               }}
             >
               {label}
@@ -306,10 +310,57 @@ export default function JobSetupPanel({
           {routeParts.length > 0 && staticRow("Route", routeParts.join(" -> "))}
           {notes.trim() && staticRow("Notes", notes.trim())}
           {(() => {
+            // The day plan is keyed by CALENDAR DAY, so on day 2+ of a trip it
+            // starts empty while the header is already saved and this tile is
+            // read-only. This row used to disappear entirely when the plan was
+            // empty, which put "Driving" - the gate on the RODS recorder - out
+            // of reach on exactly the days that need it: the crew would have had
+            // to reopen the whole setup form behind its confirm-to-edit warning.
+            // So the row always renders, and it edits in place.
             const doing = ldPlan.activities.filter((a) => isLD || a !== "driving");
-            return doing.length > 0
-              ? staticRow("Doing", doing.map((a) => a.charAt(0).toUpperCase() + a.slice(1)).join(", "))
-              : null;
+            const summary = doing.length > 0
+              ? doing.map((a) => LD_LABELS[a]).join(", ")
+              : "Not picked yet";
+            return (
+              <div className="col" style={{ gap: 8 }}>
+                <button
+                  type="button"
+                  aria-expanded={doingOpen}
+                  onClick={() => setDoingOpen((v) => !v)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8, width: "100%",
+                    background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left",
+                  }}
+                >
+                  <span className="small" style={{ color: "var(--muted)", flex: "0 0 52px" }}>Doing</span>
+                  <span
+                    className="small"
+                    style={{
+                      fontWeight: 600, minWidth: 0, wordBreak: "break-word",
+                      color: doing.length > 0 ? "var(--text)" : "var(--muted)",
+                    }}
+                  >
+                    {summary}
+                  </span>
+                  <span className="row" style={{ alignItems: "center", gap: 6, marginLeft: "auto", flex: "0 0 auto" }}>
+                    <BetaTag feature="dayPlanInlineEdit" style={{ marginTop: 0 }} />
+                    <span className="small" style={{ color: "var(--brand)" }}>
+                      {doingOpen ? "Done" : "Change"}
+                    </span>
+                  </span>
+                </button>
+                {doingOpen && (
+                  <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                    <LdPlanTile
+                      plan={ldPlan}
+                      onToggleActivity={onToggleActivity}
+                      showDriving={isLD}
+                      storageErr={ldStorageErr}
+                    />
+                  </div>
+                )}
+              </div>
+            );
           })()}
         </div>
       ) : !open ? (
@@ -366,7 +417,7 @@ export default function JobSetupPanel({
                         padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
                         border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
                         background: on ? "var(--brand)" : "transparent",
-                        color: on ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: on ? 700 : 400,
+                        color: on ? "var(--on-brand)" : "var(--text)", fontWeight: on ? 700 : 400,
                       }}
                     >
                       <span>{c.name || "(unnamed)"}</span>
@@ -421,7 +472,7 @@ export default function JobSetupPanel({
                       padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
                       border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
                       background: on ? "var(--brand)" : "transparent",
-                      color: on ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: on ? 700 : 400,
+                      color: on ? "var(--on-brand)" : "var(--text)", fontWeight: on ? 700 : 400,
                     }}
                   >
                     {u.name}
@@ -454,7 +505,7 @@ export default function JobSetupPanel({
                       padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
                       border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
                       background: on ? "var(--brand)" : "transparent",
-                      color: on ? "var(--on-brand, #fff)" : "var(--text)", fontWeight: on ? 700 : 400,
+                      color: on ? "var(--on-brand)" : "var(--text)", fontWeight: on ? 700 : 400,
                     }}
                   >
                     {t}

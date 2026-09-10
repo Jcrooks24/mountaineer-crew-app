@@ -27,7 +27,7 @@ import JobChecklistCard from "./components/JobChecklistCard";
 import JobClosedPanel from "./components/JobClosedPanel";
 import DqReminderBanner from "./components/DqReminderBanner";
 import RodsRecorder from "./components/RodsRecorder";
-import { useLdPlan } from "./components/LdWorkday";
+import { useLdPlan, LD_LABELS } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
@@ -2641,9 +2641,24 @@ export default function App() {
               return (
                 <div className="card" data-component="TimelineActionsTile">
                   <div className="microLabel" style={{ marginBottom: 10 }}>Actions</div>
+                  {/* Reaching this branch with longDistance true means ldLabor is
+                      non-empty AND ldDriving is false - the drive-only and mixed
+                      branches above already claimed every other case. So this is
+                      exactly the state where the crew has labor logged and no RODS.
+                      The old copy here said "Driving is handled by the RODS on
+                      drive days", which reads as reassurance that the app has it
+                      covered, and a crew lead loading and driving an interstate job
+                      called it in as a missing feature rather than an unticked box
+                      (2026-09-10). Name the gap and the action instead. */}
                   {longDistance && (
-                    <div className="small" style={{ color: "var(--muted)", marginBottom: 10 }}>
-                      Use these for your labor: Arrive / Start / Finish / Depart / Note. Driving is handled by the RODS on drive days.
+                    <div className="small" style={{ marginBottom: 10 }}>
+                      <div style={{ color: "var(--muted)" }}>
+                        Use these for your labor: Arrive / Start / Finish / Depart / Note.
+                        Today is logged as {ldLabor.map((a) => LD_LABELS[a]).join(", ")}.
+                      </div>
+                      <div style={{ color: "var(--brand)", fontWeight: 600, marginTop: 6 }}>
+                        Driving today? Tick "Driving" in Job setup above to bring up your RODS.
+                      </div>
                     </div>
                   )}
                   <div className="row wrap">{coreActions}{noteButton}{weightButton}</div>

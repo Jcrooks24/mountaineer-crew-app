@@ -50,6 +50,11 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   // reviewed the bill" tick (2026-09-09, ADR 0044). It is more taps at close-out
   // and the crew will notice, so it says so rather than looking like a bug.
   "billLineChecks",
+  // Today's activities are now editable straight from the read-only Job setup
+  // tile (2026-09-10), instead of only inside the setup form. The plan resets
+  // each calendar day, so on day 2+ of a trip the crew has to change it on a
+  // tile that never used to be interactive. The tag is how they find out.
+  "dayPlanInlineEdit",
 ]);
 
 export function isBeta(feature: string): boolean {
