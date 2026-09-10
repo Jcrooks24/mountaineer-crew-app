@@ -111,6 +111,19 @@ Not defects. Decisions nobody has made yet, which someone should make **before**
 these paths promote and become the way it has always been. Each needs a yes or a no,
 not a fix.
 
+> **WAIVED FOR THE 2026-09-10 PROMOTION, by the owner, explicitly.** Both promoted
+> undecided. Their words: "bypass for now and merge to main. will have a more
+> granular followup session this afternoon but we need to get this batch live."
+> Recorded here because the protocol says silence is not a waiver and a bypass
+> needs its reason in writing.
+>
+> **What the bypass costs.** These stop being open questions the moment they are
+> in production: job setup becomes a domain admin reads only in-app, and bulletin
+> images become a `LargeBinary` column with real history behind it. Neither gets
+> harder to answer, but both get harder to change, and the bulletin one gets
+> harder in proportion to how much the crew posts. They stay in this file, under
+> this waiver, until they are ruled on rather than being quietly absorbed.
+
 ### 1. Should job setup mirror to the Sheet?
 
 `job_setup` is the only new crew-captured domain on staging with **no Sheet export**
