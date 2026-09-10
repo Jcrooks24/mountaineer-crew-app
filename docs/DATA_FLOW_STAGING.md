@@ -2028,6 +2028,31 @@ open the BOL Inventory tab: that gate is `ldLabor.includes("loading")`
 (`App.tsx`), and an internal rearrange has no shipment to declare.
 
 Both directions are compatible with a device holding the other build's plan.
+
+### The plan write reports its failure, and a toggle reads the committed plan (2026-09-10)
+
+**Class D, client only.** Still no endpoint and no new field; what changes is the
+WRITE STRATEGY behind the same key, so it is logged here rather than ridden along.
+
+| Change | Path | Adherence |
+|---|---|---|
+| `crew_ld_plan_v1:<date>` written via `persistJson`, result checked | `components/LdWorkday.tsx` (`savePlan`, `persist`) | `[x]` |
+| A refused plan write surfaces the storage-full message | `components/LdWorkday.tsx` (`storageErr`) | `[x]` |
+| `toggleActivity` resolves against `planRef.current`, not the render snapshot | `components/LdWorkday.tsx` | `[x]` |
+| Behavioral coverage | `frontend/scripts/verify_ld_plan_toggle.mjs` | `[x]` |
+
+`savePlan` used to be a bare `try/catch` that dropped its failure, the last raw
+swallow on a write path in the app and exactly the pattern `lib/persistQueue.ts`
+exists to outlaw (ADR 0020, "bug 5"). It matters more here than the "client only"
+class suggests: `driving` is what `useLdPlan` turns into `drive_day`, and
+`drive_day` is what pays the day and gates the federally required RODS recorder.
+A plan that did not persist used to look ticked, then revert to whatever last
+landed, which is how a crew lead reached a drive day with no duty log
+(2026-09-10). Both the plan write and the `setLdDay` write are now reported.
+
+The stale-snapshot half is the same defect seen from the other side: two toggles
+resolved against one render dropped the first, so ticking a second activity
+cleared `driving`.
 `LdPlanTile` renders from the fixed `LD_ACTIVITIES` list rather than from the
 stored array, so an older build reading a plan that contains `rearranging` keeps
 the value, counts it as labor, and simply shows no chip for it.
