@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, ApiError } from "../api/client";
+import { newUUID } from "../lib/bolStore";
 import PayrollNotes from "./PayrollNotes";
 
 /**
@@ -1171,6 +1172,9 @@ function TipsSection({ emp, onChanged }: { emp: Employee; onChanged: () => void 
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Idempotency key for the tip being entered. Survives a failed attempt so the
+  // retry is the same write; cleared only once the server has confirmed.
+  const attemptUuid = useRef<string | null>(null);
 
   const tips = emp.tip_items ?? [];
   const total = tips.reduce((n, t) => n + (t.amount || 0), 0);
@@ -1183,11 +1187,22 @@ function TipsSection({ emp, onChanged }: { emp: Employee; onChanged: () => void 
     }
     setBusy(true);
     setErr(null);
+    // Minted once per pending tip and kept until the server confirms, so a
+    // retry after a lost response carries the SAME key and the server returns
+    // the row it already has. Minting inside the request would defeat the
+    // point: the retry is the case this exists for.
+    if (!attemptUuid.current) attemptUuid.current = newUUID();
     try {
       await apiFetch("/api/admin/payroll/tips", {
         method: "POST",
-        body: JSON.stringify({ user_id: emp.user_id, amount: value, note: note.trim() }),
+        body: JSON.stringify({
+          user_id: emp.user_id,
+          amount: value,
+          note: note.trim(),
+          tip_uuid: attemptUuid.current,
+        }),
       });
+      attemptUuid.current = null;
       setAmount("");
       setNote("");
       onChanged();
@@ -1423,6 +1438,8 @@ function CorrectionForm({
   const [workDate, setWorkDate] = useState(line?.date || period.start);
   const [label, setLabel] = useState(line?.source_label || "");
   const [reason, setReason] = useState(line?.correction_reason || "");
+  // Idempotency key for a bonus submission, see TipsSection.
+  const attemptUuid = useRef<string | null>(null);
   // Whether finalize emails this crew member about this line. Defaults to
   // emailing, always: an adjustment to somebody's pay that nobody tells them
   // about is the worse failure, so silence has to be chosen.
@@ -1458,14 +1475,18 @@ function CorrectionForm({
       if (isBonus) {
         // Its own endpoint: a bonus is dollars, and every correction bucket is
         // hours. Putting it in a bucket would corrupt every sum that adds them.
+        // Same idempotency key as the tip path above, for the same reason.
+        if (!attemptUuid.current) attemptUuid.current = newUUID();
         await apiFetch("/api/admin/payroll/bonuses", {
           method: "POST",
           body: JSON.stringify({
             user_id: emp.user_id,
             amount: n,
             note: reason.trim(),
+            bonus_uuid: attemptUuid.current,
           }),
         });
+        attemptUuid.current = null;
         onSaved();
         return;
       }

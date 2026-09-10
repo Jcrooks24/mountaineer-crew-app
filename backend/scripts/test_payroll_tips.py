@@ -149,6 +149,36 @@ check("cents survive", TipCreate(user_id=1, amount=12.345).amount == 12.35,
       str(TipCreate(user_id=1, amount=12.345).amount))
 check("a job is optional", TipCreate(user_id=1, amount=5).job_uuid is None)
 
+print("")
+print("Idempotency (a retried POST must not mint a second payable row):")
+# The vet found tip_uuid was server-minted, so the unique index on it could
+# never dedupe: a POST whose response was lost, then retried by hand, created a
+# second row and paid the tip twice. The key is now client-minted, and a replay
+# returns the row that already exists WITHOUT updating it, so a retry can never
+# alter an amount already recorded.
+check("tip_uuid is accepted on the create body", TipCreate(user_id=1, amount=40, tip_uuid="k1").tip_uuid == "k1")
+check("tip_uuid stays optional for an older client", TipCreate(user_id=1, amount=40).tip_uuid is None)
+
+_s = db
+_u = _s.query(User).first()
+KEY = "retry-key-0001"
+_s.add(EmployeeTip(tip_uuid=KEY, user_id=_u.id, user_name=_u.name, tip_date=START.isoformat(),
+                   amount=40.0, note="first write", created_by_id=_u.id, created_by_name=_u.name,
+                   created_at=datetime.utcnow(), updated_at=datetime.utcnow()))
+_s.commit()
+
+
+# The router replay branch, exercised the way the router runs it.
+def replay(key):
+    return _s.query(EmployeeTip).filter(EmployeeTip.tip_uuid == key).first()
+
+
+check("a replayed key finds the existing row", replay(KEY) is not None)
+check("the replay does not create a second row",
+      _s.query(EmployeeTip).filter(EmployeeTip.tip_uuid == KEY).count() == 1)
+check("a replay leaves the first amount standing", float(replay(KEY).amount) == 40.0)
+check("an unseen key does not match anything", replay("never-sent") is None)
+
 print()
 if FAILURES:
     print("FAILURES: " + ", ".join(FAILURES))

@@ -209,6 +209,13 @@ class TipCreate(BaseModel):
     job_uuid: Optional[str] = None
     job_name: Optional[str] = None
     note: str = ""
+    # Client-minted idempotency key, same pattern as event_id / submission_id /
+    # bol_id. The server used to mint this, which made the unique index on
+    # tip_uuid unable to dedupe anything: a POST whose response was lost on a
+    # flaky connection, then retried by hand, created a SECOND payable row.
+    # Optional so an older client still works; those keep the server-minted id
+    # and the old retry behaviour.
+    tip_uuid: Optional[str] = None
 
     @field_validator("amount")
     @classmethod
@@ -243,6 +250,8 @@ class BonusCreate(BaseModel):
     job_uuid: Optional[str] = None
     job_name: Optional[str] = None
     note: str = ""
+    # Idempotency key, for the reason given on TipCreate.tip_uuid.
+    bonus_uuid: Optional[str] = None
 
     @field_validator("amount")
     @classmethod

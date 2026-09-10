@@ -1459,7 +1459,29 @@ bounded pool - the money has already moved and the DB already says so, so failin
 a payroll run because Google was slow would be the wrong trade).
 
 **`SHEETS_TIPS_TAB` must be set on staging** before tips are used there, or
-staging tips land in the production `Tips` tab. See CREDENTIALS.md.
+staging tips land in the production `Tips` tab. See CREDENTIALS.md. Both it and
+`SHEETS_PAYROLL_TAB` are now in `.env.staging.example` (2026-09-10), which is
+where their absence was actually costing something: neither was listed, so the
+default silently pointed staging payroll at the production worksheet.
+
+**Both create paths are idempotent (2026-09-10).** `POST /api/admin/payroll/tips`
+and `POST /api/admin/payroll/bonuses` accept a client-minted `tip_uuid` /
+`bonus_uuid` on the request body, the same pattern as `event_id`,
+`submission_id` and `bol_id`. The key is minted once per pending entry in
+`PayrollTool.tsx` and held in a ref until the server confirms, so a retry after
+a lost response carries the SAME key; the server returns the existing row with
+`deduped: true` and does not update it, so a replay can never alter an amount
+already recorded. Both fields are optional, so an older client keeps the
+server-minted id and the old behaviour. Until this, the uuid was minted
+server-side, which meant the unique index on it could not dedupe anything and a
+hand-retried POST created a second payable row.
+
+| Path | Where | Status |
+|---|---|---|
+| `tip_uuid` accepted and replayed | `schemas/payroll.py`, `routers/payroll.py::create_tip` | [x] |
+| `bonus_uuid` accepted and replayed | `schemas/payroll.py`, `routers/payroll.py::create_bonus` | [x] |
+| Key minted per pending entry, held across a retry | `components/PayrollTool.tsx` | [x] |
+| Replay proven not to double-write | `scripts/test_payroll_tips.py` | [x] |
 
 
 ## Payroll notes: one rolling note, archived at each finalize (2026-09-09)

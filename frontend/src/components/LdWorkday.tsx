@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { hydrateDay, setLdDay } from "../lib/ldDayStore";
+import { persistJson } from "../lib/persistQueue";
 import { BetaTag } from "./BetaTag";
 
 /**
@@ -46,14 +47,29 @@ function loadPlan(date: string): LdPlan {
   } catch {}
   return { activities: [] };
 }
-function savePlan(date: string, plan: LdPlan) {
-  try {
-    localStorage.setItem(PLAN_PREFIX + date, JSON.stringify(plan));
-  } catch {}
+/** Returns false if the plan could not be stored. This was the last raw
+ *  try/catch-and-swallow on a write path in the app, which is exactly the
+ *  pattern lib/persistQueue.ts exists to outlaw (ADR 0020, "bug 5"): the box
+ *  showed ticked, the write had thrown, and the plan reverted to whatever last
+ *  landed. The plan is what gates the RODS recorder and what sets drive_day, so
+ *  a selection that did not persist must never look recorded. */
+function savePlan(date: string, plan: LdPlan): boolean {
+  return persistJson(PLAN_PREFIX + date, plan);
 }
 
 export function useLdPlan(date: string) {
   const [plan, setPlan] = useState<LdPlan>(() => loadPlan(date));
+  // The COMMITTED plan. A toggle must resolve against what actually landed, not
+  // against the render that happened to be on screen when the finger came down:
+  // two toggles resolved from one snapshot drop the first, which is how ticking
+  // a second activity cleared Driving and made it look uncheckable (reported
+  // from the field 2026-09-10). Also lets the cross-device hydrate below merge
+  // without a side effect inside a state updater, which StrictMode double-runs.
+  const planRef = useRef<LdPlan>(plan);
+  function commit(next: LdPlan) {
+    planRef.current = next;
+    setPlan(next);
+  }
 
   // Cross-device: adopt today's server drive_day (-> Driving selected).
   useEffect(() => {
@@ -61,12 +77,10 @@ export function useLdPlan(date: string) {
     (async () => {
       const remote = await hydrateDay(date);
       if (cancelled || !remote || !remote.drive_day) return;
-      setPlan((prev) => {
-        if (prev.activities.includes("driving")) return prev;
-        const merged: LdPlan = { activities: [...prev.activities, "driving"] };
-        savePlan(date, merged);
-        return merged;
-      });
+      if (planRef.current.activities.includes("driving")) return;
+      const merged: LdPlan = { activities: [...planRef.current.activities, "driving"] };
+      savePlan(date, merged);
+      commit(merged);
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -77,12 +91,14 @@ export function useLdPlan(date: string) {
   const [storageErr, setStorageErr] = useState<string | null>(null);
 
   function persist(next: LdPlan) {
-    savePlan(date, next);
-    setPlan(next);
+    // BOTH writes are reported. The plan write used to be the silent one, so a
+    // full device showed a ticked box with nothing behind it.
+    const planStored = savePlan(date, next);
+    commit(next);
     // Only the drive_day flag comes from the plan; out_of_town is set on the Report tab.
     const day = setLdDay(date, { drive_day: next.activities.includes("driving") });
     setStorageErr(
-      day.stored === false
+      !planStored || day.stored === false
         ? "There is no room left on this device to save this day. Free up space " +
           "- sync or delete old photos - and set it again."
         : null,
@@ -94,10 +110,10 @@ export function useLdPlan(date: string) {
     storageErr,
     driving: plan.activities.includes("driving"),
     laborSelected: plan.activities.filter((a) => a !== "driving"),
-    toggleActivity: (a: LdActivity) =>
-      persist({
-        activities: plan.activities.includes(a) ? plan.activities.filter((x) => x !== a) : [...plan.activities, a],
-      }),
+    toggleActivity: (a: LdActivity) => {
+      const cur = planRef.current.activities;
+      persist({ activities: cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a] });
+    },
   };
 }
 

@@ -2486,9 +2486,33 @@ def create_tip(
         # tomorrow and could drop it into the next pay period.
         d = utc_naive_to_mountain_date(datetime.now(timezone.utc).replace(tzinfo=None))
 
+    # Idempotency. A client-minted uuid makes the unique index on tip_uuid do
+    # the deduping: a retried POST after a lost response returns the row that
+    # already exists instead of minting a second payable one. Nothing is
+    # updated on the replay - the first write stands, so a retry can never
+    # change an amount that has already been recorded.
+    key = (body.tip_uuid or "").strip()
+    if key:
+        existing = db.query(EmployeeTip).filter(EmployeeTip.tip_uuid == key).first()
+        if existing is not None:
+            return {
+                "ok": True,
+                "deduped": True,
+                "tip": {
+                    "uuid": existing.tip_uuid,
+                    "user_id": existing.user_id,
+                    "user_name": existing.user_name,
+                    "date": existing.tip_date,
+                    "amount": float(existing.amount or 0),
+                    "job_uuid": existing.job_uuid,
+                    "job_name": existing.job_name or "",
+                    "note": existing.note,
+                },
+            }
+
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     tip = EmployeeTip(
-        tip_uuid=str(uuid.uuid4()),
+        tip_uuid=key or str(uuid.uuid4()),
         job_uuid=(body.job_uuid or None),
         job_name=(body.job_name or None),
         user_id=user.id,
@@ -2730,9 +2754,29 @@ def create_bonus(
         # from the office's point of view, and UTC would already be tomorrow.
         d = utc_naive_to_mountain_date(datetime.now(timezone.utc).replace(tzinfo=None))
 
+    # Idempotency, for the reason given in create_tip.
+    key = (body.bonus_uuid or "").strip()
+    if key:
+        existing = db.query(EmployeeBonus).filter(EmployeeBonus.bonus_uuid == key).first()
+        if existing is not None:
+            return {
+                "ok": True,
+                "deduped": True,
+                "bonus": {
+                    "uuid": existing.bonus_uuid,
+                    "user_id": existing.user_id,
+                    "user_name": existing.user_name,
+                    "date": existing.bonus_date,
+                    "amount": float(existing.amount or 0),
+                    "job_uuid": existing.job_uuid,
+                    "job_name": existing.job_name or "",
+                    "note": existing.note,
+                },
+            }
+
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     bonus = EmployeeBonus(
-        bonus_uuid=str(uuid.uuid4()),
+        bonus_uuid=key or str(uuid.uuid4()),
         job_uuid=(body.job_uuid or None),
         job_name=(body.job_name or None),
         user_id=user.id,
