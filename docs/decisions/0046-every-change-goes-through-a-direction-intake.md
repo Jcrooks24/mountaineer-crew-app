@@ -83,6 +83,23 @@ Supporting rules, each decided rather than assumed:
   review ledger. A decision founded on something no longer true is **superseded
   by a new ADR, never quietly edited**, because the fact that the assumption was
   wrong is the most useful thing in the record.
+- **Every answer is checked for contradictions, and a hit stops the work**
+  (added 2026-09-09, same day, at the owner's request; see the section in the
+  protocol). Checked against the stated record and against answers earlier in
+  the same session. **Not** checked against the code, the data, or pre-protocol
+  commit history: a stated belief disagreeing with the Sheet is a `/sanity` or
+  `/debug` finding rather than a contradiction, and old commit text is mostly
+  the assistant's words, so flagging the owner against it would discredit the
+  check. Two categories earn a flag, direct conflict and scope tension, and the
+  prior line must be quotable with its date or it is not a flag at all. The
+  owner's reasons: they answer in whatever framing the question arrives in, so
+  the same question can be ruled opposite ways hours apart without either
+  feeling wrong; a reversal should surface as it happens rather than be found
+  later as two documents that disagree; and a record that contradicts itself is
+  worse than none, because the next person builds from whichever line they read
+  first. A fourth candidate reason, scope creeping one step at a time, was
+  offered and **not** selected, which is why the check is framed around keeping
+  the record honest rather than around gatekeeping scope.
 - **Two carve-outs, both about safety rather than size:** active data loss is
   stopped first and asked about after, and the owner may waive intake for a
   specific change, with the waiver noted in the commit message.

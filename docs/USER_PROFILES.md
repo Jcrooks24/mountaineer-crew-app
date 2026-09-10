@@ -23,6 +23,12 @@ fact is the one that decides whether a feature is right.
   inferred line is not evidence.** When a change turns on one, that is an intake
   question, not an assumption to build on.
 
+A `[confirmed]` line is part of the checked record. A later answer that conflicts
+with one triggers the contradiction check in
+[INTAKE_PROTOCOL.md](INTAKE_PROTOCOL.md): both lines are surfaced with their
+dates, the work stops, and on the owner's call the old line moves to a dated
+**Superseded** note inside that same profile rather than being deleted.
+
 Everything below starts as `[inferred]`, because this doc was seeded from the
 SOP and the code before the first intake ran. Confirming these is what the early
 intake rounds will mostly be doing.

@@ -131,6 +131,82 @@ An answer is sufficient when it is:
 
 ---
 
+## The contradiction check
+
+Every answer is checked against what the owner has already said. Added
+2026-09-09, at the owner's request, for three reasons in their words: they
+answer in whatever framing the question arrives in, so the same underlying
+question can be ruled one way in the morning and the opposite way in the
+afternoon without either answer feeling wrong at the time; direction changes as
+they learn, and a reversal should surface at the moment it happens rather than
+be found months later as two documents that disagree; and a record that
+contradicts itself is worse than none, because the next person builds from
+whichever line they read first with no way to know it was superseded.
+
+### What it is checked against
+
+Two corpora, both chosen deliberately:
+
+1. **The stated record.** PRD purpose and out-of-scope lines, `[confirmed]`
+   lines in [USER_PROFILES.md](USER_PROFILES.md), and the driving scenarios and
+   assumptions in ADRs from 0046 onward. Every line in it is dated and
+   attributed, which is what makes a flag checkable rather than an impression.
+2. **Answers earlier in the same session.** The fast kind: ruled one way on the
+   second question and the other way on the fifth, usually because the framing
+   changed. Free to check, since it is all in front of the assistant.
+
+**Deliberately not checked:** evidence in the code and the data, and commit
+history from before this protocol. The first is a different question (a stated
+belief disagreeing with what the Sheet shows belongs to a `/sanity` or `/debug`
+finding, not to a contradiction flag). The second is mostly the assistant's own
+words rather than the owner's, and flagging the owner against a sentence the
+assistant wrote is how a check like this loses its credibility.
+
+### What earns a flag
+
+Two categories, and nothing else:
+
+1. **Direct conflict.** The new statement and a stated line cannot both be true.
+2. **Scope tension.** The request reaches into something explicitly marked out
+   of scope, or moves a stated boundary without saying so.
+
+**The threshold, and the whole defense against noise: the prior line must be
+quotable, with its date and its source.** If it cannot be pointed to, it is not
+a flag. It is an ordinary intake question, asked as one.
+
+### What happens
+
+**Stop. Do not proceed on either reading.** A contradiction usually means the
+change is not yet well defined, and continuing produces work that one of the two
+answers was always going to discard.
+
+Show three things and then wait:
+
+- **The prior line**, quoted, with its date and where it lives.
+- **The new statement**, quoted.
+- **What each one implies** for the change actually in hand.
+
+Do not rank them, do not argue for either, and do not guess which was meant.
+Waiting is the entire value.
+
+### After the ruling
+
+- **Not actually a contradiction** (the assistant misread the prior line):
+  record nothing, continue. Say so plainly, do not defend the flag.
+- **The new statement stands:** the old line moves into the `Superseded` block
+  **of the entry it belongs to**, dated, directly under its replacement. History
+  lives next to the thing it is about, and there is no separate reversals log to
+  keep true.
+- **The old line stands:** the request is adjusted to fit it. Nothing is written
+  to the record, because nothing changed.
+
+### How the flag is phrased
+
+It names lines, never the person. "The PRD says X, dated 2026-09-12; this reads
+as Y" is the shape. Not "you contradicted yourself", not a count of how often it
+has happened, and not a flag re-raised later in the session once it has been
+ruled on. This check exists to protect the record, not to keep score.
+
 ## Small changes: ask, then work while the answer comes
 
 The questions go out first. Then, while they are unanswered, only work that

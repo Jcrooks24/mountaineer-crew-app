@@ -38,6 +38,8 @@ This file is the **operating manual**: the rules, the invariants, and the proced
 3. **Which user classes it touches, how and why**, written into [docs/USER_PROFILES.md](docs/USER_PROFILES.md) in the same commit.
 4. **Grade the answers** against concrete / causal / bounded / checkable-later, and **surface the grade only when it falls short.** Then either a confirm multi-select whose options are the exact sentences that would enter the record, or one targeted question. **One follow-up round, never two.**
 
+5. **Check every answer for contradictions**, against the stated record (PRD lines, `[confirmed]` profile lines, ADR scenarios and assumptions from 0046 on) and against answers earlier in the same session. A **direct conflict** or **scope tension** stops the work: show the prior line quoted with its date, the new statement, and what each implies, then wait. **The prior line must be quotable with its date, or it is not a flag.** Name lines, never the person, and never re-raise a flag already ruled on.
+
 **While answers are pending**, do only work no answer could change (read code, reproduce, write the failing test, build checks). Stop before the fix, the schema, the UI, the copy. **Commit nothing before answers land**, and discard redirected work without arguing for it.
 
 **Carve-outs, about safety and not size:** active data loss is stopped first and asked about after, and the owner may waive intake for a specific change, with the waiver noted in the commit message.

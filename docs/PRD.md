@@ -43,10 +43,20 @@ Settled 2026-09-09, so the same sentence is never written in both places:
 
 ## When a new answer contradicts a stated line
 
-Surface both, with their dates, and stop. On the owner's call, the old line
-moves into the entry's **Superseded** block with the date it was replaced. It is
-never deleted. A document that only shows the current answer hides the fact that
-the direction changed, which is the same hole the rest of this protocol closes.
+Every answer is checked against this document, against the `[confirmed]` lines
+in [USER_PROFILES.md](USER_PROFILES.md), against ADR driving scenarios and
+assumptions from 0046 on, and against answers given earlier in the same session.
+The full rules are the **contradiction check** in
+[INTAKE_PROTOCOL.md](INTAKE_PROTOCOL.md).
+
+When one fires: surface both lines with their dates, stop, and wait. The prior
+line has to be quotable with its date, or it is not a flag.
+
+On the owner's call, the old line moves into the entry's **Superseded** block
+with the date it was replaced. It is never deleted, and there is no separate
+reversals log: the history lives inside the entry it belongs to. A document that
+shows only the current answer hides the fact that the direction changed, which
+is the same hole the rest of this protocol closes.
 
 ## Entry template
 

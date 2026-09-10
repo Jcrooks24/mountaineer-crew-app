@@ -46,6 +46,31 @@ both, and **one follow-up round only** - a second round trains the owner to give
 answers to escape it, which destroys the point. "I do not know yet" is a valid answer and is
 recorded as an open assumption, not chased.
 
+## Check every answer for contradictions, and stop when one fires
+
+Check each answer against **the stated record** (PRD purpose and out-of-scope lines,
+`[confirmed]` lines in `docs/USER_PROFILES.md`, driving scenarios and assumptions in ADRs
+from 0046 on) and against **answers given earlier in this session**. Do not check against
+the code, the data, or pre-protocol commit history: the first is a `/sanity` or `/debug`
+finding rather than a contradiction, and the second is mostly your own words, not the
+owner's.
+
+Two things earn a flag: a **direct conflict** (both statements cannot be true) and **scope
+tension** (the request reaches into something explicitly out of scope, or moves a stated
+boundary without saying so). **The prior line must be quotable with its date and source. If
+you cannot point to it, it is not a flag, it is an ordinary question.**
+
+When one fires: **stop, and do not proceed on either reading.** Show the prior line quoted
+with its date and location, the new statement quoted, and what each implies for the change
+in hand. Do not rank them, do not argue for one, do not guess which was meant. Then wait.
+
+Name lines, never the person. "The PRD says X, dated 2026-09-12; this reads as Y." Not "you
+contradicted yourself", no tally of how often it happens, and no re-raising a flag that has
+already been ruled on. After the ruling: a misread flag is dropped without defending it; a
+new statement that stands sends the old line to the **Superseded** block of the entry it
+belongs to, dated; an old line that stands means the request gets adjusted and nothing is
+written.
+
 ## While waiting for answers
 
 Do only work **no possible answer could change**: read the code, trace current behavior,
