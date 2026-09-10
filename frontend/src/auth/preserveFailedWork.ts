@@ -97,7 +97,10 @@ const QUEUE_KEYS = [
   "crew_incident_queue_v1",
 ] as const;
 
-type FailedBackup = Record<string, unknown[]>;
+// Most sections hold an array of queue entries. The payroll-note mirror is the
+// one exception: a single string under its own section key (see
+// PAYROLL_NOTE_SECTION), which is why the value type is not array-only.
+type FailedBackup = Record<string, unknown[] | string>;
 
 function backupKey(userId: number | string): string {
   return `${BACKUP_PREFIX}${userId}`;
@@ -193,7 +196,7 @@ export function backupFailedWork(userId: number | string | undefined | null): bo
     // the freeze crews reported. It also briefly DOUBLED the stored bytes, at
     // the exact moment before the wipe, on the devices most likely to be near
     // quota already.
-    const drafts = collectBolDraftsFor(neededDraftJobs(backup[BOL_QUEUE_KEY]));
+    const drafts = collectBolDraftsFor(neededDraftJobs(backup[BOL_QUEUE_KEY] as unknown[] | undefined));
     if (drafts.length > 0) {
       backup[BOL_DRAFTS_SECTION] = drafts;
       any = true;
