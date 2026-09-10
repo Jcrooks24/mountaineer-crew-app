@@ -84,19 +84,29 @@ Everything that causes a hop-2 transfer, with the drain function it calls.
 
 | Trigger | Source | Drains | Timing |
 |---|---|---|---|
-| `window` `online` | `App.tsx:1792` | `syncQueueNow`, `drainNotePatchQueue`, `syncMaterialsInBackground`, `drainIncidents`, `drainOffJob`, `drainPendingPhotos`, `drainJobInventory` | immediate on event |
+| `window` `online` | `App.tsx` | `syncQueueNow`, `drainNotePatchQueue`, `syncMaterialsInBackground`, `drainIncidents`, `drainOffJob`, `drainPendingPhotos`, `drainJobInventory`, `drainBugReports`, `drainFeatureRequests`, `drainJobSetups`, `drainChecklistChecks`, `drainReimbursements`, `drainLongDistance` (BOL + RODS + LD day, `Promise.allSettled`) | immediate on event |
 | `isOnline` state flip | `App.tsx:1857` | `syncQueueNow`, `drainNotePatchQueue`, `drainPendingPhotos` | immediate. Redundant with the above on purpose: some browsers miss `online` after sleep or a VPN flap |
 | App boot | `App.tsx:1758` mount effect | same set as `online`, plus `loadHistoryFromBackend`, `ensureDirectory` | once per cold load |
 | Action tap | `App.tsx::recordEvent` | `syncQueueNow` | immediate, inline with the tap |
-| Component mount | BillCalculator, EstimatorTab, BillOfLadingForm, OfficeHours, Reimbursement | that feature's `syncQueue` / `drain` | on mount and on key change |
+| **2-minute timer** | `App.tsx` while the app is open | `drainReimbursements` **only** | every 2 min. Exists because neither boot nor `online` fires when the app stays connected and the SERVER has a bad minute (a deploy, a 503, a cold start). `syncQueue()` returns immediately when offline, already draining, or empty |
+| Component mount | BillCalculator, EstimatorTab, BillOfLadingForm, OfficeHours, Reimbursement | that feature's `syncQueue` / `drain` | on mount and on key change. **No longer the only trigger for any queue except the estimator** |
 | `visibilitychange` / `focus` | BillCalculator `:523`, BolInventoryTab `:71`, JobReport `:329` | that feature's refresh | on tab return |
 | Debounce timer | job notes `App.tsx:1840`, BOL `bolStore.ts:647`, estimator meta `EstimatorTab.tsx:338`, estimator item `:997` | `flushJobNotes`, `bolStore.syncQueue`, `flushMetaSave`, `flushItemSave` | 1500ms / 1000ms / 800ms / 600ms |
 
 **Failure policy, uniform across every queue** (`lib/queueFailure.ts`, ADR 0013): a
 permanent 4xx marks the entry `failed_at` and **keeps** it in the queue, skipped by
 the drain so it cannot wedge the line, surfaced to the crew with Retry and Discard.
-It leaves only when a person says so. **401, 403 and 408 are deliberately classified
-transient** so an expired token cannot destroy a day of queued field work.
+It leaves only when a person says so. **401, 403, 408 and 429 are deliberately
+classified transient** so neither an expired token nor a Google Sheets rate limit
+can destroy a day of queued field work. **413 is permanent everywhere**: the
+body-size middleware and three upload endpoints return it, and an oversized upload
+that retries forever never gets smaller.
+
+There is **one** classifier. `api/client.ts::isPermanentFailure` (an allowlist of
+400/404/409/422, which disagreed with the other) is deleted. Every queue
+mark-and-keeps: `jobChecklistStore` and `jobSetupStore` used to delete on a
+permanent rejection, and `bugReportStore` / `featureRequestStore` had no
+permanent-versus-transient split at all, so a refused report was re-POSTed forever.
 
 ## Sheet export reference
 
@@ -246,6 +256,22 @@ not something the crew asked for and can act on, so the photo stays queued and
 retryable. Stops mid-batch if signal drops again rather than burning through the rest
 marking everything failed. Guarded by `drainingPhotosRef`.
 
+**Captions are not queued, which is why swallowing mattered.** `POST /api/photos/caption`
+used to return HTTP 200 with `{"ok": false}` when the photo was missing or the DB
+commit failed. `apiFetch` throws only on `!res.ok`, so the UI showed "Note saved",
+cleared the draft, and the note was gone. For an incident photo the note **is** the
+record. It now returns **404** when the photo is not found (permanent) and **500**
+when the commit fails (retryable), and the client turns on whether a local copy
+holds the caption:
+
+- **Local photo** - `updatePhoto` stored it and it rides along on the next upload.
+  Every server failure is swallowed, a 404 included, because a not-yet-uploaded
+  photo genuinely is not on the server yet.
+- **Server-only photo** - nothing else holds the note, so every failure is
+  surfaced, offline included, and the crew member knows to redo it on signal.
+
+Drive description mirroring stays best-effort and never fails the request.
+
 ## Job inventory
 
 **Class A.**
@@ -299,7 +325,7 @@ All summary fields (`customer_name`, `customer_email`, `customer_phone`, `move_d
 |---|---|
 | Local keys | `crew_bol_draft_v1:` (per job), `crew_bol_queue_v1` (heterogeneous op queue) |
 | Drain | `bolStore.syncQueue`, autosave entry point `bolStore.autosyncDraft` |
-| Trigger | **1000ms debounce** after any item edit; plus `online`, mount, and save |
+| Trigger | **1000ms debounce** after any item edit; plus boot and `online` app-wide (`App.tsx`, `drainLongDistance`), mount, and save. Before 2026-09-09 it drained only while `<BillOfLadingForm>` was mounted |
 | Endpoint | `POST /api/bol` and signing / PDF endpoints |
 | Export | `export_bol_to_sheets`, coalesced per `bol_id`, **reconciled every 300s** via `bol_reconcile.py` |
 
@@ -325,7 +351,7 @@ Item fields `item_no`, `item_name`, `qty`, `packed_by`, `condition_notes`,
 |---|---|
 | Local keys | `crew_rods_day_v1:` (per date+driver), `crew_rods_queue_v1` |
 | Drain | `rodsStore.syncQueue` |
-| Trigger | **sign-off only** (`RodsSignoff.tsx:158`). Duty changes accumulate locally until the driver signs |
+| Trigger | **boot and `online`** (`App.tsx`, `drainLongDistance`), plus sign-off (`RodsSignoff.tsx`). Until 2026-09-09 this was sign-off only, so a duty log signed offline waited for somebody to reopen that exact screen while online |
 | Endpoint | `POST /api/long-distance/rods` |
 | Export | `export_rods_to_sheets`, replace by `rods_id`, **not reconciled** |
 
@@ -340,28 +366,40 @@ All of `rods_id`, `log_date`, `driver_name`, `co_driver_name`, `vehicle_number`,
 
 ## Long-distance day (per-diem / drive day)
 
-**Class A on paper. Broken in practice.**
+**Class A.** Was "Class A on paper, broken in practice" until 2026-09-09: nothing
+called `syncQueue`, so every drive-day toggle ever set sat in the queue and the
+`LongDistancePay` tab stayed empty.
 
 | | |
 |---|---|
-| Local keys | `crew_ld_day_v1:` (per date), `crew_ld_day_queue_v1` |
-| Drain | `ldDayStore.syncQueue` |
-| Trigger | **NONE. Nothing calls it.** |
-| Endpoint | `POST /api/long-distance/day` |
+| Local keys | `crew_ld_plan_v1:<date>` (the day plan), `crew_ld_day_v1:` (per date), `crew_ld_day_queue_v1` |
+| Drain | `ldDayStore.syncQueue`, via `drainLongDistance` |
+| Trigger | **boot and `online`** (`App.tsx`), `Promise.allSettled` alongside the BOL and RODS drains so one failure does not hold the others |
+| Endpoint | `POST /api/long-distance/day` (idempotent by driver + date) |
 | Export | `export_ld_day_to_sheets` |
 
 | Field | Adheres | Note |
 |---|---|---|
-| `day_id` | `[ ]` | never transmitted |
-| `date` | `[ ]` | never transmitted |
-| `driver_name` | `[ ]` | never transmitted |
-| `job_uuid` / `job_name` | `[ ]` | never transmitted |
-| `out_of_town` | `[ ]` | never transmitted, **and never set**: `setLdDay` is only ever called with `drive_day` |
-| `drive_day` | `[ ]` | written locally by `LdWorkday.tsx:70`, never transmitted |
-| `per_diem` | `[-]` | derived at export, `$50` if `out_of_town` |
-| `updated_at` | `[ ]` | never transmitted |
+| `day_id` | `[x]` | |
+| `date` | `[x]` | Mountain calendar date, not UTC: per-diem is per day, so the day it lands on is the money |
+| `driver_name` | `[x]` | |
+| `job_uuid` / `job_name` | `[x]` | attached from `readActiveJob()` at write time |
+| `out_of_town` | `[ ]` | transmitted, **but never set**: `setLdDay` is only ever called with `drive_day`. See Deviations |
+| `drive_day` | `[x]` | set from the day plan's `driving` activity by `useLdPlan` |
+| `per_diem` | `[-]` | derived at export, `$50` if `out_of_town`, so it stays 0 while the above holds |
+| `updated_at` | `[x]` | |
 
-See Deviations. This is logged as a Known defect in [RUNBOOKS.md](RUNBOOKS.md).
+**The plan behind `drive_day` is client-only and per calendar day**
+(`crew_ld_plan_v1:<date>`, `components/LdWorkday.tsx`). Only `driving` leaves the
+device, as `drive_day`. Both the plan write and the `LdDay` write are checked and
+reported: a selection that could not be stored shows the out-of-space message
+rather than appearing ticked, and `toggleActivity` resolves against the committed
+plan rather than the render snapshot. Covered by
+`frontend/scripts/verify_ld_plan_toggle.mjs`.
+
+`frontend/scripts/verify_ld_drain.mjs` asserts the drain wiring and scans `lib/`
+for any queue module unreachable from `App.tsx`, so a new store cannot repeat the
+original defect.
 
 ## Prior on-duty statement
 
@@ -523,21 +561,24 @@ failed queue entries across the wipe.
 
 Things that do not do what their class says. Keep this list short and act on it.
 
-### 1. The long-distance day queue never drains
+### 1. `out_of_town` is transmitted but never set
 
-`LdWorkday.tsx:70` calls `setLdDay()`, which writes `crew_ld_day_queue_v1`. **Nothing
-in the app calls `ldDayStore.syncQueue()`.** `POST /api/long-distance/day` is its
-only caller, and `long_distance.py:375` is the only place `LdDay` rows are created.
+Narrowed 2026-09-09. The old form of this entry was "the long-distance day queue
+never drains", which was the larger defect: nothing called
+`ldDayStore.syncQueue()`, so the `LdDays` table and the `LongDistancePay` tab
+stayed empty and Admin's "Drive days" tally always read zero. That is fixed - the
+queue now drains from boot and `online` - and `drive_day` completes its path.
 
-Consequences: the `LdDays` table stays empty, the `LongDistancePay` tab stays empty,
-Admin's "Drive days" tally (`Admin.tsx:7154`) always reads zero, and
-`crew_ld_day_queue_v1` grows on every Driving toggle without ever emptying.
+What remains is narrower: **nothing ever calls `setLdDay` with `out_of_town`**, so
+that column stays false and the tab's derived `per_diem` stays 0. The toggle that
+would set it lives on the Report tab, per person, and writes the job report rather
+than the `LdDay` row.
 
-Not a payroll-money bug: `payroll.py` takes per-diem nights primarily from the
-per-employee `out_of_town` flag on job-report hours and only supplements from
-`LdDay`. The real loss is `drive_day`, which has no other source.
+Not a payroll-money bug: `payroll.py` takes per-diem nights from the per-employee
+`out_of_town` flag on job-report hours and only supplements from `LdDay`. The loss
+is confined to the `LongDistancePay` tab's own columns.
 
-Present on `main` and `staging`. Logged in [RUNBOOKS.md](RUNBOOKS.md) Known defects.
+Logged in [RUNBOOKS.md](RUNBOOKS.md) Known defects.
 
 ### 2. The estimator queue drains only on mount
 
@@ -547,6 +588,12 @@ for the crew to reopen that estimate rather than shipping on reconnect. This is 
 failure class ARCHITECTURE.md warns about under "A queue must not depend on its own
 UI being mounted". It self-heals on next open, so it is a weakness rather than data
 loss, but `pruneStale` deletes entries after 14 days.
+
+**It is now the only one left.** The BOL, RODS, long-distance day, bug report,
+feature request, job setup, checklist and reimbursement queues were all moved to
+boot + `online` (reimbursements additionally on a 2-minute timer). `verify_ld_drain.mjs`
+scans `lib/` for queue modules unreachable from `App.tsx`; the estimator is the
+known exception it is allowed to report.
 
 ### 3. Availability has no offline path
 
