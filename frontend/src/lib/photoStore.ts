@@ -28,6 +28,16 @@ export type StoredPhoto = {
   // Optional link to an incident this photo documents (see IncidentReport).
   incident_uuid?: string;
   claim_number?: string;
+  // A photo whose bytes are stored but which the crew member has not pressed
+  // Save on yet. It exists so the image is durable from the moment it is taken:
+  // the picked File handle can die before Save is pressed, and reading it later
+  // threw the photo away. See ADR 0048.
+  //
+  // A draft is deliberately invisible to every existing reader. It is not in the
+  // saved gallery, not swept by the upload drain, not seen by the estimator or
+  // the BOL. Only the pending tray that owns it can see it, via
+  // listDraftPhotosForJob().
+  draft?: boolean;
 };
 
 const DB_NAME = "crew_app_db";
@@ -102,9 +112,41 @@ export async function listPhotosForJob(jobUuid: string): Promise<StoredPhoto[]> 
 
   db.close();
 
+  // Drafts are excluded HERE, at the single choke point, rather than at each
+  // call site. Every caller of this function (the saved gallery, the upload
+  // drain, the estimator, the BOL) wants photos the crew member has actually
+  // saved, and filtering in one place is what makes it impossible for a new
+  // caller to surface a half-finished photo by forgetting to.
+  const saved = results.filter((p) => !p.draft);
+
   // newest first
-  results.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-  return results;
+  saved.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  return saved;
+}
+
+/**
+ * The photos sitting in a job's pending tray: stored on the device, captioned or
+ * not, but not yet saved by the crew member. Oldest first, so the tray shows them
+ * in the order they were taken.
+ *
+ * This is the only reader of draft rows. Restoring from it on load is what makes
+ * the tray survive a reload, a crash, or a phone that killed the tab.
+ */
+export async function listDraftPhotosForJob(jobUuid: string): Promise<StoredPhoto[]> {
+  if (!jobUuid.trim()) return [];
+
+  const db = await openDb();
+  const tx = db.transaction(STORE_PHOTOS, "readonly");
+  const store = tx.objectStore(STORE_PHOTOS);
+  const idx = store.index("by_job");
+
+  const results = await txPromise(idx.getAll(jobUuid.trim()));
+
+  db.close();
+
+  const drafts = results.filter((p) => p.draft);
+  drafts.sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  return drafts;
 }
 
 /** Read ONE photo (including its bytes) by id. Lets a drain read photos one at a

@@ -8,9 +8,9 @@ folded into [DATA_FLOW.md](DATA_FLOW.md) at promotion.
 
 | | |
 |---|---|
-| Branch / commit | `staging` @ `159d24b` |
-| Compared to | `main` @ `159d24b` (the 2026-09-10 promotion) |
-| Date verified | 2026-09-10 |
+| Branch / commit | `staging` @ working tree, 2026-09-11 |
+| Compared to | `main` @ `7681d5a` (the 2026-09-10 promotion) |
+| Date verified | 2026-09-11 |
 
 **Emptied at the 2026-09-10 promotion.** Everything that stood here was folded
 into [DATA_FLOW.md](DATA_FLOW.md) under "Folded from staging at the 2026-09-10
@@ -88,7 +88,50 @@ The full step-by-step is the **Data-flow doc gate** in
 
 # Changed behavior in existing domains
 
-Nothing yet.
+## Photos - the local write moved from Save to pick
+
+**Class E**, unchanged. The destination, the drain, the trigger and the Sheet
+position are all exactly as
+[DATA_FLOW.md](DATA_FLOW.md#photos) describes. What changed is **when the row
+enters the local store**, and one field that the retry path was dropping.
+
+See [ADR 0048](decisions/0048-a-photo-is-durable-when-it-is-taken-not-when-it-is-saved.md).
+
+| | Before (`main`) | After (staging) |
+|---|---|---|
+| Row created | in `uploadOnePhoto`, on Save | in `onAddPhotoFiles`, at pick |
+| Bytes read | `toQueuedPhoto(file)` at Save, unguarded | `toQueuedPhoto(file)` at pick, guarded |
+| Row on a failed read | **none. The photo was destroyed** | no row, and the photo is not added to the tray, because there was nothing to read |
+| `job_uuid` stamped | at Save, from the then-current selection | at pick |
+| Tray contents | React state only | restored from stored drafts per job |
+| Upload path on Save | `uploadOnePhoto`, a second copy of the uploader | `pushPhotoToDrive`, the same one the drain uses |
+
+**The new local state.** A `photos` row may now carry `draft: true`, meaning the
+bytes are on the device but the crew member has not pressed Save. A draft is
+filtered out inside `listPhotosForJob`, so the saved gallery, `drainPendingPhotos`,
+the estimator and the BOL cannot see it. `listDraftPhotosForJob` is the only reader,
+and only the pending tray calls it. **No draft ever reaches the network**: Save is
+what clears the flag, and the drain only ever sees cleared rows.
+
+Per-field, for the row as it now enters the store at pick:
+
+| Field | | Note |
+|---|---|---|
+| `id` | `[x]` | `crypto.randomUUID()`, and the same id the upload carries |
+| `job_uuid` | `[x]` | stamped at pick. This is the fix for photos following a job switch |
+| `created_at` | `[x]` | pick time, not save time, so the tray restores in capture order |
+| `mime` | `[x]` | |
+| `blob` | `[x]` | `QueuedPhoto` bytes per ADR 0017, read at pick |
+| `draft` | `[x]` | new. `true` at pick, cleared on Save, never sent anywhere |
+| `caption` | `[x]` | empty at pick, written on Save |
+| `category` | `[x]` | written on Save. **Was `[ ]` on the retry path**: `pushPhotoToDrive` did not send it, so a photo tagged Before came back General after a failed first upload. It now sends the stored value |
+| `incident_uuid` / `claim_number` | `[x]` | written on Save from the tray's attach target |
+| `drive_status` / `drive_url` / `drive_error` | `[x]` | unchanged, owned by the uploader |
+
+**Deletion is now a real delete.** Remove and Clear in the tray call
+`deletePhoto` on the stored draft. Clear confirms first, because it destroys
+stored image data rather than discarding a list. A failed delete is swallowed: the
+row is already out of the tray, and orphaned bytes are wasteful rather than wrong.
 
 # New domains
 
@@ -152,7 +195,7 @@ migration painful.
 
 # Not yet documented
 
-Nothing outstanding as of `159d24b`.
+Nothing outstanding as of the 2026-09-11 photo-durability change.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.

@@ -1461,6 +1461,23 @@ it fires in exactly this case and names the section to fill.
 
 ### Recently fixed (kept briefly so you do not re-report them)
 
+- **A job photo was destroyed when its file handle died before Save.** Fixed
+  2026-09-11 (staging). The bytes were read in `uploadOnePhoto` at Save time and
+  the read threw before the row was ever persisted, so the photo was in no store,
+  had no Retry, and had already been cleared from the tray. The crew member saw
+  the browser's raw `NotReadableError` text, which blames a permission problem
+  that is not the cause. Photos are now written to IndexedDB as drafts at pick
+  time. [ADR 0048](decisions/0048-a-photo-is-durable-when-it-is-taken-not-when-it-is-saved.md).
+- **Pending photos were re-filed under whatever job was selected at Save.** Fixed
+  2026-09-11 (staging), alongside the above and never separately reported. The
+  tray held no `job_uuid`, so `uploadOnePhoto` read the then-current selection.
+  Picking photos on one job and switching before saving filed them under the
+  second job, against the unique-key invariant. `job_uuid` is now stamped at pick.
+- **A retried photo lost its Before/After tag.** Fixed 2026-09-11 (staging).
+  There were two uploaders: `uploadOnePhoto` for a fresh save sent `category`, and
+  `pushPhotoToDrive` for the reconnect drain did not, so the endpoint's
+  `category` default of `"general"` silently won on every retry. Save now goes
+  through the drain's uploader, so there is one path instead of two.
 - Signed BOL could not be viewed, emailed, or uploaded to Drive; some BOLs went
   to `delivered` after only an origin signing. Fixed 2026-09-02 (staging,
   [ADR 0042](decisions/0042-pdf-text-is-transliterated-and-a-failed-copy-is-not-a-failed-signature.md)).

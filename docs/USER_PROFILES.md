@@ -53,8 +53,14 @@ app.
 - **What breaks their day** [inferred]: an action that silently needed signal, a
   screen that lost what they typed, being paid wrong because a tap did not
   register, or not knowing which of two tools to use for a situation.
+- **Photos** [confirmed 2026-09-11]: they take them and, until the upload lands,
+  they are the only person holding a copy. A photo destroyed on their phone is
+  destroyed everywhere, and the office cannot tell it was ever attempted. The
+  owner: "A lost job photo is not recoverable later, and damage photos are what a
+  claim rests on." ([ADR 0048](decisions/0048-a-photo-is-durable-when-it-is-taken-not-when-it-is-saved.md))
 - **Open questions:** Do movers share a phone on a job? What is the actual rate
-  of "my phone died mid-job"? Which screens do new hires get wrong most?
+  of "my phone died mid-job"? Which screens do new hires get wrong most? How long
+  do unsaved photos sit in the tray before somebody saves or discards them?
 
 ## 2. Crew lead
 
@@ -117,9 +123,14 @@ App role: `admin`. Hailey (SOP section 1.1).
 - **What breaks their day** [inferred]: a number in the app disagreeing with the
   Sheet, a correction that does not reach the person it corrects, and re-keying
   anything by hand into QuickBooks.
+- **Cannot see a photo that never arrived** [confirmed 2026-09-11]: job and
+  damage photos surface to the office only once they reach Drive. Nothing records
+  that a crew member tried and lost one, so a claim can be short of evidence with
+  no signal anywhere on this side that it happened.
+  ([ADR 0048](decisions/0048-a-photo-is-durable-when-it-is-taken-not-when-it-is-saved.md))
 - **Open questions:** Which app numbers get trusted directly and which get
   re-checked against the Sheet? What is still done by hand that the app could
-  produce?
+  produce? Should the office be able to see that a photo was attempted and lost?
 
 ## 5. Scheduler and estimator
 

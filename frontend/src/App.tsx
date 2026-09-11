@@ -31,7 +31,7 @@ import { useLdPlan, LD_LABELS } from "./components/LdWorkday";
 import DVIRReminderModal from "./components/DVIRReminderModal";
 import UserAvatar from "./components/UserAvatar";
 import { ensureDirectory } from "./lib/userDirectory";
-import { addPhoto, deletePhoto, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
+import { addPhoto, deletePhoto, getPhoto, listDraftPhotosForJob, listPhotosForJob, updatePhoto, type StoredPhoto } from "./lib/photoStore";
 import { slotToBlob, slotToPreviewBlob, toQueuedPhoto, UnreadablePhotoError } from "./lib/queuedPhoto";
 import { useTheme, useResolvedLogo } from "./theme/ThemeContext";
 import {
@@ -222,7 +222,13 @@ type ServerPhoto = {
 // One entry in the pending photo batch (not yet saved). Crew can queue several
 // - multi-selected from the library and/or taken one at a time - and add a
 // per-photo note before submitting the whole batch.
-type PendingPhoto = { id: string; file: File; caption: string };
+// A photo in the pending tray. It deliberately holds NO File.
+//
+// The bytes live in IndexedDB from the moment the photo is taken (ADR 0048), so
+// the tray only needs the id to find them again. `previewUrl` is a display
+// artifact built once at pick time and revoked when the row leaves the tray;
+// losing it costs a thumbnail, never the photo.
+type PendingPhoto = { id: string; caption: string; previewUrl: string };
 
 // `<input type="time">` round-tripping. The element's value is "HH:mm" in
 // the user's local time. We keep the event's existing date intact and only
@@ -1659,92 +1665,180 @@ export default function App() {
   // Append one or more picked/taken files to the pending batch. Called by both
   // the "Add from Library" (multiple) and "Take Photo" (capture) inputs, so a
   // crew member can accumulate several shots before submitting.
-  function onAddPhotoFiles(files: FileList | null) {
+  //
+  // The bytes are read and written to IndexedDB HERE, at pick time, not at Save
+  // (ADR 0048). A File off a camera input is a reference to a temp file the OS
+  // owns, and Android reclaims it when the app is backgrounded or memory runs
+  // short. Reading it at Save meant the read could fail after the only copy of
+  // the image existed nowhere else, and the photo was destroyed. The window
+  // between taking a photo and storing it is now a few milliseconds wide.
+  async function onAddPhotoFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    if (!jobUuid.trim()) { setPhotoError("Select a job first"); return; }
+    const uuid = jobUuid.trim();
+    if (!uuid) { setPhotoError("Select a job first"); return; }
     setPhotoError("");
-    const additions: PendingPhoto[] = Array.from(files).map((file) => ({
-      id: crypto.randomUUID(),
-      file,
-      caption: "",
-    }));
-    setPendingPhotos((prev) => [...prev, ...additions]);
+    setPhotoBusy(true);
+
+    const additions: PendingPhoto[] = [];
+    let unreadable = 0;
+    try {
+      for (const file of Array.from(files)) {
+        const id = crypto.randomUUID();
+        let bytes: Awaited<ReturnType<typeof toQueuedPhoto>>;
+        try {
+          bytes = await toQueuedPhoto(file);
+        } catch {
+          // The handle was already dead when we got it. There is nothing to
+          // save, so say so instead of adding a row that can never upload.
+          unreadable++;
+          continue;
+        }
+        if (!bytes || bytes.bytes.byteLength === 0) { unreadable++; continue; }
+
+        // job_uuid is stamped from the job selected AT PICK TIME. Switching jobs
+        // with photos in the tray used to reassign them to the new job on Save,
+        // because Save read the then-current jobUuid.
+        await addPhoto({
+          id,
+          job_uuid: uuid,
+          created_at: new Date().toISOString(),
+          mime: file.type || "image/jpeg",
+          caption: "",
+          blob: bytes,
+          drive_status: "pending",
+          draft: true,
+        });
+
+        // Preview off the File, not off the stored bytes: a memory-backed URL for
+        // every photo in a batch would hold the whole batch in RAM on a phone.
+        // If the handle dies the thumbnail breaks and the photo is still safe.
+        additions.push({ id, caption: "", previewUrl: URL.createObjectURL(file) });
+      }
+
+      if (additions.length > 0) setPendingPhotos((prev) => [...prev, ...additions]);
+      if (unreadable > 0) {
+        setPhotoError(
+          unreadable === 1
+            ? "One photo could not be read from this phone and was not added. Take it again."
+            : `${unreadable} photos could not be read from this phone and were not added. Take them again.`,
+        );
+      }
+    } catch (e: any) {
+      setPhotoError(e?.message ?? "Could not save the photo to this device");
+    } finally {
+      setPhotoBusy(false);
+    }
   }
 
   function setPendingCaptionFor(id: string, caption: string) {
     setPendingPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, caption } : p)));
   }
 
-  function removePendingPhoto(id: string) {
+  // Drop one photo from the tray. The stored draft goes with it: the tray is the
+  // only thing that can see a draft, so leaving the row behind would orphan bytes
+  // nobody can reach.
+  async function removePendingPhoto(id: string) {
+    const row = pendingPhotos.find((p) => p.id === id);
+    if (row) URL.revokeObjectURL(row.previewUrl);
     setPendingPhotos((prev) => prev.filter((p) => p.id !== id));
+    try {
+      await deletePhoto(id);
+    } catch {
+      // The row is already out of the tray. A failed delete leaves bytes on the
+      // device, which is wasteful but not wrong, and not worth an error a crew
+      // member cannot act on.
+    }
   }
 
-  // Save one photo: store locally first (offline-safe), then attempt the Drive
-  // upload. Drive failures leave the photo queued as "failed"/"pending" for the
-  // Retry button - they never lose the local copy.
-  async function uploadOnePhoto(photoId: string, file: File, caption: string) {
+  // Clear the whole tray. These are real stored photos now, so it asks first.
+  async function onClearPending() {
+    if (pendingPhotos.length === 0) return;
+    const ok = window.confirm(
+      pendingPhotos.length === 1
+        ? "Discard this photo? It has not been saved to the job yet."
+        : `Discard all ${pendingPhotos.length} photos? They have not been saved to the job yet.`,
+    );
+    if (!ok) return;
+
+    const batch = pendingPhotos;
+    setPendingPhotos([]);
+    for (const p of batch) {
+      URL.revokeObjectURL(p.previewUrl);
+      try { await deletePhoto(p.id); } catch { /* see removePendingPhoto */ }
+    }
+  }
+
+  // Rebuild the tray from stored drafts whenever the selected job changes.
+  //
+  // This is what makes the tray survive a reload, a crash, or Android killing the
+  // tab, and it is also why switching jobs no longer carries photos across: each
+  // job shows its own unsaved photos and nobody else's.
+  useEffect(() => {
+    let cancelled = false;
+    const uuid = jobUuid.trim();
+
+    // Revoke the outgoing job's preview URLs before the tray is replaced.
+    setPendingPhotos((prev) => {
+      for (const p of prev) URL.revokeObjectURL(p.previewUrl);
+      return [];
+    });
+
+    if (!uuid) return;
+
+    (async () => {
+      try {
+        const drafts = await listDraftPhotosForJob(uuid);
+        if (cancelled || drafts.length === 0) return;
+        const restored: PendingPhoto[] = [];
+        for (const d of drafts) {
+          // Restored drafts have no File, so the preview comes from the stored
+          // bytes. Only unsaved photos that outlived a reload pay this cost.
+          const blob = await slotToPreviewBlob(d.blob);
+          if (!blob) continue;
+          restored.push({ id: d.id, caption: d.caption || "", previewUrl: URL.createObjectURL(blob) });
+        }
+        if (cancelled) {
+          for (const r of restored) URL.revokeObjectURL(r.previewUrl);
+          return;
+        }
+        if (restored.length > 0) setPendingPhotos(restored);
+      } catch {
+        // A tray that cannot be restored is an empty tray, not a broken screen.
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [jobUuid]);
+
+  // Promote one drafted photo out of the tray and into the job, then upload it.
+  //
+  // The bytes are already on the device (ADR 0048), so this writes the crew
+  // member's choices onto the stored row and hands it to the same uploader the
+  // retry drain uses. There is one upload path, not two: the second copy used to
+  // drift from this one, and that is how a retried photo lost its Before/After
+  // tag.
+  async function promoteOnePhoto(photoId: string, caption: string) {
     // Resolve the incident this batch is tagged to (if any). "" target = a plain
     // job photo. A stale selection (incident not in the current list) is ignored.
     const inc = attachIncidentUuid
       ? jobIncidents.find((x) => x.incident_uuid === attachIncidentUuid)
       : undefined;
-    // Store the photo's BYTES, not the File.
-    //
-    // A File off an <input> is a reference to a file on disk, not the data. This
-    // queue persists it and uploads it later, sometimes days later, across
-    // reloads. On iOS/WebKit that reference can go stale, and a stale File does
-    // not fail loudly: appending it to FormData yields a request whose body never
-    // serialises, so the server sees an empty body. Reading it once, here, while
-    // the handle is still live, makes the queued photo self-contained. See
-    // ADR 0017.
-    const stored: StoredPhoto = {
-      id: photoId,
-      job_uuid: jobUuid.trim(),
-      created_at: new Date().toISOString(),
-      mime: file.type || "image/jpeg",
+
+    await updatePhoto(photoId, {
       caption,
-      blob: await toQueuedPhoto(file),
-      drive_status: "pending",
       category: photoCategory,
       incident_uuid: inc?.incident_uuid,
       claim_number: inc?.claim_number,
-    };
-    await addPhoto(stored);
+      drive_status: "pending",
+      drive_error: undefined,
+      // The photo is now the job's. It appears in Saved and the drain will retry
+      // it until Drive takes it.
+      draft: false,
+    });
 
-    try {
-      const form = new FormData();
-      const resized = await resizeImage(file);
-      form.append("file", resized, (file.name || "photo.jpg").replace(/.[^.]+$/, ".jpg"));
-      form.append("photo_id", photoId);
-      form.append("job_uuid", jobUuid.trim());
-      form.append("job_name", jobName);
-      form.append("job_date", jobDate);
-      form.append("caption", caption);
-      form.append("category", photoCategory);
-      if (inc) {
-        form.append("incident_uuid", inc.incident_uuid);
-        form.append("claim_number", inc.claim_number || "");
-      }
-
-      const token = getToken() || "";
-      const res = await fetch(`${API}/api/photos/upload`, {
-        method: "POST",
-        headers: makeAuthHeaders(token),
-        body: form,
-      });
-      const { error, body } = await readPhotoUploadResponse(res);
-      if (!error && body?.drive_url) {
-        await updatePhoto(photoId, { drive_status: "uploaded", drive_url: body.drive_url });
-      } else {
-        await updatePhoto(photoId, { drive_status: "failed", drive_error: error ?? "Drive upload failed" });
-      }
-    } catch (uploadErr: any) {
-      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
-      const msg = offline
-        ? "Offline - photo will retry when you're back online"
-        : (uploadErr?.message ?? "Network error - tap Retry");
-      await updatePhoto(photoId, { drive_status: "failed", drive_error: msg });
-    }
+    const row = await getPhoto(photoId);
+    if (!row) throw new Error("Photo could not be read back from this device");
+    await pushPhotoToDrive(row);
   }
 
   async function onSaveAllPending() {
@@ -1755,21 +1849,29 @@ export default function App() {
     const batch = pendingPhotos;
     let saved = 0;
     let lastErr = "";
+    const stuck: PendingPhoto[] = [];
     // Sequential: keeps peak memory and server load bounded, and preserves the
     // offline-first "local save always succeeds" guarantee per photo.
+    //
+    // A Drive failure is NOT a failure here. pushPhotoToDrive marks the row
+    // failed/pending and the drain retries it; the photo has left the tray and is
+    // in the job either way. Only a photo that could not be promoted at all stays
+    // in the tray, so the tray is never emptied of something that was not saved.
     for (const p of batch) {
       try {
-        await uploadOnePhoto(p.id, p.file, p.caption.trim());
+        await promoteOnePhoto(p.id, p.caption.trim());
+        URL.revokeObjectURL(p.previewUrl);
         saved++;
       } catch (e: any) {
         lastErr = e?.message ?? "Photo save failed";
+        stuck.push(p);
       }
     }
 
-    setPendingPhotos([]);
+    setPendingPhotos(stuck);
     await refreshPhotos();
     if (lastErr) setPhotoError(lastErr);
-    setStatus(saved === 1 ? "Photo saved" : `${saved} photos saved`);
+    if (saved > 0) setStatus(saved === 1 ? "Photo saved" : `${saved} photos saved`);
     setPhotoBusy(false);
   }
 
@@ -1838,6 +1940,10 @@ export default function App() {
       form.append("job_name", jobName);
       form.append("job_date", jobDate);
       form.append("caption", photo.caption);
+      // Carry the stored category. Without this the endpoint defaults to
+      // "general", so a photo tagged Before that failed its first upload came
+      // back General on retry.
+      form.append("category", photo.category || "general");
       if (photo.incident_uuid) {
         form.append("incident_uuid", photo.incident_uuid);
         form.append("claim_number", photo.claim_number || "");
@@ -2207,6 +2313,11 @@ export default function App() {
     color: "var(--text)",
     outline: "none",
   };
+  // Genuine exception, not drift: these style native <option> elements. The
+  // dropdown they open is an OS widget, not our surface, and it does not follow
+  // the app theme on Android or iOS. The pair is self-consistent dark ink on
+  // white, which is legible whichever way the platform renders the popup.
+  // eslint-disable-next-line no-restricted-syntax
   const optionStyle: React.CSSProperties = { color: "#0b1220", background: "#ffffff" };
 
   const mergedLog = useMemo(() => {
@@ -3045,7 +3156,7 @@ export default function App() {
                   capture="environment"
                   style={{ display: "none" }}
                   disabled={photoBusy}
-                  onChange={(e) => { onAddPhotoFiles(e.target.files); e.currentTarget.value = ""; }}
+                  onChange={(e) => { void onAddPhotoFiles(e.target.files); e.currentTarget.value = ""; }}
                 />
               </label>
               <label style={{ cursor: photoBusy ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", padding: "10px 18px", borderRadius: "var(--btn-r)", border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)" }}>
@@ -3056,7 +3167,7 @@ export default function App() {
                   multiple
                   style={{ display: "none" }}
                   disabled={photoBusy}
-                  onChange={(e) => { onAddPhotoFiles(e.target.files); e.currentTarget.value = ""; }}
+                  onChange={(e) => { void onAddPhotoFiles(e.target.files); e.currentTarget.value = ""; }}
                 />
               </label>
               <button onClick={refreshPhotos} disabled={photoBusy}>Refresh</button>
@@ -3070,6 +3181,10 @@ export default function App() {
           {pendingPhotos.length > 0 && (
             <div className="card">
               <div className="microLabel" style={{ marginBottom: 10 }}>Ready to save ({pendingPhotos.length})</div>
+              <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
+                {pendingPhotos.length === 1 ? "This photo is" : "These photos are"} already stored on this phone
+                and will not be lost. Saving adds {pendingPhotos.length === 1 ? "it" : "them"} to the job.
+              </div>
 
               {/* Photo type for the batch: before / after / general. Tagging to
                   an incident below makes it an incident photo instead. */}
@@ -3120,10 +3235,13 @@ export default function App() {
 
               <div className="col" style={{ gap: 12, marginTop: 8 }}>
                 {pendingPhotos.map((p) => {
-                  const url = URL.createObjectURL(p.file);
                   return (
                     <div key={p.id} style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "rgba(255,255,255,0.02)" }}>
-                      <img src={url} alt="preview" style={{ width: "100%", display: "block" }} onLoad={() => URL.revokeObjectURL(url)} />
+                      {/* previewUrl is created once at pick time and revoked when the
+                          row leaves the tray. It used to be created during render and
+                          revoked onLoad, which minted a fresh object URL on every
+                          keystroke in the note box. */}
+                      <img src={p.previewUrl} alt="preview" style={{ width: "100%", display: "block" }} />
                       <div className="col" style={{ gap: 6, padding: 10 }}>
                         <div className="label">Note (optional)</div>
                         <textarea
@@ -3148,7 +3266,7 @@ export default function App() {
                 <button className="btnPrimary" onClick={onSaveAllPending} disabled={photoBusy}>
                   {photoBusy ? "Saving…" : (pendingPhotos.length === 1 ? "Save Photo" : `Save All (${pendingPhotos.length})`)}
                 </button>
-                <button onClick={() => setPendingPhotos([])} disabled={photoBusy}>Clear</button>
+                <button onClick={onClearPending} disabled={photoBusy}>Clear</button>
               </div>
             </div>
           )}

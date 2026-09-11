@@ -95,13 +95,43 @@ their own words, that statement becomes a line here.
 | 5 | Vehicle and DVIR | not yet |
 | 6 | Money out (reimbursements, materials) | not yet |
 | 7 | Customer paperwork (BOL, inventory, signature, documents) | not yet |
-| 8 | Photos and incidents | not yet |
+| 8 | Photos and incidents | partly, 2026-09-11 |
 | 9 | Estimating | not yet |
 | 10 | Payroll and close-out | not yet |
 | 11 | Roster, skills, DQ files | not yet |
 | 12 | Admin job summary and notes | not yet |
 | 13 | Crew comms (bulletin, directory, patch notes) | not yet |
 | 14 | Feedback intake (bug reports, feature requests) | not yet |
+
+---
+
+### Photos and incidents
+
+**Purpose** (owner, 2026-09-11): "A lost job photo is not recoverable later, and
+damage photos are what a claim rests on." Stated as the consequence of losing
+one, which is the only part of the purpose intake has drawn out so far. What the
+photo tool is *for* in the positive sense, beyond evidence for a claim, is still
+unstated.
+
+**Serves**: Mover and Crew lead take the photos and are the only people holding a
+copy until it uploads. Admin depends on them for claims and cannot see that a
+photo was ever attempted, so a loss is invisible from the office side.
+
+**Driving scenario** (owner, 2026-09-11): "A crew member added photos to a job,
+pressed Save, and got a red error they could not act on. The photo was gone: not
+in the tray, not in Saved, no Retry. The exact sequence that led to it was not
+captured."
+
+**Out of scope, deliberately**: not yet stated.
+
+**Decisions behind it**:
+[ADR 0017](decisions/0017-offline-queues-store-bytes-not-file-handles.md),
+[ADR 0048](decisions/0048-a-photo-is-durable-when-it-is-taken-not-when-it-is-saved.md).
+
+**Open questions**: what the tool is for beyond claim evidence; whether
+before/after photos serve a different job from damage photos and should be
+treated differently; whether unsaved photos should expire off a device, and after
+how long.
 
 ---
 

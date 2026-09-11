@@ -156,7 +156,7 @@ When you are in one of these files, convert what you can:
 | `components/RolePreviewSwitch.tsx` | 8 |
 | `lib/confetti.ts` | 6 |
 | `lib/rodsStore.ts` | 4 |
-| `App.tsx` | 2 |
+| `App.tsx` | 0 - cleared 2026-09-11. Both were `optionStyle`, the colors for native `<option>` elements. The dropdown is an OS widget that does not follow the app theme, so the literal pair is a genuine exception and now carries a disable with a reason at the site |
 | `components/SignaturePad.tsx` | 2 |
 | `components/BillOfLadingForm.tsx` | 0 - cleared 2026-09-02. The one literal was a genuine exception (white ink on a hardcoded `rgba(0,0,0,0.55)` photo scrim) and now carries a disable with a reason at the site |
 | `pages/ReportBug.tsx` | 1 |
@@ -170,7 +170,7 @@ site, not a config entry, so the exception is visible where someone reads it.
 **When the count reaches zero, change `'warn'` to `'error'`** in
 `eslint.config.js` and delete this item.
 
-**Progress:** 38 warnings as of 2026-08-10.
+**Progress:** 36 warnings as of 2026-09-11 (was 38 on 2026-08-10).
 
 > Separately: `npm run lint` currently reports ~277 **pre-existing errors** from
 > other rules (mostly `no-unused-vars`), unrelated to any of this. Lint was
