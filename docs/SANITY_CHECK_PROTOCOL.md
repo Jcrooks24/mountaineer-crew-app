@@ -253,7 +253,7 @@ taste is deleted).
 | 5 | Vehicle and DVIR | `DVIR`, `MechanicSign`, `VehicleUnitSpecs`, `TruckDeckGauge` | never | - |
 | 6 | Money out | `Reimbursement`, materials capture, `ReimbursementsAdminTab` | never | - |
 | 7 | Customer paperwork | `BillOfLadingForm`, `BolInventoryTab`, `ActualInventory`, `SignaturePad`, `DocumentLibrary` | never | - |
-| 8 | Photos and incidents | `IncidentReport`, photo capture, `IncidentsAdminTab` | never | - |
+| 8 | Photos and incidents | `IncidentReport`, photo capture, `IncidentsAdminTab` | 2026-09-11 | [6](sanity/2026-09-11-photos-incidents.md) |
 | 9 | Estimating | `EstimatorTab`, `WrapUpEstimator`, `BillCalculator` | never | - |
 | 10 | Payroll and close-out | `PayrollTool`, `PayrollNotes`, `CloseoutStepper` | 2026-09-09 | [8](sanity/2026-09-09-payroll-closeout.md) |
 | 11 | Roster, skills, DQ files | `EmployeesTab`, `DqFilesTab`, `DqMyFileCard`, `RosterPicker` | never | - |
