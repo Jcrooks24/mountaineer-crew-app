@@ -161,6 +161,33 @@ check("the local copy is dropped once the account has it",
 await P.drainAvailabilityPalette();
 check("draining again sends nothing", sent.length === 1);
 
+// Vet 2026-09-14: the frontend deploys ahead of the backend. An old backend
+// ignores the unknown field and answers 200; that must not count as saved.
+globalThis.__apiFetch = async (path, opts) => {
+  const body = JSON.parse(opts.body);
+  sent.push({ user: globalThis.__cachedUser.id, ...body });
+  return { ...globalThis.__cachedUser }; // 200, field silently dropped
+};
+globalThis.__cachedUser = { id: 7, availability_palette: undefined };
+const onOldBackend = await P.chooseAvailabilityPalette(7, "deuteranopia");
+check("a 200 that did not store the palette is not treated as saved", onOldBackend === null);
+check("so the choice stays on the phone for the next drain",
+  [...localStorage.m.entries()].some(([k, v]) => k.endsWith(":7") && v === "deuteranopia"));
+
+// Vet 2026-09-14: storage blocked. No local copy exists, so "saved on this phone"
+// would be a lie; it must send directly, and fail loudly if it cannot.
+localStorage.m.clear();
+const realSet = localStorage.setItem;
+localStorage.setItem = () => { throw new Error("QuotaExceededError"); };
+globalThis.__apiFetch = async () => { throw new TypeError("Failed to fetch"); };
+let threw = false;
+try { await P.chooseAvailabilityPalette(7, "monochrome"); } catch { threw = true; }
+check("storage blocked and no signal: the pick fails loudly, not 'saved on this phone'", threw);
+globalThis.__apiFetch = async (path, opts) => ({ ...globalThis.__cachedUser, ...JSON.parse(opts.body) });
+const direct = await P.chooseAvailabilityPalette(7, "monochrome");
+check("storage blocked but online: it is sent directly and confirmed", direct?.availability_palette === "monochrome");
+localStorage.setItem = realSet;
+
 // Later, changed on another phone: the account value must win here.
 globalThis.__cachedUser = { id: 7, availability_palette: "monochrome" };
 check("a later change from another phone wins on this one", P.useStatusPalette(true).mode === "monochrome");

@@ -101,7 +101,8 @@ own Availability screens. See
 | Applies | immediately, from the local key, on that user's own Availability screens |
 | Transfer | `PATCH /api/auth/me` `{availability_palette}` from `chooseAvailabilityPalette`, then `drainAvailabilityPalette` on App.tsx boot and `online` |
 | Drain guard | sends only while the signed-in user (`mm_user_cache_v1`) is the key's user id |
-| On success | local key removed (unless re-picked in flight), profile passed to `setUser` |
+| On success | only when the response ECHOES the chosen palette (a backend without the column answers 200 and drops it): local key removed (unless re-picked in flight), profile passed to `setUser` |
+| Storage blocked | no local copy possible: sent directly; if that also fails the pick is reverted and "Could not save" shown |
 | Logout | key survives: outside the `mm_` / `crew_` prefixes `clearCrewState` wipes |
 | Server | `users.availability_palette` (NOT NULL, default `default`), migration `t1v3x5z7b9d1` |
 | Read back | `GET /api/auth/me` and every `UserResponse` |

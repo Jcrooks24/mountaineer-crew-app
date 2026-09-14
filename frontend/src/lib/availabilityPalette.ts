@@ -197,6 +197,11 @@ export async function drainAvailabilityPalette(): Promise<User | null> {
       method: "PATCH",
       body: JSON.stringify({ availability_palette: mode }),
     });
+    // A 200 is not proof the account has it. A backend that predates the column
+    // (the frontend deploys on its own, often ahead of the backend) ignores the
+    // unknown field and still answers 200. Keep the local copy until the account
+    // echoes the choice back.
+    if (updated?.availability_palette !== mode) return null;
     // Only drop the local copy if nobody picked again while this was in flight;
     // otherwise the newer choice stays pending and goes on the next drain.
     if (readPending(me.id) === mode) {
@@ -213,7 +218,19 @@ export async function drainAvailabilityPalette(): Promise<User | null> {
 /** Choose a palette. It applies at once on this device, with or without signal,
  *  and returns the updated profile if it also reached the server. */
 export async function chooseAvailabilityPalette(userId: number, mode: AvailabilityPalette): Promise<User | null> {
-  try { localStorage.setItem(pendingKey(userId), mode); } catch { /* storage blocked: still sent below if online */ }
+  try {
+    localStorage.setItem(pendingKey(userId), mode);
+  } catch {
+    // Storage blocked or full: there is no local copy to drain, so send it
+    // straight away. The caller shows "saved on this phone" only on a null
+    // return, and a null here would be a lie, so a failure throws instead.
+    const updated = await apiFetch<User>("/api/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify({ availability_palette: mode }),
+    });
+    if (updated?.availability_palette !== mode) throw new Error("palette not saved");
+    return updated;
+  }
   return drainAvailabilityPalette();
 }
 

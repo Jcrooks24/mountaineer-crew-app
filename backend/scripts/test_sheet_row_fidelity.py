@@ -66,6 +66,27 @@ check("None leaves the cell empty", cells[4], {})
 check("a leading = is literal text, as RAW wrote it", cells[5],
       {"userEnteredValue": {"stringValue": "=SUM(1,2)"}})
 
+# Vet 2026-09-14: the old path failed on these (JSON encoding); str() would have
+# written a money total as text and a timestamp in a second format, silently.
+from datetime import datetime, timezone  # noqa: E402
+from decimal import Decimal  # noqa: E402
+for bad in (Decimal("45.00"), datetime(2026, 3, 28, tzinfo=timezone.utc), [1], {"a": 1}):
+    try:
+        se._cell(bad)
+        check(f"a {type(bad).__name__} fails loudly instead of becoming text", "no error", "TypeError")
+    except TypeError:
+        check(f"a {type(bad).__name__} fails loudly instead of becoming text", "TypeError", "TypeError")
+
+# And the Materials re-export now sends the live shapes: ISO text and a float.
+import json as _json  # noqa: E402
+captured = []
+sb_src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "app", "integrations", "sheet_backfill.py"), encoding="utf-8").read()
+check("the Materials re-export sends created_at as ISO text",
+      '"created_at": row.created_at.isoformat() if row.created_at else "",' in sb_src, True)
+check("the Materials re-export sends the total as a number",
+      '"total": float(row.total or 0),' in sb_src, True)
+
 
 class Grid:
     """A tab as a list of rows, driven through the googleapiclient surface the

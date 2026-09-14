@@ -378,16 +378,22 @@ def _re_materials(db: Session, ref: Any) -> None:
     ).first()
     if not row:
         return
+    # The same shapes the live POST sends (routers/materials.py: `created_at`
+    # is an ISO string, `total` a float). The ORM hands back a datetime and a
+    # Decimal, which the old values.update path could not serialize at all, so a
+    # re-driven submission never landed; the cell writer would instead store the
+    # timestamp in a different format and the total as TEXT, which a SUM skips.
+    # Vet 2026-09-14.
     run_export_in_background(export_materials_to_sheets, {
         "id": row.submission_id,
-        "created_at": row.created_at,
+        "created_at": row.created_at.isoformat() if row.created_at else "",
         "job_uuid": row.job_uuid,
         "jobName": row.job_name or "",
         "jobLabel": row.job_label or "",
         "jobDate": row.job_date or "",
         "notes": row.notes or "",
         "items": json.loads(row.items_json or "[]"),
-        "total": row.total,
+        "total": float(row.total or 0),
     })
     # Scheduled, not fired directly. A backfill re-drives many submissions, and
     # several of them routinely belong to the SAME job - firing one rebuild each

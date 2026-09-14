@@ -881,14 +881,23 @@ def _write_rows_top(
 def _cell(value: Any) -> Dict[str, Any]:
     """One CellData, written the way valueInputOption=RAW wrote it: strings stay
     literal text (a leading "=" is not a formula), numbers and booleans stay
-    typed, and an empty value leaves the cell empty."""
+    typed, and an empty value leaves the cell empty.
+
+    Anything else RAISES, exactly as the old path did: values.update JSON-encoded
+    the row, and a datetime, Decimal, list or dict failed there with a TypeError.
+    Falling through to str() instead would quietly write a differently formatted
+    timestamp, or a money total as text that a SUM skips (vet 2026-09-14: the
+    Materials re-export passed both). A failed export is visible and retried; a
+    wrong-looking row is neither."""
     if value is None or value == "":
         return {}
     if isinstance(value, bool):  # before int: bool is an int subclass
         return {"userEnteredValue": {"boolValue": value}}
     if isinstance(value, (int, float)):
         return {"userEnteredValue": {"numberValue": value}}
-    return {"userEnteredValue": {"stringValue": str(value)}}
+    if isinstance(value, str):
+        return {"userEnteredValue": {"stringValue": value}}
+    raise TypeError(f"sheet cell value of type {type(value).__name__} is not serializable: {value!r}")
 
 
 def _top_insert_requests(sheet_id: int, rows: List[List[Any]]) -> List[Dict[str, Any]]:

@@ -364,9 +364,19 @@ function AvailabilityPaletteCard() {
 
   async function pick(next: AvailabilityPalette) {
     if (!user || next === mode) return;
+    const previous = mode;
     setMode(next);
     setNote(null);
-    const updated = await chooseAvailabilityPalette(user.id, next);
+    let updated: User | null;
+    try {
+      updated = await chooseAvailabilityPalette(user.id, next);
+    } catch {
+      // Only reachable when the phone could not store the choice AND the send
+      // failed: nothing was saved anywhere, so say so and show what is in effect.
+      setMode(previous);
+      setNote("Could not save. Check your signal and try again.");
+      return;
+    }
     if (updated) {
       setUser(updated);
       setNote("Saved");
