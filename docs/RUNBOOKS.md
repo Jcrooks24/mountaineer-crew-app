@@ -238,6 +238,18 @@ Job; emails jacob@ on any FAIL - see CREDENTIALS) and can be run by hand any tim
   data behind `last_error`. This is the check that matters most before a DB is
   retired/migrated - the Sheet is the long-term copy.
 
+  **If they will not drain and there is NO `last_error`**, suspect a marker that
+  outlived its row: Materials, Bills, DVIRs and PriorOnDuty skip any record already
+  marked exported, and return 0 without an error. Re-send and Drain all clear
+  those markers for records the audit reads as absent ([ADR
+  0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md));
+  the 20-minute sweep deliberately does not. A bill or Materials submission with
+  zero line items owes the sheet no row and is not counted at all.
+
+  **Do not run `cleanup_sheet.py --step blankrows` before finding out where the
+  blanks came from.** A blank row between data rows was the fingerprint of a lost
+  row (the old two-call top insert). The 2026-08-05 sweep deleted that evidence.
+
   **If a backlog will not drain at all, read this before digging.** The
   auto-reconcile sweep used to ignore the very cooldown it set, so it queued a
   fresh 100-record batch (~400 reads against a 60/minute quota) every 20 minutes
@@ -1066,10 +1078,20 @@ it fires in exactly this case and names the section to fill.
      real fix is an idempotent write (delete-by-key before insert, as the
      replace-style exports do) or a two-phase marker, and either deserves its own
      change with an ADR rather than a reordering.
-   - **`Bills` is missing 33 records** (db=355, sheet=327), `DVIRs` 1, and
-     `PriorOnDuty` 1. Some of these may drain now that the grid bug is fixed;
-     re-read the next run before investigating, and use Admin -> backfill to
-     re-drive whatever is still missing.
+   - **`Bills` 33, `Materials` 5, `DVIRs` 1, `PriorOnDuty` 1 would not drain.
+     Diagnosed 2026-09-14, fixed on staging, recovers only after promotion.**
+     29 of the Bills were empty bills the audit should never have counted. The
+     other 11 records were marked exported with no row in the tab, so their
+     exports skipped them and Re-send did nothing, silently. The rows were lost
+     by the two-call top insert racing another writer. See
+     [ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md).
+     **After promoting: press Drain all once** and re-read the audit. It should
+     show 0 for all four. The 5 Materials rows are from 2026-03-28, before the top
+     insert existed, so their original cause is still unknown.
+   - **The Bills audit cannot see lost bill line items when the job's Materials
+     line survives.** It keys on `job_uuid`, and the aggregated Materials line on
+     the Bills tab carries the same `job_uuid`, so such a job reads as present.
+     Found 2026-09-14, not fixed. A correct check would compare per-item keys.
    - **`Availability` reports 20 missing while the sheet holds MORE rows than the
      database** (db=208, sheet=212), which means this is a key mismatch, not a
      lost record. The keys shown carry a trailing space in the name

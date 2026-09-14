@@ -73,6 +73,21 @@ def _iso(value: Any) -> str:
 # `ref` is whatever the re-export needs to rebuild the record (defaults to `id`).
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _has_items(items_json: Optional[str]) -> bool:
+    """True when a record has at least one line item, and so owes the sheet a row.
+
+    Bills and Materials write ONE ROW PER ITEM and nothing for the record itself,
+    so a record saved with no items has nothing to send and never will. Counting
+    it as missing is a permanent false positive: on 2026-09-14, 29 of the 33 Bills
+    prod reported missing were empty, and the count had sat at 33 for a month
+    reading as a stuck sync. Unparseable JSON counts as having items, so a corrupt
+    record stays visible instead of disappearing from the audit."""
+    try:
+        return bool(json.loads(items_json or "[]"))
+    except (TypeError, ValueError):
+        return True
+
+
 def _src_materials(db: Session) -> List[Dict[str, Any]]:
     from app.db.models.materials import MaterialsSubmission
     rows = db.query(MaterialsSubmission).order_by(MaterialsSubmission.created_at.desc()).all()
@@ -80,7 +95,7 @@ def _src_materials(db: Session) -> List[Dict[str, Any]]:
         "id": r.submission_id,
         "label": f"{r.job_name or r.job_label or r.job_uuid} - {r.job_date or ''}".strip(" -"),
         "created_at": _iso(r.created_at),
-    } for r in rows if r.submission_id]
+    } for r in rows if r.submission_id and _has_items(r.items_json)]
 
 
 def _src_job_reports(db: Session) -> List[Dict[str, Any]]:
@@ -100,7 +115,7 @@ def _src_bills(db: Session) -> List[Dict[str, Any]]:
         "id": r.job_uuid,
         "label": f"bill saved by {r.saved_by_name or 'unknown'}",
         "created_at": _iso(r.created_at),
-    } for r in rows if r.job_uuid]
+    } for r in rows if r.job_uuid and _has_items(r.items_json)]
 
 
 def _src_estimates(db: Session) -> List[Dict[str, Any]]:
@@ -943,7 +958,11 @@ def audit_sheet_backfill(db: Session) -> Dict[str, Any]:
 RECONCILE_MAX_PER_CYCLE = 15
 
 
-def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE) -> Dict[str, Any]:
+def reconcile_all_missing(
+    db: Session,
+    max_total: int = RECONCILE_MAX_PER_CYCLE,
+    clear_markers: bool = False,
+) -> Dict[str, Any]:
     """Self-heal every backfillable sync: audit Postgres against the Sheet once,
     then re-drive the records that never landed, up to a per-cycle budget. This is
     the durable "retry until it lands" the once-at-write-time export lacked - a
@@ -952,9 +971,12 @@ def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE)
     already self-heal via their own reconcilers.
 
     Reuses the manual backfill's audit + `_re_*` drivers, so there is one
-    re-export code path. Safe to run on a schedule: the audited exports are
+    re-export code path. Safe to run on a schedule: most audited exports are
     replace-style (keyed delete-before-write), so re-driving a record that is
-    actually present rewrites its row rather than duplicating it. A record whose
+    actually present rewrites its row rather than duplicating it. The other four
+    (MARKER_CLEARERS) skip on a marker instead, which is also safe to repeat but
+    means a record whose marker outlived its row never lands from here. Only a
+    human-initiated call passes `clear_markers=True`. A record whose
     export genuinely throws every time is re-driven each cycle but stays visible
     as a persistent failure in the Sheet-record health check (its `last_error`),
     so the churn is bounded and surfaced, not silent.
@@ -1000,7 +1022,9 @@ def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE)
         if not ids:
             continue
         try:
-            res = reexport_missing(db, row["key"], ids)
+            # This audit ran moments ago, so its row is what confirms absence.
+            res = reexport_missing(db, row["key"], ids,
+                                   clear_markers=clear_markers, audit_row=row)
         except Exception as e:  # noqa: BLE001 - one sync must not kill the sweep
             print(f"[reconcile-all] {row['key']} re-export failed: {e}")
             continue
@@ -1020,43 +1044,116 @@ def reconcile_all_missing(db: Session, max_total: int = RECONCILE_MAX_PER_CYCLE)
             "drain_seconds": estimate_drain_seconds(total_queued)}
 
 
-def reexport_missing(db: Session, key: str, ids: Optional[List[str]] = None) -> Dict[str, Any]:
+# ── Clearing a marker that lies ──────────────────────────────────────────────
+# Four exports skip any record whose "already exported" marker exists, and return
+# 0 without an error. So when a row the marker vouches for is NOT in the sheet,
+# re-driving that record is a silent no-op forever: the audit reports it missing,
+# Re-send "queues" it, nothing lands, and nothing anywhere says why.
+#
+# Found on prod 2026-09-14: 4 Bills, 5 Materials, 1 DVIR and 1 prior on-duty
+# statement, every one fully marked, every one absent from its tab, some stuck
+# since spring. The rows were written and later lost from the sheet (see the
+# tab lock around `_write_rows_top`), and the marker outlived them.
+#
+# The module docstring already says the sheet is the ground truth and the marker
+# can lie. This is the re-export honouring that. Deliberately MANUAL ONLY (owner's
+# call, 2026-09-14): a marker is cleared only when a human pressed Re-send or
+# Drain all, and only for records a FRESH audit just read as absent. The
+# unattended sweep never clears one, because the failure that makes an audit
+# misread a whole tab (a header overwritten, a key column renamed) would turn an
+# automatic clear into mass duplication with nobody watching - which is exactly
+# how Reimbursements reached 189 duplicate rows in July.
+
+def _clear_prefixed(db: Session, table: str, rid: str, kind: Optional[str] = None) -> int:
+    """Delete the markers for one record: its exact key, or any `<rid>:...` key.
+    Compared with substr rather than LIKE, so an id can never act as a pattern."""
+    prefix = f"{rid}:"
+    where = "(export_key = :rid OR substr(export_key, 1, :n) = :prefix)"
+    params: Dict[str, Any] = {"rid": rid, "n": len(prefix), "prefix": prefix}
+    if kind is not None:
+        where = f"kind = :kind AND {where}"
+        params["kind"] = kind
+    from sqlalchemy import text
+    res = db.execute(text(f"DELETE FROM {table} WHERE {where}"), params)
+    return int(res.rowcount or 0)
+
+
+# Only the exports that SKIP on a marker need one. Replace-style exports delete
+# by key and rewrite, so a stale marker cannot block them.
+MARKER_CLEARERS = {
+    "materials":   lambda db, rid: _clear_prefixed(db, "sheet_material_exports", rid),
+    "bills":       lambda db, rid: _clear_prefixed(db, "sheet_generic_exports", rid, "bill"),
+    "dvirs":       lambda db, rid: _clear_prefixed(db, "sheet_generic_exports", rid, "dvir"),
+    "prior_hours": lambda db, rid: _clear_prefixed(db, "sheet_generic_exports", rid, "prior_hours"),
+}
+
+
+def reexport_missing(
+    db: Session,
+    key: str,
+    ids: Optional[List[str]] = None,
+    clear_markers: bool = False,
+    audit_row: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Re-drive the real export for the given records of one sync. When `ids` is
     omitted the audit is re-run for that sync and everything currently missing is
-    queued, capped at MAX_REEXPORT_PER_REQUEST."""
+    queued, capped at MAX_REEXPORT_PER_REQUEST.
+
+    `clear_markers` is for the human-initiated paths only; see MARKER_CLEARERS.
+    A marker is cleared only for an id the audit row says is absent right now.
+    `audit_row` lets a caller that has just audited pass that row in, instead of
+    paying for a second audit; without it, clearing always re-audits, because ids
+    from the admin's page may be minutes old and a record that has landed since
+    must not have its marker cleared."""
     entry = _entry_for(key)
     if entry is None or entry.get("auto"):
         return {"ok": False, "error": f"'{key}' is not a backfillable sync", "queued": 0}
 
     records = {r["id"]: r for r in entry["source"](db)}
 
-    if ids is None:
+    if audit_row is None and (ids is None or clear_markers):
         audit = audit_sheet_backfill(db)
-        row = next((r for r in audit["results"] if r["key"] == key), None)
-        if row is None or row.get("error"):
-            return {"ok": False, "error": (row or {}).get("error") or "audit failed", "queued": 0}
-        ids = [m["id"] for m in row["missing"]]
+        audit_row = next((r for r in audit["results"] if r["key"] == key), None)
+        if audit_row is None or audit_row.get("error"):
+            return {"ok": False, "error": (audit_row or {}).get("error") or "audit failed", "queued": 0}
+    if ids is None:
+        ids = [m["id"] for m in audit_row["missing"]]
+
+    confirmed_absent = {m["id"] for m in (audit_row or {}).get("missing", [])}
+    clearer = MARKER_CLEARERS.get(key) if clear_markers else None
 
     capped = ids[:MAX_REEXPORT_PER_REQUEST]
-    queued, skipped = 0, 0
+    queued, skipped, cleared = 0, 0, 0
     for rid in capped:
         rec = records.get(rid)
         if rec is None:
             skipped += 1
             continue
         try:
+            if clearer is not None and rid in confirmed_absent:
+                # Committed before the export is queued: it runs on a pool thread
+                # with its own session and must not see the old marker.
+                cleared += clearer(db, rid)
+                db.commit()
             entry["reexport"](db, rec.get("ref", rid))
             queued += 1
         except Exception as e:  # noqa: BLE001 - keep going; report the rest
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
             print(f"[backfill] re-export failed for {key}/{rid}: {e}")
             skipped += 1
 
+    if cleared:
+        print(f"[backfill] {key}: cleared {cleared} stale marker(s) before re-export")
     note_backfill_queued(queued)
     return {
         "ok": True,
         "key": key,
         "queued": queued,
         "skipped": skipped,
+        "markers_cleared": cleared,
         "not_queued": max(0, len(ids) - len(capped)),
         "cap": MAX_REEXPORT_PER_REQUEST,
         "drain_seconds": estimate_drain_seconds(queued),

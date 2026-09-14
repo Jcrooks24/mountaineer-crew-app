@@ -803,10 +803,35 @@ def _write_rows_top(
     rows: List[List[Any]],
 ) -> None:
     """Insert `rows` immediately below the header row so the tab reads
-    newest-first. Two API calls (insertDimension + values.update) instead
-    of one for `.values().append()`, which is the cost of putting most
-    recent activity at the top - what admins actually want when they open
-    the sheet looking for what just happened.
+    newest-first - what admins actually want when they open the sheet looking
+    for what just happened.
+
+    ONE batchUpdate carrying the insert AND the values, under the tab lock.
+    This used to be two calls - insertDimension, then values.update into the
+    fixed range A2 - and the gap between them lost rows (prod, 2026-09-14):
+
+      * Two writers on one tab. A inserts a blank row 2; B inserts a blank row 2,
+        pushing A's blank to row 3; A writes row 2; B writes row 2 over A's
+        data. A's row is gone, its marker says exported, and a blank row is left
+        behind. The 2026-08-05 cleanup swept exactly those blanks ("partial-write
+        residue": 3 on Bills, 1 on DVIRs), which destroyed the evidence. This is
+        the only path by which a DVIRs or PriorOnDuty row could vanish - nothing
+        in the app deletes rows on those tabs - and one DVIR and one statement
+        had.
+      * A delete on the same tab. `_delete_rows_matching` reads indices, then
+        deletes. An insert landing between the two shifts every data row down,
+        so the delete removes the row ABOVE its target - someone else's line,
+        silently, with no stale-index 400 because the grid got longer, not
+        shorter. Bills takes a keyed delete on every materials rebuild.
+
+    A batchUpdate is applied atomically and in order, which closes the first
+    (across processes, too). The tab lock, shared with `_delete_rows_matching`
+    and the in-place cell writers, closes the second within this process.
+
+    One cost to know: `_api` retries a transient failure, and a request that
+    timed out AFTER Google applied it would insert its rows twice. Before, the
+    same retry inserted a second blank row. A duplicate is visible and the
+    integrity check's dedupe finds it; a lost row was neither.
 
     Late arrivals from the reconciler land at the top regardless of their
     actual chronology; the Apps Script cleanup re-sorts strictly when
@@ -818,62 +843,79 @@ def _write_rows_top(
     if not rows:
         return
 
-    sheet_numeric_id = _sheet_ids(svc, spreadsheet_id).get(tab)
-    if sheet_numeric_id is None:
-        # Not in cached metadata - confirm with a live read before falling back
-        # to a plain append (which would put the row at the bottom).
-        sheet_numeric_id = _sheet_ids(svc, spreadsheet_id, refresh=True).get(tab)
-    if sheet_numeric_id is None:
-        _api(lambda: svc.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute())
-        return
+    with _lock_for_tab(spreadsheet_id, tab):
+        sheet_numeric_id = _sheet_ids(svc, spreadsheet_id).get(tab)
+        if sheet_numeric_id is None:
+            # Not in cached metadata - confirm with a live read before falling
+            # back to a plain append (which would put the row at the bottom).
+            sheet_numeric_id = _sheet_ids(svc, spreadsheet_id, refresh=True).get(tab)
+        if sheet_numeric_id is None:
+            _api(lambda: svc.spreadsheets().values().append(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!A1",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": rows},
+            ).execute())
+            return
 
-    n = len(rows)
+        def _insert_and_write(sid: int) -> None:
+            body = {"requests": _top_insert_requests(sid, rows)}
+            _api(lambda: svc.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id, body=body,
+            ).execute())
 
-    def _insert(sid: int) -> None:
-        _api(lambda: svc.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body={"requests": [{
-                "insertDimension": {
-                    "range": {
-                        "sheetId": sid,
-                        "dimension": "ROWS",
-                        "startIndex": 1,        # row 2 (0-based) - directly below header
-                        "endIndex": 1 + n,
-                    },
-                    # Don't pull header formatting (bold, frozen, etc.) onto the
-                    # data rows we're about to write.
-                    "inheritFromBefore": False,
-                }
-            }]},
-        ).execute())
+        try:
+            _insert_and_write(sheet_numeric_id)
+        except Exception:
+            # A cached sheetId that no longer resolves (tab deleted/recreated in
+            # the sheet) fails with a hard 400 that retrying can't fix. Refresh
+            # once and try again before surfacing the failure. Safe to repeat:
+            # the batch is atomic, so a rejected one inserted nothing.
+            fresh = _sheet_ids(svc, spreadsheet_id, refresh=True).get(tab)
+            if fresh is None or fresh == sheet_numeric_id:
+                raise
+            _insert_and_write(fresh)
 
-    try:
-        _insert(sheet_numeric_id)
-    except Exception:
-        # A cached sheetId that no longer resolves (tab deleted/recreated in the
-        # sheet) fails with a hard 400 that retrying can't fix. Refresh once and
-        # try again before surfacing the failure.
-        fresh = _sheet_ids(svc, spreadsheet_id, refresh=True).get(tab)
-        if fresh is None or fresh == sheet_numeric_id:
-            raise
-        _insert(fresh)
 
-    width = max((len(r) for r in rows), default=0)
-    if width <= 0:
-        return
-    end_col = _col_letter(width - 1)
-    _api(lambda: svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id,
-        range=f"{tab}!A2:{end_col}{1 + n}",
-        valueInputOption="RAW",
-        body={"values": rows},
-    ).execute())
+def _cell(value: Any) -> Dict[str, Any]:
+    """One CellData, written the way valueInputOption=RAW wrote it: strings stay
+    literal text (a leading "=" is not a formula), numbers and booleans stay
+    typed, and an empty value leaves the cell empty."""
+    if value is None or value == "":
+        return {}
+    if isinstance(value, bool):  # before int: bool is an int subclass
+        return {"userEnteredValue": {"boolValue": value}}
+    if isinstance(value, (int, float)):
+        return {"userEnteredValue": {"numberValue": value}}
+    return {"userEnteredValue": {"stringValue": str(value)}}
+
+
+def _top_insert_requests(sheet_id: int, rows: List[List[Any]]) -> List[Dict[str, Any]]:
+    """The insert and the values as one ordered request list, so they land
+    together or not at all. See `_write_rows_top`."""
+    requests: List[Dict[str, Any]] = [{
+        "insertDimension": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": 1,        # row 2 (0-based) - directly below header
+                "endIndex": 1 + len(rows),
+            },
+            # Don't pull header formatting (bold, frozen, etc.) onto the data
+            # rows being written.
+            "inheritFromBefore": False,
+        }
+    }]
+    if any(rows):
+        requests.append({
+            "updateCells": {
+                "start": {"sheetId": sheet_id, "rowIndex": 1, "columnIndex": 0},
+                "rows": [{"values": [_cell(v) for v in r]} for r in rows],
+                "fields": "userEnteredValue",
+            }
+        })
+    return requests
 
 
 def export_events_to_sheets(db: Session, events: List[Dict[str, Any]]) -> int:
@@ -1080,34 +1122,38 @@ def update_event_note_in_sheets(db: Session, event_id: str, note: Optional[str])
         event_col_letter = _col_letter(headers_row.index("event_id"))
         note_col_letter = _col_letter(headers_row.index("note"))
 
-        col = _api(lambda: svc.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!{event_col_letter}:{event_col_letter}",
-        ).execute())
-        col_values = col.get("values") or []
+        # Tab lock across the find and the write: a top insert landing between
+        # them shifts the row down and the note lands on the event above it.
+        # See _write_rows_top.
+        with _lock_for_tab(spreadsheet_id, tab):
+            col = _api(lambda: svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{event_col_letter}:{event_col_letter}",
+            ).execute())
+            col_values = col.get("values") or []
 
-        target_row: Optional[int] = None
-        for i, row in enumerate(col_values):
-            if i == 0:
-                continue  # header
-            value = row[0] if row else ""
-            if value == event_id:
-                target_row = i + 1  # sheet rows are 1-based
-                break
+            target_row: Optional[int] = None
+            for i, row in enumerate(col_values):
+                if i == 0:
+                    continue  # header
+                value = row[0] if row else ""
+                if value == event_id:
+                    target_row = i + 1  # sheet rows are 1-based
+                    break
 
-        # Drop the large column response before the network update so the
-        # bytes are eligible for GC while we wait on Google.
-        del col, col_values
+            # Drop the large column response before the network update so the
+            # bytes are eligible for GC while we wait on Google.
+            del col, col_values
 
-        if target_row is None:
-            return 0
+            if target_row is None:
+                return 0
 
-        _api(lambda: svc.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!{note_col_letter}{target_row}",
-            valueInputOption="RAW",
-            body={"values": [[note or ""]]},
-        ).execute())
+            _api(lambda: svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{note_col_letter}{target_row}",
+                valueInputOption="RAW",
+                body={"values": [[note or ""]]},
+            ).execute())
         return 1
     finally:
         lock.release()
@@ -1179,32 +1225,36 @@ def update_event_timestamp_in_sheets(db: Session, event_id: str, timestamp: str)
         event_col_letter = _col_letter(headers_row.index("event_id"))
         ts_col_letter = _col_letter(headers_row.index("timestamp"))
 
-        col = _api(lambda: svc.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!{event_col_letter}:{event_col_letter}",
-        ).execute())
-        col_values = col.get("values") or []
+        # Tab lock across the find and the write, or a concurrent top insert
+        # moves the row and the edited time lands on a neighbouring event -
+        # a payroll-relevant value on someone else's row. See _write_rows_top.
+        with _lock_for_tab(spreadsheet_id, tab):
+            col = _api(lambda: svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{event_col_letter}:{event_col_letter}",
+            ).execute())
+            col_values = col.get("values") or []
 
-        target_row: Optional[int] = None
-        for i, row in enumerate(col_values):
-            if i == 0:
-                continue
-            value = row[0] if row else ""
-            if value == event_id:
-                target_row = i + 1
-                break
+            target_row: Optional[int] = None
+            for i, row in enumerate(col_values):
+                if i == 0:
+                    continue
+                value = row[0] if row else ""
+                if value == event_id:
+                    target_row = i + 1
+                    break
 
-        del col, col_values
+            del col, col_values
 
-        if target_row is None:
-            return 0
+            if target_row is None:
+                return 0
 
-        _api(lambda: svc.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range=f"{tab}!{ts_col_letter}{target_row}",
-            valueInputOption="RAW",
-            body={"values": [[timestamp]]},
-        ).execute())
+            _api(lambda: svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{tab}!{ts_col_letter}{target_row}",
+                valueInputOption="RAW",
+                body={"values": [[timestamp]]},
+            ).execute())
         return 1
     finally:
         lock.release()
@@ -3609,6 +3659,23 @@ def schedule_bol_export(bol_id: str) -> None:
 # sweep only fixes the historical rows.
 
 def _sweep_sheet_entry_status(
+    svc: Any,
+    spreadsheet_id: str,
+    tab: str,
+    job_uuid: str,
+    entered_by: str,
+    entered_on: str,
+) -> int:
+    """Under the tab lock: the sweep finds row numbers, then writes to them, and
+    a top insert in between would stamp the admin's initials onto the wrong
+    job's rows. See _write_rows_top."""
+    with _lock_for_tab(spreadsheet_id, tab):
+        return _sweep_sheet_entry_status_locked(
+            svc, spreadsheet_id, tab, job_uuid, entered_by, entered_on,
+        )
+
+
+def _sweep_sheet_entry_status_locked(
     svc: Any,
     spreadsheet_id: str,
     tab: str,

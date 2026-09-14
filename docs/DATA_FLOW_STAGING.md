@@ -88,6 +88,36 @@ The full step-by-step is the **Data-flow doc gate** in
 
 # Changed behavior in existing domains
 
+## Sheet plumbing - atomic top insert, and Re-send past a lying marker
+
+**Sheet export path, all tabs that use `_write_rows_top`.** Destinations, triggers,
+debounce, and per-field columns are unchanged from [DATA_FLOW.md](DATA_FLOW.md).
+What changed is how a row is placed, and what the manual backfill does. See
+[ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md).
+
+| | Before (`main`) | After (staging) |
+|---|---|---|
+| Top insert | `insertDimension`, then `values.update` into `A2`: two calls | one `batchUpdate`: `insertDimension` + `updateCells`, atomic |
+| Tab lock | keyed deletes only | keyed deletes, top inserts, event note/timestamp cell writes, entered-by sweep |
+| Cell typing | `valueInputOption=RAW` | `_cell`: text literal, numbers/booleans typed, empty stays empty (same result) |
+| Audit: Bills, Materials with zero line items | counted missing, forever | not counted (owe the sheet no row) |
+| `POST /api/admin/system-check/sheet-backfill` | re-drives; marker-gated exports skip | clears markers of ids a fresh audit reads absent, then re-drives |
+| `POST /api/admin/system-check/sheet-backfill-all` | same | same as above, reusing its own audit |
+| Auto-reconcile sweep (20 min) | re-drives; skips on marker | unchanged: never clears a marker |
+| Response field | - | `markers_cleared` on both endpoints' per-sync result |
+
+Marker tables cleared, per sync, only on the two manual endpoints:
+
+| Sync | Table | Keys cleared | |
+|---|---|---|---|
+| Materials | `sheet_material_exports` | `<submission_id>:*` | `[x]` |
+| Bills | `sheet_generic_exports`, kind `bill` | `<job_uuid>:*` (every saved version) | `[x]` |
+| DVIRs | `sheet_generic_exports`, kind `dvir` | `<dvir_id>:*` (driver and mechanic rows) | `[x]` |
+| Prior on-duty | `sheet_generic_exports`, kind `prior_hours` | `<statement_id>` | `[x]` |
+
+No new deviation. The lost-row race is a deviation `main` carries (RUNBOOKS Known
+defects), and this removes it.
+
 ## Photos - the local write moved from Save to pick
 
 **Class E**, unchanged. The destination, the drain, the trigger and the Sheet

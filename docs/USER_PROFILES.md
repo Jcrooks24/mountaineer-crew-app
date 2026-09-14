@@ -58,6 +58,9 @@ app.
   destroyed everywhere, and the office cannot tell it was ever attempted. The
   owner: "A lost job photo is not recoverable later, and damage photos are what a
   claim rests on." ([ADR 0048](decisions/0048-a-photo-is-durable-when-it-is-taken-not-when-it-is-saved.md))
+- **Sheet row fidelity** [confirmed 2026-09-14]: Movers and crew leads are
+  unaffected; every path changed runs on the server after their record was
+  accepted. ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
 - **Open questions:** Do movers share a phone on a job? What is the actual rate
   of "my phone died mid-job"? Which screens do new hires get wrong most? How long
   do unsaved photos sit in the tray before somebody saves or discards them?
@@ -128,6 +131,11 @@ App role: `admin`. Hailey (SOP section 1.1).
   that a crew member tried and lost one, so a claim can be short of evidence with
   no signal anywhere on this side that it happened.
   ([ADR 0048](decisions/0048-a-photo-is-durable-when-it-is-taken-not-when-it-is-saved.md))
+- **Reconciles against the Sheet** [confirmed 2026-09-14]: reconciles jobs
+  invoiced long ago against the Sheet, and expects the Sheet to match the server.
+  A row missing from the Sheet is a job that cannot be reconciled, with nothing on
+  the Sheet side to say so.
+  ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
 - **Open questions:** Which app numbers get trusted directly and which get
   re-checked against the Sheet? What is still done by hand that the app could
   produce? Should the office be able to see that a photo was attempted and lost?
@@ -161,6 +169,10 @@ this file.
 - **What breaks their day** [inferred]: a defect reaching crews, a promotion
   that needs manual setup nobody recorded, and being the only person who knows
   something.
+- **The Sheet as compliance copy** [confirmed 2026-09-14]: treats DVIRs and prior
+  on-duty statements in the Sheet as the DOT compliance copy, so a lost row is a
+  gap in an inspection or hours record.
+  ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
 
 ## 7. Mechanic
 

@@ -1596,7 +1596,9 @@ def run_sheet_backfill(
         reexport_missing,
     )
     _reject_if_draining(backfill_cooldown_remaining())
-    result = reexport_missing(db, body.key, body.ids)
+    # A human pressed Re-send, so a marker the sheet contradicts may be cleared
+    # (sheet_backfill.MARKER_CLEARERS). The unattended sweep never does this.
+    result = reexport_missing(db, body.key, body.ids, clear_markers=True)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Backfill failed")
     return result
@@ -1652,7 +1654,7 @@ def run_sheet_backfill_all(
     # the sweep's default was cut from 100 to 15, this call inherited the cut and
     # quietly made the button six times weaker; the default is not this endpoint's
     # to borrow.
-    result = reconcile_all_missing(db, max_total=MAX_REEXPORT_PER_REQUEST)
+    result = reconcile_all_missing(db, max_total=MAX_REEXPORT_PER_REQUEST, clear_markers=True)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Backfill failed")
     return result
