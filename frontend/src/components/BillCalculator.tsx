@@ -24,6 +24,7 @@ import { roundBillableQuarter, longestBillableShift, DEFAULT_LABOR_RATE, type Em
 import BetaTag from "./BetaTag";
 import NumberField from "./NumberField";
 import { billLineSubtotal } from "../lib/billTotal";
+import { syncSourceLines as syncLines } from "../lib/billLineSync";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -187,6 +188,16 @@ const DUMPSTER_FULL_COST = 700;
 
 function uuid(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** syncSourceLines (lib/billLineSync) bound to this file's id minting and types. */
+function syncSourceLines(
+  prev: Bill,
+  source: LineItem["source"],
+  build: (existing: LineItem | undefined) => Omit<LineItem, "id" | "verifiedSig">,
+  labels: string[],
+): Bill {
+  return syncLines(prev, source, build, labels, uuid);
 }
 
 // Both delegate to lib/billTotal so the editable bill, the admin Job Summary and
@@ -422,41 +433,28 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   useEffect(() => {
     if (!loaded || employeeHours === undefined) return;
     const list = employeeHours;
+    // One line per billable hours ROW, not per name: a crew member entered twice
+    // (a split shift, or a duplicate) gets two lines with two ids. See
+    // syncSourceLines for why that matters.
+    const rows = list.filter((e) => !e.non_billable && (e.name || "").trim().length > 0);
     setBill((prev) => {
-      const hoursLabel = (name: string) => `Labor - ${name}`;
-      const desired = list
-        .filter((e) => !e.non_billable && (e.name || "").trim().length > 0)
-        .map((e) => {
-          const label = hoursLabel(e.name.trim());
-          const existing = prev.items.find(
-            (it) => it.source === "hours" && it.label === label,
-          );
+      let i = 0;
+      return syncSourceLines(
+        prev,
+        "hours",
+        (existing) => {
+          const e = rows[i++];
           return {
-            id: existing?.id ?? uuid(),
-            label,
+            label: `Labor - ${e.name.trim()}`,
             qty: roundBillableQuarter(e.hours || 0),
             rate: existing ? existing.rate : DEFAULT_LABOR_RATE,
             unit: "hr" as Unit,
             discount: existing?.discount ?? 0,
             source: "hours" as const,
           };
-        });
-
-      const otherItems = prev.items.filter((it) => it.source !== "hours");
-      const nextItems = [...otherItems, ...desired];
-
-      // Bail out if nothing actually changed - keeps the debounced draft
-      // save quiet on renders that touched employeeHours reference only.
-      if (nextItems.length === prev.items.length) {
-        const same = nextItems.every((n, i) => {
-          const p = prev.items[i];
-          return p && p.id === n.id && p.label === n.label &&
-            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
-            p.discount === n.discount && p.source === n.source;
-        });
-        if (same) return prev;
-      }
-      return { ...prev, items: nextItems };
+        },
+        rows.map((e) => `Labor - ${e.name.trim()}`),
+      );
     });
   }, [loaded, employeeHours]);
 
@@ -466,33 +464,22 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
   // unless the crew hand-edits it (mirrors the labor-line preservation).
   useEffect(() => {
     if (!loaded || personalVehicleCount === undefined) return;
+    const labels = Array.from({ length: personalVehicleCount }, (_, k) => `Crew transport vehicle #${k + 1}`);
     setBill((prev) => {
-      const desired = [] as LineItem[];
-      for (let i = 1; i <= personalVehicleCount; i++) {
-        const label = `Crew transport vehicle #${i}`;
-        const existing = prev.items.find((it) => it.source === "personal_vehicle" && it.label === label);
-        desired.push({
-          id: existing?.id ?? uuid(),
-          label,
+      let i = 0;
+      return syncSourceLines(
+        prev,
+        "personal_vehicle",
+        (existing) => ({
+          label: labels[i++],
           qty: 1,
           rate: existing ? existing.rate : 100,
           unit: "day",
           discount: existing?.discount ?? 0,
           source: "personal_vehicle",
-        });
-      }
-      const otherItems = prev.items.filter((it) => it.source !== "personal_vehicle");
-      const nextItems = [...otherItems, ...desired];
-      if (nextItems.length === prev.items.length) {
-        const same = nextItems.every((n, i) => {
-          const p = prev.items[i];
-          return p && p.id === n.id && p.label === n.label &&
-            p.qty === n.qty && p.rate === n.rate && p.unit === n.unit &&
-            p.discount === n.discount && p.source === n.source;
-        });
-        if (same) return prev;
-      }
-      return { ...prev, items: nextItems };
+        }),
+        labels,
+      );
     });
   }, [loaded, personalVehicleCount]);
 
@@ -525,49 +512,42 @@ const BillCalculator = forwardRef<BillHandle, Props>(function BillCalculator(
     // bill-totals warning below says so out loud rather than leaving a silent
     // gap. Any line already on the bill is left exactly as it is.
     if (longest <= 0) return;
+    const labels = Array.from({ length: truckCount }, (_, k) => `Truck #${k + 1} (per hour)`);
     setBill((prev) => {
-      const desired = [] as LineItem[];
-      for (let i = 1; i <= truckCount; i++) {
-        const label = `Truck #${i} (per hour)`;
-        const existing = prev.items.find((it) => it.source === "truck" && it.label === label);
-        // AN EXISTING LINE IS NEVER RE-SIZED. Auto-fill happens once, when the
-        // line is created; after that the number is the office's, whether they
-        // typed it or accepted it.
-        //
-        // An earlier version of this re-sized any line that carried no explicit
-        // lock, to repair the bills sitting at a frozen 1h. That also silently
-        // overwrote every deliberate figure entered before the lock existed, on
-        // a $90/hr line, which is a worse failure than the one it fixed. Old
-        // bills are left alone at the user's direction (2026-09-09): they have
-        // been corrected by hand where it mattered. Going forward the 1h bug
-        // cannot recur anyway, because the line is no longer created before
-        // there are hours to size it from.
-        //
-        // "Use crew hours" on the row re-derives on demand, which is the
-        // deliberate version of what this used to do behind everyone's back.
-        const overridden = existing !== undefined && existing.qtyLocked !== false;
-        desired.push({
-          id: existing?.id ?? uuid(),
-          label,
-          qty: overridden ? existing!.qty : longest,
-          rate: existing ? existing.rate : 90,
-          unit: "hr",
-          discount: existing?.discount ?? 0,
-          source: "truck",
-          ...(overridden ? { qtyLocked: true } : {}),
-        });
-      }
-      const otherItems = prev.items.filter((it) => it.source !== "truck");
-      const nextItems = [...otherItems, ...desired];
-      if (nextItems.length === prev.items.length) {
-        const same = nextItems.every((n, i) => {
-          const p = prev.items[i];
-          return p && p.id === n.id && p.label === n.label && p.qty === n.qty
-            && p.rate === n.rate && p.discount === n.discount && p.source === n.source;
-        });
-        if (same) return prev;
-      }
-      return { ...prev, items: nextItems };
+      let i = 0;
+      return syncSourceLines(
+        prev,
+        "truck",
+        (existing) => {
+          const label = labels[i++];
+          // AN EXISTING LINE IS NEVER RE-SIZED. Auto-fill happens once, when the
+          // line is created; after that the number is the office's, whether they
+          // typed it or accepted it.
+          //
+          // An earlier version of this re-sized any line that carried no explicit
+          // lock, to repair the bills sitting at a frozen 1h. That also silently
+          // overwrote every deliberate figure entered before the lock existed, on
+          // a $90/hr line, which is a worse failure than the one it fixed. Old
+          // bills are left alone at the user's direction (2026-09-09): they have
+          // been corrected by hand where it mattered. Going forward the 1h bug
+          // cannot recur anyway, because the line is no longer created before
+          // there are hours to size it from.
+          //
+          // "Use crew hours" on the row re-derives on demand, which is the
+          // deliberate version of what this used to do behind everyone's back.
+          const overridden = existing !== undefined && existing.qtyLocked !== false;
+          return {
+            label,
+            qty: overridden ? existing!.qty : longest,
+            rate: existing ? existing.rate : 90,
+            unit: "hr",
+            discount: existing?.discount ?? 0,
+            source: "truck",
+            ...(overridden ? { qtyLocked: true } : {}),
+          };
+        },
+        labels,
+      );
     });
   }, [loaded, truckCount, employeeHours]);
 
