@@ -169,7 +169,12 @@ console.log("\nThe person who needs it can find it from the screen it changes:")
 const { readFileSync } = await import("node:fs");
 const availSrc = readFileSync(`${ROOT}/frontend/src/pages/Availability.tsx`, "utf8");
 const profileSrc = readFileSync(`${ROOT}/frontend/src/pages/Profile.tsx`, "utf8");
-check("the Availability screen links to the setting", availSrc.includes('nav("/profile#colors")'));
+check("the Availability screen links to the setting, saying where it came from",
+  availSrc.includes('nav("/profile#colors", { state: { from: "availability" } })'));
+// Sanity 2026-09-14 F3, confirmed by the owner on a phone: back from the setting
+// went to the Profile landing, so the new colors were never seen where they apply.
+check("back from the setting returns to Availability, not the Profile landing",
+  /if \(cameFromAvailability\) \{\s*nav\(-1\);\s*return;/.test(profileSrc));
 check("the deep link opens My Profile, not the Profile landing",
   profileSrc.includes('window.location.hash === "#colors" ? "profile" : "main"'));
 check("and the setting card is the scroll target", profileSrc.includes('ref={cardRef} id="colors"'));

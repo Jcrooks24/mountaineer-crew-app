@@ -248,7 +248,7 @@ taste is deleted).
 |---|---|---|---|---|
 | 1 | Auth and account | `Login`, `Signup`, `ForgotPassword`, `ResetPassword`, `Profile` | never | - |
 | 2 | Job capture and timeline | `App` job screen, `JobSetupPanel`, `JobChecklistCard`, `JobReport`, `JobClosedPanel` | never | - |
-| 3 | Time capture siblings | `OffJob`, `OfficeHours`, `Availability`, `LdWorkday` | 2026-09-14, Availability palette only; the rest never | [8](sanity/2026-09-14-availability-palette.md) |
+| 3 | Time capture siblings | `OffJob`, `OfficeHours`, `Availability`, `LdWorkday` | 2026-09-14, Availability palette only; the rest never | [0](sanity/2026-09-14-availability-palette.md) |
 | 4 | Long-distance mode | `LongDistance`, `RodsRecorder`, `RodsSignoff`, `LdDocuments` | never | - |
 | 5 | Vehicle and DVIR | `DVIR`, `MechanicSign`, `VehicleUnitSpecs`, `TruckDeckGauge` | never | - |
 | 6 | Money out | `Reimbursement`, materials capture, `ReimbursementsAdminTab` | never | - |

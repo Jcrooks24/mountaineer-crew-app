@@ -538,7 +538,7 @@ export default function Availability() {
                 person who needs it finds it from the screen it changes. */}
             <button
               type="button"
-              onClick={() => nav("/profile#colors")}
+              onClick={() => nav("/profile#colors", { state: { from: "availability" } })}
               className="small"
               style={{
                 display: "block", marginTop: 6, padding: "6px 0", minHeight: 32,

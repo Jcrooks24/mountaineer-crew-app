@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch, ApiError } from "../api/client";
 import { useAuth, type User } from "../auth/AuthContext";
 import { refreshDirectory } from "../lib/userDirectory";
@@ -56,6 +56,12 @@ async function resizeToDataUrl(file: File, maxPx = 256, quality = 0.8): Promise<
 export default function Profile() {
   const { user, logout, setUser } = useAuth();
   const nav = useNavigate();
+  const location = useLocation();
+  // Set by the "Colorblind-friendly colors" link on Availability. Back then
+  // returns there, where the new colors show, instead of to the Profile landing
+  // (sanity 2026-09-14, F3: the owner found back did not return to Availability).
+  const cameFromAvailability =
+    (location.state as { from?: string } | null)?.from === "availability";
 
   // "main" = landing (app update, tools, patch notes); "profile" = the
   // My Profile sub-page (photo + account config).
@@ -167,6 +173,10 @@ export default function Profile() {
         <AppHeader
           title="My Profile"
           onBack={() => {
+            if (cameFromAvailability) {
+              nav(-1);
+              return;
+            }
             setView("main");
             // Drop the #colors deep link, or a reload would reopen My Profile.
             if (window.location.hash === "#colors") {

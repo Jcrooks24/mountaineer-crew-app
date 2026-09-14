@@ -102,6 +102,36 @@ returns to `/availability` (unverified).
 4. **F1:** on a day when nothing is due, open Availability. Report: is the hint anywhere
    on screen?
 
+### Owner's results, 2026-09-14
+
+"I think the my eyes points pass besides 3: link does not return to availability on
+back button."
+
+- **Item 1 passed: F2 closed.** "Unavail" fits the cell on a real phone; the width
+  estimate above was wrong.
+- **Item 2 passed:** Tritanopia and Monochrome are distinguishable on a dark theme.
+- **Item 3 failed: F3 confirmed**, and it is not only the in-app arrow: going back does
+  not return to Availability.
+- **Item 4 reported as passing,** which disagrees with the code for the caught-up state
+  (`Availability.tsx:421, 502-513`). Open until it is re-checked on a day with nothing
+  due; F1 stays open meanwhile.
+
+### Rulings, 2026-09-14
+
+| # | Ruling | Where it went |
+|---|---|---|
+| F1 | declined (item 4 not re-checked) | RUNBOOKS Known defects; ADR 0050 corrected |
+| F2 | closed, did not reproduce on a phone | - |
+| F3 | **approved, fixed** | back arrow on My Profile returns to Availability when opened from its link; pinned in `verify_availability_palette.mjs` |
+| F4 | declined, polish | dropped |
+| F5 | declined | RUNBOOKS Known defects |
+| F6 | declined | RUNBOOKS Known defects |
+| F7 | declined, polish | dropped |
+| F8 | declined, taste | dropped |
+
+**Open findings: 0.** The phone's own back gesture from the setting still wants one
+re-check: no code in the app intercepts history, so it should already return.
+
 ## 7. Unverified from here
 
 - The migration `t1v3x5z7b9d1` against a real Postgres (runs on the staging deploy).

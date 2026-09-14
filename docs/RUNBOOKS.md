@@ -742,6 +742,25 @@ about one request.
 
 ## Known defects
 
+### Colorblind palette: three defects the owner declined to fix (2026-09-14)
+
+Found by the sanity pass on the availability palette
+([report](sanity/2026-09-14-availability-palette.md),
+[ADR 0050](decisions/0050-colorblind-availability-palettes-live-on-the-account-and-recolor-only-your-own-view.md)).
+Declined, so they are recorded rather than dropped:
+
+- **F1. The "Colorblind-friendly colors" link only shows while a window is due.** It
+  renders inside the Submit picker (`Availability.tsx`, `showPicker`), so the
+  caught-up view and History have no link. Anyone who needs the setting on a day
+  nothing is due has to know it lives on Profile, My Profile.
+- **F5. A palette picked offline reaches the account only once the job screen
+  opens.** The drain is wired in `App.tsx`, and `/availability` and `/profile` are
+  separate routes. The choice applies on the phone meanwhile; it is lost only if
+  the phone is replaced before the job screen is opened. The Profile note says it
+  syncs "when you are back online", which is slightly ahead of the truth.
+- **F6. Two phones:** an offline choice on one phone overwrites a newer choice made
+  on another when the first one next drains. There is no age check.
+
 ### A PARTLY answered close-out does not fully survive a remount
 
 **Open as of 2026-09-03, narrowed the same day.** The three cause questions
