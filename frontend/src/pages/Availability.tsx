@@ -534,6 +534,23 @@ export default function Availability() {
               Once submitted, if you're scheduled on an available day you're
               expected to work it (exception: scheduled with 3 or fewer days' notice).
             </div>
+            {/* The palette setting lives on My Profile (ADR 0050); this is how the
+                person who needs it finds it from the screen it changes. */}
+            <button
+              type="button"
+              onClick={() => nav("/profile#colors")}
+              className="small"
+              style={{
+                display: "block", marginTop: 6, padding: "6px 0", minHeight: 32,
+                background: "none", border: "none", cursor: "pointer", textAlign: "left",
+                color: "var(--muted)",
+              }}
+            >
+              Hard to tell the colors apart?{" "}
+              <span style={{ color: "var(--brand)", fontWeight: 700, textDecoration: "underline" }}>
+                Colorblind-friendly colors
+              </span>
+            </button>
             {unlockForActiveWindow ? (
               <div
                 className="small"

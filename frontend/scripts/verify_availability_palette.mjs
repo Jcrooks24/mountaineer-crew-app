@@ -165,6 +165,15 @@ check("draining again sends nothing", sent.length === 1);
 globalThis.__cachedUser = { id: 7, availability_palette: "monochrome" };
 check("a later change from another phone wins on this one", P.useStatusPalette(true).mode === "monochrome");
 
+console.log("\nThe person who needs it can find it from the screen it changes:");
+const { readFileSync } = await import("node:fs");
+const availSrc = readFileSync(`${ROOT}/frontend/src/pages/Availability.tsx`, "utf8");
+const profileSrc = readFileSync(`${ROOT}/frontend/src/pages/Profile.tsx`, "utf8");
+check("the Availability screen links to the setting", availSrc.includes('nav("/profile#colors")'));
+check("the deep link opens My Profile, not the Profile landing",
+  profileSrc.includes('window.location.hash === "#colors" ? "profile" : "main"'));
+check("and the setting card is the scroll target", profileSrc.includes('ref={cardRef} id="colors"'));
+
 console.log();
 if (fails.length) { console.log(`FAILURES: ${fails.join(", ")}`); process.exit(1); }
 console.log("all checks passed");

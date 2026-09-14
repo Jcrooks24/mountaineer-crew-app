@@ -87,5 +87,10 @@ How it is built:
   the client, and `UserResponse` still serializes it.
 - The monochrome available fill is near-white, so its status dot in the Notes list
   is faint on a light theme. The word beside the dot carries the meaning.
-- The setting is on My Profile. Nothing on the Availability screen points to it;
-  whether the employee can find it unaided is a question for the sanity pass.
+- The setting is on My Profile, and the Availability Submit tab carries an
+  always-visible link to it ("Hard to tell the colors apart? Colorblind-friendly
+  colors", opening `/profile#colors`). Added 2026-09-14 after the owner reviewed the
+  palettes: "make sure to add a hint to the crew facing scheduling availability tool
+  so they can find the pallete settings." The owner chose a tappable link, shown
+  always rather than only while on standard colors, so anyone who switches back can
+  still find it.

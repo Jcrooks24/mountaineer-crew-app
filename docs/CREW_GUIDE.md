@@ -409,7 +409,7 @@ Available: you can be scheduled this day.
 Unavailable: you cannot be scheduled this day.
 Conditional: you can be scheduled with some restriction; use the day's note to explain (e.g. "available after 1pm").
 Tap a day on the calendar grid to cycle it: available → unavailable → conditional → back to available. Every day in the window must be set before you can submit.
-Hard to tell the colors apart? Profile → My Profile → Colorblind-friendly colors. Pick the option that suits your eyes (red-green, deuteranopia, protanopia, tritanopia, or monochrome). Your Availability screens switch to those colors and every day also shows a word: Avail, Unavail, or Cond. It is saved to your account, so it follows you to a new phone, and it works without signal. The office still sees the standard colors.
+Hard to tell the colors apart? Tap "Colorblind-friendly colors" under the instructions on the Submit tab (or go to Profile → My Profile → Colorblind-friendly colors). Pick the option that suits your eyes (red-green, deuteranopia, protanopia, tritanopia, or monochrome). Your Availability screens switch to those colors and every day also shows a word: Avail, Unavail, or Cond. It is saved to your account, so it follows you to a new phone, and it works without signal. The office still sees the standard colors.
 ONCE SUBMITTED, YOU'RE COMMITTED: If you're scheduled on a day you marked available, you're expected to work it, unless you're scheduled with 3 or fewer days' notice. Double check your selections before tapping Submit.
 ### 11.2 Submitting Your Availability
 Open Scheduling Availability from the Profile tab. If you have availability due, the Submit tab opens directly to the next 14-day window that needs filling in.

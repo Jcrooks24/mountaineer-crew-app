@@ -59,7 +59,11 @@ export default function Profile() {
 
   // "main" = landing (app update, tools, patch notes); "profile" = the
   // My Profile sub-page (photo + account config).
-  const [view, setView] = useState<"main" | "profile">("main");
+  // /profile#colors (the hint on the Availability screen) opens straight into
+  // My Profile, where the colorblind palette setting lives.
+  const [view, setView] = useState<"main" | "profile">(
+    () => (window.location.hash === "#colors" ? "profile" : "main"),
+  );
 
   const [photo, setPhoto] = useState<string | null>(user?.profile_photo ?? null);
   const [name, setName] = useState(user?.name ?? "");
@@ -160,7 +164,16 @@ export default function Profile() {
   if (view === "profile") {
     return (
       <div className="container" style={{ maxWidth: 480 }}>
-        <AppHeader title="My Profile" onBack={() => setView("main")} />
+        <AppHeader
+          title="My Profile"
+          onBack={() => {
+            setView("main");
+            // Drop the #colors deep link, or a reload would reopen My Profile.
+            if (window.location.hash === "#colors") {
+              window.history.replaceState(null, "", window.location.pathname + window.location.search);
+            }
+          }}
+        />
 
         {/* Avatar */}
         <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
@@ -328,6 +341,16 @@ function AvailabilityPaletteCard() {
     () => effectivePalette(user?.id, user?.availability_palette),
   );
   const [note, setNote] = useState<string | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Arrived from the Availability hint: bring the setting into view.
+  useEffect(() => {
+    if (window.location.hash !== "#colors") return;
+    const t = window.setTimeout(() => {
+      cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, []);
 
   async function pick(next: AvailabilityPalette) {
     if (!user || next === mode) return;
@@ -343,7 +366,7 @@ function AvailabilityPaletteCard() {
   }
 
   return (
-    <div className="card">
+    <div className="card" ref={cardRef} id="colors">
       <div className="row" style={{ alignItems: "center", gap: 8 }}>
         <div className="microLabel" style={{ marginBottom: 0 }}>Colorblind-friendly colors</div>
         <BetaTag feature="colorblindPalette" style={{ marginTop: 0 }} />
