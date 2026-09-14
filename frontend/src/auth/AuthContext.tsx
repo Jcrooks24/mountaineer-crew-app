@@ -15,6 +15,9 @@ export type User = {
   is_skill_rater?: boolean;
   profile_photo?: string | null;
   scheduling_notes?: string;
+  // Colorblind-friendly palette for this person's own Availability tools
+  // (ADR 0050). Optional: absent on a profile cached by an older build.
+  availability_palette?: string;
 };
 
 export type DirectoryEntry = {
@@ -64,7 +67,7 @@ const AuthCtx = createContext<AuthState | null>(null);
 // network errors.
 const USER_CACHE_KEY = "mm_user_cache_v1";
 
-function loadCachedUser(): User | null {
+export function loadCachedUser(): User | null {
   try {
     const raw = localStorage.getItem(USER_CACHE_KEY);
     if (!raw) return null;

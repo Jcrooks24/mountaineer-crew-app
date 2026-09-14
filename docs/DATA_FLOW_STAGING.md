@@ -86,6 +86,36 @@ The full step-by-step is the **Data-flow doc gate** in
 
 ---
 
+# New data paths
+
+## Availability palette (colorblind colors)
+
+**Class A-shaped: local first, drained.** A crew member's colorblind palette for their
+own Availability screens. See
+[ADR 0050](decisions/0050-colorblind-availability-palettes-live-on-the-account-and-recolor-only-your-own-view.md).
+
+| | |
+|---|---|
+| Trigger | tapping a palette on Profile, My Profile, Colorblind-friendly colors |
+| Local write | `availability_palette_pending_v1:<user id>` (localStorage), at the tap, before any network |
+| Applies | immediately, from the local key, on that user's own Availability screens |
+| Transfer | `PATCH /api/auth/me` `{availability_palette}` from `chooseAvailabilityPalette`, then `drainAvailabilityPalette` on App.tsx boot and `online` |
+| Drain guard | sends only while the signed-in user (`mm_user_cache_v1`) is the key's user id |
+| On success | local key removed (unless re-picked in flight), profile passed to `setUser` |
+| Logout | key survives: outside the `mm_` / `crew_` prefixes `clearCrewState` wipes |
+| Server | `users.availability_palette` (NOT NULL, default `default`), migration `t1v3x5z7b9d1` |
+| Read back | `GET /api/auth/me` and every `UserResponse` |
+| Sheet | none |
+
+| Field | | Note |
+|---|---|---|
+| `availability_palette` | `[x]` | one of `default`, `red_green`, `deuteranopia`, `protanopia`, `tritanopia`, `monochrome`; anything else is a 422 on write |
+| Sheet column | `[-]` | a display preference for one person's own screen, not job, time or pay data. No worksheet carries user settings, and admin views deliberately ignore it |
+
+No new deviation.
+
+---
+
 # Changed behavior in existing domains
 
 ## Sheet plumbing - atomic top insert, and Re-send past a lying marker

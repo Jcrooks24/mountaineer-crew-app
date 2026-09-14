@@ -55,6 +55,9 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   // each calendar day, so on day 2+ of a trip the crew has to change it on a
   // tile that never used to be interactive. The tag is how they find out.
   "dayPlanInlineEdit",
+  // Colorblind-friendly colors for a person's own Availability screens
+  // (2026-09-14, ADR 0050). The tag sits on the Profile setting.
+  "colorblindPalette",
 ]);
 
 export function isBeta(feature: string): boolean {

@@ -23,6 +23,7 @@ import { drainChecklistChecks } from "./lib/jobChecklistStore";
 import { syncQueue as drainBolQueue } from "./lib/bolStore";
 import { syncQueue as drainRodsQueue } from "./lib/rodsStore";
 import { syncQueue as drainLdDayQueue } from "./lib/ldDayStore";
+import { drainAvailabilityPalette } from "./lib/availabilityPalette";
 import JobChecklistCard from "./components/JobChecklistCard";
 import JobClosedPanel from "./components/JobClosedPanel";
 import DqReminderBanner from "./components/DqReminderBanner";
@@ -384,7 +385,7 @@ const HubIcons = {
 };
 
 export default function App() {
-  const { user } = useAuth();
+  const { user, setUser } = useAuth();
   const { settings: themeSettings } = useTheme();
   const { src: logo, variant: logoVariant } = useResolvedLogo();
   const ht = themeSettings.helpTexts;
@@ -2022,6 +2023,11 @@ export default function App() {
    * syncQueue returns immediately when offline, already running, or empty, so
    * the steady-state cost is three localStorage reads.
    */
+  async function drainPalette() {
+    const updated = await drainAvailabilityPalette();
+    if (updated) setUser(updated);
+  }
+
   async function drainLongDistance() {
     if (!navigator.onLine) return;
     // Independently, so one failing queue cannot hold the other two. Each
@@ -2129,7 +2135,7 @@ export default function App() {
     // activity entries and photo attributions.
     ensureDirectory().catch(() => { /* offline - fall back to initials */ });
 
-    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainFeatureRequests(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); void drainChecklistChecks(); void drainReimbursements(); void drainLongDistance(); };
+    const onOnline = () => { setIsOnline(true); syncQueueNow(); drainNotePatchQueue(); syncMaterialsInBackground(jobUuid); drainIncidents(); drainOffJob(); void drainBugReports(); void drainFeatureRequests(); void drainPendingPhotos(); void drainJobInventory(); void drainJobSetups(); void drainChecklistChecks(); void drainReimbursements(); void drainLongDistance(); void drainPalette(); };
     const onOffline = () => setIsOnline(false);
     // Flush any incidents + off-job hours + un-uploaded photos queued while
     // offline on this mount too.
@@ -2154,6 +2160,9 @@ export default function App() {
     // drainLongDistance: these were the only queues with no drain here, and they
     // hold the least replaceable records in the app.
     void drainLongDistance();
+    // A colorblind palette picked with no signal (ADR 0050). Applied locally at
+    // once; this is what gets it onto the account.
+    void drainPalette();
     // Record which build this device is on, so patch notes can read as a real
     // version history instead of a list of announcements. Fire and forget.
     void reportBuildSeen();

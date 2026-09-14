@@ -24,6 +24,7 @@ import {
   type AvailabilityStatus,
   type AvailabilityUnlock,
 } from "../lib/availabilityStore";
+import { useStatusPalette, type StatusStyle } from "../lib/availabilityPalette";
 
 function formatHuman(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
@@ -57,11 +58,9 @@ function nextStatus(current: AvailabilityStatus | null): AvailabilityStatus {
   return "available";
 }
 
-const STATUS_COLORS: Record<AvailabilityStatus, { bg: string; fg: string; label: string }> = {
-  available:   { bg: "color-mix(in srgb, var(--ok) 18%, transparent)",     fg: "var(--ok)",     label: "Available" },
-  unavailable: { bg: "color-mix(in srgb, var(--danger) 18%, transparent)", fg: "var(--danger)", label: "Unavailable" },
-  conditional: { bg: "var(--warn-bg)",                                     fg: "var(--warn)",   label: "Conditional" },
-};
+// Status colors come from useStatusPalette (lib/availabilityPalette): the
+// conventional palette, or the signed-in person's colorblind palette on their
+// own view. ADR 0050.
 
 type Tab = "submit" | "history";
 
@@ -85,6 +84,9 @@ export default function Availability() {
     return Number.isFinite(id) ? id : null;
   });
   const isViewingSelf = viewingUserId === null;
+  // Colorblind palette on your own view only; an admin opening someone else's
+  // availability always sees the conventional colors (ADR 0050).
+  const { colors: statusColors } = useStatusPalette(isViewingSelf);
 
   const [cache, setCache] = useState<AvailabilityState>(() => loadCache());
   // Discard any draft whose window_start has already passed - otherwise a
@@ -502,6 +504,7 @@ export default function Availability() {
           state={cache}
           activeWindowStart={activeWindowStart}
           editable={isAdmin}
+          statusColors={statusColors}
           onAdminCycle={isAdmin
             ? (d) => adminCycleHistoryDay(viewingUserId ?? user!.id, d)
             : undefined}
@@ -579,7 +582,7 @@ export default function Availability() {
             <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
               {[0, 1, 2, 3, 4, 5, 6].map((dow) => {
                 const st = quickFillStatus[dow] ?? null;
-                const colors = st ? STATUS_COLORS[st] : null;
+                const colors = st ? statusColors[st] : null;
                 const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
                 return (
                   <button
@@ -589,13 +592,16 @@ export default function Availability() {
                     style={{
                       flex: "1 1 60px",
                       padding: "10px 8px", borderRadius: 8,
-                      border: `1px solid ${colors ? colors.fg : "var(--border)"}`,
+                      border: `1px solid ${colors ? colors.border : "var(--border)"}`,
                       background: colors ? colors.bg : "transparent",
                       color: colors ? colors.fg : "var(--text)",
                       fontWeight: 700, fontSize: 13,
                     }}
                   >
                     {labels[dow]}
+                    {colors?.cellLabel && (
+                      <div style={{ fontSize: 9, fontWeight: 800, lineHeight: 1.1 }}>{colors.cellLabel}</div>
+                    )}
                   </button>
                 );
               })}
@@ -616,7 +622,7 @@ export default function Availability() {
               {windowDays.map((day) => {
                 const current = merged.get(day);
                 const st = current?.status ?? null;
-                const colors = st ? STATUS_COLORS[st] : null;
+                const colors = st ? statusColors[st] : null;
                 const isTodayDay = day === today;
                 const locked = isEffectivelyLocked(day);
                 const noteText = (current?.note || "").trim();
@@ -636,7 +642,7 @@ export default function Availability() {
                       minHeight: 76,
                       padding: 6,
                       borderRadius: 8,
-                      border: `1px solid ${colors ? colors.fg : "var(--border)"}`,
+                      border: `1px solid ${colors ? colors.border : "var(--border)"}`,
                       background: colors ? colors.bg : "transparent",
                       color: colors ? colors.fg : "var(--text)",
                       position: "relative",
@@ -650,6 +656,9 @@ export default function Availability() {
                     <div className="mono" style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
                       {dayOfMonth(day)}
                     </div>
+                    {colors?.cellLabel && (
+                      <div style={{ fontSize: 9, fontWeight: 800, lineHeight: 1.1 }}>{colors.cellLabel}</div>
+                    )}
                     {isTodayDay && (
                       <div style={{ fontSize: 9, fontWeight: 700, opacity: 0.7 }}>today</div>
                     )}
@@ -691,7 +700,7 @@ export default function Availability() {
                 const expanded = expandedNote === day;
                 const locked = isEffectivelyLocked(day);
                 const st = current?.status ?? null;
-                const colors = st ? STATUS_COLORS[st] : null;
+                const colors = st ? statusColors[st] : null;
 
                 if (!hasNote && !expanded) {
                   return (
@@ -714,7 +723,7 @@ export default function Availability() {
                         {colors && (
                           <span
                             className="statusDot"
-                            style={{ ["--dot" as any]: colors.fg, marginLeft: 8, verticalAlign: "middle" }}
+                            style={{ ["--dot" as any]: colors.swatch, marginLeft: 8, verticalAlign: "middle" }}
                           >
                             {colors.label}
                           </span>
@@ -743,7 +752,7 @@ export default function Availability() {
                         )}
                       </span>
                       {colors && (
-                        <span className="statusDot" style={{ ["--dot" as any]: colors.fg }}>
+                        <span className="statusDot" style={{ ["--dot" as any]: colors.swatch }}>
                           {colors.label}
                         </span>
                       )}
@@ -857,6 +866,7 @@ export default function Availability() {
       {showFutureModal && (
         <FuturePeriodModal
           today={today}
+          statusColors={statusColors}
           onCancel={() => setShowFutureModal(false)}
           onSubmitted={(newState, summary) => {
             setCache(newState);
@@ -966,6 +976,7 @@ function HistoryView({
   activeWindowStart,
   editable,
   onAdminCycle,
+  statusColors,
 }: {
   state: AvailabilityState;
   activeWindowStart: string;
@@ -974,6 +985,8 @@ function HistoryView({
   /** Click handler that advances the cell's status one step. Required when
    *  editable is true; called with the original day record. */
   onAdminCycle?: (day: AvailabilityDay) => void;
+  /** From useStatusPalette in the parent, which already knows whose data this is. */
+  statusColors: Record<AvailabilityStatus, StatusStyle>;
 }) {
   // Group submitted days by window_start. Each group becomes a 14-cell grid
   // that mirrors the layout the user saw at submit time. Read-only by
@@ -1026,7 +1039,7 @@ function HistoryView({
               {windowDays.map((day) => {
                 const d = byDay.get(day);
                 const st = d?.status ?? null;
-                const colors = st ? STATUS_COLORS[st] : null;
+                const colors = st ? statusColors[st] : null;
                 const noteText = (d?.note || "").trim();
                 const hasNote = noteText.length > 0;
                 const cellContent = (
@@ -1037,6 +1050,9 @@ function HistoryView({
                     <div className="mono" style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
                       {dayOfMonth(day)}
                     </div>
+                    {colors?.cellLabel && (
+                      <div style={{ fontSize: 9, fontWeight: 800, lineHeight: 1.1 }}>{colors.cellLabel}</div>
+                    )}
                     {hasNote && (
                       <div
                         style={{
@@ -1059,7 +1075,7 @@ function HistoryView({
                   alignItems: "center", justifyContent: "flex-start",
                   gap: 2, minHeight: 76, padding: 6,
                   borderRadius: 8,
-                  border: `1px solid ${colors ? colors.fg : "var(--border)"}`,
+                  border: `1px solid ${colors ? colors.border : "var(--border)"}`,
                   background: colors ? colors.bg : "transparent",
                   color: colors ? colors.fg : "var(--muted)",
                   position: "relative",
@@ -1184,10 +1200,12 @@ function FuturePeriodModal({
   today,
   onCancel,
   onSubmitted,
+  statusColors,
 }: {
   today: string;
   onCancel: () => void;
   onSubmitted: (newState: AvailabilityState, summary: string) => void;
+  statusColors: Record<AvailabilityStatus, StatusStyle>;
 }) {
   const { settings: themeSettings } = useTheme();
   const ht = themeSettings.helpTexts;
@@ -1350,10 +1368,7 @@ function FuturePeriodModal({
           <div className="seg" style={{ marginTop: 6 }}>
             {(["available", "unavailable", "conditional"] as const).map((s) => {
               const active = status === s;
-              const seg =
-                s === "unavailable" ? "var(--danger)" :
-                s === "conditional" ? "var(--warn)" :
-                "var(--ok)";
+              const seg = statusColors[s].text;
               return (
                 <button
                   key={s}
@@ -1363,7 +1378,7 @@ function FuturePeriodModal({
                   style={{ ["--seg" as any]: seg }}
                   onClick={() => setStatus(s)}
                 >
-                  {STATUS_COLORS[s].label}
+                  {statusColors[s].label}
                 </button>
               );
             })}
@@ -1391,7 +1406,7 @@ function FuturePeriodModal({
           >
             Marking <strong className="mono" style={{ color: "var(--text)" }}>{totalDays}</strong>
             {" "}day{totalDays === 1 ? "" : "s"} as
-            {" "}<strong style={{ color: STATUS_COLORS[status].fg }}>{STATUS_COLORS[status].label.toLowerCase()}</strong>.
+            {" "}<strong style={{ color: statusColors[status].text }}>{statusColors[status].label.toLowerCase()}</strong>.
             {" "}You'll see these in your History tab and the office will see them in your calendar today.
           </div>
         )}

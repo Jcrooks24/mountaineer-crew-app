@@ -14,6 +14,14 @@ import {
 import { BetaTag } from "../components/BetaTag";
 import AppHeader from "../components/AppHeader";
 import { buildStorageReport, formatBytes, type StorageReport } from "../lib/storageReport";
+import {
+  AVAILABILITY_PALETTES,
+  PALETTE_LABELS,
+  chooseAvailabilityPalette,
+  effectivePalette,
+  statusPalette,
+  type AvailabilityPalette,
+} from "../lib/availabilityPalette";
 
 const LEGACY_PHOTO_KEY = "crew_profile_photo_v1";
 
@@ -225,6 +233,8 @@ export default function Profile() {
             </form>
           </div>
         </div>
+
+        <AvailabilityPaletteCard />
       </div>
     );
   }
@@ -308,6 +318,83 @@ export default function Profile() {
   );
 }
 
+
+// Colorblind-friendly colors for this person's own Availability tools. ADR 0050.
+// Saved to the account so it follows them to a new phone; applied on this phone
+// at once, even with no signal, and sent when the app is next online.
+function AvailabilityPaletteCard() {
+  const { user, setUser } = useAuth();
+  const [mode, setMode] = useState<AvailabilityPalette>(
+    () => effectivePalette(user?.id, user?.availability_palette),
+  );
+  const [note, setNote] = useState<string | null>(null);
+
+  async function pick(next: AvailabilityPalette) {
+    if (!user || next === mode) return;
+    setMode(next);
+    setNote(null);
+    const updated = await chooseAvailabilityPalette(user.id, next);
+    if (updated) {
+      setUser(updated);
+      setNote("Saved");
+    } else {
+      setNote("Saved on this phone. It will reach your account when you are back online.");
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="row" style={{ alignItems: "center", gap: 8 }}>
+        <div className="microLabel" style={{ marginBottom: 0 }}>Colorblind-friendly colors</div>
+        <BetaTag feature="colorblindPalette" style={{ marginTop: 0 }} />
+      </div>
+      <div className="small" style={{ color: "var(--muted)", marginTop: 4, marginBottom: 10 }}>
+        Changes the colors on your Availability screens, and adds a word to each day.
+        The office still sees the standard colors.
+      </div>
+      <div className="col" style={{ gap: 6 }}>
+        {AVAILABILITY_PALETTES.map((p) => {
+          const on = p === mode;
+          const colors = statusPalette(p);
+          return (
+            <button
+              key={p}
+              type="button"
+              aria-pressed={on}
+              onClick={() => void pick(p)}
+              style={{
+                display: "flex", alignItems: "center", gap: 10, width: "100%",
+                padding: "10px 12px", borderRadius: 8, textAlign: "left", cursor: "pointer",
+                border: `${on ? 2 : 1}px solid ${on ? "var(--brand)" : "var(--border)"}`,
+                background: on ? "color-mix(in srgb, var(--brand) 8%, transparent)" : "transparent",
+                color: "var(--text)",
+              }}
+            >
+              <span className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
+                <span style={{ fontWeight: on ? 800 : 600, fontSize: 14 }}>{PALETTE_LABELS[p].name}</span>
+                <span className="small" style={{ color: "var(--muted)" }}>{PALETTE_LABELS[p].hint}</span>
+              </span>
+              <span className="row" style={{ gap: 3, flexShrink: 0 }} aria-hidden>
+                {(["available", "unavailable", "conditional"] as const).map((s) => (
+                  <span
+                    key={s}
+                    style={{
+                      width: 22, height: 22, borderRadius: 4,
+                      background: colors[s].bg, border: `1px solid ${colors[s].border}`,
+                    }}
+                  />
+                ))}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {note && (
+        <div className="small" style={{ color: "var(--muted)", marginTop: 8 }}>{note}</div>
+      )}
+    </div>
+  );
+}
 
 function AppRefreshButton() {
   const [status, setStatus] = useState<"idle" | "checking" | "result">("idle");

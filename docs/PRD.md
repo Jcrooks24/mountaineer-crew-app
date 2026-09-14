@@ -90,7 +90,7 @@ their own words, that statement becomes a line here.
 |---|---|---|
 | 1 | Auth and account | not yet |
 | 2 | Job capture and timeline | not yet |
-| 3 | Time capture siblings (off-job, office, availability, LD workday) | not yet |
+| 3 | Time capture siblings (off-job, office, availability, LD workday) | partly, 2026-09-14 (availability colors) |
 | 4 | Long-distance mode | not yet |
 | 5 | Vehicle and DVIR | not yet |
 | 6 | Money out (reimbursements, materials) | not yet |
@@ -132,6 +132,34 @@ captured."
 before/after photos serve a different job from damage photos and should be
 treated differently; whether unsaved photos should expire off a device, and after
 how long.
+
+---
+
+### Time capture siblings: availability
+
+**Purpose** (owner, 2026-09-04): "Crew facing availability tools should have a
+color blind friendly palette mode. Color blind pallete should translate to the
+conventional color pallette by default in admin facing views." This states one
+requirement of the availability tool, not its whole purpose, which is still
+unstated.
+
+**Serves** (owner-confirmed 2026-09-14): the color-blind crew member, on their own
+Availability screens. Admin views stay conventional.
+
+**Driving scenario** (owner, 2026-09-04 and confirmed 2026-09-14): "We have a color
+blind employee." On the crew Availability screen they cannot tell which days they
+marked available vs. unavailable, so they submit wrong days or cannot check what they
+sent, and the office then schedules them on days they cannot work.
+
+**Out of scope, deliberately** (owner, 2026-09-14): "The palette mode recolors the
+crew Availability tools only; the rest of the app keeps its normal colors." And on
+cues beyond color: "no emoji symbols" (short text instead).
+
+**Decisions behind it**:
+[ADR 0050](decisions/0050-colorblind-availability-palettes-live-on-the-account-and-recolor-only-your-own-view.md).
+
+**Open questions**: what the availability tool is for beyond this requirement; whether
+the employee has the same trouble in any other tool.
 
 ---
 

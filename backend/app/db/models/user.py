@@ -42,6 +42,12 @@ class User(Base):
     # the read path doesn't need to handle Optional[str].
     scheduling_notes = Column(Text, nullable=False, server_default="", default="")
 
+    # Colorblind-friendly palette for this person's OWN Availability tools. One of
+    # AVAILABILITY_PALETTES in app/schemas/users.py; "default" is the conventional
+    # green / red / amber. On the account, not the device, so it follows them to a
+    # new phone. Admin views ignore it by design (ADR 0050).
+    availability_palette = Column(String, nullable=False, server_default="default", default="default")
+
     # Annual PTO allowance in hours, set by hand on the roster. Varies per person;
     # there is no accrual formula. ZERO MEANS NOT ELIGIBLE - deliberately the same
     # fact as "has no allowance", because a separate boolean beside the number

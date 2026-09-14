@@ -3,7 +3,16 @@ Pydantic schemas for Users.
 Defines request/response body shapes.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, EmailStr, Field
+
+# The colorblind-friendly palettes a crew member can pick for their own
+# Availability tools (ADR 0050). Must match AVAILABILITY_PALETTES in
+# frontend/src/lib/availabilityPalette.ts.
+AvailabilityPalette = Literal[
+    "default", "red_green", "deuteranopia", "protanopia", "tritanopia", "monochrome",
+]
 
 
 class UserCreate(BaseModel):
@@ -19,6 +28,9 @@ class UserResponse(BaseModel):
     role: str | None = None
     profile_photo: str | None = None
     scheduling_notes: str = ""
+    # A plain str on the way OUT, so a value this build does not know (a newer
+    # palette written by a later build) still serializes; the client falls back.
+    availability_palette: str = "default"
     # Admin-set skill-rating designation (see User.is_skill_rater). Surfaced to
     # the client so the Job Report can gate job-type + skill view/edit on it.
     is_skill_rater: bool = False
@@ -33,6 +45,8 @@ class UpdateProfileRequest(BaseModel):
     profile_photo: str | None = None
     # Free-form scheduling notes (e.g. "no Saturdays until July"). Send "" to clear.
     scheduling_notes: str | None = None
+    # Validated on the way IN: an unknown palette is a 422, never stored.
+    availability_palette: AvailabilityPalette | None = None
 
 
 class DirectoryEntry(BaseModel):

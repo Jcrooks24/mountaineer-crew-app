@@ -58,6 +58,12 @@ app.
   destroyed everywhere, and the office cannot tell it was ever attempted. The
   owner: "A lost job photo is not recoverable later, and damage photos are what a
   claim rests on." ([ADR 0048](decisions/0048-a-photo-is-durable-when-it-is-taken-not-when-it-is-saved.md))
+- **A color-blind crew member** [confirmed 2026-09-14]: on the Availability screen
+  they cannot tell which days they marked available vs. unavailable, so they submit
+  wrong days or cannot check what they sent, and the office then schedules them on
+  days they cannot work. They choose a colorblind palette on My Profile; it follows
+  their account and changes only their own Availability screens.
+  ([ADR 0050](decisions/0050-colorblind-availability-palettes-live-on-the-account-and-recolor-only-your-own-view.md))
 - **Sheet row fidelity** [confirmed 2026-09-14]: Movers and crew leads are
   unaffected; every path changed runs on the server after their record was
   accepted. ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
