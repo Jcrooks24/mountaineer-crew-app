@@ -1174,6 +1174,30 @@ export default function JobReport({ jobUuid, jobName, events = [], longDistance 
       setEditError("Pick start and end times for this employee.");
       return;
     }
+    // HOTFIX 2026-09-14. A new row for someone who already has one on this job
+    // used to append silently. Crew reported duplicated hours on a report: the
+    // person was entered by hand and again from the job's crew chips (filled from
+    // the calendar invitees). Every row is paid, so a duplicate is double pay.
+    // The owner chose to warn rather than block, because one person can
+    // legitimately have two rows (a split shift). The warning names the hours
+    // already there, so the answer is informed rather than a reflex.
+    if (editingIndex === null) {
+      const already = data.employee_hours.filter((e) =>
+        editUserId != null
+          ? e.user_id === editUserId
+          : (e.name || "").trim().toLowerCase() === name.toLowerCase(),
+      );
+      if (already.length > 0) {
+        const logged = already.reduce((sum, e) => sum + (e.hours || 0), 0);
+        const ok = window.confirm(
+          `${name} already has ${already.length === 1 ? "a row" : `${already.length} rows`} ` +
+          `on this job (${Number(logged.toFixed(2))} h). Add another row for them?\n\n` +
+          `Every row is paid. Only add one for a separate shift. To fix their hours, ` +
+          `tap Edit on the existing row instead.`,
+        );
+        if (!ok) return;
+      }
+    }
     const startEpoch = slotToEpoch(editStart);
     const baseEntry: EmployeeHoursEntry = {
       user_id: editUserId ?? undefined,
