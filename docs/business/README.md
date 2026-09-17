@@ -20,6 +20,7 @@ document first, then re-export here.
 | [SOP-2026.md](SOP-2026.md) | Standard Operating Procedures v1.0, July 2026. Process-forward: for each business function, who owns it, what triggers it, the steps, the tools, the output. | Who does what. Section 6 is the job-day workflow and every Crew App input, with the business reason each input matters. Section 1 is roles. |
 | [SYSTEMS-REPORT-2026.md](SYSTEMS-REPORT-2026.md) | The tools-forward audit. What systems the company runs and how well each performs. | What else is in the stack and how the app fits beside it. |
 | [M1-INTEGRATION-ASSESSMENT.md](M1-INTEGRATION-ASSESSMENT.md) | Combined systems profile for Mountaineer plus M1 Logistics, ahead of the merger. | Where this app is headed, the overlap matrix, and the key-person risk table. |
+| [MONTANA-GETTING-STARTED-2025.md](MONTANA-GETTING-STARTED-2025.md) | Montana DOT's Motor Carrier Safety Assistance Program booklet, June 2025, as a page-marked text extraction. The PDF beside it is the authoritative copy. | Resolving the Montana page citations in [../COMPLIANCE_REFERENCE.md](../COMPLIANCE_REFERENCE.md). Interstate vs intrastate applicability, the 26,001 lb intrastate threshold, hours of service, vehicle maintenance. Page markers are PDF page index, not the booklet's printed number. |
 | [xact/](xact/) | Prior product-definition work done in the xact platform, plus the meeting that reset it. | What has already been asked and answered, so it is not asked again. |
 
 ## Three rules for reading them

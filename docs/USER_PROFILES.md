@@ -67,6 +67,14 @@ app.
 - **Sheet row fidelity** [confirmed 2026-09-14]: Movers and crew leads are
   unaffected; every path changed runs on the server after their record was
   accepted. ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
+- **The subject of the federal records, and never the reader of them**
+  [confirmed 2026-09-17]: their DVIRs, duty logs and DQ documents are what
+  [COMPLIANCE_REFERENCE.md](COMPLIANCE_REFERENCE.md) exists to protect from a
+  well-meant change. They are affected by it entirely indirectly and will never
+  open it. When a compliance invariant is weakened, this is the person a defect
+  lands on: a driver whose inspection report lost its defect description, or whose
+  duty log was filed under someone else's name.
+  ([ADR 0051](decisions/0051-the-compliance-reference-maps-code-to-obligations-and-vendors-no-cfr.md))
 - **Open questions:** Do movers share a phone on a job? What is the actual rate
   of "my phone died mid-job"? Which screens do new hires get wrong most? How long
   do unsaved photos sit in the tray before somebody saves or discards them?
@@ -179,6 +187,14 @@ this file.
   on-duty statements in the Sheet as the DOT compliance copy, so a lost row is a
   gap in an inspection or hours record.
   ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
+- **Reads the compliance reference, and so does Claude Code on their behalf**
+  [confirmed 2026-09-17]: the direct and primary reader of
+  [COMPLIANCE_REFERENCE.md](COMPLIANCE_REFERENCE.md), at the moment of editing a
+  compliance-bearing file. What goes wrong without it, in their words: "Every time
+  compliance comes up, the applicability question gets worked out from scratch, at
+  cost, and possibly differently each time, because nothing in the repo records
+  which rules reach this company and why."
+  ([ADR 0051](decisions/0051-the-compliance-reference-maps-code-to-obligations-and-vendors-no-cfr.md))
 
 ## 7. Mechanic
 
