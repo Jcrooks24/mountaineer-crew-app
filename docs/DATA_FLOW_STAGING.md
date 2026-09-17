@@ -8,9 +8,9 @@ folded into [DATA_FLOW.md](DATA_FLOW.md) at promotion.
 
 | | |
 |---|---|
-| Branch / commit | `staging` @ working tree, 2026-09-11 |
+| Branch / commit | `staging` @ working tree, 2026-09-17 |
 | Compared to | `main` @ `7681d5a` (the 2026-09-10 promotion) |
-| Date verified | 2026-09-11 |
+| Date verified | 2026-09-17 |
 
 **Emptied at the 2026-09-10 promotion.** Everything that stood here was folded
 into [DATA_FLOW.md](DATA_FLOW.md) under "Folded from staging at the 2026-09-10
@@ -194,6 +194,54 @@ Per-field, for the row as it now enters the store at pick:
 stored image data rather than discarding a list. A failed delete is swallowed: the
 row is already out of the tray, and orphaned bytes are wasteful rather than wrong.
 
+## RODS - an unsigned day is refused, at three layers
+
+**Class C-shaped, unchanged in shape.** The trigger, the queue, the drain and the
+replace-style Sheet write are all exactly as [DATA_FLOW.md](DATA_FLOW.md) describes.
+What changed is **which payloads the server will accept into `rods_logs` at all**,
+and which rows any path will publish to the worksheet.
+
+See [ADR 0052](decisions/0052-a-rods-row-is-always-signed-and-the-server-is-what-says-so.md).
+
+Under V-5 in [COMPLIANCE_REFERENCE.md](COMPLIANCE_REFERENCE.md) the app's RODS is the
+only record of duty status, with no paper log behind it, so every row in that table
+is a certified federal record.
+
+| | Before (`main`) | After (staging) |
+|---|---|---|
+| Unsigned submit to `POST /api/long-distance/rods` | accepted and stored | **refused, 400**, with a sentence the driver can act on |
+| What made the rule hold | the client happened to submit only after signing | the server refuses |
+| `export_rods_to_sheets` with an unsigned row | writes it to the worksheet | returns 0, writes nothing |
+| `sheet_backfill._src_rods` | lists every row, signed or not | lists signed rows only |
+| Router export gate | `if row.signature:` on both paths | gone; a submit is always signed by then |
+| Signature assignment on update | conditional, `if body.signature is not None` | unconditional |
+
+**Why three layers and not one.** Layer 1 covers the submit path only. Layers 2 and 3
+are what stop a row that predates this rule, or arrives some future way, from reaching
+the compliance copy. Before this change an unsigned row would have been reported by the
+Sheet-sync health check as permanently missing from the worksheet, and the re-export
+that exists to fix exactly that would have published an uncertified duty log
+indistinguishable from a signed one.
+
+**Failure class.** The 400 is a **permanent** rejection under `queueFailure.ts`, so a
+refused day is marked failed, stays in the queue per ADR 0013, is skipped so it cannot
+wedge the line, and is shown to the crew member. It is not one of the transient four
+(401, 403, 408, 429), which would retry forever on a payload that can never fix itself.
+
+Per-field: no field was added, removed or renamed. The table's shape is unchanged.
+
+| Field | | Note |
+|---|---|---|
+| `signature` | `[x]` | now **required in practice**. Column stays nullable so pre-existing rows are readable, and so the refusal is our own 400 rather than a 422 schema dump |
+| `signed_at` | `[x]` | set together with the signature, unconditionally |
+| every other field | `[-]` | unchanged by this work; documented in DATA_FLOW.md |
+
+**No in-progress day is stored server-side.** That remains true and is now a rule
+rather than an accident. The drafts store for A-03 is not built; when it is, it gets
+its own table and its own entry here, and it does **not** reuse this endpoint.
+
+Guarded by `backend/scripts/verify_rods_signed_only.py`.
+
 # New domains
 
 Nothing yet.
@@ -256,7 +304,7 @@ migration painful.
 
 # Not yet documented
 
-Nothing outstanding as of the 2026-09-11 photo-durability change.
+Nothing outstanding as of the 2026-09-17 RODS signed-only change.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.

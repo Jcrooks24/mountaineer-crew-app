@@ -74,8 +74,14 @@ class RodsCreate(BaseModel):
     total_sleeper: str | None = None
     total_driving: str | None = None
     total_on_duty: str | None = None
-    # Optional: in-progress days are autosaved to the server unsigned for
-    # continuity/backup; the signature is attached when the driver signs.
+    # A RODS row is a certified duty record. The signature is REQUIRED and the
+    # router rejects a blank one: see ADR 0052. This stays `str | None` rather
+    # than a required field so the refusal is our own 400 with a sentence a
+    # driver can act on, instead of a 422 schema dump.
+    #
+    # An in-progress day is NOT stored here. It belongs in the drafts store
+    # (A-03), which is a separate table nothing else reads. Do not re-open this
+    # field to unsigned submits to implement autosave.
     signature: str | None = None
     signed_at: datetime | None = None
 

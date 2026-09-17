@@ -13,7 +13,7 @@ This file is in two parts, and they age differently:
 | **[Part 2: Open gap ledger](#part-2-open-gap-ledger)** | Findings from the 2026-09 gap audit, and where each stands. | Fast. Items close and leave. |
 
 **Part 1 verified against:** `staging` @ `b920b93`, 2026-09-17.
-**Part 2 last ruled on:** 2026-09-17.
+**Part 2 last ruled on:** 2026-09-17. V-5 answered, B-14 closed, A-03 corrected and re-scoped.
 
 A stale date on one part says nothing about the other. Update them independently.
 
@@ -58,7 +58,7 @@ irrelevant or urgent, and the 2026-09 audit spent three revisions establishing t
 | V-2 | Long-distance trips run in **rented** trucks. | `[owner]` 2026-09-16 | Rental status drives DQ, DVIR, and registry findings. |
 | V-3 | Owned trucks operate **intrastate only**. | `[owner]` 2026-09-16 | If an owned truck crosses a state line, every interstate obligation reaches it too. Montana applies intrastate FMCSRs at 26,001 lbs or more. `[reg]` Getting Started p.5, p.13, p.17, p.40 |
 | V-4 | No driver holds a CDL, and no CDL-required operation is run. | `[owner]` 2026-09-16 | Makes 26,000 lbs a hard ceiling on any rental. Also gates drug and alcohol testing applicability. `[reg]` 49 CFR 383.5, 383.91, 382.103, checked 2026-09-16 |
-| V-5 | Whether the app's RODS or a paper log is the **record of duty status** on a given trip is **unresolved**. | open | Decides whether A-03, A-04, A-05, B-08, B-10, B-11, and B-14 are live or moot. This is the single highest-leverage open question in this file. |
+| V-5 | **The app's RODS is the record of duty status. Always.** No paper log is kept alongside it. | `[owner]` 2026-09-17 | Resolved. A-03, A-04, A-05, B-08, B-10, B-11 and B-14 are **live compliance findings**, not internal tooling. Every duty-status guarantee in this file is load-bearing: there is no paper copy to fall back on. If paper is ever reintroduced, re-rate all seven. |
 | V-6 | Part 375 consumer protections reach only an **individual shipper** who pays their own charges. Employer-paid relocations and commercial freight are outside it. | `[reg]` 49 CFR 375.103, checked 2026-09-16 | Decides whether the weight-ticket finding applies at all. |
 
 **Vendored source:** the Montana booklet these cite lives at
@@ -136,18 +136,25 @@ put every clean inspection into the queue.
 **Produces:** Record of Duty Status, and the Prior On-Duty Hours Statement.
 `[reg]` 49 CFR 395.8 and 395.8(j)(2), checked 2026-09-16. See also Getting Started p.31.
 
-**Applicability:** V-1, and **V-5 above all**. If paper is the record of duty status,
-most of this section is internal tooling rather than a regulated record. Resolve V-5
-before treating any RODS change as compliance-bearing.
+**Applicability:** V-1. **V-5 is resolved: the app is the record of duty status, with
+no paper log alongside it** `[owner]` 2026-09-17. Every guarantee below is therefore
+load-bearing. A duty record this app loses is lost, not recoverable from a paper copy.
 
 ### Invariants
 
-**Only a signed day is exported.** `[code]` The Sheet write is gated on a signature.
-The server will accept an unsigned day for cross-device continuity, but the field app
-only ever submits signed days, from exactly one call site in the sign-off component.
-**If you add a second submit path, do not let it send unsigned days**: it would put
-uncertified duty records into the office's record of resort, and it would make the
-close-out checklist tick on work in progress.
+**Every row in `rods_logs` is a signed, certified day, and the server enforces it.**
+`[code]` `[ADR 0052]` An unsigned submit is refused with a 400, the export refuses to
+publish an unsigned row, and the Sheet backfill does not list one as publishable.
+Three layers, because layer 1 covers only the submit path while 2 and 3 stop a row
+that predates the rule or arrives some future way. Guarded by
+`backend/scripts/verify_rods_signed_only.py`.
+
+**Do not re-open this endpoint to unsigned payloads to build in-progress autosave.**
+That is the obvious way to implement the draft store (A-03) and it is the one thing
+this rule exists to prevent: the backfill would report every in-progress day as
+missing from the Sheet, and the re-export built to fix that would publish
+uncertified duty logs into the compliance copy, indistinguishable from signed ones.
+Under V-5 there is no paper log to check them against. Drafts get their own table.
 
 **The RODS Sheet row is replace-style, one row per driver-day.** `[code]` Re-submitting
 deletes the existing row and rewrites it. Changing this to an append would produce
@@ -177,7 +184,14 @@ only enforcement point in the long-distance flow.
 
 ### Known weaknesses, not yet changed
 
-- An unsigned day exists **only** in browser storage on one device. `[code]` See A-03.
+- An unsigned day's **trip header** exists only in browser storage on one device.
+  `[code]` See A-03. **The duty timeline is not at risk**: `changes` is derived from
+  `DUTY` events (`rodsStore.ts:194`), which ride the normal offline event queue to
+  the server and the Events tab, so a replacement device rebuilds the timeline from
+  `mergedLog`. What a lost phone destroys is the header (co-driver, vehicle, trailer,
+  origin, destination, total miles, shipping documents, carrier, main office address,
+  remarks) and the `rods_id`. Several of those are required content `[reg]` 395.8(f),
+  checked 2026-09-16.
 - No view shows the current day plus the prior seven. `[code]` See A-04.
 - "Passenger" is stored and exported as `sleeper`. `[code]` See A-01. **Do not
   "fix" the label without deciding what the stored value should be**; changing the
@@ -322,15 +336,19 @@ two documents can be read side by side.
 **Status meanings:** `open` needs a decision. `accepted` means the owner has ruled
 that it stays as-is. `closed` means fixed or determined to be a non-issue.
 
-**Nothing here has been ruled on yet.** The audit is complete; the rulings are not.
+**No individual item has been ruled on yet.** The audit is complete; the rulings are not.
+
+**V-5 was answered on 2026-09-17**: the app's RODS is the record of duty status, always,
+with no paper log alongside it. The seven items that were conditional on it are now
+marked **live**. Four items remain gated on a read of the running admin configuration.
 
 | ID | Finding | Applies if | Mark | Status |
 |---|---|---|---|---|
-| A-01 | Passenger time stored and exported as sleeper berth on trucks with no berth. | V-1, V-5 | `[code]` | open |
+| A-01 | Passenger time stored and exported as sleeper berth on trucks with no berth. | V-1, **live** | `[code]` | open |
 | A-02 | DQ replacement deletes the prior copy; no retention of superseded documents. | V-1, V-2 | `[code]` | open |
-| A-03 | An in-progress RODS day exists only in browser storage on one phone. A lost or cleared device destroys it. | V-1, V-5 | `[code]` | open |
-| A-04 | No view of the current day plus the prior seven. | V-1, V-5 | `[code]` | open |
-| A-05 | A typed driver name that does not match a user exactly files the log under the submitter, silently. | V-1, V-5 | `[code]` | open |
+| A-03 | An in-progress RODS day's **trip header** exists only in browser storage on one phone. The duty timeline itself is safe, derived from synced `DUTY` events. Corrected 2026-09-17. | **live** | `[code]` | open |
+| A-04 | No view of the current day plus the prior seven. | V-1, **live** | `[code]` | open |
+| A-05 | A typed driver name that does not match a user exactly files the log under the submitter, silently. | V-1, **live** | `[code]` | open |
 | A-06 | No National Registry verification note type. | live config | `[code]` | open |
 | A-07 | Catalogue omits pre-hire MVR, safety performance history inquiry, investigation history file, annual MVR, annual review note. | live config | `[code]` | open |
 | A-09 | No weight tickets: no tare, gross, ticket image, or scale identity. | V-6 | `[code]` | open |
@@ -340,13 +358,13 @@ that it stays as-is. `closed` means fixed or determined to be a non-issue.
 | B-04 | DVIR and PODS cannot be filed offline. | V-1 | `[code]` | open |
 | B-05 | Nothing prompts registering a rental. **A truck absent from the registry cannot have a DVIR filed for it at all.** | V-1, V-2 | `[code]` | open |
 | B-07 | Incident model has no accident-trigger fields and no register link. | V-1 | `[code]` | open |
-| B-08 | No admin review screen for RODS or PODS. | V-5 | `[code]` | open |
+| B-08 | No admin review screen for RODS or PODS. | **live** | `[code]` | open |
 | B-09 | App still requires the annual certification of violations. | live config, `[reg]` 391.27 reserved, checked 2026-09-16 | mixed | open |
-| B-10 | RODS resubmission overwrites the Sheet row with no version history. | V-5 | `[code]` | open |
-| B-11 | Immutable `logged_at` is exported to the Events tab but never joined to the RODS record it qualifies. | V-5 | `[code]` | open |
+| B-10 | RODS resubmission overwrites the Sheet row with no version history. | **live** | `[code]` | open |
+| B-11 | Immutable `logged_at` is exported to the Events tab but never joined to the RODS record it qualifies. | **live** | `[code]` | open |
 | B-12 | Remote mechanic certification rests on possessing an emailed link and a typed name, for 14 days. | unconfirmed | `[code]` | open |
 | B-13 | Loaded weight stored as free text, not a number. | V-6 | `[code]` | open |
-| B-14 | The signed-RODS guarantee is enforced by the client, not the server. | V-5 | `[code]` | open |
+| B-14 | The signed-RODS guarantee is enforced by the client, not the server. | **live** | `[code]` | **CLOSED 2026-09-17**, fixed. Three server layers refuse an unsigned day ([ADR 0052](decisions/0052-a-rods-row-is-always-signed-and-the-server-is-what-says-so.md)). Invariant moved into Part 1. |
 | B-15 | DVIR odometer required by the form, nullable in the database. | none | `[code]` | open, data quality only |
 | B-16 | Emergency equipment is a checkbox attestation, not evidence. | V-1 | `[code]` | open |
 | B-18 | "Air Brakes" is the only brake item, and its description names air-only components, so a hydraulic-brake driver may reasonably skip it. Under-reporting risk, not a record gap. | V-1 | `[code]` | open |

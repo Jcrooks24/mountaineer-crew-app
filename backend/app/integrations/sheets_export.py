@@ -2431,6 +2431,14 @@ def export_rods_to_sheets(db: Session, rods: Dict[str, Any]) -> int:
     key = rods.get("rods_id", "")
     if not key:
         return 0
+    # The RODS worksheet is the office's compliance copy, so only a SIGNED day
+    # belongs in it. The router refuses an unsigned submit (ADR 0052), but this
+    # function is also reachable from the Sheet backfill's re-export path, which
+    # reads straight from the table and would happily publish a row predating
+    # that rule. Refusing here means no caller can put an uncertified duty log
+    # into the compliance copy, whatever it was handed.
+    if not str(rods.get("signature") or "").strip():
+        return 0
 
     changes = rods.get("duty_changes") or []
     duty_str = " | ".join(

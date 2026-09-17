@@ -196,7 +196,17 @@ def _src_prior_hours(db: Session) -> List[Dict[str, Any]]:
 
 def _src_rods(db: Session) -> List[Dict[str, Any]]:
     from app.db.models.long_distance import RodsLog
-    rows = db.query(RodsLog).order_by(RodsLog.created_at.desc()).all()
+    # Signed days only. This list is "what the Sheet should contain", and the
+    # health check reports anything missing from it as a gap to be backfilled.
+    # An unsigned row is not a compliance record and is not expected in the
+    # worksheet, so listing it would report a permanent false gap AND invite the
+    # re-export that publishes it. See ADR 0052.
+    rows = (
+        db.query(RodsLog)
+        .filter(RodsLog.signature.isnot(None), RodsLog.signature != "")
+        .order_by(RodsLog.created_at.desc())
+        .all()
+    )
     return [{
         "id": r.rods_id,
         "label": f"{r.driver_name} ({r.log_date})",

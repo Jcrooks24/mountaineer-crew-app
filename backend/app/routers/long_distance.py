@@ -222,13 +222,29 @@ def create_rods(
 ):
     """Create or UPDATE this driver's Record of Duty Status for a day.
 
-    RODS is now a resumable, tap-recorded daily log: the recorder appends duty
+    RODS is a resumable, tap-recorded daily log: the recorder appends duty
     changes through the day and re-submits, and the driver may reopen a day to
     finalize/sign. So this upserts by (driver_id, log_date) - one row per driver
     per day - updating the duty changes, totals, and signature in place. The
     original rods_id + created_at are preserved so the Sheet row (replace-style
     export) tracks the same entity across the day.
+
+    **Every row in this table is a signed, certified duty record.** An unsigned
+    payload is refused here rather than stored, see ADR 0052. That rule used to
+    hold only because the field app happened to submit after signing; four server
+    paths read this table and two of them (the Sheet backfill's source list and
+    its re-export) carry no signature check, so an unsigned row reaching the table
+    would have been published into the compliance Sheet as though certified.
+    In-progress days belong in the drafts store, not here.
     """
+    if not (body.signature or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "A duty log has to be signed before it is submitted. "
+                "Open the day, sign it, and submit again."
+            ),
+        )
     # Resolve the driver: a passenger may submit a RODS on behalf of a driver,
     # so key the record by the NAMED driver (matched to a user), not the
     # submitter. Falls back to the submitter when the name doesn't match a user.
@@ -267,18 +283,15 @@ def create_rods(
         existing.total_sleeper = body.total_sleeper
         existing.total_driving = body.total_driving
         existing.total_on_duty = body.total_on_duty
-        # Only attach a signature when one is provided - an unsigned autosave
-        # (continuity backup) must NOT wipe a signature already captured on
-        # another device.
-        if body.signature is not None:
-            existing.signature = body.signature
-            existing.signed_at = body.signed_at
+        # A submit is always signed (guarded at the top), so the signature is
+        # attached unconditionally. Re-signing a corrected day is normal and
+        # replaces the earlier certification, which is the point of allowing a
+        # day to be reopened.
+        existing.signature = body.signature
+        existing.signed_at = body.signed_at
         db.commit()
         db.refresh(existing)
-        # Sheet = signed compliance record; unsigned autosaves stay DB-only so
-        # in-progress taps don't spam the replace-style Sheets export.
-        if existing.signature:
-            run_export_in_background(export_rods_to_sheets, _rods_to_response(existing).model_dump())
+        run_export_in_background(export_rods_to_sheets, _rods_to_response(existing).model_dump())
         return _rods_to_response(existing)
 
     row = RodsLog(
@@ -311,8 +324,7 @@ def create_rods(
     db.commit()
     db.refresh(row)
 
-    if row.signature:
-        run_export_in_background(export_rods_to_sheets, _rods_to_response(row).model_dump())
+    run_export_in_background(export_rods_to_sheets, _rods_to_response(row).model_dump())
 
     return _rods_to_response(row)
 
