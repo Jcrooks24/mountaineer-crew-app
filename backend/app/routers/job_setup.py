@@ -54,6 +54,23 @@ class BolHeader(BaseModel):
     accessorial_services: Optional[str] = None
 
 
+class RentalUnit(BaseModel):
+    """The actual truck behind a rental placeholder unit (ADR 0053).
+
+    `plate` is the identifier that reaches the records: it becomes the vehicle
+    on the DVIR, the RODS and the BOL, so a report says which truck it is about
+    instead of the word "rental". `gvwr_lbs` is the weight rating, and it is the
+    only place the app ever learns whether a given trip was over the federal
+    threshold. All optional at the schema so a half-filled header still saves;
+    the DVIR is where a missing plate actually stops something.
+    """
+    company: Optional[str] = None
+    agreement_number: Optional[str] = None
+    plate: Optional[str] = None
+    gvwr_lbs: Optional[float] = None
+    notes: Optional[str] = None
+
+
 class JobSetupIn(BaseModel):
     job_name: Optional[str] = None
     job_date: Optional[str] = None
@@ -62,6 +79,7 @@ class JobSetupIn(BaseModel):
     is_long_distance: bool = False
     job_type_tags: List[str] = []
     vehicle_unit_names: List[str] = []
+    rental: Optional[RentalUnit] = None
     crew: List[CrewMember] = []
     origin: Optional[str] = None
     destination: Optional[str] = None
@@ -99,6 +117,7 @@ def _to_out(row: JobSetup) -> Dict[str, Any]:
         "is_long_distance": bool(row.is_long_distance),
         "job_type_tags": [str(t) for t in _load_list(row.job_type_tags)],
         "vehicle_unit_names": [str(u) for u in _load_list(row.vehicle_unit_names)],
+        "rental": _load_obj(row.rental_json) or None,
         "crew": _load_list(row.crew_json),
         "origin": row.origin,
         "destination": row.destination,
@@ -166,6 +185,12 @@ def upsert_job_setup(
     tags = json.dumps([str(t).strip() for t in body.job_type_tags if str(t).strip()])
     units = json.dumps([str(u).strip() for u in body.vehicle_unit_names if str(u).strip()])
     crew = json.dumps(_clean_crew(body.crew))
+    # Blank strings are stored as None so "filled in" is unambiguous: the
+    # DVIR decides whether a rental is identified by looking at `plate`.
+    rental = json.dumps(
+        {k: (v.strip() if isinstance(v, str) and v.strip() else (v if isinstance(v, (int, float)) else None))
+         for k, v in (body.rental.model_dump().items() if body.rental else [])}
+    )
     stops = json.dumps([str(s).strip() for s in body.stops if str(s).strip()])
     bol = json.dumps(
         {k: (v.strip() if isinstance(v, str) and v.strip() else None)
@@ -185,6 +210,7 @@ def upsert_job_setup(
     existing.is_long_distance = bool(body.is_long_distance)
     existing.job_type_tags = tags
     existing.vehicle_unit_names = units
+    existing.rental_json = rental
     existing.crew_json = crew
     existing.origin = (body.origin or "").strip() or None
     existing.destination = (body.destination or "").strip() or None

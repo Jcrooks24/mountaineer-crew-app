@@ -148,7 +148,11 @@ function RodsDriverSection({
           let changed = false;
           if (prev.job_uuid !== tripJob) { next.job_uuid = tripJob; changed = true; }
           if (h) {
-            const veh = h.vehicle_unit_names?.[0];
+            // A rental unit name is a placeholder shared by every truck we
+            // hire, and 395.8(f) wants the vehicle number. Prefer the actual
+            // plate from the job header (ADR 0053).
+            const plate = (h.rental?.plate || "").trim();
+            const veh = plate || h.vehicle_unit_names?.[0];
             if (h.origin && !(prev.origin || "").trim()) { next.origin = h.origin; changed = true; }
             if (h.destination && !(prev.destination || "").trim()) { next.destination = h.destination; changed = true; }
             if (veh && !(prev.vehicle_number || "").trim()) { next.vehicle_number = veh; changed = true; }

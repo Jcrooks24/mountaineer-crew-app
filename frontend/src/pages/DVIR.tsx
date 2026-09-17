@@ -6,7 +6,7 @@ import SignaturePad, { type SignaturePadHandle } from "../components/SignaturePa
 import AppHeader from "../components/AppHeader";
 import VehicleUnitSpecs from "../components/VehicleUnitSpecs";
 import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
-import { loadJobSetup } from "../lib/jobSetupStore";
+import { loadJobSetup, type JobSetupData } from "../lib/jobSetupStore";
 
 // ── FMCSA 49 CFR §396.11 inspection items with descriptions ──────────────────
 const INSPECTION_ITEMS: { name: string; desc: string }[] = [
@@ -186,12 +186,24 @@ export default function DVIRPage() {
     let cancelled = false;
     loadJobSetup(attachedJobUuid)
       .then((h) => {
+        if (cancelled) return;
         const u = h?.vehicle_unit_names?.[0];
-        if (!cancelled && u) setVehicleNumber((cur) => cur || u);
+        if (u) setVehicleNumber((cur) => cur || u);
+        // The actual truck behind a rental placeholder (ADR 0053). Snapshot onto
+        // this report at submit so it stays true to the truck inspected even if
+        // the header is edited later.
+        if (h?.rental) setRental(h.rental);
       })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [attachedJobUuid]);
+
+  // Rental identity, from the job header. `plate` is what makes this report
+  // about one truck rather than about "rental".
+  const [rental, setRental] = useState<NonNullable<JobSetupData["rental"]>>({});
+  const selectedUnit = unitByName(vehUnits, vehicleNumber);
+  const needsRentalId = !!selectedUnit?.is_rental;
+  const rentalPlate = (rental?.plate || "").trim();
 
   const [odometer, setOdometer] = useState("");
   const [inspectionType, setInspectionType] = useState<"pre-trip" | "post-trip">("pre-trip");
@@ -204,8 +216,16 @@ export default function DVIRPage() {
 
   function loadPrevDVIR(vehicle: string) {
     if (!vehicle) { setPrevDVIR(null); setPrevReviewed(false); return; }
+    // A rental unit is a placeholder shared by every truck we hire, so the
+    // 396.13 review has to be about THIS truck. Without the plate there is no
+    // truck to ask about, and showing another rental's report would be the
+    // cross-contamination ADR 0053 exists to stop. The server refuses too.
+    if (needsRentalId && !rentalPlate) { setPrevDVIR(null); setPrevReviewed(false); return; }
     setPrevLoading(true);
-    apiFetch<PrevDVIR | null>(`/api/dvir/latest-for-vehicle?vehicle_number=${encodeURIComponent(vehicle)}`)
+    apiFetch<PrevDVIR | null>(
+      `/api/dvir/latest-for-vehicle?vehicle_number=${encodeURIComponent(vehicle)}`
+      + (rentalPlate ? `&vehicle_identifier=${encodeURIComponent(rentalPlate)}` : ""),
+    )
       .then((r) => setPrevDVIR(r ?? null))
       .catch(() => setPrevDVIR(null))
       .finally(() => setPrevLoading(false));
@@ -214,7 +234,8 @@ export default function DVIRPage() {
   useEffect(() => {
     setPrevReviewed(false);
     loadPrevDVIR(vehicleNumber);
-  }, [vehicleNumber]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicleNumber, rentalPlate, needsRentalId]);
 
   // True when previous DVIR has defects that haven't been mechanic-signed yet
   const prevHasOpenDefect =
@@ -268,6 +289,11 @@ export default function DVIRPage() {
           // the column stays for back-compat but is always null now.
           trailer_number: null,
           odometer: odometer ? parseInt(odometer, 10) : null,
+          // Which physical truck (ADR 0053). Snapshot, not a pointer.
+          vehicle_identifier: rentalPlate || null,
+          rental_company: (rental?.company || "").trim() || null,
+          rental_agreement: (rental?.agreement_number || "").trim() || null,
+          gvwr_lbs: rental?.gvwr_lbs ?? null,
           inspection_type: inspectionType,
           inspection_date: inspectionDate,
           job_uuid: attachedJobUuid || null,
@@ -300,6 +326,11 @@ export default function DVIRPage() {
     setErr(null);
 
     if (!vehicleNumber) return setErr("Select a vehicle unit.");
+    if (needsRentalId && !rentalPlate)
+      return setErr(
+        "This is a rental, so the report needs the truck's plate or unit number. "
+        + "Add it in the job's setup, then come back.",
+      );
     if (!odometer.trim()) return setErr("Odometer reading is required.");
     if (!driverName.trim()) return setErr("Driver name is required.");
     if (hasDefects && !defectNotes.trim()) return setErr("Describe the defect(s) - defect notes are required when defects are checked.");
@@ -497,6 +528,24 @@ export default function DVIRPage() {
               ))}
             </select>
             <VehicleUnitSpecs unit={unitByName(vehUnits, vehicleNumber)} />
+            {needsRentalId && (
+              rentalPlate ? (
+                <div className="small" style={{ marginTop: 6, color: "var(--ok)" }}>
+                  Rental: <span className="mono" style={{ fontWeight: 700 }}>{rentalPlate}</span>
+                  {rental?.company ? ` (${rental.company})` : ""}
+                  {rental?.gvwr_lbs ? ` · GVWR ${Number(rental.gvwr_lbs).toLocaleString()} lb` : ""}
+                  <div style={{ color: "var(--muted)" }}>
+                    This report is filed against that truck, not against every rental.
+                  </div>
+                </div>
+              ) : (
+                <div className="small" style={{ marginTop: 6, color: "var(--danger)" }}>
+                  This unit is a rental, and we do not know which truck it is. Add the
+                  plate or unit number in the job's setup before inspecting, so this
+                  report says which vehicle it is about.
+                </div>
+              )
+            )}
           </div>
 
           <div style={{

@@ -11,6 +11,13 @@ class DVIRCreate(BaseModel):
     vehicle_number: str
     trailer_number: Optional[str] = None
     odometer: Optional[int] = None
+    # Which physical truck (ADR 0053). Required by the router when the selected
+    # unit is a rental placeholder, because the unit name alone is reused across
+    # every truck we hire.
+    vehicle_identifier: Optional[str] = None
+    rental_company: Optional[str] = None
+    rental_agreement: Optional[str] = None
+    gvwr_lbs: Optional[int] = None
     inspection_type: str          # "pre-trip" | "post-trip"
     inspection_date: str          # YYYY-MM-DD
     job_uuid: Optional[str] = None
@@ -46,6 +53,10 @@ class MechanicReviewResponse(BaseModel):
     vehicle_number: str
     trailer_number: Optional[str]
     odometer: Optional[int]
+    vehicle_identifier: Optional[str] = None
+    rental_company: Optional[str] = None
+    rental_agreement: Optional[str] = None
+    gvwr_lbs: Optional[int] = None
     inspection_type: str
     inspection_date: str
     defects: List[str]
@@ -63,6 +74,10 @@ class DVIRResponse(BaseModel):
     vehicle_number: str
     trailer_number: Optional[str]
     odometer: Optional[int]
+    vehicle_identifier: Optional[str] = None
+    rental_company: Optional[str] = None
+    rental_agreement: Optional[str] = None
+    gvwr_lbs: Optional[int] = None
     inspection_type: str
     inspection_date: str
     job_uuid: Optional[str]

@@ -242,6 +242,62 @@ its own table and its own entry here, and it does **not** reuse this endpoint.
 
 Guarded by `backend/scripts/verify_rods_signed_only.py`.
 
+## Rental truck identity - job header, DVIR, RODS, BOL
+
+**Class B-shaped, unchanged in shape.** No new queue and no new drain. What changed
+is **what identifies the vehicle** on three records, and one new field on the job
+header. See [ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md).
+
+Current practice files every rental job against one generic registry entry, so the
+DVIR, the RODS and the BOL all recorded the vehicle as the word "rental", and every
+hired truck shared one inspection history.
+
+| | Before (`main`) | After (staging) |
+|---|---|---|
+| Registry entry | name + weights | plus `is_rental`, an admin checkbox |
+| Job header | `vehicle_unit_names` only | plus `rental_json`: company, agreement number, plate, GVWR, notes |
+| DVIR vehicle | registry name only | name **plus** a snapshot of plate, company, agreement, GVWR |
+| RODS `vehicle_number` | first unit name | the plate when there is one, else the unit name |
+| BOL vehicle | first unit name | the plate when there is one, else the unit name |
+| 396.13 prior-report review | keyed on unit name | keyed on `(unit name, plate)` for a rental |
+| Out-of-service lockout | keyed on unit name | same scoping |
+| Rental DVIR with no plate | accepted | **refused, 400**, server-side and in the form |
+| DVIRs worksheet | 19 columns | plus `vehicle_identifier`, `rental_company`, `rental_agreement`, `gvwr_lbs` |
+
+**Snapshot, not a pointer.** The DVIR copies the identity onto its own row at submit.
+Pointing at the header would mean a later header edit silently rewrites the vehicle on
+every past inspection filed under that job.
+
+**New columns**, migration `u2w4y6a8c0e2`, all nullable with no backfill, plus an
+index on `(vehicle_number, vehicle_identifier)` because the review query runs every
+time a unit is picked and the table only grows.
+
+Per-field, for the job header's rental block:
+
+| Field | | Note |
+|---|---|---|
+| `plate` | `[x]` | the identifier that reaches all three records. Required before a rental DVIR will submit |
+| `company` | `[x]` | free text |
+| `agreement_number` | `[x]` | free text |
+| `gvwr_lbs` | `[x]` | the only record of whether a trip was over the federal weight threshold (V-1) |
+| `notes` | `[x]` | free text |
+
+And for the DVIR's snapshot:
+
+| Field | | Note |
+|---|---|---|
+| `vehicle_identifier` | `[x]` | the plate. Second half of the review and lockout key |
+| `rental_company` / `rental_agreement` | `[x]` | to the worksheet as their own columns |
+| `gvwr_lbs` | `[x]` | to the worksheet |
+
+**Rows written before this carry no identifier and are left alone.** A past inspection
+stays honest about what was captured.
+
+**Owned units are unchanged end to end**: no flag, no plate asked for, the review
+query is exactly what it was.
+
+Guarded by `backend/scripts/verify_rental_truck_identity.py`.
+
 # New domains
 
 Nothing yet.
@@ -304,7 +360,7 @@ migration painful.
 
 # Not yet documented
 
-Nothing outstanding as of the 2026-09-17 RODS signed-only change.
+Nothing outstanding as of the 2026-09-17 rental-identity change.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.

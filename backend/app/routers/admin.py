@@ -328,6 +328,12 @@ def set_dvir_units(
 
 class VehicleUnitIn(BaseModel):
     name: str
+    # Marks a placeholder entry standing for a truck we rent rather than own.
+    # Selecting one makes the job header ask for the actual truck's identity,
+    # and stops the DVIR review and lockout treating two rentals as one vehicle
+    # (ADR 0053). Weights on a rental entry are a default at best: the real
+    # truck's GVWR is captured per job.
+    is_rental: bool = False
     dry_weight_lbs: Optional[float] = None
     gvwr_lbs: Optional[float] = None
     length_ft: Optional[float] = None

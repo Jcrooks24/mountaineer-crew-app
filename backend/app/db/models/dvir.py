@@ -20,6 +20,26 @@ class DVIR(Base):
     trailer_number = Column(String, nullable=True)
     odometer = Column(Integer, nullable=True)
 
+    # ── Which physical truck (ADR 0053) ──────────────────────────────────────
+    # `vehicle_number` is a fleet-registry entry name, and for a rental that
+    # entry is a placeholder reused across every truck we ever hire. These
+    # columns carry the actual vehicle, SNAPSHOT at submit rather than read
+    # through the job header, so the report stays true to the truck inspected
+    # even if the header is edited afterwards.
+    #
+    # `vehicle_identifier` is the plate or unit number and is what makes this
+    # report about one truck. It is REQUIRED when the selected unit is a rental,
+    # and it is the second half of the key for both the 396.13 prior-report
+    # review and the out-of-service lockout: without it, an unresolved defect on
+    # a truck we handed back weeks ago blocks an unrelated truck, and a clean
+    # report on that old truck clears a defective one.
+    vehicle_identifier = Column(String, nullable=True)
+    rental_company = Column(String, nullable=True)
+    rental_agreement = Column(String, nullable=True)
+    # The rented truck's weight rating. The only place the app records whether a
+    # given trip was over the federal threshold at all.
+    gvwr_lbs = Column(Integer, nullable=True)
+
     # ── Trip ─────────────────────────────────────────────────────────────────
     inspection_type = Column(String, nullable=False)   # "pre-trip" | "post-trip"
     inspection_date = Column(String, nullable=False)   # YYYY-MM-DD

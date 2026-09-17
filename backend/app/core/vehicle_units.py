@@ -43,6 +43,12 @@ def normalize_units(raw: Any) -> List[Dict[str, Any]]:
         if not name:
             continue
         unit: Dict[str, Any] = {"name": name}
+        # A rental is a PLACEHOLDER for a truck we do not own and will hand back.
+        # The entry stands for "whatever we rented", so every record filed against
+        # it needs the actual truck's identity captured per job, and the DVIR's
+        # prior-report review and out-of-service lockout must not treat two
+        # different physical trucks as one vehicle. See ADR 0053.
+        unit["is_rental"] = bool(u.get("is_rental", False))
         for f in _NUM_FIELDS:
             unit[f] = _num(u.get(f))
         axles = u.get("axle_capacities_lbs")

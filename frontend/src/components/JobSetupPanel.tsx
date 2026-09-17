@@ -84,6 +84,16 @@ export default function JobSetupPanel({
   const [unmatched, setUnmatched] = useState<string[]>([]);
   const [suggested, setSuggested] = useState<{ user_id: number; name: string }[]>([]);
   const [vehicleUnitNames, setVehicleUnitNames] = useState<string[]>([]);
+  // The actual truck behind a rental placeholder unit (ADR 0053). Only asked
+  // for when one of the selected units is flagged as a rental in the registry.
+  const [rental, setRental] = useState<NonNullable<JobSetupData["rental"]>>({});
+  // A rental entry is a placeholder reused across every truck we hire, so the
+  // job has to say which one this was. Unknown unit names are not rentals:
+  // the flag is the registry's to set.
+  const usesRental = useMemo(
+    () => vehicleUnitNames.some((n) => units.some((u) => u.name === n && u.is_rental)),
+    [vehicleUnitNames, units],
+  );
   const [isLD, setIsLD] = useState(false);
   // "What are you doing today?" expanded on the read-only tile. The day plan
   // is per-DAY and is NOT part of the job header, so it stays editable after
@@ -108,6 +118,7 @@ export default function JobSetupPanel({
     if (h) {
       setCrew(h.crew || []);
       setVehicleUnitNames(h.vehicle_unit_names || []);
+      setRental(h.rental || {});
       setIsLD(!!h.is_long_distance);
       setOrigin(h.origin || "");
       setDestination(h.destination || "");
@@ -203,6 +214,9 @@ export default function JobSetupPanel({
     is_long_distance: isLD,
     job_type_tags: tags,
     vehicle_unit_names: vehicleUnitNames,
+    // Sent only when a rental unit is selected, so deselecting one clears it
+    // rather than leaving a stale plate attached to the job.
+    rental: usesRental ? rental : null,
     crew,
     origin: origin.trim() || null,
     destination: destination.trim() || null,
@@ -213,7 +227,7 @@ export default function JobSetupPanel({
     // header is never locked. Saves carry override (below) to bypass any stale
     // lock left over from the old model.
     locked: false,
-  }), [meta.jobName, meta.jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, crew, origin, destination, stops, bolHeader, notes]);
+  }), [meta.jobName, meta.jobDate, meta.source, meta.calendarEventId, isLD, tags, vehicleUnitNames, usesRental, rental, crew, origin, destination, stops, bolHeader, notes]);
 
   const doSave = async () => {
     setBusy(true);
@@ -481,6 +495,60 @@ export default function JobSetupPanel({
               })}
             </div>
           </div>
+
+          {usesRental && (
+            <div className="col" style={{ gap: 8, padding: 12, border: "1px solid var(--brand)", borderRadius: 10 }}>
+              <FieldHelp label="Which rental truck?" bold />
+              <span className="small" style={{ color: "var(--muted)" }}>
+                The unit above is a placeholder we reuse for every truck we hire. The plate
+                is what goes on the inspection report, the duty log and the bill of lading,
+                so those records say which truck they are about.
+              </span>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small">Plate or unit number *</span>
+                <input
+                  id="rental-plate"
+                  value={rental.plate || ""}
+                  onChange={(e) => setRental((r) => ({ ...r, plate: e.target.value }))}
+                  placeholder="e.g. MT 4B-12345, or the number on the door"
+                />
+              </label>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+                  <span className="small">Rental company</span>
+                  <input
+                    id="rental-company"
+                    value={rental.company || ""}
+                    onChange={(e) => setRental((r) => ({ ...r, company: e.target.value }))}
+                    placeholder="Penske, Ryder, U-Haul..."
+                  />
+                </label>
+                <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
+                  <span className="small">Agreement number</span>
+                  <input
+                    id="rental-agreement"
+                    value={rental.agreement_number || ""}
+                    onChange={(e) => setRental((r) => ({ ...r, agreement_number: e.target.value }))}
+                  />
+                </label>
+              </div>
+              <label className="col" style={{ gap: 4 }}>
+                <span className="small">GVWR from the door sticker (lb)</span>
+                <input
+                  id="rental-gvwr"
+                  type="number"
+                  inputMode="numeric"
+                  value={rental.gvwr_lbs ?? ""}
+                  onChange={(e) => setRental((r) => ({ ...r, gvwr_lbs: e.target.value === "" ? null : Number(e.target.value) }))}
+                  placeholder="e.g. 25999"
+                />
+                <span className="small" style={{ color: "var(--muted)" }}>
+                  This is the only place the weight rating gets recorded, and it is what
+                  decides which rules applied to the trip.
+                </span>
+              </label>
+            </div>
+          )}
 
           {/* Job type. Trip (Local/Long-distance) and the day's tasks
               (Packing/Unpacking/Loading/Unloading/Internal rearrange/Driving) are

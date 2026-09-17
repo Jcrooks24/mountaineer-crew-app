@@ -6394,6 +6394,26 @@ function VehicleUnitsCard() {
               <input value={u.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="Unit name / number (e.g. 26INT)" style={{ ...numInput, fontWeight: 700, flex: "1 1 auto" }} />
               <button onClick={() => removeUnit(i)} style={{ color: "var(--danger)", background: "none", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Remove</button>
             </div>
+            {/* A rental entry stands for a different physical truck every time,
+                so a job using one has to record which truck that was (ADR 0053). */}
+            <label className="row" style={{ gap: 8, alignItems: "flex-start", marginBottom: 10, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!!u.is_rental}
+                onChange={(e) => update(i, { is_rental: e.target.checked })}
+                style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0, accentColor: "var(--brand)" }}
+              />
+              <span className="small">
+                <strong>This is a rental placeholder</strong>
+                <div style={{ color: "var(--muted)" }}>
+                  Tick this for an entry like "RENTAL" that stands for whatever truck was
+                  hired, rather than one truck you own. Jobs using it will ask for the
+                  actual plate, and each truck keeps its own inspection history instead of
+                  sharing one. Weights below are only a default for a rental: the real
+                  truck's GVWR is recorded on the job.
+                </div>
+              </span>
+            </label>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
               <label className="col" style={{ gap: 2 }}><span className="microLabel">Dry wt (lb)</span><input type="number" value={u.dry_weight_lbs ?? ""} onChange={(e) => update(i, { dry_weight_lbs: numVal(e.target.value) })} style={numInput} /></label>
               <label className="col" style={{ gap: 2 }}><span className="microLabel">GVWR (lb)</span><input type="number" value={u.gvwr_lbs ?? ""} onChange={(e) => update(i, { gvwr_lbs: numVal(e.target.value) })} style={numInput} /></label>

@@ -67,6 +67,13 @@ app.
 - **Sheet row fidelity** [confirmed 2026-09-14]: Movers and crew leads are
   unaffected; every path changed runs on the server after their record was
   accepted. ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
+- **Picks up rental trucks, and files the inspection on them** [confirmed 2026-09-17]:
+  rentals are collected by "admin or sometimes crew drivers". Every long-distance trip
+  runs in one. Under the old practice of one generic "rental" unit, this person was
+  shown a previous, unrelated truck's inspection report and asked to confirm the truck
+  in front of them was safe, and could be locked out entirely by a defect on a truck
+  the company had already handed back.
+  ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md))
 - **The subject of the federal records, and never the reader of them**
   [confirmed 2026-09-17]: their DVIRs, duty logs and DQ documents are what
   [COMPLIANCE_REFERENCE.md](COMPLIANCE_REFERENCE.md) exists to protect from a
@@ -108,6 +115,13 @@ billing, and client communication (SOP section 6.2).
   2026-09-10]: the same call. A state the app can reach but does not explain
   gets reported as a bug and costs a phone call mid-job, which is the expensive
   form of this class discovering something.
+- **Enters the rental truck's details at job setup** [confirmed 2026-09-17]: likely
+  the person collecting a rental for an early long-distance departure, with the
+  agreement in hand. The plate they type is what makes the inspection report, the
+  duty log and the bill of lading name a truck rather than the word "rental", and
+  the GVWR they copy off the door sticker is the only record of whether federal
+  rules reached the trip at all.
+  ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md))
 - **Open questions:** How much of the app do they run at the truck versus after
   the job? What do they currently do on paper instead?
 
@@ -150,6 +164,12 @@ App role: `admin`. Hailey (SOP section 1.1).
   A row missing from the Sheet is a job that cannot be reconciled, with nothing on
   the Sheet side to say so.
   ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
+- **Is who an auditor's question lands on** [confirmed 2026-09-17]: reads the DVIRs
+  worksheet as the record, and until now it recorded the vehicle as "rental" on every
+  hired truck, so the office could not tell two inspections apart or say which truck
+  either described. The worksheet now carries the plate, the rental company, the
+  agreement number and the GVWR as their own columns.
+  ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md))
 - **Open questions:** Which app numbers get trusted directly and which get
   re-checked against the Sheet? What is still done by hand that the app could
   produce? Should the office be able to see that a photo was attempted and lost?
@@ -187,6 +207,12 @@ this file.
   on-duty statements in the Sheet as the DOT compliance copy, so a lost row is a
   gap in an inspection or hours record.
   ([ADR 0049](decisions/0049-a-sheet-row-is-written-atomically-and-a-lying-marker-is-cleared-by-hand.md))
+- **Also collects rentals, and owns the registry the practice depends on**
+  [confirmed 2026-09-17]: "admin or sometimes crew drivers pick up trucks. current
+  practice is using a generic 'rental' in the crew app to designate the rental."
+  Marking that entry as a rental placeholder is an admin action, and nothing works
+  until it is done.
+  ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md))
 - **Reads the compliance reference, and so does Claude Code on their behalf**
   [confirmed 2026-09-17]: the direct and primary reader of
   [COMPLIANCE_REFERENCE.md](COMPLIANCE_REFERENCE.md), at the moment of editing a

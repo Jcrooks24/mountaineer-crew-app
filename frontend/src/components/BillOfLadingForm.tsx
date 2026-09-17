@@ -511,7 +511,10 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     loadJobSetup(ju)
       .then((h) => {
         if (!h) return;
-        const u = h.vehicle_unit_names?.[0];
+        // Prefer the rented truck's plate over the placeholder unit name, so
+        // the bill of lading names the vehicle that carried the shipment
+        // (ADR 0053).
+        const u = (h.rental?.plate || "").trim() || h.vehicle_unit_names?.[0];
         if (u) setVehicle((cur) => cur || u);
         const bh: any = h.bol_header;
         if (!bh) return;

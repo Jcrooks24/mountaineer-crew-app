@@ -44,6 +44,17 @@ export type JobSetupData = {
   is_long_distance: boolean;
   job_type_tags: string[];
   vehicle_unit_names: string[];
+  /** The actual truck behind a rental placeholder unit (ADR 0053). `plate` is
+   *  what reaches the DVIR, the RODS and the BOL in place of the word
+   *  "rental"; `gvwr_lbs` is the only record of whether a trip was over the
+   *  federal weight threshold. */
+  rental?: {
+    company?: string | null;
+    agreement_number?: string | null;
+    plate?: string | null;
+    gvwr_lbs?: number | null;
+    notes?: string | null;
+  } | null;
   crew: CrewMember[];
   origin: string | null;
   destination: string | null;

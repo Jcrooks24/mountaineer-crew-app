@@ -13,7 +13,7 @@ This file is in two parts, and they age differently:
 | **[Part 2: Open gap ledger](#part-2-open-gap-ledger)** | Findings from the 2026-09 gap audit, and where each stands. | Fast. Items close and leave. |
 
 **Part 1 verified against:** `staging` @ `b920b93`, 2026-09-17.
-**Part 2 last ruled on:** 2026-09-17. V-5 answered, B-14 closed, A-03 corrected and re-scoped.
+**Part 2 last ruled on:** 2026-09-17. V-5 answered; B-14, B-05 and B-19 closed; A-03 corrected and re-scoped; B-06 partly addressed.
 
 A stale date on one part says nothing about the other. Update them independently.
 
@@ -255,15 +255,29 @@ consequence property of an otherwise unremarkable config list, and it is not
 obvious from reading either file alone.
 
 **Units are seeded name-only, with every numeric field null.** `[code]` Deliberate,
-so no stale hardcoded weight can drift. It also means **the app holds no GVWR for a
-truck until someone enters one**, so the app cannot answer the V-1 threshold question
-for any vehicle by itself.
+so no stale hardcoded weight can drift.
 
-**A registry entry is identified by a name string, and nothing ties it to a VIN,
-plate, or rental agreement.** `[code]` The prior-report review, the out-of-service
-lockout, and the "first record" default-pass all key on that string. Reusing one
-generic entry across different physical trucks would carry one inspection history
-across all of them. See B-19.
+**A `is_rental` entry is a placeholder, and the JOB says which truck it was.**
+`[code]` `[ADR 0053]` A rental entry stands for whatever was hired, so the job header
+carries the actual truck: company, agreement number, **plate**, and GVWR. The plate
+seeds the RODS and BOL vehicle, and the DVIR **snapshots** it onto its own row rather
+than pointing at the header, so a report stays true to the truck it inspected even if
+the header is edited later.
+
+**The prior-report review and the out-of-service lockout are scoped to the actual
+truck.** `[code]` They key on `(vehicle_number, vehicle_identifier)` for a rental.
+**Do not drop that second filter.** It looks redundant and removing it silently
+re-merges every rental into one shared inspection history: a driver gets locked out
+by a defect on a truck the company no longer has, or waved through on a clean report
+for a different truck. Nothing errors either way. A rental with no identifier gets
+**no** prior report rather than another rental's. Owned units are untouched.
+
+**A rental DVIR without a plate is refused**, server-side, because the report would
+not identify the vehicle and could never be scoped afterwards. `[code]`
+
+**The GVWR on a rental job is the only place the app records whether a trip was over
+the federal threshold at all.** `[code]` See V-1. Owned units still hold no GVWR
+unless an admin has entered one.
 
 ---
 
@@ -356,7 +370,7 @@ marked **live**. Four items remain gated on a read of the running admin configur
 | B-02 | HOS limits not computed. PODS auto-fill cannot see other-employer hours, and the offline fallback to blank is silent. | V-1 | `[code]` | open |
 | B-03 | Driver tag substring match cannot exclude; "Non-Driver" matches. | live config | `[code]` | open |
 | B-04 | DVIR and PODS cannot be filed offline. | V-1 | `[code]` | open |
-| B-05 | Nothing prompts registering a rental. **A truck absent from the registry cannot have a DVIR filed for it at all.** | V-1, V-2 | `[code]` | open |
+| B-05 | Nothing prompts registering a rental; a truck absent from the registry cannot have a DVIR filed at all. | V-1, V-2 | `[code]` | **CLOSED 2026-09-17**, accepted by design. A flagged rental placeholder plus a per-job plate is the supported path ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md)). Drivers still cannot write the registry, and no longer need to. |
 | B-07 | Incident model has no accident-trigger fields and no register link. | V-1 | `[code]` | open |
 | B-08 | No admin review screen for RODS or PODS. | **live** | `[code]` | open |
 | B-09 | App still requires the annual certification of violations. | live config, `[reg]` 391.27 reserved, checked 2026-09-16 | mixed | open |
@@ -368,7 +382,7 @@ marked **live**. Four items remain gated on a read of the running admin configur
 | B-15 | DVIR odometer required by the form, nullable in the database. | none | `[code]` | open, data quality only |
 | B-16 | Emergency equipment is a checkbox attestation, not evidence. | V-1 | `[code]` | open |
 | B-18 | "Air Brakes" is the only brake item, and its description names air-only components, so a hydraulic-brake driver may reasonably skip it. Under-reporting risk, not a record gap. | V-1 | `[code]` | open |
-| B-19 | A registry entry is a reusable name string with no link to a VIN, plate, or rental agreement. Reusing one entry carries one inspection history across different physical trucks. | V-1, V-2 | `[code]` | open |
+| B-19 | A registry entry is a reusable name string with no link to a VIN, plate or rental agreement, so every rental shared one inspection history. **This was current practice, not a risk.** | V-1, V-2 | `[code]` | **CLOSED 2026-09-17**, fixed. Identity captured per job, snapshot onto the DVIR, review and lockout scoped to the truck ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md)). |
 
 **Outside the app**, tracked in the audit and not here: the TRALA exemption notice
 and its rental conditions, roadside inspection report handling, hired-auto liability

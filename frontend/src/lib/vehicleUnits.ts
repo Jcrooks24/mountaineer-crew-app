@@ -11,6 +11,10 @@ import { coalesce, invalidate } from "./sharedFetch";
 
 export type VehicleUnit = {
   name: string;
+  /** A placeholder for a truck we rent rather than own. The entry is reused
+   *  across every truck we hire, so a job that uses one must record the actual
+   *  truck's plate and GVWR on the job header (ADR 0053). */
+  is_rental?: boolean;
   dry_weight_lbs: number | null;
   gvwr_lbs: number | null;
   length_ft: number | null;

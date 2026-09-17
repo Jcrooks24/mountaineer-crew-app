@@ -2314,7 +2314,8 @@ def schedule_job_materials_bills_rebuild(
 
 DVIR_HEADERS = [
     "dvir_id", "phase", "inspection_type", "inspection_date",
-    "vehicle_number", "trailer_number", "odometer",
+    "vehicle_number", "vehicle_identifier", "rental_company", "rental_agreement",
+    "gvwr_lbs", "trailer_number", "odometer",
     "driver_name", "condition", "defects", "defect_notes",
     "back_of_truck_confirmed", "overnight_hold",
     "mechanic_name", "repairs_made", "mechanic_notes",
@@ -2336,6 +2337,13 @@ def _dvir_row(d: Dict[str, Any], phase: str) -> Dict[str, Any]:
         "inspection_type": d.get("inspection_type", ""),
         "inspection_date": d.get("inspection_date", ""),
         "vehicle_number": d.get("vehicle_number", ""),
+        # Which physical truck. For a rental the unit name is a placeholder
+        # shared by every truck we hire, so without these the office cannot
+        # tell two inspections apart. ADR 0053.
+        "vehicle_identifier": d.get("vehicle_identifier", "") or "",
+        "rental_company": d.get("rental_company", "") or "",
+        "rental_agreement": d.get("rental_agreement", "") or "",
+        "gvwr_lbs": d.get("gvwr_lbs", "") if d.get("gvwr_lbs") is not None else "",
         "trailer_number": d.get("trailer_number", "") or "",
         "odometer": d.get("odometer", "") if d.get("odometer") is not None else "",
         "driver_name": d.get("driver_name", ""),

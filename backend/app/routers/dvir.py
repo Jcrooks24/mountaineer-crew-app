@@ -29,6 +29,27 @@ DEFAULT_UNITS = ["26INT", "24FR8", "16FORD"]
 UNITS_CONFIG_KEY = "dvir_units"
 
 
+def _is_rental_unit(db: Session, vehicle_number: str) -> bool:
+    """Is this fleet-registry entry a placeholder for a truck we rent?
+
+    A rental entry stands for "whatever we hired this time", so every report
+    filed against it needs the actual truck's identifier. Unknown units are NOT
+    treated as rentals: a name the registry has never heard of is a data problem,
+    and refusing the inspection would be the app deciding a truck cannot be
+    inspected at all. See ADR 0053.
+    """
+    from app.core.vehicle_units import VEHICLE_UNITS_KEY, normalize_units
+    row = db.query(SystemConfig).filter(SystemConfig.key == VEHICLE_UNITS_KEY).first()
+    if not row or not row.value:
+        return False
+    try:
+        units = normalize_units(json.loads(row.value))
+    except (ValueError, TypeError):
+        return False
+    name = (vehicle_number or "").strip().lower()
+    return any(u.get("is_rental") and str(u.get("name", "")).strip().lower() == name for u in units)
+
+
 def _needs_mechanic_review(d: DVIR) -> bool:
     # A DVIR needs mechanic review only if defects were noted. Satisfactory
     # inspections with no defects auto-clear and do not sit in the queue.
@@ -68,6 +89,10 @@ def _to_response(
         vehicle_number=d.vehicle_number,
         trailer_number=d.trailer_number,
         odometer=d.odometer,
+        vehicle_identifier=d.vehicle_identifier,
+        rental_company=d.rental_company,
+        rental_agreement=d.rental_agreement,
+        gvwr_lbs=d.gvwr_lbs,
         inspection_type=d.inspection_type,
         inspection_date=d.inspection_date,
         job_uuid=d.job_uuid,
@@ -157,15 +182,30 @@ def get_units(
 @router.get("/latest-for-vehicle")
 def latest_for_vehicle(
     vehicle_number: str,
+    vehicle_identifier: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> Optional[DVIRResponse]:
-    dvir = (
-        db.query(DVIR)
-        .filter(DVIR.vehicle_number == vehicle_number)
-        .order_by(DVIR.created_at.desc())
-        .first()
-    )
+    """The last report for a truck, which drives the 396.13 prior-report review
+    and the out-of-service lockout on the DVIR form.
+
+    A rental unit is a placeholder reused across every truck we hire, so for one
+    of those the answer is scoped to `vehicle_identifier` (the plate). Without
+    that scoping, an unresolved defect on a truck handed back weeks ago locks out
+    an unrelated truck, and a clean report on that old truck clears a defective
+    one. Owned units are unaffected: the name IS the truck, callers pass no
+    identifier, and the query is what it always was. See ADR 0053.
+    """
+    q = db.query(DVIR).filter(DVIR.vehicle_number == vehicle_number)
+    ident = (vehicle_identifier or "").strip()
+    if ident:
+        q = q.filter(DVIR.vehicle_identifier == ident)
+    elif _is_rental_unit(db, vehicle_number):
+        # A rental with no identifier given: there is no truck to answer about.
+        # Returning the newest report for some other rental is exactly the
+        # cross-contamination this is here to stop.
+        return None
+    dvir = q.order_by(DVIR.created_at.desc()).first()
     if not dvir:
         return None
     return _to_response(dvir)
@@ -184,11 +224,29 @@ def create_dvir(
     if existing:
         return _to_response(existing)
 
+    # A rental unit names a placeholder, not a truck. Without the plate this
+    # report cannot say which vehicle was inspected, and it would join one
+    # shared inspection history with every other rental. Enforced server-side
+    # rather than only in the form, because the review and lockout queries
+    # depend on it being there. See ADR 0053.
+    if _is_rental_unit(db, body.vehicle_number) and not (body.vehicle_identifier or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This is a rental, so the inspection needs the truck's plate or "
+                "unit number. Add it to the job setup and try again."
+            ),
+        )
+
     dvir = DVIR(
         dvir_id=body.dvir_id,
         vehicle_number=body.vehicle_number,
         trailer_number=body.trailer_number,
         odometer=body.odometer,
+        vehicle_identifier=(body.vehicle_identifier or "").strip() or None,
+        rental_company=(body.rental_company or "").strip() or None,
+        rental_agreement=(body.rental_agreement or "").strip() or None,
+        gvwr_lbs=body.gvwr_lbs,
         inspection_type=body.inspection_type,
         inspection_date=body.inspection_date,
         job_uuid=body.job_uuid,
