@@ -221,6 +221,11 @@ this file.
   cost, and possibly differently each time, because nothing in the repo records
   which rules reach this company and why."
   ([ADR 0051](decisions/0051-the-compliance-reference-maps-code-to-obligations-and-vendors-no-cfr.md))
+- **Keeps a copy of every release outside GitHub** [confirmed 2026-09-23]: "If the
+  GitHub account or repo were lost or locked, the business still has every file of
+  what crews run." Runs the vault backup at each merge to main; no other class is
+  touched.
+  ([ADR 0054](decisions/0054-every-release-is-copied-to-the-owners-vault.md))
 
 ## 7. Mechanic
 

@@ -12,7 +12,7 @@ python scripts/promotion_gate.py --base-ref origin/main --report
 changes as an advisory block, so sections 2, 3 and 4 start from facts rather
 than memory.
 
-Order matters: **1-7 before the merge, 8-11 after.**
+Order matters: **1-7 before the merge, 8-12 after.**
 
 ---
 
@@ -234,6 +234,21 @@ looks wrong, and who to contact.
       consequence, which has caught us out: a fix pushed to `staging` does
       **not** reach this cron. It ships only at a promotion.
 - [ ] Any other Render/Vercel service pinned to `staging`.
+
+## 12. Back up the release to the vault
+
+- [ ] After `main` is pushed, run:
+
+      python scripts/backup_to_vault.py
+
+  It fetches, exports every tracked file at `origin/main` and `origin/staging`
+  into a dated folder in the owner's Obsidian vault (`Crew App Backup`), checks
+  each copy's file count against git, and keeps the newest five.
+  [ADR 0054](decisions/0054-every-release-is-copied-to-the-owners-vault.md).
+  A **Note** line about local commits ahead of `origin` means those are not in
+  the backup; push them first if they belong to the release. Runs only on the
+  owner's laptop; on any other machine set `CREW_APP_VAULT_BACKUP_DIR` or skip it
+  and say so.
 
 ---
 

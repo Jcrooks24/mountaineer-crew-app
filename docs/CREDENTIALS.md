@@ -241,6 +241,15 @@ The Drive folder holds a copy of this file. It contains no secret values, but it
 complete map of every account and API this system depends on. **Share the folder with
 people who would inherit the system, not with "anyone who has the link."**
 
+## Local-only settings (the owner's laptop)
+
+| Name | Kind | Powers | Breaks what, if wrong or missing |
+|---|---|---|---|
+| `CREW_APP_VAULT_BACKUP_DIR` | Env var, optional | `scripts/backup_to_vault.py`, the release backup (promotion checklist section 12) | Nothing. Defaults to `~/OneDrive/Desktop/Mountaineer Moving/Crew App Backup`; the script refuses to run if that vault folder does not exist. Set it only on another machine. [ADR 0054](decisions/0054-every-release-is-copied-to-the-owners-vault.md). |
+
+The backup copies every tracked file, including this one, into the owner's Obsidian
+vault. Same rule as the Drive mirror: no secret values here, ever.
+
 ## Rotation notes
 
 | Secret | On rotation |

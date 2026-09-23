@@ -17,7 +17,7 @@ sheet column changes. Start from its output, not from memory.
 
 ## Step 2: work `docs/PROMOTION_CHECKLIST.md` top to bottom
 
-Read that file and go through all eleven sections. It is the source of truth for
+Read that file and go through all twelve sections. It is the source of truth for
 what a promotion involves; this command is just the driver.
 
 For each section, report one of: **done**, **outstanding (with the specific
@@ -43,7 +43,9 @@ Give the user:
    environment, Apps Script pastes, Postmark/OAuth config, in-app config.
    Be specific about WHICH environment each one goes in.
 3. **Post-merge** - patch note draft, whether a mass crew email is warranted,
-   branch repointing.
+   branch repointing, and the vault backup (`scripts/backup_to_vault.py`,
+   section 12). Run the backup yourself once `main` is pushed; it only writes
+   to the owner's vault.
 4. **What you could not verify** and why.
 
 Then stop and wait. Offer to draft the patch note and the crew email; do not
