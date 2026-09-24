@@ -202,6 +202,12 @@ across with the merge:
       feature overnight.
 - [ ] **Reimbursement / per-diem rates** (ADR 0033) exist in prod SystemConfig.
 - [ ] **DQ document type catalog** matches what the office expects.
+- [ ] **Rental placeholder flag** (ADR 0053, 0055). In Admin -> Settings -> DVIR
+      unit list, tick **This is a rental placeholder** on the generic rental
+      entry, on staging for testing and on prod after the merge. Until it is
+      ticked, "+ New rental truck" never appears and no rental record is made.
+- [ ] **`SHEETS_RENTAL_TRUCKS_TAB`** (ADR 0055): `RentalTrucksStaging` on Render
+      staging. Prod can stay unset (the default `RentalTrucks` is right).
 - [ ] **Anything left undone from a prior merge** - check the bottom of this file.
 
 ## 9. Patch note

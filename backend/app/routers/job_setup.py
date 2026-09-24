@@ -64,6 +64,9 @@ class RentalUnit(BaseModel):
     threshold. All optional at the schema so a half-filled header still saves;
     the DVIR is where a missing plate actually stops something.
     """
+    # The rental truck record this is (ADR 0055). Client-generated for a new
+    # truck so a queued offline save cannot create it twice.
+    rental_uuid: Optional[str] = None
     company: Optional[str] = None
     agreement_number: Optional[str] = None
     plate: Optional[str] = None
@@ -107,7 +110,18 @@ def _load_obj(raw: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
-def _to_out(row: JobSetup) -> Dict[str, Any]:
+def _job_rentals(db: Session, job_uuid: str) -> List[Dict[str, Any]]:
+    from app.core import rental_trucks as rt
+    return rt.serialize(db, rt.rentals_for_job(db, job_uuid))
+
+
+def _to_out(row: JobSetup, db: Session) -> Dict[str, Any]:
+    # The job's rental comes from the rental truck records linked to it (ADR
+    # 0055), most recent first, whichever screen entered it. The DVIR, the RODS
+    # and the BOL all read `rental.plate` from here. `rental_json` is only the
+    # fallback for a header saved before those records existed.
+    rentals = _job_rentals(db, row.job_uuid)
+    rental = rentals[0] if rentals else (_load_obj(row.rental_json) or None)
     return {
         "job_uuid": row.job_uuid,
         "job_name": row.job_name,
@@ -117,7 +131,8 @@ def _to_out(row: JobSetup) -> Dict[str, Any]:
         "is_long_distance": bool(row.is_long_distance),
         "job_type_tags": [str(t) for t in _load_list(row.job_type_tags)],
         "vehicle_unit_names": [str(u) for u in _load_list(row.vehicle_unit_names)],
-        "rental": _load_obj(row.rental_json) or None,
+        "rental": rental,
+        "rentals": rentals,
         "crew": _load_list(row.crew_json),
         "origin": row.origin,
         "destination": row.destination,
@@ -137,7 +152,7 @@ def get_job_setup(
     _: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     row = db.query(JobSetup).filter(JobSetup.job_uuid == job_uuid).first()
-    return {"job_uuid": job_uuid, "setup": _to_out(row) if row else None}
+    return {"job_uuid": job_uuid, "setup": _to_out(row, db) if row else None}
 
 
 def _clean_crew(crew: List[CrewMember]) -> List[Dict[str, Any]]:
@@ -222,6 +237,37 @@ def upsert_job_setup(
     existing.updated_by_name = current_user.name or current_user.email
     existing.updated_at = now
 
+    # A rental entered or picked here becomes (or joins) a rental truck record
+    # linked to this job, the same record the DVIR writes (ADR 0055). A save
+    # with no rental does NOT unlink anything: a link is the history of which
+    # truck served the job, and a stale queued save must not erase it.
+    rental_row = None
+    if body.rental and (body.rental.plate or "").strip():
+        from app.core import rental_trucks as rt
+        rental_units = [u for u in body.vehicle_unit_names if rt.is_rental_unit(db, u)]
+        if rental_units:
+            try:
+                rental_row = rt.upsert_rental(
+                    db, rental_uuid=body.rental.rental_uuid, unit_name=rental_units[0],
+                    plate=body.rental.plate or "", company=body.rental.company,
+                    agreement_number=body.rental.agreement_number,
+                    gvwr_lbs=body.rental.gvwr_lbs, notes=body.rental.notes,
+                    user=current_user,
+                )
+                rt.link_rental_to_job(
+                    db, rental_row, job_uuid=job_uuid, job_name=existing.job_name,
+                    job_date=existing.job_date, source="job_setup", user=current_user,
+                )
+            except rt.PlateLocked:
+                # The plate is fixed once a truck has an inspection. Refusing the
+                # whole header over it would strand crew, route and notes edits
+                # in a queue, so keep the header and leave the truck as it is;
+                # the response shows the plate that stands.
+                rental_row = None
+
     db.commit()
+    if rental_row is not None:
+        from app.integrations.sheets_export import schedule_rental_truck_export
+        schedule_rental_truck_export(rental_row.rental_uuid)
     db.refresh(existing)
-    return {"job_uuid": job_uuid, "setup": _to_out(existing)}
+    return {"job_uuid": job_uuid, "setup": _to_out(existing, db)}

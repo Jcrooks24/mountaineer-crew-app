@@ -46,6 +46,7 @@ import { getCompanyInfoCached, refreshCompanyInfo, type CompanyInfo } from "../l
 import VehicleUnitSpecs from "./VehicleUnitSpecs";
 import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
 import { loadJobSetup } from "../lib/jobSetupStore";
+import { loadJobRentals } from "../lib/rentalTrucks";
 import SuggestInput from "./SuggestInput";
 import NumberField from "./NumberField";
 
@@ -509,13 +510,16 @@ function BolEditor({ initialDraft, onBack }: { initialDraft: BOLDraft; onBack: (
     if (!ju || draft.status !== "draft" || seededBolHeaderRef.current === ju) return;
     seededBolHeaderRef.current = ju;
     loadJobSetup(ju)
-      .then((h) => {
-        if (!h) return;
+      .then(async (h) => {
         // Prefer the rented truck's plate over the placeholder unit name, so
         // the bill of lading names the vehicle that carried the shipment
-        // (ADR 0053).
-        const u = (h.rental?.plate || "").trim() || h.vehicle_unit_names?.[0];
+        // (ADR 0053). A job with no header can still have a truck linked at an
+        // inspection (ADR 0055).
+        const plate = (h?.rental?.plate || "").trim()
+          || (h ? "" : ((await loadJobRentals(ju))[0]?.plate || "").trim());
+        const u = plate || h?.vehicle_unit_names?.[0];
         if (u) setVehicle((cur) => cur || u);
+        if (!h) return;
         const bh: any = h.bol_header;
         if (!bh) return;
         const keys = [

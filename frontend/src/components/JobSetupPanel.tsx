@@ -7,7 +7,7 @@
  * to the offline-safe job-setup store. Nothing else reads the header yet (that
  * is C1.3); this is where the office fills it in.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FieldHelp } from "./FieldHelp";
 import { BetaTag } from "./BetaTag";
 import { useTheme } from "../theme/ThemeContext";
@@ -15,6 +15,10 @@ import { apiFetch, ApiError } from "../api/client";
 import RosterPicker from "./RosterPicker";
 import { useJobTypes } from "../lib/jobTypesStore";
 import { getUnitsCached, refreshUnits, type VehicleUnit } from "../lib/vehicleUnits";
+import {
+  getActiveRentalsCached, markRentalReturned, newRentalUuid, refreshActiveRentals,
+  rentalLabel, unlinkRentalFromJob, type RentalTruck,
+} from "../lib/rentalTrucks";
 import { LdPlanTile, LD_LABELS, type LdActivity, type LdPlan } from "./LdWorkday";
 import {
   loadJobSetup,
@@ -48,6 +52,28 @@ type EventCrew = {
   matched: { user_id: number; name: string; email: string }[];
   unmatched: string[];
 };
+
+/** Only the fields a header save sends for its rental; a record from the
+ *  server also carries its job list and timestamps, which a save ignores. */
+function pickFields(r: NonNullable<JobSetupData["rental"]> | RentalTruck): NonNullable<JobSetupData["rental"]> {
+  return {
+    rental_uuid: r.rental_uuid ?? null,
+    plate: r.plate ?? null,
+    company: r.company ?? null,
+    agreement_number: r.agreement_number ?? null,
+    gvwr_lbs: r.gvwr_lbs ?? null,
+    notes: r.notes ?? null,
+  };
+}
+
+function chipStyle(on: boolean): React.CSSProperties {
+  return {
+    padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
+    border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
+    background: on ? "var(--brand)" : "transparent",
+    color: on ? "var(--on-brand)" : "var(--text)", fontWeight: on ? 700 : 400,
+  };
+}
 
 export default function JobSetupPanel({
   jobUuid,
@@ -87,6 +113,15 @@ export default function JobSetupPanel({
   // The actual truck behind a rental placeholder unit (ADR 0053). Only asked
   // for when one of the selected units is flagged as a rental in the registry.
   const [rental, setRental] = useState<NonNullable<JobSetupData["rental"]>>({});
+  // Rental trucks already entered (ADR 0055), offered next to the owned units
+  // as "Rental*<job name>" so a multi-day job picks the truck instead of
+  // re-entering it. Cached, so the chips still show offline.
+  const [rentals, setRentals] = useState<RentalTruck[]>(() => getActiveRentalsCached());
+  // The id a new truck typed here is created under, fixed for this form so a
+  // queued offline save cannot create it twice.
+  const newRentalId = useRef(newRentalUuid());
+  const [rentalBusy, setRentalBusy] = useState(false);
+  const [rentalMsg, setRentalMsg] = useState<string | null>(null);
   // A rental entry is a placeholder reused across every truck we hire, so the
   // job has to say which one this was. Unknown unit names are not rentals:
   // the flag is the registry's to set.
@@ -117,8 +152,13 @@ export default function JobSetupPanel({
   const hydrate = useCallback((h: JobSetupData | null, evc: EventCrew | null) => {
     if (h) {
       setCrew(h.crew || []);
-      setVehicleUnitNames(h.vehicle_unit_names || []);
-      setRental(h.rental || {});
+      // A truck linked to this job anywhere, usually at the pre-trip DVIR, is
+      // this job's truck here too (ADR 0055): the header adopts it rather than
+      // asking for it again.
+      const linkedUnit = h.rental?.rental_uuid ? (h.rental as RentalTruck).unit_name : "";
+      const names = h.vehicle_unit_names || [];
+      setVehicleUnitNames(linkedUnit && !names.includes(linkedUnit) ? [...names, linkedUnit] : names);
+      setRental(h.rental ? pickFields(h.rental) : {});
       setIsLD(!!h.is_long_distance);
       setOrigin(h.origin || "");
       setDestination(h.destination || "");
@@ -150,6 +190,7 @@ export default function JobSetupPanel({
     setStatus("idle");
     setErr(null);
     refreshUnits().then((u) => { if (!cancelled) setUnits(u); }).catch(() => {});
+    refreshActiveRentals().then((r) => { if (!cancelled) setRentals(r); }).catch(() => {});
 
     (async () => {
       const h = await loadJobSetup(jobUuid);
@@ -182,6 +223,80 @@ export default function JobSetupPanel({
     setVehicleUnitNames((prev) =>
       prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
     );
+
+  // The trucks this job can show as chips: the live list, plus the job's own
+  // truck even if it has since gone idle or been returned.
+  const rentalChoices = useMemo(() => {
+    const own = existing?.rentals || [];
+    const extra = own.filter((r) => !rentals.some((x) => x.rental_uuid === r.rental_uuid));
+    return [...rentals, ...extra];
+  }, [rentals, existing]);
+  const pickedRecord = rental.rental_uuid
+    ? rentalChoices.find((r) => r.rental_uuid === rental.rental_uuid) ?? null
+    : null;
+  // Saved on the server as this job's truck, so returning or removing it means
+  // something. A truck only typed here (maybe still queued offline) is not.
+  const linkedToJob = !!pickedRecord && pickedRecord.jobs.some((j) => j.job_uuid === jobUuid);
+
+  const pickRentalRecord = (r: RentalTruck) => {
+    setRentalMsg(null);
+    if (rental.rental_uuid === r.rental_uuid) {
+      if (r.jobs.some((j) => j.job_uuid === jobUuid)) {
+        // Deselecting would not unlink it on the server, so the truck would
+        // come straight back. Point at the button that actually removes it.
+        setRentalMsg("This truck is linked to this job. To take it off, use \"Wrong truck, remove from job\" below.");
+        return;
+      }
+      // Tapping the picked truck again deselects it.
+      setRental({});
+      setVehicleUnitNames((prev) => prev.filter((n) => n !== r.unit_name));
+      return;
+    }
+    setRental(pickFields(r));
+    setVehicleUnitNames((prev) => (prev.includes(r.unit_name) ? prev : [...prev, r.unit_name]));
+  };
+  const pickNewRental = (unitName: string) => {
+    setRentalMsg(null);
+    const picking = !(vehicleUnitNames.includes(unitName) && !pickedRecord);
+    newRentalId.current = newRentalUuid();
+    setRental({});
+    setVehicleUnitNames((prev) =>
+      picking ? (prev.includes(unitName) ? prev : [...prev, unitName]) : prev.filter((n) => n !== unitName),
+    );
+  };
+
+  const returnRental = async () => {
+    if (!pickedRecord) return;
+    if (!confirm(`Mark ${pickedRecord.plate} as returned to the rental company? It leaves the truck list; its record stays.`)) return;
+    setRentalBusy(true);
+    setRentalMsg(null);
+    try {
+      await markRentalReturned(pickedRecord.rental_uuid);
+      setRentals(await refreshActiveRentals({ force: true }));
+      setRentalMsg("Marked returned.");
+    } catch (e) {
+      setRentalMsg(e instanceof ApiError ? e.message : "Could not reach the server. Try again when online.");
+    } finally {
+      setRentalBusy(false);
+    }
+  };
+  const removeRentalFromJob = async () => {
+    if (!pickedRecord) return;
+    if (!confirm(`Remove ${pickedRecord.plate} from this job? Use this for a wrong pick.`)) return;
+    setRentalBusy(true);
+    setRentalMsg(null);
+    try {
+      await unlinkRentalFromJob(pickedRecord.rental_uuid, jobUuid);
+      setRental({});
+      setVehicleUnitNames((prev) => prev.filter((n) => n !== pickedRecord.unit_name));
+      setExisting((h) => (h ? { ...h, rentals: (h.rentals || []).filter((r) => r.rental_uuid !== pickedRecord.rental_uuid) } : h));
+      setRentalMsg("Removed from this job. Save to keep the change.");
+    } catch (e) {
+      setRentalMsg(e instanceof ApiError ? e.message : "Could not reach the server. Try again when online.");
+    } finally {
+      setRentalBusy(false);
+    }
+  };
   const toggleTag = (t: string) =>
     setTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
@@ -214,9 +329,12 @@ export default function JobSetupPanel({
     is_long_distance: isLD,
     job_type_tags: tags,
     vehicle_unit_names: vehicleUnitNames,
-    // Sent only when a rental unit is selected, so deselecting one clears it
-    // rather than leaving a stale plate attached to the job.
-    rental: usesRental ? rental : null,
+    // Sent only when a rental unit is selected. The server turns it into (or
+    // joins it to) a rental truck record linked to this job (ADR 0055); a save
+    // without it unlinks nothing, so a wrong pick is removed with the button.
+    rental: usesRental
+      ? { ...pickFields(rental), rental_uuid: rental.rental_uuid || newRentalId.current }
+      : null,
     crew,
     origin: origin.trim() || null,
     destination: destination.trim() || null,
@@ -319,7 +437,16 @@ export default function JobSetupPanel({
           </div>
           {staticRow("Trip", isLD ? "Long-distance" : "Local")}
           {staticRow("Crew", crewNames.length ? crewNames.join(", ") : "None added")}
-          {staticRow("Truck", vehicleUnitNames.length ? vehicleUnitNames.join(", ") : "Not set")}
+          {staticRow(
+            "Truck",
+            vehicleUnitNames.length
+              ? vehicleUnitNames
+                  .map((n) => (n === (existing?.rental as RentalTruck | null | undefined)?.unit_name && existing?.rental?.plate
+                    ? `${n} (${existing.rental.plate})`
+                    : n))
+                  .join(", ")
+              : "Not set",
+          )}
           {tags.length > 0 && staticRow("Type", tags.join(", "))}
           {routeParts.length > 0 && staticRow("Route", routeParts.join(" -> "))}
           {notes.trim() && staticRow("Notes", notes.trim())}
@@ -475,44 +602,84 @@ export default function JobSetupPanel({
             <FieldHelp label="Vehicle unit(s)" bold />
             <div className="row wrap" style={{ gap: 8 }}>
               {units.length === 0 && <span className="small" style={{ color: "var(--muted)" }}>No units configured.</span>}
-              {units.map((u) => {
+              {units.filter((u) => !u.is_rental).map((u) => {
                 const on = vehicleUnitNames.includes(u.name);
                 return (
-                  <button
-                    key={u.name}
-                    type="button"
-                    onClick={() => toggleUnit(u.name)}
-                    style={{
-                      padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer",
-                      border: on ? "1px solid var(--brand)" : "1px solid var(--border)",
-                      background: on ? "var(--brand)" : "transparent",
-                      color: on ? "var(--on-brand)" : "var(--text)", fontWeight: on ? 700 : 400,
-                    }}
-                  >
+                  <button key={u.name} type="button" onClick={() => toggleUnit(u.name)} style={chipStyle(on)}>
                     {u.name}
                   </button>
                 );
               })}
+              {rentalChoices.map((r) => {
+                const on = rental.rental_uuid === r.rental_uuid;
+                const { label, sub } = rentalLabel(r, rentalChoices);
+                return (
+                  <button key={r.rental_uuid} type="button" onClick={() => pickRentalRecord(r)} style={chipStyle(on)}>
+                    {label}
+                    {sub && <span style={{ fontSize: 11, opacity: 0.8 }}> {sub}</span>}
+                  </button>
+                );
+              })}
+              {(() => {
+                const placeholders = units.filter((u) => u.is_rental);
+                return placeholders.map((u) => {
+                  const on = vehicleUnitNames.includes(u.name) && !pickedRecord;
+                  return (
+                    <button key={`new:${u.name}`} type="button" onClick={() => pickNewRental(u.name)} style={chipStyle(on)}>
+                      {placeholders.length > 1 ? `+ New rental truck (${u.name})` : "+ New rental truck"}
+                    </button>
+                  );
+                });
+              })()}
             </div>
+            {units.some((u) => u.is_rental) && (
+              <span className="small" style={{ color: "var(--muted)" }}>
+                Rental trucks can also be entered at the pre-trip inspection. <BetaTag feature="rentalTruckList" />
+              </span>
+            )}
           </div>
 
           {usesRental && (
             <div className="col" style={{ gap: 8, padding: 12, border: "1px solid var(--brand)", borderRadius: 10 }}>
               <FieldHelp label="Which rental truck?" bold />
               <span className="small" style={{ color: "var(--muted)" }}>
-                The unit above is a placeholder we reuse for every truck we hire. The plate
-                is what goes on the inspection report, the duty log and the bill of lading,
-                so those records say which truck they are about.
+                The plate is what goes on the inspection report, the duty log and the bill
+                of lading, so those records say which truck they are about. Leave it blank
+                if nobody has the truck yet: the driver enters it at the pre-trip inspection.
               </span>
-              <label className="col" style={{ gap: 4 }}>
-                <span className="small">Plate or unit number *</span>
-                <input
-                  id="rental-plate"
-                  value={rental.plate || ""}
-                  onChange={(e) => setRental((r) => ({ ...r, plate: e.target.value }))}
-                  placeholder="e.g. MT 4B-12345, or the number on the door"
-                />
-              </label>
+              {pickedRecord ? (
+                <div className="small col" style={{ gap: 4 }}>
+                  <span>
+                    Plate <span className="mono" style={{ fontWeight: 700 }}>{pickedRecord.plate}</span>
+                    {pickedRecord.jobs.length > 0 && (
+                      <span style={{ color: "var(--muted)" }}>
+                        {" "}· used on {pickedRecord.jobs.map((j) => j.job_name || "(unnamed job)").join(", ")}
+                      </span>
+                    )}
+                  </span>
+                  {linkedToJob && (
+                    <div className="row wrap" style={{ gap: 8 }}>
+                      <button type="button" disabled={rentalBusy} onClick={returnRental} style={{ fontSize: 12 }}>
+                        Truck returned
+                      </button>
+                      <button type="button" disabled={rentalBusy} onClick={removeRentalFromJob} style={{ fontSize: 12 }}>
+                        Wrong truck, remove from job
+                      </button>
+                    </div>
+                  )}
+                  {rentalMsg && <span style={{ color: "var(--muted)" }}>{rentalMsg}</span>}
+                </div>
+              ) : (
+                <label className="col" style={{ gap: 4 }}>
+                  <span className="small">Plate or unit number</span>
+                  <input
+                    id="rental-plate"
+                    value={rental.plate || ""}
+                    onChange={(e) => setRental((r) => ({ ...r, plate: e.target.value }))}
+                    placeholder="e.g. MT 4B-12345, or the number on the door"
+                  />
+                </label>
+              )}
               <div className="row wrap" style={{ gap: 8 }}>
                 <label className="col" style={{ gap: 4, flex: "1 1 160px" }}>
                   <span className="small">Rental company</span>

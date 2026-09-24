@@ -30,24 +30,11 @@ UNITS_CONFIG_KEY = "dvir_units"
 
 
 def _is_rental_unit(db: Session, vehicle_number: str) -> bool:
-    """Is this fleet-registry entry a placeholder for a truck we rent?
-
-    A rental entry stands for "whatever we hired this time", so every report
-    filed against it needs the actual truck's identifier. Unknown units are NOT
-    treated as rentals: a name the registry has never heard of is a data problem,
-    and refusing the inspection would be the app deciding a truck cannot be
-    inspected at all. See ADR 0053.
-    """
-    from app.core.vehicle_units import VEHICLE_UNITS_KEY, normalize_units
-    row = db.query(SystemConfig).filter(SystemConfig.key == VEHICLE_UNITS_KEY).first()
-    if not row or not row.value:
-        return False
-    try:
-        units = normalize_units(json.loads(row.value))
-    except (ValueError, TypeError):
-        return False
-    name = (vehicle_number or "").strip().lower()
-    return any(u.get("is_rental") and str(u.get("name", "")).strip().lower() == name for u in units)
+    """Is this fleet-registry entry a placeholder for a truck we rent? The rule
+    lives in app.core.rental_trucks so the job header and the rentals router use
+    the same one. See ADR 0053."""
+    from app.core.rental_trucks import is_rental_unit
+    return is_rental_unit(db, vehicle_number)
 
 
 def _needs_mechanic_review(d: DVIR) -> bool:
@@ -93,6 +80,7 @@ def _to_response(
         rental_company=d.rental_company,
         rental_agreement=d.rental_agreement,
         gvwr_lbs=d.gvwr_lbs,
+        rental_uuid=d.rental_uuid,
         inspection_type=d.inspection_type,
         inspection_date=d.inspection_date,
         job_uuid=d.job_uuid,
@@ -229,24 +217,52 @@ def create_dvir(
     # shared inspection history with every other rental. Enforced server-side
     # rather than only in the form, because the review and lockout queries
     # depend on it being there. See ADR 0053.
-    if _is_rental_unit(db, body.vehicle_number) and not (body.vehicle_identifier or "").strip():
+    is_rental = _is_rental_unit(db, body.vehicle_number)
+    if is_rental and not (body.vehicle_identifier or "").strip():
         raise HTTPException(
             status_code=400,
             detail=(
                 "This is a rental, so the inspection needs the truck's plate or "
-                "unit number. Add it to the job setup and try again."
+                "unit number. Enter it on this form and try again."
             ),
         )
+
+    # The inspection is usually where a rental is first entered (ADR 0055), so
+    # the truck record and its link to this job are written in the SAME
+    # transaction as the report: there is no state where one landed and the
+    # other did not. The report then snapshots the record's merged details, so
+    # a GVWR entered earlier at job setup reaches it even if this form left it
+    # blank.
+    rental = None
+    if is_rental:
+        from app.core import rental_trucks as rt
+        try:
+            rental = rt.upsert_rental(
+                db, rental_uuid=body.rental_uuid, unit_name=body.vehicle_number,
+                plate=body.vehicle_identifier or "", company=body.rental_company,
+                agreement_number=body.rental_agreement, gvwr_lbs=body.gvwr_lbs,
+                user=current_user,
+            )
+        except rt.PlateLocked as exc:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(exc))
+        rt.link_rental_to_job(
+            db, rental, job_uuid=body.job_uuid, job_name=body.job_name,
+            job_date=body.inspection_date, source="dvir", user=current_user,
+        )
+        if body.rental_returned and body.inspection_type == "post-trip":
+            rt.mark_returned(db, rental, current_user)
 
     dvir = DVIR(
         dvir_id=body.dvir_id,
         vehicle_number=body.vehicle_number,
         trailer_number=body.trailer_number,
         odometer=body.odometer,
-        vehicle_identifier=(body.vehicle_identifier or "").strip() or None,
-        rental_company=(body.rental_company or "").strip() or None,
-        rental_agreement=(body.rental_agreement or "").strip() or None,
-        gvwr_lbs=body.gvwr_lbs,
+        vehicle_identifier=(rental.plate if rental else (body.vehicle_identifier or "").strip() or None),
+        rental_company=(rental.company if rental else (body.rental_company or "").strip() or None),
+        rental_agreement=(rental.agreement_number if rental else (body.rental_agreement or "").strip() or None),
+        gvwr_lbs=(rental.gvwr_lbs if rental else body.gvwr_lbs),
+        rental_uuid=(rental.rental_uuid if rental else None),
         inspection_type=body.inspection_type,
         inspection_date=body.inspection_date,
         job_uuid=body.job_uuid,
@@ -269,6 +285,9 @@ def create_dvir(
     run_export_in_background(
         export_dvir_to_sheets, _to_response(dvir).model_dump(), phase="driver"
     )
+    if rental is not None:
+        from app.integrations.sheets_export import schedule_rental_truck_export
+        schedule_rental_truck_export(rental.rental_uuid)
 
     return _to_response(dvir)
 

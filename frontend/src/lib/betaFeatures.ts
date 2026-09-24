@@ -58,6 +58,11 @@ export const BETA_FEATURES: ReadonlySet<string> = new Set<string>([
   // Colorblind-friendly colors for a person's own Availability screens
   // (2026-09-14, ADR 0050). The tag sits on the Profile setting.
   "colorblindPalette",
+  // Rental trucks are entered once (usually at the pre-trip DVIR) and then
+  // offered in the unit list as "Rental*<job name>" (2026-09-24, ADR 0055).
+  // The unit list looks different and gains a "+ New rental truck" option; the
+  // tag is how drivers learn the truck no longer goes in at job setup only.
+  "rentalTruckList",
 ]);
 
 export function isBeta(feature: string): boolean {

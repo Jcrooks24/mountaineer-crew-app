@@ -12,7 +12,8 @@ This file is in two parts, and they age differently:
 | **[Part 1: Regression guard](#part-1-regression-guard)** | Code surface to record to invariant. What must not break. | Slow. Changes when the code changes. |
 | **[Part 2: Open gap ledger](#part-2-open-gap-ledger)** | Findings from the 2026-09 gap audit, and where each stands. | Fast. Items close and leave. |
 
-**Part 1 verified against:** `staging` @ `b920b93`, 2026-09-17.
+**Part 1 verified against:** `staging` @ `b920b93`, 2026-09-17. Registry and rental
+section re-verified 2026-09-24 for ADR 0055.
 **Part 2 last ruled on:** 2026-09-17. V-5 answered; B-14, B-05 and B-19 closed; A-03 corrected and re-scoped; B-06 partly addressed.
 
 A stale date on one part says nothing about the other. Update them independently.
@@ -243,7 +244,7 @@ resolve the folder by a hardcoded name.
 
 ---
 
-## `backend/app/core/vehicle_units.py`, the fleet registry
+## `backend/app/core/vehicle_units.py`, `backend/app/core/rental_trucks.py`, the fleet registry and rental truck records
 
 **Produces:** no regulated record itself, but **gates** the DVIR. `[code]`
 
@@ -257,12 +258,20 @@ obvious from reading either file alone.
 **Units are seeded name-only, with every numeric field null.** `[code]` Deliberate,
 so no stale hardcoded weight can drift.
 
-**A `is_rental` entry is a placeholder, and the JOB says which truck it was.**
-`[code]` `[ADR 0053]` A rental entry stands for whatever was hired, so the job header
-carries the actual truck: company, agreement number, **plate**, and GVWR. The plate
-seeds the RODS and BOL vehicle, and the DVIR **snapshots** it onto its own row rather
-than pointing at the header, so a report stays true to the truck it inspected even if
-the header is edited later.
+**A `is_rental` entry is a placeholder, and a rental truck RECORD says which truck
+it was.** `[code]` `[ADR 0053, amended by 0055]` A rental entry stands for whatever was
+hired. The actual truck (company, agreement number, **plate**, GVWR) is a
+`rental_trucks` record, entered at the DVIR or the job header, and linked to every job
+it serves. The plate seeds the RODS and BOL vehicle, and the DVIR **snapshots** the
+record's details onto its own row rather than pointing at the record, so a report stays
+true to the truck it inspected even if the record is edited later.
+
+**One physical truck is one live record.** `[code]` `[ADR 0055]` A new entry whose
+plate matches a truck not yet returned joins that record. A later write only fills
+blank details, never blanks one. A header save never unlinks a truck from its job.
+**The plate cannot change once an inspection is filed against the truck**, because
+the review and lockout below key on it: changing it would split one truck's inspection
+history in two.
 
 **The prior-report review and the out-of-service lockout are scoped to the actual
 truck.** `[code]` They key on `(vehicle_number, vehicle_identifier)` for a rental.

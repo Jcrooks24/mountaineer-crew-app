@@ -40,6 +40,11 @@ class DVIR(Base):
     # given trip was over the federal threshold at all.
     gvwr_lbs = Column(Integer, nullable=True)
 
+    # The rental truck record this inspection was filed against (ADR 0055).
+    # A link for lookup only: the four columns above stay the report's own
+    # snapshot of the truck, so editing the record never rewrites a report.
+    rental_uuid = Column(String, nullable=True)
+
     # ── Trip ─────────────────────────────────────────────────────────────────
     inspection_type = Column(String, nullable=False)   # "pre-trip" | "post-trip"
     inspection_date = Column(String, nullable=False)   # YYYY-MM-DD

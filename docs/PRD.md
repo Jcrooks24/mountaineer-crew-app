@@ -92,7 +92,7 @@ their own words, that statement becomes a line here.
 | 2 | Job capture and timeline | not yet |
 | 3 | Time capture siblings (off-job, office, availability, LD workday) | partly, 2026-09-14 (availability colors) |
 | 4 | Long-distance mode | not yet |
-| 5 | Vehicle and DVIR | not yet |
+| 5 | Vehicle and DVIR | partly, 2026-09-24 (rental trucks) |
 | 6 | Money out (reimbursements, materials) | not yet |
 | 7 | Customer paperwork (BOL, inventory, signature, documents) | not yet |
 | 8 | Photos and incidents | partly, 2026-09-11 |
@@ -160,6 +160,50 @@ cues beyond color: "no emoji symbols" (short text instead).
 
 **Open questions**: what the availability tool is for beyond this requirement; whether
 the employee has the same trouble in any other tool.
+
+---
+
+### Vehicle and DVIR: rental trucks
+
+**Purpose** (owner, 2026-09-24): "the crew OR admin enters rental information as
+soon as it becomes relevant to do so (presumably during a pre trip DVIR), and
+after a user enters that information it is propagated to other app fields.
+Rental trucks with records should be added to the list of truck options so
+multi-day jobs dont require users to re-enter the truck info." This states what
+rental entry is for, not what the DVIR as a whole is for, which is still unstated.
+
+**Serves** (owner-confirmed 2026-09-24): mover / driver, crew lead, office admin.
+
+**Driving scenario** (owner-selected intake options, 2026-09-24, quoted exactly):
+"Two rentals are out at once and every picker just says 'rental', so crew cannot
+tell which one is theirs." And: "On a multi-day long-distance job, the driver has
+to re-enter or re-find the same truck's details each day." On 2026-09-17 the owner
+described the practice underneath it: "admin or sometimes crew drivers pick up
+trucks. current practice is using a generic 'rental' in the crew app to designate
+the rental."
+
+**Stated rules** (owner, 2026-09-24):
+- "rental truck records once entered and linked to a job should display
+  'Rental*Job name' so users can discern between rentals in the choosable list."
+  For a truck on two or more jobs, the owner chose "Most recent job".
+- When a rental leaves the list, the owner chose the option "Crew or admin can tap
+  'Returned' on it; if nobody does, it hides itself 7 days after its last
+  inspection" with the amendment "but make it 10 days".
+- "trucks being used for 2 or more different jobs should allow crew to link it to
+  the new job after completing the prior one. data record should show the truck
+  was linked and used for both jobs." On whether the prior job must be closed out
+  first, the owner chose "No, link any time".
+
+**Out of scope, deliberately**: not yet stated.
+
+**Decisions behind it**:
+[ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md),
+[ADR 0055](decisions/0055-a-rental-truck-is-entered-once-and-offered-in-the-truck-list.md).
+
+**Open questions**: what the DVIR tool is for as a whole; whether a job that uses
+two rental trucks at once needs both on its header (today the header holds one;
+the DVIR can link any number); who should be able to see the list of returned
+trucks in the app, if anyone, beyond the RentalTrucks tab.
 
 ---
 

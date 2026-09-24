@@ -69,7 +69,9 @@ waiver, new 2026-08-13),
 `SHEETS_TIPS_TAB` (default `Tips`; employee tips paid through payroll, new
 2026-09-09),
 `SHEETS_PAYROLL_TAB` (default `Payroll`; one row per employee per finalized
-pay period, new 2026-09-09). Unset is harmless on prod (the default is correct)
+pay period, new 2026-09-09),
+`SHEETS_RENTAL_TRUCKS_TAB` (default `RentalTrucks`; one row per rental truck
+listing every job it served, new 2026-09-24, ADR 0055). Unset is harmless on prod (the default is correct)
 but on STAGING it writes test waivers into the production tab, like every
 other var in this list.
 

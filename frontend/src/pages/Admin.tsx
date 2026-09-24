@@ -6322,6 +6322,8 @@ function JobChecklistCard() {
 
 type VehicleUnit = {
   name: string;
+  /** A rental placeholder (ADR 0053): "+ New rental truck" in the unit lists. */
+  is_rental?: boolean;
   dry_weight_lbs: number | null;
   gvwr_lbs: number | null;
   length_ft: number | null;

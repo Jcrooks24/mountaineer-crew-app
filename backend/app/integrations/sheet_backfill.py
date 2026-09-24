@@ -347,6 +347,16 @@ def _src_feature_requests(db: Session) -> List[Dict[str, Any]]:
     } for r in rows if r.request_uuid]
 
 
+def _src_rental_trucks(db: Session) -> List[Dict[str, Any]]:
+    from app.db.models.rental_truck import RentalTruck
+    rows = db.query(RentalTruck).order_by(RentalTruck.created_at.desc()).all()
+    return [{
+        "id": r.rental_uuid,
+        "label": f"{r.plate} ({r.company or 'rental'})",
+        "created_at": _iso(r.created_at),
+    } for r in rows if r.rental_uuid]
+
+
 def _src_availability(db: Session) -> List[Dict[str, Any]]:
     """Keyed by (user_name, window_start) because that is what the tab holds -
     one row per person per 14-day window, not one per day."""
@@ -560,6 +570,11 @@ def _re_feature_request(db: Session, ref: Any) -> None:
     schedule_feature_request_export(str(ref))
 
 
+def _re_rental_truck(db: Session, ref: Any) -> None:
+    from app.integrations.sheets_export import schedule_rental_truck_export
+    schedule_rental_truck_export(str(ref))
+
+
 def _re_availability(db: Session, ref: Any) -> None:
     from app.integrations.sheets_export import schedule_availability_export
     if isinstance(ref, dict) and ref.get("user_id") is not None:
@@ -655,6 +670,9 @@ BACKFILL_REGISTRY: List[Dict[str, Any]] = [
     {"key": "feature_requests", "label": "Feature requests", "env": "SHEETS_FEATURE_REQUESTS_TAB",
      "default": "FeatureRequests", "key_cols": ["request_uuid"],
      "source": _src_feature_requests, "reexport": _re_feature_request},
+    {"key": "rental_trucks", "label": "Rental trucks", "env": "SHEETS_RENTAL_TRUCKS_TAB",
+     "default": "RentalTrucks", "key_cols": ["rental_uuid"],
+     "source": _src_rental_trucks, "reexport": _re_rental_truck},
 ]
 
 

@@ -1,7 +1,11 @@
 # 0053 - A rental is a placeholder, and the job records which truck it was
 
 Date: 2026-09-17
-Status: Accepted
+Status: Accepted, amended by [0055](0055-a-rental-truck-is-entered-once-and-offered-in-the-truck-list.md)
+(2026-09-24): the truck's identity now lives on its own rental truck record,
+entered at the DVIR or the job header and linked to each job, instead of only on
+the job header. Everything below about the placeholder flag, the DVIR snapshot,
+the plate guard and the prior-report scoping still holds.
 
 **Driving scenario:** The owner at intake, 2026-09-17, describing current practice
 and what it costs. Two things go wrong today, and they chose both:

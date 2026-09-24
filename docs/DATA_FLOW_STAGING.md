@@ -262,7 +262,7 @@ hired truck shared one inspection history.
 | 396.13 prior-report review | keyed on unit name | keyed on `(unit name, plate)` for a rental |
 | Out-of-service lockout | keyed on unit name | same scoping |
 | Rental DVIR with no plate | accepted | **refused, 400**, server-side and in the form |
-| DVIRs worksheet | 19 columns | plus `vehicle_identifier`, `rental_company`, `rental_agreement`, `gvwr_lbs` |
+| DVIRs worksheet | 19 columns | plus `vehicle_identifier`, `rental_company`, `rental_agreement`, `gvwr_lbs` (and `rental_uuid`, ADR 0055) |
 
 **Snapshot, not a pointer.** The DVIR copies the identity onto its own row at submit.
 Pointing at the header would mean a later header edit silently rewrites the vehicle on
@@ -297,6 +297,64 @@ stays honest about what was captured.
 query is exactly what it was.
 
 Guarded by `backend/scripts/verify_rental_truck_identity.py`.
+
+## Rental truck records - DVIR, job header, RODS, BOL, RentalTrucks tab
+
+**Amends the section above.** The actual truck is no longer only a block on the job
+header: it is its own record, entered once and linked to every job it serves. See
+[ADR 0055](decisions/0055-a-rental-truck-is-entered-once-and-offered-in-the-truck-list.md).
+
+**No new client queue.** A truck is created by riding one of two existing writes:
+
+| Trigger | Path | Offline |
+|---|---|---|
+| DVIR submit with a rental unit | `POST /api/dvir` carries `rental_uuid` (client-generated for a new truck), plate, company, agreement, GVWR, `job_name`, `rental_returned`. The server upserts the truck, links it to `job_uuid`, and writes the DVIR **in one transaction** | online only, as every DVIR already is (B-04) |
+| Job header save with a rental block | `PUT /api/job-setup/{job_uuid}` carries `rental.rental_uuid`. The server upserts the truck and links it, same code path | queued by the existing `crew_job_setup_queue_v1` outbox |
+| Mark returned | `POST /api/rentals/{rental_uuid}/return`, or `rental_returned` on a post-trip DVIR | online only; it only hides the truck from the list |
+| Remove a wrong pick | `DELETE /api/rentals/{rental_uuid}/jobs/{job_uuid}`, refused 409 once an inspection on that job used the truck | online only |
+| Direct upsert | `PUT /api/rentals/{rental_uuid}` (not called by the app today; kept for admin tooling) | n/a |
+
+**Reads.** `GET /api/rentals` is the truck list: not returned, used in the last 10
+days, cached on the device in `crew_rental_trucks_v1` (30 s reuse window) so the
+picker works with no signal. `GET /api/rentals/for-job/{job_uuid}` is the job's
+trucks, called by the DVIR, RODS and BOL only when the job has **no header**; with a
+header, `GET /api/job-setup` already answers `rental` (most recent linked truck) and
+`rentals` (all of them) from the links.
+
+**Sheet export.** `export_rental_truck_to_sheets`, replace-style, one row per
+`rental_uuid` on `SHEETS_RENTAL_TRUCKS_TAB` (default `RentalTrucks`), fired in the
+background after every create, link, return and unlink. Registered in
+`SHEET_SYNC_REGISTRY`, `BACKFILL_REGISTRY` and the nightly `sheet_integrity_check`.
+
+**New tables**, migration `v3x5z7b9d1f3`: `rental_trucks`, `rental_truck_jobs`
+(unique on `(rental_uuid, job_uuid)`), and nullable `dvirs.rental_uuid`. No backfill:
+a header saved before this is read through its old `rental_json` and becomes a
+record the next time it is saved.
+
+Per-field, `rental_trucks` to the RentalTrucks tab:
+
+| Field | | Note |
+|---|---|---|
+| `rental_uuid` | `[x]` | key column |
+| `plate` | `[x]` | fixed once an inspection is filed against the truck |
+| `company` | `[x]` | `rental_company` column; fill-only |
+| `agreement_number` | `[x]` | `rental_agreement` column; fill-only |
+| `gvwr_lbs` | `[x]` | fill-only |
+| `unit_name` | `[x]` | `placeholder_unit` column |
+| `notes` | `[x]` | fill-only |
+| every linked job | `[x]` | `jobs` (name and date, oldest first) and `job_uuids` |
+| `last_used_at` | `[-]` | server-set, moved forward by every inspection and link; drives the 10-day list rule |
+| `returned_at` / `returned_by_name` | `[-]` | `returned_at` / `returned_by` |
+| `created_by_name` / `created_at` | `[-]` | `entered_by` / `created_at`, set by the server |
+| `plate_key` | `[-]` | derived from the plate on the server; an internal match key, not exported |
+
+And the one new DVIR field:
+
+| Field | | Note |
+|---|---|---|
+| `rental_uuid` | `[x]` | the record the report was filed against; its own DVIRs column, so the tab joins to RentalTrucks |
+
+Guarded by `backend/scripts/verify_rental_truck_records.py`.
 
 # New domains
 
@@ -360,7 +418,7 @@ migration painful.
 
 # Not yet documented
 
-Nothing outstanding as of the 2026-09-17 rental-identity change.
+Nothing outstanding as of the 2026-09-24 rental truck records change.
 
 Uncommitted work in the working tree is out of scope until it is committed. When it
 lands, log it here in the same commit.

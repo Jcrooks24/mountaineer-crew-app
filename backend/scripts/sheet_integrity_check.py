@@ -89,6 +89,7 @@ REGISTRY = [
     ("SHEETS_INCIDENTS_TAB",         "Incidents",         "INCIDENT_HEADERS",         "incident_uuid"),
     ("SHEETS_BUGS_TAB",              "Bugs",              "BUG_REPORT_HEADERS",       "bug_uuid"),
     ("SHEETS_FEATURE_REQUESTS_TAB",  "FeatureRequests",   "FEATURE_REQUEST_HEADERS",  "request_uuid"),
+    ("SHEETS_RENTAL_TRUCKS_TAB",     "RentalTrucks",      "RENTAL_TRUCK_HEADERS",     "rental_uuid"),
     ("SHEETS_OFFICE_HOURS_TAB",      "OfficeHours",       "OFFICE_HOURS_HEADERS",     "entry_uuid"),
     ("SHEETS_REIMBURSEMENTS_TAB",    "Reimbursements",    "REIMBURSEMENT_HEADERS",    "reimbursement_uuid"),
     ("SHEETS_AVAILABILITY_TAB",      "Availability",      "AVAILABILITY_HEADERS",     None),

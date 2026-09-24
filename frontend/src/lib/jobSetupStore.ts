@@ -8,6 +8,7 @@
  * forever would never succeed. Keyed by job_uuid; one header per job.
  */
 import { apiFetch } from "../api/client";
+import type { RentalTruck } from "./rentalTrucks";
 import { isPermanentRejection, failureMark, CLEARED_FAILURE, type MaybeFailed } from "./queueFailure";
 import { coalesce, invalidate } from "./sharedFetch";
 
@@ -49,12 +50,19 @@ export type JobSetupData = {
    *  "rental"; `gvwr_lbs` is the only record of whether a trip was over the
    *  federal weight threshold. */
   rental?: {
+    /** The rental truck record (ADR 0055). Present when the server answered
+     *  from a record; a new truck entered on this screen carries a client id so
+     *  a queued offline save cannot create it twice. */
+    rental_uuid?: string | null;
     company?: string | null;
     agreement_number?: string | null;
     plate?: string | null;
     gvwr_lbs?: number | null;
     notes?: string | null;
   } | null;
+  /** Every rental truck linked to this job, most recent first (ADR 0055).
+   *  Read-only: the server builds it from the links, a save ignores it. */
+  rentals?: RentalTruck[];
   crew: CrewMember[];
   origin: string | null;
   destination: string | null;

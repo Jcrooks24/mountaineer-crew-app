@@ -18,6 +18,17 @@ class DVIRCreate(BaseModel):
     rental_company: Optional[str] = None
     rental_agreement: Optional[str] = None
     gvwr_lbs: Optional[int] = None
+    # The rental truck record (ADR 0055). For a truck picked from the list it is
+    # that record's id; for a new truck the client generates one, so a retried
+    # submit cannot create the truck twice. The server also joins a live record
+    # with the same plate. Ignored for an owned unit.
+    rental_uuid: Optional[str] = None
+    # Carried onto the job link so the truck list can say "Rental*<job name>"
+    # even for a job that has no header yet.
+    job_name: Optional[str] = None
+    # Post-trip only: the truck went back to the rental company after this
+    # inspection, so it leaves the truck list.
+    rental_returned: bool = False
     inspection_type: str          # "pre-trip" | "post-trip"
     inspection_date: str          # YYYY-MM-DD
     job_uuid: Optional[str] = None
@@ -57,6 +68,7 @@ class MechanicReviewResponse(BaseModel):
     rental_company: Optional[str] = None
     rental_agreement: Optional[str] = None
     gvwr_lbs: Optional[int] = None
+    rental_uuid: Optional[str] = None
     inspection_type: str
     inspection_date: str
     defects: List[str]
@@ -78,6 +90,7 @@ class DVIRResponse(BaseModel):
     rental_company: Optional[str] = None
     rental_agreement: Optional[str] = None
     gvwr_lbs: Optional[int] = None
+    rental_uuid: Optional[str] = None
     inspection_type: str
     inspection_date: str
     job_uuid: Optional[str]

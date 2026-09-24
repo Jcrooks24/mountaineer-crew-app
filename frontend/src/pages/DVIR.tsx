@@ -7,6 +7,11 @@ import AppHeader from "../components/AppHeader";
 import VehicleUnitSpecs from "../components/VehicleUnitSpecs";
 import { getUnitsCached, refreshUnits, unitByName, type VehicleUnit } from "../lib/vehicleUnits";
 import { loadJobSetup, type JobSetupData } from "../lib/jobSetupStore";
+import {
+  getActiveRentalsCached, invalidateRentals, loadJobRentals, newRentalUuid,
+  refreshActiveRentals, rentalLabel, type RentalTruck,
+} from "../lib/rentalTrucks";
+import { BetaTag } from "../components/BetaTag";
 
 // ── FMCSA 49 CFR §396.11 inspection items with descriptions ──────────────────
 const INSPECTION_ITEMS: { name: string; desc: string }[] = [
@@ -126,6 +131,7 @@ type PrevDVIR = {
 type DVIRResponse = {
   dvir_id: string;
   vehicle_number: string;
+  vehicle_identifier?: string | null;
   inspection_type: string;
   inspection_date: string;
   condition: string;
@@ -178,6 +184,43 @@ export default function DVIRPage() {
   // ── Vehicle info ───────────────────────────────────────────────────────────
   const [vehicleNumber, setVehicleNumber] = useState("");
 
+  // Rental trucks already entered (ADR 0055), offered in the unit list as
+  // "Rental*<job name>" so a multi-day job does not re-enter the same truck.
+  // Cached, so the list still shows with no signal.
+  const [rentals, setRentals] = useState<RentalTruck[]>(() => getActiveRentalsCached());
+  useEffect(() => { refreshActiveRentals().then(setRentals).catch(() => {}); }, []);
+  // Which rental: a record's rental_uuid, or "" (an owned unit, or a new rental
+  // being entered on this form when the unit is a rental placeholder).
+  const [rentalPick, setRentalPick] = useState("");
+  // The id a NEW truck is created under. Fixed for the life of this form, so a
+  // retried submit cannot make the truck twice; the server also joins a live
+  // record with the same plate.
+  const newRentalId = useRef(newRentalUuid());
+  // Once the inspector picks a unit, the job's defaults stop applying.
+  const userPicked = useRef(false);
+
+  function pickRental(r: RentalTruck) {
+    setVehicleNumber(r.unit_name);
+    setRentalPick(r.rental_uuid);
+    setRental({ plate: r.plate, company: r.company, agreement_number: r.agreement_number, gvwr_lbs: r.gvwr_lbs });
+  }
+
+  function onPickUnit(v: string) {
+    userPicked.current = true;
+    if (v.startsWith("rental:")) {
+      const r = rentals.find((x) => x.rental_uuid === v.slice(7));
+      if (r) pickRental(r);
+    } else if (v.startsWith("new:")) {
+      setVehicleNumber(v.slice(4));
+      setRentalPick("");
+      setRental({});
+    } else {
+      setVehicleNumber(v);
+      setRentalPick("");
+      setRental({});
+    }
+  }
+
   // C1.3 (ADR 0034): default the unit from the job header's assigned truck when
   // this DVIR is attached to a job and the inspector hasn't picked one yet. Only
   // fills an empty field, so it never overrides a manual choice.
@@ -185,14 +228,26 @@ export default function DVIRPage() {
     if (!attachedJobUuid) return;
     let cancelled = false;
     loadJobSetup(attachedJobUuid)
-      .then((h) => {
-        if (cancelled) return;
+      .then(async (h) => {
+        if (cancelled || userPicked.current) return;
+        // The rental truck already linked to this job, whichever screen entered
+        // it (ADR 0055). A job with no header yet can still have one, entered
+        // at an earlier inspection, so ask for it directly then.
+        let linked: RentalTruck | null =
+          h?.rental?.rental_uuid ? (h.rental as unknown as RentalTruck) : null;
+        if (!linked) linked = (await loadJobRentals(attachedJobUuid))[0] ?? null;
+        if (cancelled || userPicked.current) return;
+        if (linked && !linked.returned_at) {
+          const l = linked;
+          setRentals((list) => (list.some((x) => x.rental_uuid === l.rental_uuid) ? list : [l, ...list]));
+          pickRental(l);
+          return;
+        }
         const u = h?.vehicle_unit_names?.[0];
         if (u) setVehicleNumber((cur) => cur || u);
-        // The actual truck behind a rental placeholder (ADR 0053). Snapshot onto
-        // this report at submit so it stays true to the truck inspected even if
-        // the header is edited later.
-        if (h?.rental) setRental(h.rental);
+        // A header saved before rental records existed: prefill the new-truck
+        // fields from it (ADR 0053). The report snapshots them at submit.
+        if (h?.rental && !h.rental.rental_uuid) setRental(h.rental);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -202,8 +257,18 @@ export default function DVIRPage() {
   // about one truck rather than about "rental".
   const [rental, setRental] = useState<NonNullable<JobSetupData["rental"]>>({});
   const selectedUnit = unitByName(vehUnits, vehicleNumber);
-  const needsRentalId = !!selectedUnit?.is_rental;
+  const pickedRecord = rentalPick ? rentals.find((r) => r.rental_uuid === rentalPick) ?? null : null;
+  const needsRentalId = !!selectedUnit?.is_rental || !!pickedRecord;
+  // "existing": a truck from the list. "new": a rental placeholder, so this
+  // form is where the truck gets entered. "none": an owned unit.
+  const rentalMode: "existing" | "new" | "none" =
+    pickedRecord ? "existing" : needsRentalId ? "new" : "none";
   const rentalPlate = (rental?.plate || "").trim();
+  // Post-trip only: the truck goes back to the rental company after this
+  // inspection, so it leaves the unit list.
+  const [rentalReturned, setRentalReturned] = useState(false);
+  const unitSelectValue =
+    rentalMode === "existing" ? `rental:${rentalPick}` : rentalMode === "new" ? `new:${vehicleNumber}` : vehicleNumber;
 
   const [odometer, setOdometer] = useState("");
   const [inspectionType, setInspectionType] = useState<"pre-trip" | "post-trip">("pre-trip");
@@ -233,6 +298,13 @@ export default function DVIRPage() {
 
   useEffect(() => {
     setPrevReviewed(false);
+    // A new rental's plate is being typed: wait for a pause rather than asking
+    // the server about every partial plate.
+    if (rentalMode === "new" && rentalPlate) {
+      setPrevDVIR(null);
+      const t = setTimeout(() => loadPrevDVIR(vehicleNumber), 600);
+      return () => clearTimeout(t);
+    }
     loadPrevDVIR(vehicleNumber);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicleNumber, rentalPlate, needsRentalId]);
@@ -294,6 +366,12 @@ export default function DVIRPage() {
           rental_company: (rental?.company || "").trim() || null,
           rental_agreement: (rental?.agreement_number || "").trim() || null,
           gvwr_lbs: rental?.gvwr_lbs ?? null,
+          // The rental truck record (ADR 0055): the one picked from the list,
+          // or the id a truck entered on this form is created under.
+          rental_uuid:
+            rentalMode === "existing" ? rentalPick : rentalMode === "new" ? newRentalId.current : null,
+          job_name: attachedJobName || null,
+          rental_returned: inspectionType === "post-trip" && rentalMode !== "none" && rentalReturned,
           inspection_type: inspectionType,
           inspection_date: inspectionDate,
           job_uuid: attachedJobUuid || null,
@@ -309,6 +387,10 @@ export default function DVIRPage() {
         }),
       });
       setSubmitted(res);
+      if (rentalMode !== "none") {
+        invalidateRentals();
+        refreshActiveRentals({ force: true }).then(setRentals).catch(() => {});
+      }
     } catch (e: any) {
       const msg = e?.message ?? "Submission failed.";
       setErr(
@@ -329,7 +411,7 @@ export default function DVIRPage() {
     if (needsRentalId && !rentalPlate)
       return setErr(
         "This is a rental, so the report needs the truck's plate or unit number. "
-        + "Add it in the job's setup, then come back.",
+        + "Enter it under the unit.",
       );
     if (!odometer.trim()) return setErr("Odometer reading is required.");
     if (!driverName.trim()) return setErr("Driver name is required.");
@@ -368,7 +450,7 @@ export default function DVIRPage() {
           <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 6, color: "var(--ok)" }}>DVIR Recorded</div>
           <div className="small" style={{ color: "var(--muted)", marginBottom: 20 }}>
             {submitted.inspection_type === "pre-trip" ? "Pre-Trip" : "Post-Trip"} inspection for{" "}
-            <strong>{submitted.vehicle_number}</strong> on {submitted.inspection_date}
+            <strong>{submitted.vehicle_number}{submitted.vehicle_identifier ? ` ${submitted.vehicle_identifier}` : ""}</strong> on {submitted.inspection_date}
           </div>
           <div
             className="chip"
@@ -392,6 +474,11 @@ export default function DVIRPage() {
               onClick={() => {
                 setSubmitted(null);
                 setVehicleNumber("");
+                setRentalPick("");
+                setRental({});
+                setRentalReturned(false);
+                newRentalId.current = newRentalUuid();
+                userPicked.current = false;
                 setOdometer("");
                 setDefects(new Set());
                 setDefectNotes("");
@@ -515,36 +602,136 @@ export default function DVIRPage() {
           <div className="microLabel" style={{ marginBottom: 12 }}>Vehicle Information</div>
 
           <div style={{ marginBottom: 10 }}>
-            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>Unit *</div>
+            <div className="small" style={{ color: "var(--muted)", marginBottom: 4 }}>
+              Unit * <BetaTag feature="rentalTruckList" style={{ marginLeft: 6 }} />
+            </div>
             <select
-              value={vehicleNumber}
-              onChange={(e) => setVehicleNumber(e.target.value)}
+              value={unitSelectValue}
+              onChange={(e) => onPickUnit(e.target.value)}
               required
               style={selectStyle}
             >
               <option value="">Select unit…</option>
-              {units.map((u) => (
+              {units.filter((u) => !unitByName(vehUnits, u)?.is_rental).map((u) => (
                 <option key={u} value={u}>{u}</option>
               ))}
+              {rentals.length > 0 && (
+                <optgroup label="Rental trucks">
+                  {rentals.map((r) => {
+                    const { label, sub } = rentalLabel(r, rentals);
+                    return (
+                      <option key={r.rental_uuid} value={`rental:${r.rental_uuid}`}>
+                        {sub ? `${label} (${sub})` : label}
+                      </option>
+                    );
+                  })}
+                </optgroup>
+              )}
+              {(() => {
+                const placeholders = units.filter((u) => unitByName(vehUnits, u)?.is_rental);
+                return placeholders.map((u) => (
+                  <option key={`new:${u}`} value={`new:${u}`}>
+                    {placeholders.length > 1 ? `+ New rental truck (${u})` : "+ New rental truck"}
+                  </option>
+                ));
+              })()}
             </select>
-            <VehicleUnitSpecs unit={unitByName(vehUnits, vehicleNumber)} />
-            {needsRentalId && (
-              rentalPlate ? (
-                <div className="small" style={{ marginTop: 6, color: "var(--ok)" }}>
-                  Rental: <span className="mono" style={{ fontWeight: 700 }}>{rentalPlate}</span>
-                  {rental?.company ? ` (${rental.company})` : ""}
-                  {rental?.gvwr_lbs ? ` · GVWR ${Number(rental.gvwr_lbs).toLocaleString()} lb` : ""}
+            {rentalMode === "none" && <VehicleUnitSpecs unit={selectedUnit} />}
+
+            {rentalMode === "existing" && pickedRecord && (
+              <div className="small" style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ color: "var(--ok)" }}>
+                  Plate <span className="mono" style={{ fontWeight: 700 }}>{pickedRecord.plate}</span>
+                  {pickedRecord.company ? ` (${pickedRecord.company})` : ""}
+                  {pickedRecord.gvwr_lbs ? ` · GVWR ${Number(pickedRecord.gvwr_lbs).toLocaleString()} lb` : ""}
+                </div>
+                {pickedRecord.jobs.length > 0 && (
                   <div style={{ color: "var(--muted)" }}>
-                    This report is filed against that truck, not against every rental.
+                    Used on: {pickedRecord.jobs.map((j) => j.job_name || "(unnamed job)").join(", ")}
                   </div>
+                )}
+                {attachedJobUuid && !pickedRecord.jobs.some((j) => j.job_uuid === attachedJobUuid) && (
+                  <div style={{ color: "var(--muted)" }}>
+                    Submitting also links this truck to {attachedJobName || "this job"}.
+                  </div>
+                )}
+                {/* Only the details nobody has entered yet. A detail already on
+                    the record is not re-asked, and the server never blanks one. */}
+                {(!pickedRecord.gvwr_lbs || !pickedRecord.company || !pickedRecord.agreement_number) && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
+                    {!pickedRecord.gvwr_lbs && (
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                        <span>GVWR from the door sticker (lb)</span>
+                        <input type="number" inputMode="numeric" value={rental.gvwr_lbs ?? ""} placeholder="e.g. 25999"
+                          onChange={(e) => setRental((r) => ({ ...r, gvwr_lbs: e.target.value === "" ? null : Number(e.target.value) }))}
+                          style={inputStyle} />
+                      </label>
+                    )}
+                    {!pickedRecord.company && (
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                        <span>Rental company</span>
+                        <input value={rental.company || ""} placeholder="Penske, Ryder, U-Haul..."
+                          onChange={(e) => setRental((r) => ({ ...r, company: e.target.value }))} style={inputStyle} />
+                      </label>
+                    )}
+                    {!pickedRecord.agreement_number && (
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                        <span>Agreement number</span>
+                        <input value={rental.agreement_number || ""}
+                          onChange={(e) => setRental((r) => ({ ...r, agreement_number: e.target.value }))} style={inputStyle} />
+                      </label>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {rentalMode === "new" && (
+              <div style={{ marginTop: 8, padding: 12, border: "1px solid var(--brand)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div className="small" style={{ color: "var(--muted)" }}>
+                  Enter the truck once. After this inspection it shows in the unit list as
+                  Rental*{attachedJobName || "job name"}, so nobody types it again for the
+                  rest of the job or the next job it goes to.
                 </div>
-              ) : (
-                <div className="small" style={{ marginTop: 6, color: "var(--danger)" }}>
-                  This unit is a rental, and we do not know which truck it is. Add the
-                  plate or unit number in the job's setup before inspecting, so this
-                  report says which vehicle it is about.
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="small">Plate or unit number *</span>
+                  <input value={rental.plate || ""} placeholder="e.g. MT 4B-12345, or the number on the door"
+                    onChange={(e) => setRental((r) => ({ ...r, plate: e.target.value }))} style={inputStyle} />
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                    <span className="small">Rental company</span>
+                    <input value={rental.company || ""} placeholder="Penske, Ryder, U-Haul..."
+                      onChange={(e) => setRental((r) => ({ ...r, company: e.target.value }))} style={inputStyle} />
+                  </label>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                    <span className="small">Agreement number</span>
+                    <input value={rental.agreement_number || ""}
+                      onChange={(e) => setRental((r) => ({ ...r, agreement_number: e.target.value }))} style={inputStyle} />
+                  </label>
                 </div>
-              )
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="small">GVWR from the door sticker (lb)</span>
+                  <input type="number" inputMode="numeric" value={rental.gvwr_lbs ?? ""} placeholder="e.g. 25999"
+                    onChange={(e) => setRental((r) => ({ ...r, gvwr_lbs: e.target.value === "" ? null : Number(e.target.value) }))}
+                    style={inputStyle} />
+                </label>
+              </div>
+            )}
+
+            {rentalMode !== "none" && inspectionType === "post-trip" && (
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginTop: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={rentalReturned}
+                  onChange={(e) => setRentalReturned(e.target.checked)}
+                  style={{ marginTop: 3, accentColor: "var(--brand)", width: 18, height: 18, flexShrink: 0 }}
+                />
+                <span style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  This truck is going back to the rental company now. It leaves the unit list;
+                  its record and inspections are kept.
+                </span>
+              </label>
             )}
           </div>
 

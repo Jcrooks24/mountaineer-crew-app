@@ -74,6 +74,12 @@ app.
   in front of them was safe, and could be locked out entirely by a defect on a truck
   the company had already handed back.
   ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md))
+- **Enters a rental truck once, at the pre-trip inspection, then picks it** [confirmed
+  2026-09-24, owner-selected option]: "Picks up the rental and files the pre-trip DVIR;
+  would now enter the truck there and pick it from the list on later days." The truck
+  then shows as "Rental*<job name>" in the unit list, so two rentals out at once are
+  told apart and a multi-day job does not re-enter it.
+  ([ADR 0055](decisions/0055-a-rental-truck-is-entered-once-and-offered-in-the-truck-list.md))
 - **The subject of the federal records, and never the reader of them**
   [confirmed 2026-09-17]: their DVIRs, duty logs and DQ documents are what
   [COMPLIANCE_REFERENCE.md](COMPLIANCE_REFERENCE.md) exists to protect from a
@@ -122,6 +128,11 @@ billing, and client communication (SOP section 6.2).
   the GVWR they copy off the door sticker is the only record of whether federal
   rules reached the trip at all.
   ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md))
+- **Enters or picks the rental truck** [confirmed 2026-09-24, owner-selected option]:
+  "Often collects the rental for an early departure; enters or picks the truck." Amends
+  the 2026-09-17 line above: the truck can now be entered at the pre-trip inspection
+  as well as at job setup, and whichever comes first is the one record both use.
+  ([ADR 0055](decisions/0055-a-rental-truck-is-entered-once-and-offered-in-the-truck-list.md))
 - **Open questions:** How much of the app do they run at the truck versus after
   the job? What do they currently do on paper instead?
 
@@ -170,6 +181,11 @@ App role: `admin`. Hailey (SOP section 1.1).
   either described. The worksheet now carries the plate, the rental company, the
   agreement number and the GVWR as their own columns.
   ([ADR 0053](decisions/0053-a-rental-is-a-placeholder-and-the-job-records-which-truck-it-was.md))
+- **Enters rental details at booking when known, and reads the records** [confirmed
+  2026-09-24, owner-selected option]: "Enters rental details at booking when known,
+  and reads the DVIR / RODS / BOL records." The RentalTrucks tab lists each truck with
+  every job it served.
+  ([ADR 0055](decisions/0055-a-rental-truck-is-entered-once-and-offered-in-the-truck-list.md))
 - **Open questions:** Which app numbers get trusted directly and which get
   re-checked against the Sheet? What is still done by hand that the app could
   produce? Should the office be able to see that a photo was attempted and lost?

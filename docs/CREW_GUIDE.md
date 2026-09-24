@@ -116,6 +116,7 @@ The DVIR checklist covers 25 items including brakes, lights, tires, mirrors, hor
 Pre-Trip DVIR Step by Step
 Open the DVIR tab before moving the truck.
 Select your vehicle from the unit dropdown. If your truck isn't listed, tell Jacob; vehicles are admin-configured.
+Rental truck? If it is already in the list as "Rental*" plus a job name, pick it: its plate and details are already on file. If it is not, pick "+ New rental truck" and enter the plate (required), rental company, agreement number and the GVWR from the door sticker. You enter it once; after this inspection it shows in the list for the rest of the job and for any job it goes to next. If two rentals show the same job name, the plate is shown beside each.
 Review the previous DVIR for your vehicle. Note any prior defects and whether they were resolved.
 Walk through the 25-item checklist. Mark each item satisfactory or defective.
 If you found defects: describe them clearly in the notes field.
@@ -123,6 +124,7 @@ Sign with your finger in the signature pad and submit.
 A clean pre-trip with no defects takes around 2 minutes to complete in the app. Build it into your morning routine before the truck moves.
 Post-Trip DVIR
 Same process as pre-trip, completed after your last job of the day when you return the truck. If you're running multiple jobs on the same truck in one day, complete only one post-trip at the very end, not between jobs.
+Returning a rental: on the post-trip, tick "This truck is going back to the rental company now". It leaves the unit list. If nobody ticks it, a rental leaves the list by itself 10 days after it was last used.
 What Happens With Defects
 If your DVIR notes any defect:
 The DVIR enters the mechanic review queue. Admin is notified.

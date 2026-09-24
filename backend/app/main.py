@@ -35,6 +35,7 @@ import app.db.models.incident  # noqa: F401 - register incidents
 import app.db.models.bug_report  # noqa: F401 - register bug_reports
 import app.db.models.feature_request  # noqa: F401 - register feature_requests
 import app.db.models.job_setup  # noqa: F401 - register job_setup (job header, ADR 0034)
+import app.db.models.rental_truck  # noqa: F401 - register rental_trucks + rental_truck_jobs (ADR 0055)
 import app.db.models.job_checklist_check  # noqa: F401 - register job_checklist_checks (C3)
 import app.db.models.dq_document  # noqa: F401 - register dq_documents (C4)
 import app.db.models.off_job_entry  # noqa: F401 - register off-job hours
@@ -97,6 +98,7 @@ from app.routers.incidents import (
 from app.routers.bug_reports import router as bug_reports_router
 from app.routers.feature_requests import router as feature_requests_router
 from app.routers.job_setup import router as job_setup_router
+from app.routers.rentals import router as rentals_router
 from app.routers.job_checklist import router as job_checklist_router
 from app.routers.job_summary import router as job_summary_router
 from app.routers.bulletin import router as bulletin_router
@@ -291,6 +293,7 @@ app.include_router(routing_router)               # /api/routing/return-trip (dri
 app.include_router(hours_router)                 # /api/hours/worked-history (per-user weekly hours)
 app.include_router(payroll_router)               # /api/admin/payroll/* (admin payroll summary + corrections)
 app.include_router(job_setup_router)             # /api/job-setup/* (job header, ADR 0034)
+app.include_router(rentals_router)               # /api/rentals/* (rental truck records, ADR 0055)
 app.include_router(job_checklist_router)         # /api/job-checklist/* (C3 status + manual ticks)
 app.include_router(job_summary_router)           # /api/job-summary/{uuid} (crew: closed-job panel)
 app.include_router(bulletin_router)              # /api/bulletin/* (community feed)

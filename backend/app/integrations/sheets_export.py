@@ -2315,7 +2315,7 @@ def schedule_job_materials_bills_rebuild(
 DVIR_HEADERS = [
     "dvir_id", "phase", "inspection_type", "inspection_date",
     "vehicle_number", "vehicle_identifier", "rental_company", "rental_agreement",
-    "gvwr_lbs", "trailer_number", "odometer",
+    "gvwr_lbs", "rental_uuid", "trailer_number", "odometer",
     "driver_name", "condition", "defects", "defect_notes",
     "back_of_truck_confirmed", "overnight_hold",
     "mechanic_name", "repairs_made", "mechanic_notes",
@@ -2344,6 +2344,9 @@ def _dvir_row(d: Dict[str, Any], phase: str) -> Dict[str, Any]:
         "rental_company": d.get("rental_company", "") or "",
         "rental_agreement": d.get("rental_agreement", "") or "",
         "gvwr_lbs": d.get("gvwr_lbs", "") if d.get("gvwr_lbs") is not None else "",
+        # Which rental truck record this report was filed against (ADR 0055),
+        # so the DVIRs tab joins to the RentalTrucks tab.
+        "rental_uuid": d.get("rental_uuid", "") or "",
         "trailer_number": d.get("trailer_number", "") or "",
         "odometer": d.get("odometer", "") if d.get("odometer") is not None else "",
         "driver_name": d.get("driver_name", ""),
@@ -3582,6 +3585,79 @@ def schedule_feature_request_export(request_uuid: str) -> None:
         run_export_in_background(export_feature_request_to_sheets, payload)
 
 
+RENTAL_TRUCK_HEADERS = [
+    "rental_uuid", "plate", "rental_company", "rental_agreement", "gvwr_lbs",
+    "placeholder_unit", "jobs", "job_uuids", "last_used_at", "returned_at",
+    "returned_by", "entered_by", "created_at", "notes",
+]
+
+
+def export_rental_truck_to_sheets(db: Session, rental: Dict[str, Any]) -> int:
+    """Replace-style export: one row per rental truck on the RentalTrucks tab.
+
+    `jobs` lists every job the truck served, oldest first, so the office can see
+    that one truck carried two jobs (ADR 0055). Re-exported on every change."""
+    tab = os.getenv("SHEETS_RENTAL_TRUCKS_TAB", "RentalTrucks").strip() or "RentalTrucks"
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", DEFAULT_SHEET_ID).strip()
+    uuid = rental.get("rental_uuid") or ""
+    if not uuid:
+        return 0
+    svc = _get_sheets_svc(db)
+    headers = _ensure_tab(svc, spreadsheet_id, tab, RENTAL_TRUCK_HEADERS)
+    _delete_sheet_rows_by_value(svc, spreadsheet_id, tab, "rental_uuid", uuid)
+    jobs = list(reversed(rental.get("jobs") or []))
+    row = {
+        "rental_uuid": uuid,
+        "plate": rental.get("plate") or "",
+        "rental_company": rental.get("company") or "",
+        "rental_agreement": rental.get("agreement_number") or "",
+        "gvwr_lbs": rental.get("gvwr_lbs") if rental.get("gvwr_lbs") is not None else "",
+        "placeholder_unit": rental.get("unit_name") or "",
+        "jobs": "; ".join(
+            f"{j.get('job_name') or '(unnamed job)'}"
+            + (f" ({j.get('job_date')})" if j.get("job_date") else "")
+            for j in jobs
+        ),
+        "job_uuids": ", ".join(j.get("job_uuid") or "" for j in jobs),
+        "last_used_at": rental.get("last_used_at") or "",
+        "returned_at": rental.get("returned_at") or "",
+        "returned_by": rental.get("returned_by_name") or "",
+        "entered_by": rental.get("created_by_name") or "",
+        "created_at": rental.get("created_at") or "",
+        "notes": rental.get("notes") or "",
+    }
+    _write_rows_top(svc, spreadsheet_id, tab, [_build_row(row, headers)])
+    return 1
+
+
+def _build_rental_truck_payload(db: Session, rental_uuid: str) -> Optional[Dict[str, Any]]:
+    from app.core.rental_trucks import serialize  # local import to avoid cycles
+    from app.db.models.rental_truck import RentalTruck
+
+    row = db.query(RentalTruck).filter(RentalTruck.rental_uuid == rental_uuid).first()
+    if row is None:
+        return None
+    return serialize(db, [row])[0]
+
+
+def schedule_rental_truck_export(rental_uuid: str) -> None:
+    """Re-export one rental truck. Low-frequency (a truck is entered, linked or
+    returned a handful of times), replace-style, so a plain background fire."""
+    if not rental_uuid:
+        return
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        payload = _build_rental_truck_payload(db, rental_uuid)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+    if payload:
+        run_export_in_background(export_rental_truck_to_sheets, payload)
+
+
 def _build_bol_payload(db: Session, bol_id: str) -> Optional[Dict[str, Any]]:
     """Re-read one BOL from the DB into the export shape export_bol_to_sheets
     expects. The worker calls this when it runs, so a coalesced export always
@@ -4239,6 +4315,7 @@ SHEET_SYNC_REGISTRY = [
     {"key": "bug_reports",       "label": "Bug reports",         "env": "SHEETS_BUGS_TAB",               "default": "Bugs",              "fn": "export_bug_report_to_sheets"},
     {"key": "feature_requests",  "label": "Feature requests",    "env": "SHEETS_FEATURE_REQUESTS_TAB",   "default": "FeatureRequests",   "fn": "export_feature_request_to_sheets"},
     {"key": "tips",              "label": "Tips and bonuses",    "env": "SHEETS_TIPS_TAB",               "default": "Tips",              "fn": "export_extra_pay_to_sheets"},
+    {"key": "rental_trucks",     "label": "Rental trucks",       "env": "SHEETS_RENTAL_TRUCKS_TAB",      "default": "RentalTrucks",      "fn": "export_rental_truck_to_sheets"},
     {"key": "payroll",           "label": "Payroll periods",     "env": "SHEETS_PAYROLL_TAB",            "default": "Payroll",           "fn": "export_payroll_period_to_sheets"},
 ]
 

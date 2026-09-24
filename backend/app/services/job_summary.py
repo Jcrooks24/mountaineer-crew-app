@@ -157,7 +157,7 @@ def build_job_summary(db: Session, job_uuid: str, *, include_admin: bool) -> Dic
     out: Dict[str, Any] = {
         "job_uuid": job_uuid,
         "job_name": job_name,
-        "job_setup": _job_setup_out(setup) if setup else None,
+        "job_setup": _job_setup_out(setup, db) if setup else None,
         "checklist": _checklist_state(db, job_uuid),
         "events": [
             {

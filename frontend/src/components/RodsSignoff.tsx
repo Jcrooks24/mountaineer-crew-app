@@ -4,6 +4,7 @@ import type { DirectoryEntry } from "../auth/AuthContext";
 import { apiFetch } from "../api/client";
 import { ensureDirectory } from "../lib/userDirectory";
 import { loadJobSetup } from "../lib/jobSetupStore";
+import { loadJobRentals } from "../lib/rentalTrucks";
 import SignaturePad, { type SignaturePadHandle } from "./SignaturePad";
 import {
   type RodsDay,
@@ -142,20 +143,23 @@ function RodsDriverSection({
   useEffect(() => {
     if (!tripJob) return;
     loadJobSetup(tripJob)
-      .then((h) => {
+      .then(async (h) => {
+        // The rented truck's plate (ADR 0053), from the header, or from the
+        // truck record linked to this job when it was entered at an inspection
+        // on a job with no header yet (ADR 0055).
+        const plate = (h?.rental?.plate || "").trim()
+          || (h ? "" : ((await loadJobRentals(tripJob))[0]?.plate || "").trim());
         setDay((prev) => {
           const next = { ...prev };
           let changed = false;
           if (prev.job_uuid !== tripJob) { next.job_uuid = tripJob; changed = true; }
+          // A rental unit name is a placeholder shared by every truck we hire,
+          // and 395.8(f) wants the vehicle number, so the plate wins.
+          const veh = plate || h?.vehicle_unit_names?.[0];
+          if (veh && !(prev.vehicle_number || "").trim()) { next.vehicle_number = veh; changed = true; }
           if (h) {
-            // A rental unit name is a placeholder shared by every truck we
-            // hire, and 395.8(f) wants the vehicle number. Prefer the actual
-            // plate from the job header (ADR 0053).
-            const plate = (h.rental?.plate || "").trim();
-            const veh = plate || h.vehicle_unit_names?.[0];
             if (h.origin && !(prev.origin || "").trim()) { next.origin = h.origin; changed = true; }
             if (h.destination && !(prev.destination || "").trim()) { next.destination = h.destination; changed = true; }
-            if (veh && !(prev.vehicle_number || "").trim()) { next.vehicle_number = veh; changed = true; }
           }
           if (!changed) return prev;
           next.updated_at = new Date().toISOString();
