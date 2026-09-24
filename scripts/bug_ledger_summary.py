@@ -5,6 +5,11 @@ Read-only. Prints Markdown tables; the ones in docs/bugs/README.md came from thi
 
     python scripts/bug_ledger_summary.py              # every row
     python scripts/bug_ledger_summary.py --live-era   # drop pre-staging rows (before 2026-04-18)
+    python scripts/bug_ledger_summary.py --all-classes  # count spec gaps and by-design rows too
+
+By default every table after the first counts defect_class=code-defect only: a spec
+gap is the design missing a scenario, not the code failing, and the owner asked for
+the two to be kept apart (2026-09-24).
 """
 import csv
 import statistics
@@ -47,6 +52,16 @@ def main():
     if "--live-era" in sys.argv:
         rows = [r for r in rows if r["era"] != "pre-staging"]
     size, features = read(SIZE), read(FEATURES)
+
+    print("### Defect class (every row)\n")
+    classes = ["code-defect", "spec-gap", "by-design"]
+    k = Counter((r["environment"], r.get("defect_class", "")) for r in rows)
+    table(["environment"] + classes + ["total"],
+          [[e] + [k[(e, c)] for c in classes] + [sum(k[(e, c)] for c in classes)]
+           for e in ["prod", "staging", "unknown"]])
+    if "--all-classes" not in sys.argv:
+        rows = [r for r in rows if r.get("defect_class", "code-defect") == "code-defect"]
+        print("Tables below count code defects only.\n")
     dets = DETECTIONS + sorted({r["detection"] for r in rows} - set(DETECTIONS))
     print(f"{len(rows)} defects\n")
 

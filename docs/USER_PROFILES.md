@@ -249,8 +249,10 @@ this file.
   frequency can be related to the actual size of the app." Their own reports,
   including through the in-app bug tool, are owner-reported and kept apart from
   field reports: "bugs reported by me shouldn't be considered field-reported"
-  (2026-09-24, replacing that morning's "counts as user-reported"). The office
-  and crew are touched only as the people whose reports count as field-reported.
+  (2026-09-24, replacing that morning's "counts as user-reported"). Wants only
+  real code defects in the trend, apart from "a misspecification on my part or a
+  byproduct of code doing what it's technically supposed to." The office and crew
+  are touched only as the people whose reports count as field-reported.
 
 ## 7. Mechanic
 

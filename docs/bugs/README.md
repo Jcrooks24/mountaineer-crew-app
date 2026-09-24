@@ -1,6 +1,6 @@
 # Bug ledger
 
-[BUG_LEDGER.csv](BUG_LEDGER.csv) holds one row per defect (563 as of 2026-09-24) this
+[BUG_LEDGER.csv](BUG_LEDGER.csv) holds one row per defect (561 as of 2026-09-24) this
 app has ever had, on `main` (production, crews' phones) or on `staging`. Two files
 beside it let bug counts be read against how big the app is:
 [APP_SIZE.csv](APP_SIZE.csv) (lines of code and lines changed, per branch per month)
@@ -46,6 +46,21 @@ else uses that page. `reporter` (crew / office-admin / owner) and
 `crew-reported`, `office-admin-reported`, `owner-reported`, `dev-self-found`,
 `unknown`).
 
+**`defect_class`**: is it really the code's fault? Added 2026-09-24 because "I want to
+make sure each bug actually is a code defect and not a misspecification on my part or
+a byproduct of code doing what it's technically supposed to."
+
+| value | means |
+|---|---|
+| `code-defect` | the code did not do what it was built to do, with the intent evident from the commit, an ADR, the docs or the feature's purpose. Also: failing to handle a foreseeable outside condition (Google quota, lost signal, full storage, a worker restart) **when a stated invariant covers it** (offline-first, synced data lands in the Sheet, crew auth, field reliability, unique job keys, simple admin views, fast mobile crew UX) |
+| `spec-gap` | the code did what it was designed to do, but the design missed a real scenario or requirement, and no invariant covers it. Compliance shortfalls where a feature was never built to do the thing land here |
+| `by-design` | a deliberate, documented tradeoff that an ADR, RUNBOOKS or the owner accepted and did not reopen |
+
+**Trend, rate, area and severity tables count `code-defect` only** (pass
+`--all-classes` to count everything). `defect_class_basis` gives the reason, and
+names the invariant when one decided it. Owner rulings on borderline rows are
+written into that column (BUG-0548, 0559, 0569).
+
 **`environment`**: `prod` if the defect was live on `main` before its fix reached
 `main`. `staging` if the defect and its fix reached `main` in the same merge, or
 the defect never reached `main`. `unknown` if that could not be decided.
@@ -59,6 +74,7 @@ the defect never reached `main`. `unknown` if that could not be decided.
 | `incident_date` | the date used for trends: `detected_date`, else `fix_date`, else `introduced_date` |
 | `area` | fixed vocabulary: rods-eld, dvir, bol, payroll-hours, job-report, timeline-events, offline-sync, sheets-export, drive-upload, auth, estimator, inventory, photos-incidents, availability, admin-ui, crew-ui, notifications-email, dq-docs, perf-oom, deploy-infra, other |
 | `severity` | data-loss, wrong-data, blocked-workflow, degraded, cosmetic, perf |
+| `defect_class` / `defect_class_basis` | code-defect, spec-gap or by-design, and why |
 | `reporter` / `reporter_basis` | crew, office-admin or owner, and the quote or Bugs-tab entry that settles it (reported rows only) |
 | `detection_evidence` | the quote that justifies `detection_method`. Empty means `unknown`. |
 | `era` | `pre-staging` before 2026-04-18, when every commit went straight to `main`; `staging-first` after |
@@ -119,10 +135,15 @@ other rows were not re-read.
   crew member was testing staging, or the environment call is wrong. Worth a look
   when those rows matter.
 
+A fourth pass classified every row as code defect, spec gap or by design (above):
+512 code defects, 38 spec gaps, 13 by design, before two misfits were retired.
+
 ### Retired IDs
 
 These were removed as not being defects. Their numbers are not reused.
 
+- `BUG-0053` N+1 query in sheets export dedup: a code-quality cleanup by the commit's own account, with no wrong behavior (owner ruling 2026-09-24).
+- `BUG-0295` Staging PWA stuck on stale bundle: Vercel began redirecting `/sw.js` on staging; nobody changed the app, and crews never saw it (owner ruling 2026-09-24).
 - `BUG-0060` iOS photo input forced camera, no library option: capture=environment was set in the initial commit as a deliberate design choice, so removing it later to add a photo-library option is a preference change, not a defect fix.
 - `BUG-0264` Patch notes admin tab labeled Notes, unfindable: The admin patch-notes tab was correctly functional, just labeled plain 'Notes' making it hard to find; this is a naming/discoverability improvement, not the software behaving incorrectly.
 - `BUG-0317` Payroll excludes hours for unmatched roster names: RUNBOOKS.md states the exclusion of unmatched-name hours from payroll totals is deliberate, to avoid inventing a match and paying the wrong person, so this is a documented design tradeoff rather than software behaving contrary to its intent.
@@ -150,39 +171,51 @@ month with little new code (September) shows a high per-churn rate from bugs in
 older code. Per-KLOC and per-feature rates are steadier. Read three months
 together, not one.
 
-## Snapshot, staging-first era (2026-04-18 on, 492 rows)
+## Snapshot, staging-first era (2026-04-18 on)
+
+Every row, by class (491 rows):
+
+| environment | code-defect | spec-gap | by-design | total |
+|---|---|---|---|---|
+| prod | 220 | 27 | 8 | 255 |
+| staging | 219 | 9 | 4 | 232 |
+| unknown | 3 | 0 | 1 | 4 |
+
+Spec gaps cluster in September, when the compliance audit and the payroll sanity
+pass recorded what the design never covered. Everything below counts **code
+defects only** (442 rows).
 
 | environment | vet | field-reported | owner-reported | other | total |
 |---|---|---|---|---|---|
-| prod | 30 | 31 | 24 | 170 | 255 |
-| staging | 74 | 7 | 25 | 127 | 233 |
-| unknown | 0 | 0 | 0 | 4 | 4 |
+| prod | 24 | 30 | 20 | 146 | 220 |
+| staging | 74 | 6 | 23 | 116 | 219 |
+| unknown | 0 | 0 | 0 | 3 | 3 |
 
 | month | prod | staging | unknown | vet | field-reported | owner-reported | other | total |
 |---|---|---|---|---|---|---|---|---|
-| 2026-04 | 17 | 24 | 0 | 0 | 2 | 0 | 39 | 41 |
+| 2026-04 | 16 | 24 | 0 | 0 | 2 | 0 | 38 | 40 |
 | 2026-05 | 26 | 7 | 0 | 0 | 3 | 2 | 28 | 33 |
 | 2026-06 | 12 | 15 | 0 | 0 | 0 | 5 | 22 | 27 |
-| 2026-07 | 59 | 94 | 2 | 47 | 9 | 9 | 90 | 155 |
-| 2026-08 | 80 | 52 | 2 | 34 | 11 | 22 | 67 | 134 |
-| 2026-09 | 61 | 41 | 0 | 23 | 13 | 11 | 55 | 102 |
+| 2026-07 | 51 | 88 | 1 | 42 | 8 | 8 | 82 | 140 |
+| 2026-08 | 76 | 51 | 2 | 33 | 11 | 22 | 63 | 129 |
+| 2026-09 | 39 | 34 | 0 | 23 | 12 | 6 | 32 | 73 |
 
-Against size (prod bugs vs `main`, staging bugs vs `staging`; churn = lines added + removed):
+Against size (prod code defects vs `main`, staging code defects vs `staging`; churn = lines added + removed):
 
 | month | main loc | prod bugs | per kloc | per k churned | features on main | per feature | staging bugs | per k churned | per feature |
 |---|---|---|---|---|---|---|---|---|---|
-| 2026-04 | 17,546 | 17 | 0.97 | 1.29 | 20 | 0.85 | 24 | 1.36 | 1.20 |
+| 2026-04 | 17,546 | 16 | 0.91 | 1.22 | 20 | 0.80 | 24 | 1.36 | 1.20 |
 | 2026-05 | 26,997 | 26 | 0.96 | 2.28 | 23 | 1.13 | 7 | 0.47 | 0.30 |
 | 2026-06 | 34,081 | 12 | 0.35 | 1.58 | 27 | 0.44 | 15 | 1.61 | 0.56 |
-| 2026-07 | 53,033 | 59 | 1.11 | 2.44 | 40 | 1.48 | 94 | 2.27 | 2.19 |
-| 2026-08 | 75,793 | 80 | 1.06 | 2.83 | 49 | 1.63 | 52 | 2.22 | 1.06 |
-| 2026-09 | 81,963 | 61 | 0.74 | 7.36 | 54 | 1.13 | 41 | 3.61 | 0.76 |
+| 2026-07 | 53,033 | 51 | 0.96 | 2.11 | 40 | 1.27 | 88 | 2.12 | 2.05 |
+| 2026-08 | 75,793 | 76 | 1.00 | 2.69 | 49 | 1.55 | 51 | 2.18 | 1.04 |
+| 2026-09 | 81,963 | 39 | 0.48 | 4.71 | 54 | 0.72 | 34 | 3.00 | 0.63 |
 
-Prod defects cluster in sheets-export (49), job-report (28), crew-ui (24),
-payroll-hours (18), offline-sync (17), bol (15) and rods-eld (14). By severity:
-wrong-data 73, degraded 61, data-loss 40, cosmetic 33, blocked-workflow 31, perf 17.
-A fixed prod defect was live a median of 32.5 days (mean 48.3, max 175, n=160)
-before its fix reached `main`.
+Prod code defects cluster in sheets-export (45), job-report (28), crew-ui (23),
+offline-sync (15), perf-oom (13) and bol (13). By severity: wrong-data 62,
+degraded 50, data-loss 37, cosmetic 27, blocked-workflow 27, perf 17. A fixed prod
+code defect was live a median of 32.5 days (mean 48.5, max 175, n=158) before its
+fix reached `main`.
 
 ## Keeping it current
 
