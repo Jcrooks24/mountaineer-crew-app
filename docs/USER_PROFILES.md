@@ -242,6 +242,11 @@ this file.
   what crews run." Runs the vault backup at each merge to main; no other class is
   touched.
   ([ADR 0054](decisions/0054-every-release-is-copied-to-the-owners-vault.md))
+- **Tracks bug incidence over time** [confirmed 2026-09-24]: the reader of
+  [bugs/BUG_LEDGER.csv](bugs/README.md), to see whether quality is improving,
+  where bugs cluster, what each cost the field, and how bug frequency is
+  trending. Counts their own staging testing as user-reported. No other class is
+  touched.
 
 ## 7. Mechanic
 
