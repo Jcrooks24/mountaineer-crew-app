@@ -245,8 +245,12 @@ this file.
 - **Tracks bug incidence over time** [confirmed 2026-09-24]: the reader of
   [bugs/BUG_LEDGER.csv](bugs/README.md), to see whether quality is improving,
   where bugs cluster, what each cost the field, and how bug frequency is
-  trending. Counts their own staging testing as user-reported. No other class is
-  touched.
+  trending, read against lines of code and feature count "so that the bug
+  frequency can be related to the actual size of the app." Their own reports,
+  including through the in-app bug tool, are owner-reported and kept apart from
+  field reports: "bugs reported by me shouldn't be considered field-reported"
+  (2026-09-24, replacing that morning's "counts as user-reported"). The office
+  and crew are touched only as the people whose reports count as field-reported.
 
 ## 7. Mechanic
 

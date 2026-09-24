@@ -1,46 +1,65 @@
 # Bug ledger
 
-[BUG_LEDGER.csv](BUG_LEDGER.csv) holds one row per defect (559 as of 2026-09-24) this app has ever had, on
-`main` (production, crews' phones) or on `staging`. It exists to answer four
-questions, in the owner's words (intake 2026-09-24):
+[BUG_LEDGER.csv](BUG_LEDGER.csv) holds one row per defect (563 as of 2026-09-24) this
+app has ever had, on `main` (production, crews' phones) or on `staging`. Two files
+beside it let bug counts be read against how big the app is:
+[APP_SIZE.csv](APP_SIZE.csv) (lines of code and lines changed, per branch per month)
+and [FEATURES.csv](FEATURES.csv) (every feature, dated; the definition is in
+[FEATURES.md](FEATURES.md)).
+
+They exist to answer four questions, in the owner's words (intake 2026-09-24):
 
 1. Is quality improving?
 2. Where do bugs cluster?
 3. What does a bug cost the field (how long it was live, how bad)?
 4. How is bug frequency trending over time?
 
-`python scripts/bug_ledger_summary.py` prints the tables below from the CSV. Add
-`--live-era` to leave out the pre-staging rows.
+And, from the second intake the same day: "account for # of lines of code over
+time and # of features, so that the bug frequency can be related to the actual
+size of the app."
+
+| command | does |
+|---|---|
+| `python scripts/bug_ledger_summary.py` | prints every table below. `--live-era` leaves out the pre-staging rows. |
+| `python scripts/bug_ledger_size.py` | regenerates APP_SIZE.csv from git |
 
 ## The two variables the owner asked for
 
-**`detection`** has three values: how the defect was first noticed.
+**`detection`** has four values: how the defect was first noticed.
 
 | value | means |
 |---|---|
 | `vet` | caught by the `/vet` pre-promotion pass ([VETTING_PROTOCOL.md](../VETTING_PROTOCOL.md), in use from 2026-07-01) |
-| `user-reported` | a person hit it while using the app: crew in the field, admin, **or the owner testing staging** |
+| `field-reported` | a crew member or office staff hit it doing real work. Includes reports the owner typed in on their behalf ("Crew reported bug: ...") |
+| `owner-reported` | the owner found it: testing staging, using the app, reviewing the Sheet Backfill page, or through the in-app bug tool in their own name |
 | `other` | everything else: `/sanity`, found while building or in review, found by an audit script, or nobody recorded how |
 
-The owner chose a three-way split over a strict binary, and chose to count their
-own staging testing as user-reported (intake 2026-09-24). `detection_method` keeps
-the fine-grained value (`vet`, `sanity`, `crew-reported`,
-`admin-or-owner-reported`, `dev-self-found`, `unknown`), so a different
-collapse is always possible.
+**Owner rulings, 2026-09-24.** The first intake split detection three ways and
+counted the owner's own reports as user-reported. The second intake split that
+value in two, because "sometimes I use the bug reporting feature to report bugs,
+so bugs reported by me shouldn't be considered field-reported." Also ruled: a
+crew report the owner relays is field-reported; unnamed "reported as ..." rows
+are owner-reported; the Sheet Backfill defects are owner-reported, since nobody
+else uses that page. `reporter` (crew / office-admin / owner) and
+`reporter_basis` record who and why for every reported row, and
+`detection_method` keeps the fine-grained value (`vet`, `sanity`,
+`crew-reported`, `office-admin-reported`, `owner-reported`, `dev-self-found`,
+`unknown`).
 
 **`environment`**: `prod` if the defect was live on `main` before its fix reached
 `main`. `staging` if the defect and its fix reached `main` in the same merge, or
-the defect never reached `main`. `unknown` if the introducing commit could not be
-identified. `environment_basis` says how each call was made.
+the defect never reached `main`. `unknown` if that could not be decided.
+`environment_basis` says how each call was made.
 
 ## Columns
 
 | column | meaning |
 |---|---|
-| `id` | `BUG-NNNN`, in `incident_date` order. Stable: new rows append the next number. |
+| `id` | `BUG-NNNN`. Stable: new rows take the next number above the highest ever used, retired numbers included. |
 | `incident_date` | the date used for trends: `detected_date`, else `fix_date`, else `introduced_date` |
 | `area` | fixed vocabulary: rods-eld, dvir, bol, payroll-hours, job-report, timeline-events, offline-sync, sheets-export, drive-upload, auth, estimator, inventory, photos-incidents, availability, admin-ui, crew-ui, notifications-email, dq-docs, perf-oom, deploy-infra, other |
 | `severity` | data-loss, wrong-data, blocked-workflow, degraded, cosmetic, perf |
+| `reporter` / `reporter_basis` | crew, office-admin or owner, and the quote or Bugs-tab entry that settles it (reported rows only) |
 | `detection_evidence` | the quote that justifies `detection_method`. Empty means `unknown`. |
 | `era` | `pre-staging` before 2026-04-18, when every commit went straight to `main`; `staging-first` after |
 | `status` | fixed, open, wontfix |
@@ -51,8 +70,25 @@ identified. `environment_basis` says how each call was made.
 | `fix_path` | hotfix, promotion, direct-to-main, staging-only-fix, on-staging-not-yet-promoted, unfixed |
 | `days_live_in_prod` | `fix_reached_main_date` minus `prod_exposure_start` |
 | `confidence` | how sure the extraction was that this is a real, distinct defect |
-| `env_confidence` | how sure the `environment` call is (`med`/`low` = inferred by git blame) |
-| `source` | where it was found: commit, postmortem, runbook, adr, sanity, patch-notes, promotion-checklist, data-flow, other-doc |
+| `env_confidence` | how sure the `environment` call is (`med`/`low` = inferred by git blame, `checked` = re-read against git) |
+| `source` | where it was found: commit, postmortem, runbook, adr, sanity, patch-notes, promotion-checklist, data-flow, other-doc, bugs-tab |
+
+## Size and features
+
+**APP_SIZE.csv**, one row per branch per month. `loc` counts app source lines
+(backend/app, frontend/src, apps_script; no tests, migrations or caches) at the
+month-end commit. `lines_added`/`lines_removed` is churn: for `main`, what
+reached production that month; for `staging`, all development work written that
+month. Prod bugs are read against `main`, staging bugs against `staging`.
+
+**FEATURES.csv**, one row per feature, with the day it reached staging and the day
+it reached `main`, and a removal date if it was pulled. A feature is a distinct
+tool or surface one user class uses to do one job, at the grain of the items the
+PRD lists inside each capability (for example, "off-job, office, availability, LD
+workday" are four features under one capability). Anything smaller is an
+enhancement. That definition was inferred from [PRD.md](../PRD.md) and then
+applied to the patch notes, as the owner asked; [FEATURES.md](FEATURES.md) has
+the reasoning and every borderline call. 55 features, 54 live.
 
 ## How the ledger was built (2026-09-24)
 
@@ -67,17 +103,21 @@ commit reached `main` was computed from the first-parent merge history, and wher
 introducing commit was named, `git blame` on the lines each fix removed picked the
 most likely one (`env_confidence` med or low).
 
-A second check then re-read every row that was low-confidence or had an unknown
-environment (144 rows) against git: is it really a defect, is the environment
-right, is the detection right. Those rows carry `env_confidence=checked`. It moved
-47 environment calls (most unknown to prod, by confirming the defective code is on
-`main` today), corrected 7 detection calls, and removed the 12 rows below. The
-other 427 rows were not re-read.
+A second check re-read every row that was low-confidence or had an unknown
+environment (144 rows) against git. It moved 47 environment calls, corrected 7
+detection calls, and removed the 12 rows listed below. A third pass re-read every
+user-reported row (84) to name the reporter, matched against the 15 reports in
+the production Sheet's Bugs tab (14 submitted by the owner, 1 by a crew member),
+and added the 3 Bugs-tab reports that had no row (BUG-0572 to 0574). BUG-0575 was added by another session the same day. The
+other rows were not re-read.
 
 - `detection=other` is large because most commit messages do not say who found a
-  bug. Treat it as "not recorded as vet or user-found", not as "found internally".
+  bug. Treat it as "not recorded as vet or reported", not as "found internally".
 - 4 rows remain `environment=unknown`: process or shared-resource problems (an env
   var, the Apps Script runtime, a CI mirror) that belong to neither branch.
+- 7 rows are `field-reported` on `staging`. Crews run `main`, so either a named
+  crew member was testing staging, or the environment call is wrong. Worth a look
+  when those rows matter.
 
 ### Retired IDs
 
@@ -103,36 +143,53 @@ detailed from July 2026, the vet pass started 2026-07-01, and the sanity pass
 started 2026-09-09. A rise from June to July is at least partly better record
 keeping. September is a partial month (to 2026-09-23). Open defects count in the
 month they were first recorded, so recent months also carry the open backlog.
-Compare like with like: prod defects per promotion, or the `user-reported` share,
-are sturdier than raw monthly totals.
 
-## Snapshot, staging-first era (2026-04-18 on, 488 rows)
+**Rates beat counts, and size beats churn for a single month.** Bugs are recorded
+in the month they were noticed, but they come from code written earlier, so a
+month with little new code (September) shows a high per-churn rate from bugs in
+older code. Per-KLOC and per-feature rates are steadier. Read three months
+together, not one.
 
-| environment | vet | user-reported | other | total |
-|---|---|---|---|---|
-| prod | 30 | 52 | 170 | 252 |
-| staging | 74 | 32 | 126 | 232 |
-| unknown | 0 | 0 | 4 | 4 |
+## Snapshot, staging-first era (2026-04-18 on, 492 rows)
 
-| month | prod | staging | unknown | vet | user-reported | other | total |
-|---|---|---|---|---|---|---|---|
-| 2026-04 | 17 | 24 | 0 | 0 | 2 | 39 | 41 |
-| 2026-05 | 26 | 7 | 0 | 0 | 5 | 28 | 33 |
-| 2026-06 | 12 | 15 | 0 | 0 | 5 | 22 | 27 |
-| 2026-07 | 59 | 94 | 2 | 47 | 18 | 90 | 155 |
-| 2026-08 | 80 | 52 | 2 | 34 | 33 | 67 | 134 |
-| 2026-09 | 58 | 40 | 0 | 23 | 21 | 54 | 98 |
+| environment | vet | field-reported | owner-reported | other | total |
+|---|---|---|---|---|---|
+| prod | 30 | 31 | 24 | 170 | 255 |
+| staging | 74 | 7 | 25 | 127 | 233 |
+| unknown | 0 | 0 | 0 | 4 | 4 |
+
+| month | prod | staging | unknown | vet | field-reported | owner-reported | other | total |
+|---|---|---|---|---|---|---|---|---|
+| 2026-04 | 17 | 24 | 0 | 0 | 2 | 0 | 39 | 41 |
+| 2026-05 | 26 | 7 | 0 | 0 | 3 | 2 | 28 | 33 |
+| 2026-06 | 12 | 15 | 0 | 0 | 0 | 5 | 22 | 27 |
+| 2026-07 | 59 | 94 | 2 | 47 | 9 | 9 | 90 | 155 |
+| 2026-08 | 80 | 52 | 2 | 34 | 11 | 22 | 67 | 134 |
+| 2026-09 | 61 | 41 | 0 | 23 | 13 | 11 | 55 | 102 |
+
+Against size (prod bugs vs `main`, staging bugs vs `staging`; churn = lines added + removed):
+
+| month | main loc | prod bugs | per kloc | per k churned | features on main | per feature | staging bugs | per k churned | per feature |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-04 | 17,546 | 17 | 0.97 | 1.29 | 20 | 0.85 | 24 | 1.36 | 1.20 |
+| 2026-05 | 26,997 | 26 | 0.96 | 2.28 | 23 | 1.13 | 7 | 0.47 | 0.30 |
+| 2026-06 | 34,081 | 12 | 0.35 | 1.58 | 27 | 0.44 | 15 | 1.61 | 0.56 |
+| 2026-07 | 53,033 | 59 | 1.11 | 2.44 | 40 | 1.48 | 94 | 2.27 | 2.19 |
+| 2026-08 | 75,793 | 80 | 1.06 | 2.83 | 49 | 1.63 | 52 | 2.22 | 1.06 |
+| 2026-09 | 81,963 | 61 | 0.74 | 7.36 | 54 | 1.13 | 41 | 3.61 | 0.76 |
 
 Prod defects cluster in sheets-export (49), job-report (28), crew-ui (24),
-offline-sync (17), payroll-hours (15), bol (15) and rods-eld (14). By severity:
-wrong-data 72, degraded 60, data-loss 40, cosmetic 33, blocked-workflow 30, perf 17.
-A fixed prod defect was live a median of 35 days (mean 48.4, max 175, n=159)
+payroll-hours (18), offline-sync (17), bol (15) and rods-eld (14). By severity:
+wrong-data 73, degraded 61, data-loss 40, cosmetic 33, blocked-workflow 31, perf 17.
+A fixed prod defect was live a median of 32.5 days (mean 48.3, max 175, n=160)
 before its fix reached `main`.
 
 ## Keeping it current
 
 When a commit fixes a defect, add a row in the same commit (Definition of done,
 item 5 in [CLAUDE.md](../../CLAUDE.md)). Take the next `BUG-NNNN`, fill what is
-known, and leave a field empty rather than guess. When a Known defects entry in
-RUNBOOKS.md is deleted because it was fixed, its ledger row gets its fix columns
-and `status=fixed`.
+known, name the reporter when a person reported it, and leave a field empty rather
+than guess. When a Known defects entry in RUNBOOKS.md is deleted because it was
+fixed, its ledger row gets its fix columns and `status=fixed`. When a feature
+reaches `main`, add its FEATURES.csv row. Rerun `bug_ledger_size.py` before
+reading a new month.
